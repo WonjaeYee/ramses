@@ -107,6 +107,28 @@ subroutine calc_power_spectrum(k, power_spectrum)
             power_spectrum = 1.0
          end if
 
+      case('power_law_wj')
+         ! power law with user-defined slope
+         if (all(k==0)) then
+            power_spectrum = 0
+            return
+         end if
+
+         k_mag = sqrt(real(sum(k**2),dp))
+         if (k_mag > (TURB_GS/2)) then
+            power_spectrum = 0
+            return
+         end if
+         power_spectrum = k_mag**(k_mag_slope)
+
+      case('parabolic_wj')
+         ! parabolic spectrum with different bounds
+         power_spectrum = 0.0_dp
+         k_mag = sqrt(real(sum(k**2),dp))
+         if ((k_mag >= k_mag_min) .and. (k_mag <= k_mag_max)) then
+            power_spectrum = -1.0 * (k_mag - k_mag_min) * (k_mag - k_mag_max)
+         end if
+
       case default
          write (6,*) "Unknown forcing_power_spectrum!"
          write (6,*) "Use 'power_law', 'parabolic', 'konstandin' or 'test'"

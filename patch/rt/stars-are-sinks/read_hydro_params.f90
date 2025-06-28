@@ -1,0 +1,446 @@
+subroutine read_hydro_params(nml_ok)
+  use amr_commons
+  use hydro_commons
+#ifdef RT
+  use rt_parameters, ONLY:iIons
+  use rt_cooling_module, ONLY:rt_isIRtrap, iIRtrapVar
+#endif
+  implicit none
+#ifndef WITHOUTMPI
+  include 'mpif.h'
+#endif
+  logical::nml_ok
+  !--------------------------------------------------
+  ! Local variables
+  !--------------------------------------------------
+  integer::i,idim,nboundary_true=0
+  integer ,dimension(1:MAXBOUND)::bound_type
+  real(dp)::scale,ek_bound
+  integer::imet ! metal enrichment
+
+  !--------------------------------------------------
+  ! Namelist definitions
+  !--------------------------------------------------
+  namelist/init_params/filetype,initfile,multiple,nregion,region_type &
+       & ,x_center,y_center,z_center,aexp_ini &
+       & ,length_x,length_y,length_z,exp_region &
+#if NENER>0
+       & ,prad_region &
+#endif
+       & ,d_region,u_region,v_region,w_region,p_region,read_ic_part,var_region &
+       & ,omega_b
+  namelist/hydro_params/gamma,courant_factor,smallr,smallc &
+       & ,niter_riemann,slope_type,difmag,noadvect_init,nvarnoadvect_og &
+       & ,cooling_time_ivar,temperature_save_ivar,coolheat_save_ivar &
+       & ,star_min_timestep &
+#if NENER>0
+       & ,gamma_rad &
+#endif
+       & ,pressure_fix,beta_fix,scheme,riemann
+  namelist/refine_params/x_refine,y_refine,z_refine,r_refine &
+       & ,a_refine,b_refine,exp_refine,jeans_refine,cooling_refine,mass_cut_refine &
+       & ,m_refine,mass_sph,err_grad_d,err_grad_p,err_grad_u &
+       & ,floor_d,floor_u,floor_p,ivar_refine,var_cut_refine &
+       & ,interpol_var,interpol_type,sink_refine,ivar_refine_reset_disable_lxyz &
+       & ,lx_refine,ly_refine,lz_refine,jeans_refine_nH &
+       & ,mISM_refine,nISM_refine,aISM_refine,ZsunISM_refine &
+       & ,agg_geo_refine,agg_geo_refine_x,agg_geo_refine_y,agg_geo_refine_z &
+       & ,agg_geo_refine_rho_kpc, agg_geo_refine_z_kpc, young_star_refine
+  namelist/boundary_params/nboundary,bound_type &
+       & ,ibound_min,ibound_max,jbound_min,jbound_max &
+       & ,kbound_min,kbound_max &
+       & ,d_bound,u_bound,v_bound,w_bound,p_bound,z_bound
+  namelist/physics_params/cooling,haardt_madau,metal,isothermal &
+       & ,m_star,t_star,n_star,T2_star,g_star,del_star,eps_star,jeans_ncells &
+       & ,eta_sn,yield,rbubble,f_ek,ndebris,f_w,mass_gmc,kappa_IR &
+       & ,J21,a_spec,z_ave,z_reion,ind_rsink,delayed_cooling &
+       & ,self_shielding,smbh,agn &
+       & ,units_density,units_time,units_length,neq_chem,ir_feedback,ir_eff,t_diss &
+       & ,T2thres_SF, mechanical_feedback, sn2_real_delay, fstar_min, M_SNII       &
+       & ,t_delay, log_mfb, log_mfb_mega, loading_type, mechanical_geen            &
+       & ,star_imf, n_gmc, nsn2mass, star_maker, sf_lam, t_sne &
+       & ,cloudy_metal_cooling, cloudy_metal_file, kick_SF   &
+       & ,A_SN, expN_SN, E_SNII, variable_energy_SN, H2crit_SF, pop3, pop3_mass, Zcrit_pop3  &
+       & ,taysun_stellar_winds, stellar_winds_file, use_initial_mass &
+       & ,snIa_mech, A_snIa, E_SNIa, variable_yield_SNII, mass_loss_boost, chem_list  &
+       & ,mechanical_bpass, sfr_ff_fixed, SFE_boost, npop3max &
+       ! edge2/metal enrichment params
+       & ,SNenergy, vmaxFB, Tmax, maxadvfb, supernovae, Nrcool, momST, SNdiagnostics, winds &
+       & ,momentum, energy, fbsafety, SNIamodel, Ia_rate, temp_star, tau_IR, metalscaling &
+       & ,mstarparticle, smallT, radpressure, SFdiagnostics, oscaar_feedback, oscaar_real_delay &
+       & ,yields_portinari, yields_lc18, yields_lc18_dir, oxygen_ions, nitrogen_ions, carbon_ions, magnesium_ions &
+       & ,silicon_ions, sulfur_ions, iron_ions, neon_ions, metal_chem_atol, metal_chem_rtol, simple_ode &
+       & ,os13_metal_cooling, os13_cooling_dir, fs_cooling_dir, htmc_metal_cooling, htmc_cooling_dir,no_metal_update &
+       & ,init_metal_ions_all_ionized,stromgren_star_formation &
+       & ,var_imf_m0,var_imf_m1,var_imf_m2,var_imf_a1,var_imf_a2,imf_varies_with_metallicity,imf_varies_complex &
+       & ,imf_maker,star_group_mass,star_lp_mass,star_sink_initial_mass,sse_dir,sse_file,sse_winds,sse_supernova &
+       & ,lc18_SN_dir
+  ! npop3max added 210615 (Kang)
+
+  ! Read namelist file
+  rewind(1)
+  read(1,NML=init_params,END=101)
+  goto 102
+101 write(*,*)' You need to set up namelist &INIT_PARAMS in parameter file'
+  call clean_stop
+102 rewind(1)
+  if(nlevelmax>levelmin)read(1,NML=refine_params)
+  rewind(1)
+  if(hydro)read(1,NML=hydro_params)
+  rewind(1)
+  read(1,NML=boundary_params,END=103)
+  simple_boundary=.true.
+  goto 104
+103 simple_boundary=.false.
+104 if(nboundary>MAXBOUND)then
+    write(*,*) 'Error: nboundary>MAXBOUND'
+    call clean_stop
+  end if
+  rewind(1)
+  read(1,NML=physics_params,END=105)
+105 continue
+#ifdef ATON
+  if(aton)call read_radiation_params(1)
+#endif
+
+  !--------------------------------------------------
+  ! Check that we only use taysun or oscaar feedback
+  !--------------------------------------------------
+   if(oscaar_real_delay.and.sn2_real_delay) then
+      if (supernovae) then
+         write(*,*) 'Error: you cannot use both oscaar_real_delay and sn2_real_delay'
+         call clean_stop
+      endif
+   endif
+   if(.not.oscaar_real_delay.and..not.sn2_real_delay) then
+      write(*,*) 'Error: you must choose oscaar_real_delay or taysuns sn2_real_delay'
+      call clean_stop
+   endif
+   !--------------------------------------------------
+   ! Check that we only use taysun or oscaar feedback
+   !--------------------------------------------------
+   if(mechanical_feedback.and.oscaar_feedback) then
+      if (supernovae) then
+         write(*,*) 'Error: you can only taysuns or oscaars feedback'
+         write(*,*) 'Note: you can use taysun SN with oscar winds'
+         call clean_stop
+      endif
+   endif
+   if(.not.mechanical_feedback.and..not.oscaar_feedback) then
+      write(*,*) 'Error: you must choose taysuns or oscaas feedback'
+      call clean_stop
+   endif
+  !--------------------------------------------------
+  ! Check for star formation
+  !--------------------------------------------------
+  if(t_star>0)then
+     star=.true.
+     pic=.true.
+     eps_star=0.14257514*(n_star/0.1)**(-0.5)/t_star ! necessary for Padoan SF
+  else if(eps_star>0)then
+     t_star=0.14257514*(n_star/0.1)**(-0.5)/eps_star ! Taysun double-checked
+     star=.true.
+     pic=.true.
+  endif
+
+  !--------------------------------------------------
+  ! Check for metal
+  !--------------------------------------------------
+  if(metal.and.nvar<(ndim+3))then
+     if(myid==1)write(*,*)'Error: metals need nvar >= ndim+3'
+     if(myid==1)write(*,*)'Modify hydro_parameters.f90 and recompile'
+     nml_ok=.false.
+  endif
+
+  !--------------------------------------------------
+  ! Check for non-thermal energies
+  !--------------------------------------------------
+#if NENER>0
+  if(nvar<(ndim+2+nener))then
+     if(myid==1)write(*,*)'Error: non-thermal energy need nvar >= ndim+2+nener'
+     if(myid==1)write(*,*)'Modify NENER and recompile'
+     nml_ok=.false.
+  endif
+#endif
+
+  !--------------------------------------------------
+  ! Check ind_rsink
+  !--------------------------------------------------
+  if(ind_rsink<=0.0d0)then
+     if(myid==1)write(*,*)'Error in the namelist'
+     if(myid==1)write(*,*)'Check ind_rsink'
+     nml_ok=.false.
+  end if
+
+  !--------------------------------------------------
+  ! Check initial mass [TK]
+  !--------------------------------------------------
+  if(sn2_real_delay)        use_initial_mass=.true. ! for continuous SN2
+  if(sn2_real_delay)        t_delay=50.             ! SNe explode up to 50 Myr.
+  !Note: t_delay<<50 would reduce the SN rate per particle if sn2_real_delay=.true.
+
+  !--------------------------------------------------
+  ! IMF-dependent M_SNII and mass loss [TK]
+  !--------------------------------------------------
+  if(TRIM(star_imf).eq.'salpeter')then !0.08-100
+     M_SNII=18.728254
+     eta_sn=0.12761627
+  else if(TRIM(star_imf).eq.'kroupa')then
+     M_SNII=19.134730
+     eta_sn=0.20913717
+  else if(TRIM(star_imf).eq.'chabrier')then
+     M_SNII=19.134730 !TODO
+     eta_sn=0.313706  !TODO
+  else if(TRIM(star_imf).ne.'')then
+     write(*,*) 'your star_imf seems wrong -->'//TRIM(star_imf)
+     stop
+  endif
+
+  !-------------------------------------------------
+  ! This section deals with hydro boundary conditions
+  !-------------------------------------------------
+  if(simple_boundary.and.nboundary==0)then
+     simple_boundary=.false.
+  endif
+
+  if (simple_boundary)then
+
+     ! Compute new coarse grid boundaries
+     do i=1,nboundary
+        if(ibound_min(i)*ibound_max(i)==1.and.ndim>0.and.bound_type(i)>0)then
+           nx=nx+1
+           if(ibound_min(i)==-1)then
+              icoarse_min=icoarse_min+1
+              icoarse_max=icoarse_max+1
+           end if
+           nboundary_true=nboundary_true+1
+        end if
+     end do
+     do i=1,nboundary
+        if(jbound_min(i)*jbound_max(i)==1.and.ndim>1.and.bound_type(i)>0)then
+           ny=ny+1
+           if(jbound_min(i)==-1)then
+              jcoarse_min=jcoarse_min+1
+              jcoarse_max=jcoarse_max+1
+           end if
+           nboundary_true=nboundary_true+1
+        end if
+     end do
+     do i=1,nboundary
+        if(kbound_min(i)*kbound_max(i)==1.and.ndim>2.and.bound_type(i)>0)then
+           nz=nz+1
+           if(kbound_min(i)==-1)then
+              kcoarse_min=kcoarse_min+1
+              kcoarse_max=kcoarse_max+1
+           end if
+           nboundary_true=nboundary_true+1
+        end if
+     end do
+
+     ! Compute boundary geometry
+     do i=1,nboundary
+        if(ibound_min(i)*ibound_max(i)==1.and.ndim>0.and.bound_type(i)>0)then
+           if(ibound_min(i)==-1)then
+              ibound_min(i)=icoarse_min+ibound_min(i)
+              ibound_max(i)=icoarse_min+ibound_max(i)
+              if(bound_type(i)==1)boundary_type(i)=1
+              if(bound_type(i)==2)boundary_type(i)=11
+              if(bound_type(i)==3)boundary_type(i)=21
+           else
+              ibound_min(i)=icoarse_max+ibound_min(i)
+              ibound_max(i)=icoarse_max+ibound_max(i)
+              if(bound_type(i)==1)boundary_type(i)=2
+              if(bound_type(i)==2)boundary_type(i)=12
+              if(bound_type(i)==3)boundary_type(i)=22
+           end if
+           if(ndim>1)jbound_min(i)=jcoarse_min+jbound_min(i)
+           if(ndim>1)jbound_max(i)=jcoarse_max+jbound_max(i)
+           if(ndim>2)kbound_min(i)=kcoarse_min+kbound_min(i)
+           if(ndim>2)kbound_max(i)=kcoarse_max+kbound_max(i)
+        else if(jbound_min(i)*jbound_max(i)==1.and.ndim>1.and.bound_type(i)>0)then
+           ibound_min(i)=icoarse_min+ibound_min(i)
+           ibound_max(i)=icoarse_max+ibound_max(i)
+           if(jbound_min(i)==-1)then
+              jbound_min(i)=jcoarse_min+jbound_min(i)
+              jbound_max(i)=jcoarse_min+jbound_max(i)
+              if(bound_type(i)==1)boundary_type(i)=3
+              if(bound_type(i)==2)boundary_type(i)=13
+              if(bound_type(i)==3)boundary_type(i)=23
+           else
+              jbound_min(i)=jcoarse_max+jbound_min(i)
+              jbound_max(i)=jcoarse_max+jbound_max(i)
+              if(bound_type(i)==1)boundary_type(i)=4
+              if(bound_type(i)==2)boundary_type(i)=14
+              if(bound_type(i)==3)boundary_type(i)=24
+           end if
+           if(ndim>2)kbound_min(i)=kcoarse_min+kbound_min(i)
+           if(ndim>2)kbound_max(i)=kcoarse_max+kbound_max(i)
+        else if(kbound_min(i)*kbound_max(i)==1.and.ndim>2.and.bound_type(i)>0)then
+           ibound_min(i)=icoarse_min+ibound_min(i)
+           ibound_max(i)=icoarse_max+ibound_max(i)
+           jbound_min(i)=jcoarse_min+jbound_min(i)
+           jbound_max(i)=jcoarse_max+jbound_max(i)
+           if(kbound_min(i)==-1)then
+              kbound_min(i)=kcoarse_min+kbound_min(i)
+              kbound_max(i)=kcoarse_min+kbound_max(i)
+              if(bound_type(i)==1)boundary_type(i)=5
+              if(bound_type(i)==2)boundary_type(i)=15
+              if(bound_type(i)==3)boundary_type(i)=25
+           else
+              kbound_min(i)=kcoarse_max+kbound_min(i)
+              kbound_max(i)=kcoarse_max+kbound_max(i)
+              if(bound_type(i)==1)boundary_type(i)=6
+              if(bound_type(i)==2)boundary_type(i)=16
+              if(bound_type(i)==3)boundary_type(i)=26
+           end if
+        end if
+     end do
+     do i=1,nboundary
+        ! Check for errors
+        if( (ibound_min(i)<0.or.ibound_max(i)>(nx-1)) .and. (ndim>0) .and.bound_type(i)>0 )then
+           if(myid==1)write(*,*)'Error in the namelist'
+           if(myid==1)write(*,*)'Check boundary conditions along X direction',i
+           nml_ok=.false.
+        end if
+        if( (jbound_min(i)<0.or.jbound_max(i)>(ny-1)) .and. (ndim>1) .and.bound_type(i)>0)then
+           if(myid==1)write(*,*)'Error in the namelist'
+           if(myid==1)write(*,*)'Check boundary conditions along Y direction',i
+           nml_ok=.false.
+        end if
+        if( (kbound_min(i)<0.or.kbound_max(i)>(nz-1)) .and. (ndim>2) .and.bound_type(i)>0)then
+           if(myid==1)write(*,*)'Error in the namelist'
+           if(myid==1)write(*,*)'Check boundary conditions along Z direction',i
+           nml_ok=.false.
+        end if
+     end do
+  end if
+  nboundary=nboundary_true
+  if(simple_boundary.and.nboundary==0)then
+     simple_boundary=.false.
+  endif
+
+  imetal=nener+ndim+3
+
+  !--------------------------------------------------
+  ! Compute boundary conservative variables
+  !--------------------------------------------------
+  do i=1,nboundary
+     boundary_var(i,1)=MAX(d_bound(i),smallr)
+     boundary_var(i,2)=d_bound(i)*u_bound(i)
+#if NDIM>1
+     boundary_var(i,3)=d_bound(i)*v_bound(i)
+#endif
+#if NDIM>2
+     boundary_var(i,4)=d_bound(i)*w_bound(i)
+#endif
+     ek_bound=0.0d0
+     do idim=1,ndim
+        ek_bound=ek_bound+0.5d0*boundary_var(i,idim+1)**2/boundary_var(i,1)
+     end do
+     boundary_var(i,ndim+2)=ek_bound+P_bound(i)/(gamma-1.0d0)
+     if(metal) then
+       do imet=1,nmetals
+         boundary_var(i,imetal+imet-1)=d_bound(i)*0.0 !metal enrichment --> zero metallicity boundaries
+       enddo
+     endif
+  end do
+
+  !-----------------------------------
+  ! Rearrange level dependent arrays
+  !-----------------------------------
+  do i=nlevelmax,levelmin,-1
+     jeans_refine(i)=jeans_refine(i-levelmin+1)
+     cooling_refine(i)=cooling_refine(i-levelmin+1)
+  end do
+  do i=1,levelmin-1
+     jeans_refine(i)=-1.0
+     cooling_refine(i)=-1.0
+  end do
+
+  !-----------------------------------
+  ! Sort out passive variable indices
+  !-----------------------------------
+  idelay=imetal
+  if(metal)then
+     idelay=imetal+nmetals ! metal enrichment
+     ! Add nCO right after the metals
+     if (nco.gt.0) then
+        ! Used nco.gt.0 instead of isCO here because isCO is only defined in modules that import rt parameters.
+        ico = idelay
+        idelay = idelay + nco
+     endif
+     if (oxygen_ions) then
+        ioxygen = idelay
+        idelay = idelay + n_oxygen_ions
+     endif
+     if (nitrogen_ions) then
+        initrogen = idelay
+        idelay = idelay + n_nitrogen_ions
+     endif
+     if (carbon_ions) then
+        icarbon = idelay
+        idelay = idelay + n_carbon_ions
+     endif
+     if (magnesium_ions) then
+        imagnesium = idelay
+        idelay = idelay + n_magnesium_ions
+     endif
+     if (silicon_ions) then
+        isilicon = idelay
+        idelay = idelay + n_silicon_ions
+     endif
+     if (sulfur_ions) then
+        isulfur = idelay
+        idelay = idelay + n_sulfur_ions
+     endif
+     if (iron_ions) then
+        iiron = idelay
+        idelay = idelay + n_iron_ions
+     endif
+     if (neon_ions) then
+        ineon = idelay
+        idelay = idelay + n_neon_ions
+     endif
+  endif
+  ixion=idelay
+  if(delayed_cooling)ixion=idelay+1
+  ichem=ixion
+  if(aton)ichem=ixion+1
+  ! Last variable is ichem
+
+#ifdef RT
+  ! This is necessary if the code is compiled with RT, but rt=.false.
+  ! Otherwise, xions in mechanical_fine.f90 tries to keep uold(iIons) the same,
+  ! which will lead to no change in metallicities
+  if (.not.rt) iIons=ichem+nchem        !  iIons       7 (for nchem=0)
+  ! if rt=.true., iIons will be updated in rt_init.f90
+#endif
+
+  if(myid==1) then
+     write(*,*) '>>>NOTE: M_SNII    =',sngl(M_SNII)
+     write(*,*) '>>>NOTE: eta_sn    =',sngl(eta_sn)
+     write(*,*) '>>>NOTE: t_delay   =',sngl(t_delay)
+     write(*,*) '>>>NOTE: NSN/100M  =',sngl(eta_sn/M_SNII*100)
+     write(*,*) '>>>NOTE: imetal    =', imetal, '-', idelay - 1
+     if (oxygen_ions)    write(*,*) '>>>NOTE: ioxygen     =', ioxygen
+     if (nitrogen_ions)  write(*,*) '>>>NOTE: initrogen   =', initrogen
+     if (carbon_ions)    write(*,*) '>>>NOTE: icarbon     =', icarbon
+     if (magnesium_ions) write(*,*) '>>>NOTE: imagnesium  =', imagnesium
+     if (silicon_ions)   write(*,*) '>>>NOTE: isilicon    =', isilicon
+     if (sulfur_ions)    write(*,*) '>>>NOTE: isulfur     =', isulfur
+     if (iron_ions)      write(*,*) '>>>NOTE: iiron       =', iiron
+     if (neon_ions)      write(*,*) '>>>NOTE: ineon       =', ineon
+     if (nco.gt.0)       write(*,*) '>>>NOTE: ico         =', ico
+     do i=1,nchem
+        write(*,*) '>>>NOTE: ichem ('//chem_list(i)//')=', ichem+i-1
+     end do
+#ifdef RT
+     if(.not.rt)then
+        write(*,*) '>>>NOTE: iIons  = ', iIons
+        if(rt_isIRtrap) write(*,*) '>>>NOTE: iIRtrapVar  = ', iIRtrapVar
+     endif
+#endif
+     write(*,*)
+  endif
+
+end subroutine read_hydro_params

@@ -214,6 +214,9 @@ module amr_parameters
   logical ::sf_compressive=.false.      ! Advect compressive and solenoidal turbulence terms separately
   logical ::cooling_ism = .false.      ! Use cooling module from Audit & Hennebelle 2005 (non-RT)
                                         ! instead of ramses classical cooling
+  
+  ! WJ - to force writing birth epoch and metallicity
+  logical ::ignore_no_prev = .false.
 
   ! EOS parameters
   character(len=20)::barotropic_eos_form='legacy'  !Type of barotropic EOS: choose from:

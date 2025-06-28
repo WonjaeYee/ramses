@@ -1,0 +1,57 @@
+	
+Cloudy stuff:
+	- Cloudy cooling is borrowed from Britton Smith's Grackle data.
+	- Note that this is not grackle stuff
+	- Harley wrote this entire code, and Taysun simply tidied up to make it fit into his code
+
+	Files modified
+	- adaptive_loop.f90
+	- amr_parameters.f90
+	- read_hydro_params.f90
+	- init_time.f90
+	- cooling_module.f90	
+
+Mechanical SN Feedback:
+	Files added
+	- mechanical_commons.f90
+	- mechanical_fine.f90
+
+	Files modified
+	- adaptive_loop.f90
+	- add_list.f90
+	- particle_tree.f90
+	- amr_parameters.f90
+	- read_hydro_params.f90
+	- init_part.f90
+	- output_part.f90
+	- star_formation.f90
+
+Molecular Hydrogen + LW:
+	Files modified
+	- rt_init.f90      
+	- rt_init_xion.f90 
+	- rt_parameter.f90 
+	- coolrates.f90    
+	- rt_cooling_module.f90
+	- rt_spectra.f90
+
+Chemical Enrichment:
+
+Particle Type: ityp & use_particle_type
+	Types
+	 0: DM
+	 1: sink particle for AGNs (reserved)
+	-2: Pop II star particle with SN progenitors
+	 2: Pop II star particle after SNe
+	-3: Pop III star before explosion or implosion (reserved) 
+	 3: Pop III star after (reserved)
+	 5: sink particle for stars (reserved)
+
+	Files modified
+	- amr_parameters.f90
+	- read_hydro_params.f90
+	- add_list.f90
+	- output_part.f90
+	- init_part.f90
+	- particle_tree.f90
+	- feedback.f90

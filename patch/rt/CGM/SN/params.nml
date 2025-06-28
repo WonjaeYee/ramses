@@ -1,0 +1,258 @@
+&RUN_PARAMS 
+clumpfind=.false.
+sink=.false.
+cosmo=.false.
+pic=.true.
+poisson=.true.
+hydro=.true.
+nrestart=0
+nremap=10
+nsubcycle=1,1,2,2
+ncontrol=1
+rt=.true.
+verbose=.false.
+nstepmax=3
+/
+
+&OUTPUT_PARAMS
+foutput=1
+noutput=25
+tout=0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.2,1.4,1.6,1.8,2.0,2.25,2.50,2.75,3.00,3.25,3.50,3.75,4.00,4.25,4.50,4.75,5.00,20
+/
+
+&INIT_PARAMS
+filetype='ascii'
+initfile(1)='./'
+/
+
+&AMR_PARAMS
+levelmin=6
+levelmax=7    ! Physical resolution is ~9 pc
+ngridmax=200000
+npartmax=80000
+boxlen=1d0
+/
+
+&POISSON_PARAMS 
+epsilon=1e-4
+gravity_type=0
+gravity_params=1d2,1d2,30000,0.1   !nH_cl, T2_cl, rpc_cl, nH_bg
+/
+
+&TURB_PARAMS
+turb=.false.    !#####
+instant_turb=.true.
+turb_type=1
+comp_frac=0.25
+turb_T=0.5  
+turb_Ndt=100
+forcing_power_spectrum="kolmogorov"
+turb_seed=15775577
+turb_rms=0.00763
+/
+
+&BOUNDARY_PARAMS
+nboundary=6
+bound_type= 2, 2,  2,  2,  2,  2
+ibound_min=-1, 1, -1, -1, -1, -1
+ibound_max=-1, 1,  1,  1,  1,  1
+jbound_min= 0, 0, -1,  1, -1, -1
+jbound_max= 0, 0, -1,  1,  1,  1
+kbound_min= 0, 0,  0,  0, -1,  1
+kbound_max= 0, 0,  0,  0, -1,  1
+/
+
+&PHYSICS_PARAMS
+haardt_madau=.false.
+self_shielding=.true.
+cooling=.true.
+cloudy_metal_cooling=.false.
+cloudy_metal_file="~/soft/lib/cloudy_metal_HM12_z.bin"
+os13_metal_cooling=.true.
+os13_cooling_dir="~/soft/lib/ion_cooling_tables/"
+neq_chem=.true.
+metal=.true.
+simple_ode=.true.
+oxygen_ions=.true.
+nitrogen_ions=.true.
+carbon_ions=.true.
+magnesium_ions=.true.
+silicon_ions=.true.
+sulfur_ions=.true.
+iron_ions=.true.
+neon_ions=.true.
+z_ave=0.1 ! 1/10 solar
+n_star=10.
+t_star=1.632456
+T2_star=15.
+g_star=1.0
+jeans_ncells=-1
+n_gmc=1d10
+!taysun added:
+nsn2mass=20
+fstar_min=-1
+mechanical_feedback=.true.
+mechanical_geen=.false.
+t_delay=0.0   ! make sure sn2_real_delay=.false.
+M_SNII=20.
+eta_sn=0.2 !Kroupa
+sn2_real_delay=.false.
+star_maker='FK2'
+star_imf='kroupa'
+log_mfb=.true.
+sf_lam=1 ! allow star formation if lamjt < 2
+use_initial_mass=.true.
+eta_sn=0.2     ! Kroupa
+snIa_mech=.false.
+!--------------------------
+!Oscar params
+!--------------------------
+oscaar_feedback=.false.
+oscaar_real_delay=.false.
+!eta_sn=0.1
+SNenergy=1.0d51
+Tmax=1.0d9
+vmaxFB=6000.00
+maxadvfb=6000.0
+smallT=1.e0
+fbsafety=.true.
+Nrcool=6.0
+supernovae=.false.
+winds=.false.
+momentum=.false.
+energy=.false.
+metalscaling=.false.
+SNIamodel=1      !DTD, t^-1.12
+Ia_rate=2.6d-13  !Field DTD
+yields_portinari=.true.
+units_time=3.1536d13
+units_density = 1.5066091d-20 ! Make sure G=1 
+units_length =  4.928d19 ! 16 pc
+/
+
+&HYDRO_PARAMS
+gamma=1.666667 
+courant_factor=0.7
+slope_type=1
+pressure_fix=.true.
+beta_fix=0.5
+riemann='hllc'
+scheme='muscl'
+temperature_save_ivar=2
+cooling_time_ivar=1
+coolheat_save_ivar=3
+/
+
+&REFINE_PARAMS
+mass_sph=1.3788978e-07  ! 1 solar masses
+m_refine=30*1. 
+interpol_type=0
+interpol_var=1
+jeans_refine=20*4.0
+/
+
+&SINK_PARAMS
+rho_sink=3.0161d-22    !test  3.0161d-20
+accretion_scheme='flux'
+nol_accretion=.false.
+nsinkmax=1000
+create_sinks=.true.
+eddington_limit=.false.
+sink_drag=.false.
+acc_sink_boost=1
+clump_core=.false.
+ir_cloud=4
+/
+
+&MOVIE_PARAMS
+movie=.false.
+tendmov=10.0 
+imovout=500
+imov=1  
+nw_frame=800
+nh_frame=800
+levelmax_frame=10
+xcentre_frame=0.5,0.,0.,0.,0.5,0.,0.,0.
+ycentre_frame=0.5,0.,0.,0.,0.5,0.,0.,0.
+zcentre_frame=0.5,0.,0.,0.,0.5,0.,0.,0.
+deltax_frame=1.,0,1.,0
+deltay_frame=1.,0,1.,0
+deltaz_frame=1.,0,1.,0
+proj_axis='yz'
+shader_frame='cube','cube'
+movie_vars_txt='dens','temp','stars','xHII','var16','var17','var18','var25','var32','var38','var33','var34','var50','var55','var56'
+/
+
+&RT_PARAMS
+X=7.6d-1
+Y=2.4d-1
+rt_isIR=.true.
+rt_isIRtrap=.false.     !----> TK
+rt_isoPress=.false.     !----> TK
+rt_pressBoost=0.0000001 !----> TK
+rt_smooth=.true.
+SED_isEgy=.true.
+rt_output_coolstats=.true.
+rt_star=.true.
+rt_otsa=.true.
+sed_dir='~/soft/lib/SED/bc03_Chabrier/'
+sedprops_update=10
+rt_esc_frac=0.0    ! ########################
+rt_nsubcycle=1
+rt_c_fraction=0.01
+rt_flux_scheme='glf'
+isHe=.true.
+isH2=.true.
+isH2Katz=.true.
+H2clumping=1.d0
+isCO=.true.
+LWgroup = 4
+include_collisional_ionization=.true.
+include_photoionisation=.true.
+include_charge_transfer=.true.
+include_grain_recombination=.true.
+include_cosmic_ray_ionization=.true.
+include_cosmic_ray_heating=.true.
+include_dust_heat_cool=.true.
+! z=0 haardt madau 2012
+UV_background_hydrogen= 2.26d-14
+UV_background_helium= 1.24d-14, 5.52d-16
+UV_background_oxygen= 7.20d-14, 9.87d-15, 2.282d-15, 7.396d-16, 2.251d-16, 8.18d-17, 1.03d-17, 3.70d-18
+UV_background_nitrogen= 9.18d-14, 1.10d-14, 1.75d-15, 4.444d-16, 1.553d-16, 1.60d-17, 5.46d-18
+UV_background_carbon= 3.29d-13, 1.03d-14, 1.0032d-15, 3.146d-16, 2.68d-17, 8.57d-18
+UV_background_magnesium= 2.7812982d-13, 6.04d-15, 3.06d-15, 1.49d-15, 6.92d-16, 2.61d-16
+UV_background_silicon= 1.06d-11, 6.49d-15, 2.06d-15, 1.26d-15, 6.51d-16, 3.62d-16
+UV_background_sulfur= 1.42d-12, 9.19d-15, 1.83d-15, 1.14d-15, 5.82d-16, 3.64d-16
+UV_background_iron= 7.67d-13, 3.54d-14, 1.89d-14, 6.10d-15, 3.16d-15, 1.84d-15
+UV_background_neon= 3.24d-14, 8.56d-15, 3.32d-15, 1.15d-15, 4.51d-16, 1.76d-16
+UV_background_hydrogen_heating= 1.42d-25
+UV_background_helium_heating= 1.64d-25, 1.03d-26
+UV_background_oxygen_heating= 1.31E-24, 1.95d-25, 4.33d-26, 5.62d-27, 0.00d+00, 1.00d-40, 0.00d0, 0.00d0
+UV_background_nitrogen_heating= 1.12d-24, 1.82d-25, 3.88d-26, 3.17d-27, 9.39d-30, 0.00d0, 0.00d0
+UV_background_carbon_heating= 1.38d-24, 1.55d-25, 1.99d-26, 4.08d-27, 0.00d0, 0.00d0
+UV_background_magnesium_heating= 5.06d-25, 8.09d-26, 1.67d-26, 0.00d0, 0.00d0, 0.00d0
+UV_background_silicon_heating= 1.62d-23, 6.99d-26, 1.54d-26, 4.84d-27, 0.00d0, 0.00d0
+UV_background_sulfur_heating= 4.44d-24, 8.62d-26, 3.81d-26, 1.69d-26, 2.03d-27, 1.98d-28
+UV_background_iron_heating= 2.38d-24, 1.11d-24, 4.71d-25, 1.13d-25, 2.30d-26, 2.28d-29
+UV_background_neon_heating= 7.22d-25, 2.14d-25, 5.45d-26, 1.93d-28, 0.00d0, 0.00d0
+UV_background_G0=0.0070977d0
+xi_h_cr=1.d-16
+low_t_noneq_cooling=.true.
+metal_cooling_catastrophe_fix=.false.
+metal_cooling_catastrophe_rho=0.005d0
+simple_dust_depletion=.true.
+!depletion_one=.false.
+use_cloudy_prim_rates=.false.
+!Ha, Hb, O3_5007, O3_4959, O3_4363, O2_3726, O2_3728, N2_6583
+el_movie_vars= 1, 1, 1, 1, 1, 1, 1, 1
+/
+
+&RT_GROUPS
+kappaAbs      = 0.0,  1d3,   1d3,   1d3,   1d3,   1d3,    1d3,    1d3     
+kappaSc       = 5.0,    0,     0,     0,     0,     0,      0,      0       
+group_egy     = 0.1,  1.0,  7.61, 12.27, 14.32, 17.50, 28.985, 65.106
+groupL0       = 0.1,  1.0,  5.60, 11.20, 13.60, 15.20, 24.590, 54.420
+groupL1       = 1.0,  5.6, 11.20, 13.60, 15.20, 24.59, 54.420, 1000.000
+spec2group    = 4,5,6,7             ! H2, HI, HeI, HeII -> pck  
+/
+

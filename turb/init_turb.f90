@@ -112,6 +112,11 @@ subroutine init_turb
                k_vec(1) = i
             end if
             call calc_power_spectrum(k_vec, power_spec(i,j,k))
+
+            ! <<WJ>> Suppress low-k powers
+            if (all(abs(k_vec) < turb_cut_k)) then
+               power_spec(i,j,k) = 0.0_dp
+            end if
          end do
       end do
    end do

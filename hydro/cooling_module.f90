@@ -1343,6 +1343,7 @@ function cool_ion(ispec,T)
   cool_ion = 0
   if(ispec==HI  )cool_ion = dumfac_ion*1.27D-21*SQRT(T)/(1d0+SQRT(T5))*EXP(-157809.1D0/T)
   if(ispec==HEI )cool_ion = dumfac_ion*9.38D-22*SQRT(T)/(1d0+SQRT(T5))*EXP(-285335.4D0/T)
+  ! if(ispec==HEII)cool_ion = dumfac_ion*9.38D-22*SQRT(T)/(1d0+SQRT(T5))*EXP(-285335.4D0/T)
   if(ispec==HEII)cool_ion = dumfac_ion*4.95D-22*SQRT(T)/(1d0+SQRT(T5))*EXP(-631515.0D0/T)
   return
 end function cool_ion
@@ -1375,6 +1376,7 @@ function taux_ion(ispec,T)
   taux_ion = 0
   if(ispec==HI  )taux_ion = dumfac_ion*5.85D-11*SQRT(T)/(1d0+SQRT(T5))*EXP(-157809.1D0/T)
   if(ispec==HEI )taux_ion = dumfac_ion*2.38D-11*SQRT(T)/(1d0+SQRT(T5))*EXP(-285335.4D0/T)
+  ! if(ispec==HEII)taux_ion = dumfac_ion*2.38D-11*SQRT(T)/(1d0+SQRT(T5))*EXP(-285335.4D0/T)
   if(ispec==HEII)taux_ion = dumfac_ion*5.68D-12*SQRT(T)/(1d0+SQRT(T5))*EXP(-631515.0D0/T)
   return
 end function taux_ion

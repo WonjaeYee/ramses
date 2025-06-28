@@ -159,7 +159,7 @@ subroutine backup_part(filename, filename_desc)
 #endif
 
   ! Write birth epoch
-  if (star .or. sink) then
+  if (star .or. sink .or. ignore_no_prev) then
      allocate(xdp(1:npart))
      ipart = 0
      do i = 1, npartmax

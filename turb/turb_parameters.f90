@@ -18,7 +18,11 @@ module turb_parameters
 #endif
 
   ! Turbulence variables
+#ifdef TURB_GRID_SIZE
+  integer,parameter :: TURB_GS=TURB_GRID_SIZE
+#else
   integer, parameter  :: TURB_GS=64                    ! Turbulent grid size
+#endif
   integer, parameter  :: TGRID_X=TURB_GS-1             ! Limit of grid, x dimension
 #if NDIM>1
   integer, parameter  :: TGRID_Y=TURB_GS-1             ! Limit of grid, x dimension
@@ -48,5 +52,11 @@ module turb_parameters
   real(dp) :: turb_rms=1.0_dp     ! rms turbulent forcing acceleration
 
   real(dp) :: turb_min_rho=1d-50  ! Minimum density for turbulence
+
+  ! <<WJ>> Suppress low-k powers
+  integer :: turb_cut_k=0
+  real(dp) :: k_mag_min = 0.0_dp
+  real(dp) :: k_mag_max = 512.0_dp
+  real(dp) :: k_mag_slope = -2.0_dp
 
 end module turb_parameters

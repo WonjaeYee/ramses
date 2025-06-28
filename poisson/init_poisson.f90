@@ -65,7 +65,7 @@ subroutine init_poisson
   !--------------------------------
   ! For a restart, read poisson file
   !--------------------------------
-  if(nrestart>0)then
+  if(nrestart>0.and.(.not.ignore_no_prev))then
      ilun=ncpu+myid+10
      call title(nrestart,nchar)
      if(IOGROUPSIZEREP>0)then

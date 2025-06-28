@@ -12,7 +12,7 @@ COMPILER = GNU
 # Size of vector cache
 NVECTOR = 32
 # Number of dimensions
-NDIM = 1
+NDIM = 3
 # Float precision size
 NPRE = 8
 # hydro/mhd/rhd solver
@@ -22,18 +22,19 @@ PATCH =
 # Use RT? 1=Yes, 0=No
 RT = 0
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
-USE_TURB = 0
+USE_TURB = 1
+TURB_GRID_SIZE = 128
 # Use MPI? 1=Yes, 0=No
-MPI = 0
+MPI = 1
 MPIF90 = mpif90
 # Root name of executable
-EXEC = ramses
+EXEC = /work/project-imf/bin/ramses_dev_PassiveScalar_$(TURB_GRID_SIZE)_
 # Number of additional energies
 NENER = 0
 # Use Grackle cooling? 1=Yes, 0=No
 GRACKLE = 0
 # Number of metal species
-NMETALS = 0
+NMETALS = 1
 # Use ATON? 1=Yes, 0=No
 ATON = 0
 # Number of ions for RT
@@ -42,7 +43,7 @@ NIONS = 0
 # Number of photon groups for RT
 NGROUPS = 0
 # Number of passive scalars
-NPSCAL = 0
+NPSCAL = 1
 # Light MPI communicator structure (for > 10k MPI processes)
 LIGHT_MPI_COMM = 0
 
@@ -80,7 +81,7 @@ ifeq ($(RT),1)
    DEFINES += -DRT -DNIONS=$(NIONS) -DNGROUPS=$(NGROUPS)
 endif
 ifeq ($(USE_TURB),1)
-   DEFINES += -DUSE_TURB
+   DEFINES += -DUSE_TURB -DTURB_GRID_SIZE=$(TURB_GRID_SIZE)
 endif
 ifeq ($(LIGHT_MPI_COMM), 1)
    DEFINES += -DLIGHT_MPI_COMM
@@ -99,16 +100,16 @@ ifeq ($(COMPILER),GNU)
       FC = gfortran
       FFLAGS += -DWITHOUTMPI
    endif
-   F90 += -ffree-line-length-none -fimplicit-none
-   FC += -ffree-line-length-none -fimplicit-none
+   F90 += -ffree-line-length-none -fimplicit-none -fPIE
+   FC += -ffree-line-length-none -fimplicit-none -fPIE
    ifeq ($(GCOV),1)
          F90 += -O0 -fprofile-arcs -ftest-coverage
    else
       ifeq ($(DEBUG),1)
-         F90 += -g -O0 -fbacktrace -fbounds-check -Wuninitialized -Wall
-         FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
+         F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
+         # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
       else
-         F90 += -O3
+         F90 += -O3 -mcmodel=medium
       endif
    endif
 endif
@@ -131,7 +132,7 @@ ifeq ($(COMPILER),INTEL)
       F90 += -warn all -O0 -g -traceback -check bounds
       FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
    else
-      F90 += -O3
+      F90 += -O2
    endif
 endif
 
@@ -151,8 +152,12 @@ ifeq ($(GRACKLE),1)
    LIBS_OBJ     = -I$(HOME)/local/include -DCONFIG_BFLOAT_8 -DH5_USE_16_API -fPIC
 endif
 ifeq ($(USE_TURB),1)
-   LIBS_TURB = -L$(HOME)/local/lib -lfftw3
-   LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
+   # LIBS_TURB = -L$(HOME)/local/lib -lfftw3
+   # LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
+   # LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
+   # LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
+   LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
+   LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
 endif
 LIBS = $(LIBMPI) $(LIBS_GRACKLE) $(LIBS_TURB)
 #############################################################################
