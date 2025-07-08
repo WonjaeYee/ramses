@@ -23,12 +23,12 @@ PATCH =
 RT = 0
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
 USE_TURB = 1
-TURB_GRID_SIZE = 128
+TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
 MPI = 1
 MPIF90 = mpif90
 # Root name of executable
-EXEC = /work/project-imf/bin/ramses_dev_PassiveScalar_$(TURB_GRID_SIZE)_
+EXEC = /work/project-imf/bin/ramses_dev_CheckUpdate_$(TURB_GRID_SIZE)_
 # Number of additional energies
 NENER = 0
 # Use Grackle cooling? 1=Yes, 0=No
