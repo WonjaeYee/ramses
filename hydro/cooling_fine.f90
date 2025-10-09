@@ -149,7 +149,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*grackle_HydrogenFractionByMass/mH
 #else
 #ifdef RTZ
-     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*0.76/mH !TODO(code) update this
+     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*0.76/mH 
 #else
      nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*X/mH
 #endif
@@ -417,7 +417,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
 #ifdef CO
         if (isCO_rtz) then
-           nCO(i) = uold(ind_leaf(i),iCO) * scale_nH / (elements(6)%atomic_mass+elements(8)%atomic_mass)
+           do i=1,nleaf !loop over leaf cells
+              nCO(i) = uold(ind_leaf(i),iCO) * scale_nH / (elements(6)%atomic_mass+elements(8)%atomic_mass)
+           end do
         endif
 #endif
 #else
@@ -553,7 +555,6 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      endif
 #endif
 #endif
-
 
 #ifdef RT
      if(neq_chem) then
@@ -711,7 +712,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         endif
 #ifdef CO
         ! In the case of CO, we have to update mass densities
-        uold(ind_leaf(i),iCO) = nCO(i) * (elements(6)%atomic_mass+elements(8)%atomic_mass) / scale_nH
+        do i=1,nleaf !loop over leaf cells
+           uold(ind_leaf(i),iCO) = nCO(i) * (elements(6)%atomic_mass+elements(8)%atomic_mass) / scale_nH
+        end do
 
         e_counter = 0
         do ii=1,n_elements ! loop over elements

@@ -1,6 +1,7 @@
 ! dust_recombination_module.f90
 module dust_recombination_module
   use amr_parameters, only: dp
+  use safe_math, only: safe_exp
   implicit none
 
   private  ! everything is private by default
@@ -63,7 +64,7 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
      return
   else if (T.gt.1d3) then
      ! Scale down if greater than 1.d3
-     dr_sf = exp(-1.d0 * T / 1.d3) / exp(-1.d0)
+     dr_sf = safe_exp(-1.d0 * T / 1.d3) / safe_exp(-1.d0)
   end if
 
   if (T.lt.10.0) then
@@ -97,6 +98,8 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
   ! Zubko assumes 3.3d-5 C in PAH / H atom
   ! Weingartner & Draine assume 6d-5 C in PAH / H atom
   rate = rate * (3.3d-5 / 6.0d-5)
+
+  rate = MAX(rate,1.d-100)
 
 END FUNCTION dust_recombination
 

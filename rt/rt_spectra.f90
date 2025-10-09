@@ -250,6 +250,11 @@ MODULE SED_module
 #ifdef RTZ
   PUBLIC initialize_cross_sections_from_blackbody &
         ,initialize_group_energies_from_blackbody
+#ifdef INDIVIDUAL_SINK_STARS
+  PUBLIC init_popIII_table, interpolate_popIII_table, get_popIII_temp_from_mass
+  PUBLIC init_popII_stellar_properties, init_popII_table, interpolate_popII_table
+  PUBLIC interpolate_popII_age
+#endif
 #endif
   PRIVATE   ! default
 
@@ -267,6 +272,54 @@ MODULE SED_module
   ! the case of SED_isEgy=true). Lum-acc is accumulated lum.
   real(dp),allocatable,dimension(:,:,:,:)::SED_table
   ! ----------------------------------------------------------------------
+
+#ifdef INDIVIDUAL_SINK_STARS
+  ! Tables of Pop III star data from https://iopscience.iop.org/article/10.3847/1538-3881/ac9b43/pdf
+  ! For now we assume a simply black body with a small H and He atmosphere
+  real(dp), dimension(1:59):: larkin_mass = (/ &
+      1.000, 1.124, 1.264, 1.421, 1.597, 1.796, 2.019, &
+      2.270, 2.551, 2.868, 3.225, 3.625, 4.075, 4.582, &
+      5.151, 5.790, 6.510, 7.318, 8.227, 9.249, 10.398, &
+      11.690, 13.141, 14.774, 16.609, 18.672, 20.991, 23.598, &
+      26.529, 29.825, 33.529, 37.694, 42.376, 47.639, 53.557, &
+      60.209, 67.688, 76.095, 85.547, 96.172, 108.118, 121.547, &
+      136.645, 153.617, 172.698, 194.149, 218.264, 245.375, 275.853, &
+      310.117, 348.637, 391.941, 440.624, 495.354, 556.881, 626.052, &
+      703.814, 791.234, 820.200 /)
+  real(dp), dimension(1:59):: larkin_temp = (/ &
+      7180, 8047, 9000, 10045, 11189, 12437, 13796, 15273, 16873, 18602, &
+      20466, 22472, 24623, 26924, 29381, 31996, 34772, 37712, 40817, 44087, &
+      47521, 51118, 54874, 58785, 62432, 65238, 68031, 70799, 73528, 76205, &
+      78819, 81355, 83800, 86143, 88369, 90467, 92425, 94232, 95878, 97352, &
+      98647, 99754, 100666, 101379, 102000, 102624, 103253, 103885, 104521, &
+      105160, 105804, 106452, 107103, 107759, 108419, 109082, 109750, 110422, & 
+      110629 /)
+  real(dp), dimension(1:59):: larkin_llum = (/ &
+      0.267, 0.485, 0.700, 0.911, 1.118, 1.322, 1.523, 1.719, 1.912, 2.102, &
+      2.288, 2.471, 2.650, 2.825, 2.997, 3.165, 3.330, 3.491, 3.648, 3.802, &
+      3.953, 4.100, 4.243, 4.383, 4.519, 4.652, 4.781, 4.906, 5.028, 5.147, &
+      5.261, 5.373, 5.480, 5.584, 5.685, 5.782, 5.875, 5.965, 6.052, 6.134, &
+      6.214, 6.289, 6.361, 6.430, 6.497, 6.563, 6.630, 6.697, 6.764, 6.831, &
+      6.898, 6.964, 7.031, 7.098, 7.165, 7.232, 7.299, 7.365, 7.386 /)
+  real(dp), dimension(1:59,1:NGROUPS):: larkin_nphot
+
+  ! Tables for Pop II stars
+  ! For now this is a very simple approximation where we interpolate the 
+  ! zero-age-main-sequence models from MIST to get a log L and a Teff
+  ! for each star and then we assume a modified blackbody spectrum
+  real(dp), dimension(1:55):: mist_mass = (/ &
+      4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, &
+      17.0, 18.0, 19.0, 20.0, 22.0, 24.0, 26.0, 28.0, 30.0, 32.0, 34.0, 36.0, &
+      38.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0, 85.0, 90.0, &
+      95.0, 100.0, 105.0, 110.0, 115.0, 120.0, 125.0, 130.0, 135.0, 140.0,    &
+      145.0, 150.0, 175.0, 200.0, 225.0, 250.0, 275.0, 300.0 /)
+  real(dp), dimension(1:15):: mist_fe_over_h = (/ &
+      -4.0, -3.5, -3.0, -2.5, -2.0, -1.75, -1.5, -1.25, -1.0, -0.75, -0.5, &
+      -0.25, 0.0, 0.25, 0.5 /)
+  real(dp), dimension(1:15,1:55,4):: mist_stellar_props
+  real(dp), dimension(1:15,1:55,1:NGROUPS):: mist_nphot
+
+#endif
 
 CONTAINS
 
@@ -1214,6 +1267,7 @@ FUNCTION blackbody(T, lambda) result(B_lam)
   ! cross sections 
   ! T --> temeprature [K]
   ! lambda --> wavelengths [A] 
+  use safe_math, only: safe_exp
   use constants, only: c_cgs, hplanck, kB
   implicit none
   real(kind=8), intent(in):: T, lambda
@@ -1225,7 +1279,7 @@ FUNCTION blackbody(T, lambda) result(B_lam)
 
   ! now compute B_lam
   B_lam = 2.d0 * hplanck * c_cgs * c_cgs / (lambda_cm**5.d0)
-  B_lam = B_lam * (1.d0 / (exp(hplanck * c_cgs / (lambda_cm * kB * T)) - 1.d0))
+  B_lam = B_lam * (1.d0 / (safe_exp(hplanck * c_cgs / (lambda_cm * kB * T)) - 1.d0))
 
 END FUNCTION blackbody
 
@@ -1324,6 +1378,285 @@ SUBROUTINE initialize_group_energies_from_blackbody(T, group_L0, group_L1, group
   end do
 
 END SUBROUTINE initialize_group_energies_from_blackbody
+
+#ifdef INDIVIDUAL_SINK_STARS
+SUBROUTINE init_popII_stellar_properties()
+  use amr_commons, only: myid
+  implicit none
+
+  if (myid.eq.1) write(*,*) "Loading in Pop. II stellar data"
+
+  ! Harley formatted this in python so we should be able to simply read it in as a 3D array
+  open(unit=10, file='./data/popII_data/mist_stellar_props.bin', access='stream', form='unformatted', status='old', action='read')
+  read(10) mist_stellar_props
+  close(10)
+
+END SUBROUTINE init_popII_stellar_properties
+
+SUBROUTINE init_popII_table(group_L0, group_L1)
+! Initializes pop III data in terms of photons/s emitted by each group
+  use amr_commons, only: myid
+  use rt_parameters, only: nGroups
+  use spectrum_integrator_module
+  use constants, only: c_cgs, eV2erg, sb, pi, hplanck, L_sun
+  implicit none
+  real(dp), intent(in):: group_L0(nGroups), group_L1(nGroups)
+  real(dp):: X(100000), Y(100000)
+  integer:: i, j, ii, ip
+  real(dp):: lambda_max, lambda_min, delta_lambda
+  real(dp):: rescale_factor, atmosphere_scale
+
+  if (myid.eq.1) write(*,*) "Initializing Pop. II radiation fields"
+
+  ! If we integrate the planck function over all frequencies, we
+  ! get sigma T^4 / pi. So we need to rescale our integrals 
+  ! by this value divided by the luminosity of the star
+  do i=1,15 ! Loop over metallicity
+     do j=1,55 ! Loop over stellar mass
+        rescale_factor = (10.d0**mist_stellar_props(i,j,3) * L_sun) / (sb * ((10.d0**mist_stellar_props(i,j,2))**4.d0) / pi)
+
+        ! Loop over groups
+        do ip = 1, nGroups
+
+           ! No update for non-SED groups (L0>L1):
+          if(group_L0(ip).ne. 0d0 .and. group_L1(ip) .ne. 0d0 .and. &
+                &  (group_L0(ip) .ge. group_L1(ip)) ) cycle
+
+           ! Fill out the X and Y arrays for integration
+           lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
+           lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+           delta_lambda = (lambda_max - lambda_min) / 100000.0
+
+           ! Initialize X and Y arrays and fill them out
+           X = 0.d0
+           Y = 0.d0
+           do ii=1, 100000
+              atmosphere_scale = 1.0
+              X(ii) = lambda_min + (delta_lambda * (real(ii,kind=dp)-1.d0))
+              if (X(ii).lt.912.d0) atmosphere_scale = 0.75d0
+              if (X(ii).lt.228.d0) atmosphere_scale = 0.25d0
+              Y(ii) = atmosphere_scale * blackbody((10.d0**mist_stellar_props(i,j,2)), X(ii)) / (hplanck * c_cgs / (X(ii)*1e-8)) ! Convert to photon number
+              X(ii) = X(ii) * 1.d-8
+           end do
+
+           ! Integrate to get the number of photons
+           mist_nphot(i,j,ip) = trapz1(X,Y,100000) * rescale_factor
+
+        end do ! End loop over groups
+     end do ! End loop over stellar masses
+  end do ! End loop over metallicity
+
+END SUBROUTINE init_popII_table
+
+SUBROUTINE init_popIII_table(group_L0, group_L1)
+! Initializes pop III data in terms of photons/s emitted by each group
+  use amr_commons, only: myid
+  use rt_parameters, only: nGroups
+  use spectrum_integrator_module
+  use constants, only: c_cgs, eV2erg, sb, pi, hplanck, L_sun
+  implicit none
+  real(dp), intent(in):: group_L0(nGroups), group_L1(nGroups)
+  real(dp):: X(100000), Y(100000)
+  integer:: i, ii, ip
+  real(dp):: lambda_max, lambda_min, delta_lambda
+  real(dp):: rescale_factor, atmosphere_scale
+
+  if (myid.eq.1) write(*,*) "Initializing Pop. III radiation fields"
+
+  ! If we integrate the planck function over all frequencies, we
+  ! get sigma T^4 / pi. So we need to rescale our integrals 
+  ! by this value divided by the luminosity of the star
+  do i=1,59
+     rescale_factor = (10.d0**larkin_llum(i) * L_sun) / (sb * (larkin_temp(i)**4.d0) / pi)
+
+     ! Loop over groups
+     do ip = 1, nGroups
+
+        ! No update for non-SED groups (L0>L1):
+        if(group_L0(ip).ne. 0d0 .and. group_L1(ip) .ne. 0d0 .and. &
+             &  (group_L0(ip) .ge. group_L1(ip)) ) cycle
+
+        ! Fill out the X and Y arrays for integration
+        lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
+        lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+        delta_lambda = (lambda_max - lambda_min) / 100000.0
+
+        ! Initialize X and Y arrays and fill them out
+        X = 0.d0
+        Y = 0.d0
+        do ii=1, 100000
+           atmosphere_scale = 1.0
+           X(ii) = lambda_min + (delta_lambda * (real(ii,kind=dp)-1.d0))
+           if (X(ii).lt.912.d0) atmosphere_scale = 0.75d0
+           if (X(ii).lt.228.d0) atmosphere_scale = 0.25d0
+           Y(ii) = atmosphere_scale * blackbody(larkin_temp(i), X(ii)) / (hplanck * c_cgs / (X(ii)*1e-8)) ! Convert to photon number
+           X(ii) = X(ii) * 1.d-8
+        end do
+
+        ! Integrate to get the number of photons
+        larkin_nphot(i,ip) = trapz1(X,Y,100000) * rescale_factor
+
+     end do
+
+  end do
+END SUBROUTINE init_popIII_table
+
+FUNCTION get_popIII_temp_from_mass(mass) result(T)
+  ! Return the surface temperature of the Pop III star
+  ! given its mass
+  implicit none
+  real(dp), intent(in):: mass
+  real(dp):: T
+  real(dp):: frac_low, frac_high
+  integer:: idx, i
+
+  ! No extrapolation
+  if (mass.lt.larkin_mass(1)) then
+     T = larkin_temp(1)
+     return
+  end if
+
+  if (mass.ge.larkin_mass(59)) then
+     T = larkin_temp(59)
+     return
+  end if
+
+  ! 1D interpolation
+  idx = 1
+  do i=1,58
+     if (mass.ge.larkin_mass(i) .and. mass.lt.larkin_mass(i+1)) then
+        idx = i
+     end if
+  end do
+
+  frac_high = (mass - larkin_mass(idx)) / (larkin_mass(idx+1) - larkin_mass(idx))
+  frac_low = 1.d0 - frac_high
+
+  T = (frac_low * larkin_temp(idx)) + (frac_high * larkin_temp(idx+1))
+
+END FUNCTION get_popIII_temp_from_mass
+
+FUNCTION interpolate_popII_age(mass) result(main_sequence_lifetime)
+  ! Fit to the main sequence age of a star for all metallicities in MIST
+  ! A 6th degree polynomial works very well
+  implicit none
+  real(dp), intent(in):: mass
+  real(dp):: main_sequence_lifetime
+  real(dp):: log_mass
+
+  ! Initialize
+  main_sequence_lifetime = 0.d0
+
+  ! No extrapolation
+  log_mass = LOG10(MIN(MAX(mass,0.1d0),300.d0))
+
+  main_sequence_lifetime = main_sequence_lifetime + (-0.01238189d0 * (log_mass**6.d0)) 
+  main_sequence_lifetime = main_sequence_lifetime + (0.11748747d0 * (log_mass**5.d0)) 
+  main_sequence_lifetime = main_sequence_lifetime + (-0.44017475d0 * (log_mass**4.d0))
+  main_sequence_lifetime = main_sequence_lifetime + (0.6436884d0 * (log_mass**3.d0))
+  main_sequence_lifetime = main_sequence_lifetime + (0.50033302d0 * (log_mass**2.d0))
+  main_sequence_lifetime = main_sequence_lifetime + (-3.21486962d0 * log_mass) + 9.80173894d0
+
+  ! Convert to Myr
+  main_sequence_lifetime = (10.d0**main_sequence_lifetime) / 1.d6
+
+END FUNCTION interpolate_popII_age
+
+FUNCTION interpolate_popII_table(log_fe_over_h,mass,ig) result(nphot_per_second)
+  ! Function to get the number of photons emitted by a Pop II star
+  ! of a given metallicity and mass
+  implicit none
+  real(dp), intent(in):: log_fe_over_h,mass
+  integer, intent(in):: ig
+  real(dp):: nphot_per_second
+  real(dp):: met_loc, mass_loc, tx, ty
+  real(dp):: f11, f21, f12, f22
+  integer:: idx_met, idx_mass, i
+
+  ! Initialize
+  nphot_per_second = 0.d0
+
+  ! No emission from low mass stars...sorry
+  if (mass.lt.mist_mass(1)) then
+     nphot_per_second = 0.d0
+     return
+  end if
+
+  ! No extrapolation for metallicity
+  met_loc = MIN(MAX(log_fe_over_h,mist_fe_over_h(1)),mist_fe_over_h(15))
+
+  ! No extrapolation for mass
+  mass_loc = MIN(mass,mist_mass(55))
+
+  ! Get the relevent indices in the mass and metallicity arrays
+  idx_met = 1
+  do i=1,14
+     if (met_loc.ge.mist_fe_over_h(i) .and. met_loc.le.mist_fe_over_h(i+1)) then
+        idx_met = i
+     end if
+  end do
+
+  idx_mass = 1
+  do i=1,54
+     if (mass_loc.ge.mist_mass(i) .and. mass_loc.le.mist_mass(i+1)) then
+        idx_mass = i
+     end if
+  end do
+
+  ! Get function values at corners
+  f11 = mist_nphot(idx_met,   idx_mass, ig)
+  f21 = mist_nphot(idx_met+1, idx_mass, ig)
+  f12 = mist_nphot(idx_met,   idx_mass+1, ig)
+  f22 = mist_nphot(idx_met+1, idx_mass+1, ig)
+
+  ! Normalize distances
+  tx = (met_loc - mist_fe_over_h(idx_met)) / (mist_fe_over_h(idx_met+1) - mist_fe_over_h(idx_met))
+  ty = (mass_loc - mist_mass(idx_mass)) / (mist_mass(idx_mass+1) - mist_mass(idx_mass))
+
+  ! Bilinear interpolation formula
+  nphot_per_second = (1.0d0 - tx)*(1.0d0 - ty)*f11 + tx*(1.0d0 - ty)*f21 + (1.0d0 - tx)*ty*f12 + tx*ty*f22
+
+END FUNCTION interpolate_popII_table
+
+FUNCTION interpolate_popIII_table(T,ig) result(nphot_per_second)
+  ! Function to get the number of photons emitted by a Pop III star
+  ! of a given blackbody temperature
+  implicit none
+  real(dp), intent(in):: T
+  integer, intent(in):: ig
+  real(dp):: nphot_per_second
+  real(dp):: T_loc, frac_low, frac_high
+  integer:: idx, i
+
+  T_loc = T
+
+  ! No extrapolation
+  if (T_loc.lt.larkin_temp(1)) then
+     nphot_per_second = larkin_nphot(1,ig)
+     return
+  end if
+
+  if (T_loc.ge.larkin_temp(59)) then
+     nphot_per_second = larkin_nphot(59,ig)
+     return
+  end if
+
+  ! 1D interpolation
+  idx = 1
+  do i=1,58
+     if (T_loc.ge.larkin_temp(i) .and. T_loc.lt.larkin_temp(i+1)) then
+        idx = i
+     end if
+  end do
+
+  frac_high = (T_loc - larkin_temp(idx)) / (larkin_temp(idx+1) - larkin_temp(idx))
+  frac_low = 1.d0 - frac_high
+
+  nphot_per_second = (frac_low * larkin_nphot(idx,ig)) + (frac_high * larkin_nphot(idx+1,ig))
+
+END FUNCTION interpolate_popIII_table
+
+#endif
 
 #endif
 

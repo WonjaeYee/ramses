@@ -4,7 +4,7 @@ subroutine backup_hydro(filename, filename_desc)
   use dump_utils, only : dump_header_info, generic_dump, dim_keys
 #ifdef RTZ
   use rtz_module
-  use rt_parameters, only:iIons, nIons
+  use rt_parameters, only:iIons, nIons, isCO_rtz, isH2_rtz
 #endif
   use mpi_mod
   implicit none
@@ -142,6 +142,7 @@ subroutine backup_hydro(filename, filename_desc)
                  do i = 1, ncache
                     xdp(i) = uold(ind_grid(i)+iskip, ivar)/max(uold(ind_grid(i)+iskip, 1), smallr)
                  end do
+
 #if NMETALS > 1
                  if (metal .and. ivar.ge.imetal .and. ivar.lt.iIons) then
 #ifdef RTZ
@@ -155,6 +156,13 @@ subroutine backup_hydro(filename, filename_desc)
                           end if
                        end if
                     end do
+
+#ifdef CO  
+                 if (isCO_rtz) then         
+                    if (ivar.eq.iCO) field_name = 'CO'
+                 end if
+#endif
+
 #else
                     write(field_name, '("metallicity_", i0.2)') ivar - imetal    
 #endif  
@@ -176,8 +184,20 @@ subroutine backup_hydro(filename, filename_desc)
                           end do
                        end if
                     end do
+
+                    ! Deal with molecules separately
+                    if (isH2_rtz) then
+                       if (ivar.eq.counter + iIons + 1) field_name = 'H2'
+                    end if
+
                  else
                     write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener
+
+                    ! Deal with refinement scalar
+                    if (ivar_refine.gt.nhydro) then
+                       if (ivar.eq.ivar_refine) field_name = 'refinement_scalar'
+                    end if
+
                  endif
 #else
                     write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener

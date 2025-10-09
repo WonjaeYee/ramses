@@ -16,7 +16,7 @@ NDIM = 3
 # Float precision size
 NPRE = 8
 # hydro/mhd/rhd solver
-SOLVER = hydro
+SOLVER = mhd
 # Patch
 PATCH =
 # Use RT? 1=Yes, 0=No
@@ -24,13 +24,12 @@ RT = 0
 # Use RTZ? 1=Yes, 0=No (note, do not set both RT and RTZ to 1!)
 RTZ = 1
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
-USE_TURB = 1
-TURB_GRID_SIZE = 64
+USE_TURB = 0
 # Use MPI? 1=Yes, 0=No
 MPI = 1
 MPIF90 = mpif90
 # Root name of executable
-EXEC = /work/project-imf/bin/ramses_dev_CheckUpdate_$(TURB_GRID_SIZE)_
+EXEC = ramses
 # Number of additional energies
 NENER = 0
 # Use Grackle cooling? 1=Yes, 0=No
@@ -50,7 +49,7 @@ LIGHT_MPI_COMM = 0
 N_HYDROGEN_IONS = 2
 N_H2 = 1
 N_HELIUM_IONS = 3
-N_CARBON_IONS = 7
+N_CARBON_IONS = 6
 N_NITROGEN_IONS = 6
 N_OXYGEN_IONS = 6
 N_NEON_IONS = 6
@@ -98,7 +97,7 @@ GITREPO = $(shell git config --get remote.$(GITREMOTE).url)
 BUILDDATE = $(shell date +"%D-%T")
 BUILDCOMMAND =${MAKE} ${MAKEFLAGS}
 DEFINES = -DNVECTOR=$(NVECTOR) -DNDIM=$(NDIM) -DNPRE=$(NPRE) -DNENER=$(NENER) \
-          -DNVAR=$(NVAR) -DNHYDRO=$(NHYDRO) -DSOLVER$(SOLVER)
+          -DNVAR=$(NVAR) -DNHYDRO=$(NHYDRO) -DSOLVER$(SOLVER) -DINDIVIDUAL_SINK_STARS
 ifeq ($(ATON),1)
    DEFINES += -DATON
 endif
@@ -130,7 +129,7 @@ ifeq ($(CO),1)
 endif
 endif
 ifeq ($(USE_TURB),1)
-   DEFINES += -DUSE_TURB -DTURB_GRID_SIZE=$(TURB_GRID_SIZE)
+   DEFINES += -DUSE_TURB
 endif
 ifeq ($(LIGHT_MPI_COMM), 1)
    DEFINES += -DLIGHT_MPI_COMM
@@ -149,16 +148,16 @@ ifeq ($(COMPILER),GNU)
       FC = gfortran
       FFLAGS += -DWITHOUTMPI
    endif
-   F90 += -ffree-line-length-none -fimplicit-none -fPIE
-   FC += -ffree-line-length-none -fimplicit-none -fPIE
+   F90 += -ffree-line-length-none -fimplicit-none -ffixed-line-length-none 
+   FC += -ffree-line-length-none -fimplicit-none -ffixed-line-length-none 
    ifeq ($(GCOV),1)
          F90 += -O0 -fprofile-arcs -ftest-coverage
    else
       ifeq ($(DEBUG),1)
-         F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
-         # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
+         F90 += -g -O0 -fbacktrace -fbounds-check -Wuninitialized -Wall
+	 #FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
       else
-         F90 += -O3 -mcmodel=medium
+         F90 += -O3
       endif
    endif
 endif
@@ -175,13 +174,13 @@ ifeq ($(COMPILER),INTEL)
       FC = ifort
       FFLAGS += -DWITHOUTMPI
    endif
-   F90 += -fp-model source
-   FC += -fp-model source
+   F90 += -fp-model fast=2
+   FC += -fp-model fast=2
    ifeq ($(DEBUG),1)
       F90 += -warn all -O0 -g -traceback -check bounds
       FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
    else
-      F90 += -O2
+      F90 += -O3
    endif
 endif
 
@@ -201,12 +200,8 @@ ifeq ($(GRACKLE),1)
    LIBS_OBJ     = -I$(HOME)/local/include -DCONFIG_BFLOAT_8 -DH5_USE_16_API -fPIC
 endif
 ifeq ($(USE_TURB),1)
-   # LIBS_TURB = -L$(HOME)/local/lib -lfftw3
-   # LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
-   # LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
-   # LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
-   LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
-   LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
+   LIBS_TURB = -L$(HOME)/local/lib -lfftw3
+   LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
 endif
 LIBS = $(LIBMPI) $(LIBS_GRACKLE) $(LIBS_TURB)
 #############################################################################
@@ -226,14 +221,15 @@ VPATH += ../hydro:../pm:../poisson:../amr:../io
 #############################################################################
 # All objects
 MODOBJ = mpi_mod.o amr_parameters.o amr_commons.o amr_constants.o random.o pm_parameters.o sink_feedback_parameters.o \
-         pm_commons.o poisson_parameters.o collapse_parameters.o dump_utils.o constants.o safe_math.o file_module.o
+         pm_commons.o poisson_parameters.o collapse_parameters.o dump_utils.o constants.o safe_math_module.o file_module.o \
+         imf_module.o
 ifeq ($(GRACKLE),1)
    MODOBJ += grackle_parameters.o
 endif
 MODOBJ += poisson_commons.o hydro_parameters.o hydro_commons.o \
           cooling_module.o bisection.o sparse_mat.o clfind_commons.o \
           gadgetreadfile.o write_makefile.o write_patch.o write_gitinfo.o \
-          metal_yields_module.o sink_sn_feedback.o
+          metal_yields_module.o sink_sn_feedback.o 
 ifeq ($(RT),1)
    MODOBJ += rt_parameters.o rt_hydro_commons.o coolrates_module.o \
              rt_spectra.o rt_cooling_module.o rt_flux_module.o
@@ -254,7 +250,7 @@ AMROBJ = read_params.o init_amr.o init_time.o init_refine.o tracer_utils.o adapt
          amr_step.o update_time.o timer.o output_amr.o flag_utils.o \
          physical_boundaries.o virtual_boundaries.o refine_utils.o \
          nbors_utils.o hilbert.o load_balance.o title.o sort.o cooling_fine.o \
-         eos.o units.o light_cone.o movie.o memory.o end.o
+         eos.o units.o light_cone.o movie_lines_module.o movie.o memory.o end.o
 # Particle-Mesh objects
 PMOBJ = init_part.o output_part.o rho_fine.o synchro_fine.o move_fine.o \
         newdt_fine.o particle_tree.o add_list.o remove_list.o star_formation.o \

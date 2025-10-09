@@ -57,6 +57,7 @@ module rt_parameters
   logical::rt_star=.false.             ! Activate radiation from star particles?         !
   logical::rt_AGN=.false.              ! Activate radiation from sink particles on central cloud !
   logical::rt_sink=.false.             ! Activate radiation from sinks
+  logical::rt_sink_central_cloud=.true.! Radiation from sinks only on central cloud particle !
   real(dp)::rt_esc_frac=1d0            ! Escape fraction of light from stellar particles !
   logical::rt_is_init_xion=.false.     ! Initialize ionization from T profile?           !
   character(LEN=10)::rt_flux_scheme='glf'                                                !
@@ -160,7 +161,10 @@ module rt_parameters
   ! H2 parameters ------------------------------------------------------------------------
   ! Self-shielding factor, see Nickerson, Teyssier, & Rosdahl (2018)
   ! Array to track which groups are in the Lyman-Werner band, 11.2 eV to 13.6 eV
-  real(dp),dimension(1:NGROUPS)::ssh2 = 1d0, isLW = 0d0
+  real(dp),dimension(1:NGROUPS)::ssh2 = 1d0
+#ifndef RTZ
+  real(dp),dimension(1:NGROUPS)::isLW = 0d0
+#endif
 
 #ifdef RTZ
   ! RTZ parameters -----------------------------------------------------------------------
@@ -173,7 +177,9 @@ module rt_parameters
   logical::rtz_include_dust_recombination=.true.
   logical::rtz_include_HM12_UVB=.true.
   logical::isH2_rtz=.false.
+  integer,dimension(1:NGROUPS)::isLW=0
   logical::isCO_rtz=.false.
+  real(dp)::rtz_H2_clumping=1.d0
   real(dp)::rtz_UV_background_G0=0.d0
   real(dp)::rtz_primary_cosmic_ray_ionization_rate=0.d0
   real(dp)::rtz_max_cool_timestep=1.d11

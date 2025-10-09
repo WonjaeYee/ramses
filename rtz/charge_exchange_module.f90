@@ -65,6 +65,7 @@ SUBROUTINE load_ct_rates()
 END SUBROUTINE load_ct_rates
 
 FUNCTION charge_transfer_recombination(ion, nelem, T) result(rate)
+  use safe_math, only: safe_exp
   ! ion is stage of ionization, 2 for the ion going to the atom
   ! nelem is atomic number of element, 2 up to 30
   ! Example:  O+ + H => O + H+ is HCTRecom(2,8,1e4)
@@ -97,11 +98,14 @@ FUNCTION charge_transfer_recombination(ion, nelem, T) result(rate)
   tused = max(tused,1d-10) ! harley added to prevent zero temperature
 
   ! The interpolation equation
-  rate = CTRecomb(1,ipIon,nelem) * 1d-9 * (tused**CTRecomb(2,ipIon,nelem)) * (1.d0 + CTRecomb(3,ipIon,nelem) * exp(CTRecomb(4,ipIon,nelem)*tused) )
+  rate = CTRecomb(1,ipIon,nelem) * 1d-9 * (tused**CTRecomb(2,ipIon,nelem)) * (1.d0 + CTRecomb(3,ipIon,nelem) * safe_exp(CTRecomb(4,ipIon,nelem)*tused) )
+
+  rate = MAX(rate,1.d-100)
 
 END FUNCTION charge_transfer_recombination
 
 FUNCTION charge_transfer_ionization(ion, nelem, T) result(rate)
+  use safe_math, only: safe_exp
   ! ion is stage of ionization, 1 for atom
   ! nelem is atomic number of element, 2 up to 30
   ! Example:  O + H+ => O+ + H is HCTIon(1,8,1e4)
@@ -130,7 +134,9 @@ FUNCTION charge_transfer_ionization(ion, nelem, T) result(rate)
   tused = max(tused,1d-10) ! harley added to prevent zero temperature
 
   ! the interpolation equation
-  rate = CTIon(1,ipIon,nelem) * 1d-9 * (tused**CTIon(2,ipIon,nelem)) * (1.d0 + CTIon(3,ipIon,nelem) * exp(CTIon(4,ipIon,nelem)*tused) ) * exp(-1.d0 * CTIon(7,ipIon,nelem)/tused)
+  rate = CTIon(1,ipIon,nelem) * 1d-9 * (tused**CTIon(2,ipIon,nelem)) * (1.d0 + CTIon(3,ipIon,nelem) * safe_exp(CTIon(4,ipIon,nelem)*tused) ) * safe_exp(-1.d0 * CTIon(7,ipIon,nelem)/tused)
+
+  rate = MAX(rate,1.d-100)
 
 END FUNCTION charge_transfer_ionization
 

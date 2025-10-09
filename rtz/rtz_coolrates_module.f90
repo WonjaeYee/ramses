@@ -1,6 +1,7 @@
 ! rtz_coolrates_module.f90
 module rtz_coolrates_module
   use amr_parameters, only: dp
+  use safe_math, only: safe_exp
   implicit none
 
   private  ! everything is private by default
@@ -65,8 +66,10 @@ FUNCTION collisional_ionization_cooling_HI(T) result(rate)
 
     term_1 = 1.27d-21 * sqrt(T)
     term_2 = 1.d0 /(1.d0 + sqrt(T/1.d5))
-    term_3 = exp(-157809.1d0/T)
+    term_3 = safe_exp(-157809.1d0/T)
     rate = term_1 * term_2 * term_3
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_ionization_cooling_HI
 
@@ -79,8 +82,10 @@ FUNCTION collisional_ionization_cooling_HeI(T) result(rate)
 
     term_1 = 9.38d-22 * sqrt(T)
     term_2 = 1.d0 /(1.d0 + sqrt(T/1.d5))
-    term_3 = exp(-285335.4d0/T)
+    term_3 = safe_exp(-285335.4d0/T)
     rate = term_1 * term_2 * term_3
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_ionization_cooling_HeI
 
@@ -93,8 +98,10 @@ FUNCTION collisional_ionization_cooling_HeII(T) result(rate)
 
     term_1 = 4.95d-22 * sqrt(T)
     term_2 = 1.d0 /(1.d0 + sqrt(T/1.d5))
-    term_3 = exp(-631515.d0/T)
+    term_3 = safe_exp(-631515.d0/T)
     rate = term_1 * term_2 * term_3
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_ionization_cooling_HeII
 
@@ -111,6 +118,8 @@ FUNCTION recombination_cooling_case_B_HII(T) result(rate)
     term_3 = (1.d0 + ((lam_HI/2.25d0)**0.376d0))**(-3.72d0)
     rate = term_1 * term_2 * term_3
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION recombination_cooling_case_B_HII
 
 FUNCTION recombination_cooling_case_B_HeII(T) result(rate)
@@ -124,6 +133,8 @@ FUNCTION recombination_cooling_case_B_HeII(T) result(rate)
     term_1 = KB * T * 1.26d-14
     term_2 = lam_HeI**0.75d0
     rate = term_1 * term_2
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION recombination_cooling_case_B_HeII
 
@@ -140,6 +151,8 @@ FUNCTION recombination_cooling_case_B_HeIII(T) result(rate)
     term_3 = (1.d0 + ((lam_HeII/2.25d0)**0.376d0))**(-3.72d0)
     rate = term_1 * term_2 * term_3
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION recombination_cooling_case_B_HeIII
 
 FUNCTION dielectronic_recombination_cooling_HeII(T) result(rate)
@@ -150,9 +163,11 @@ FUNCTION dielectronic_recombination_cooling_HeII(T) result(rate)
     real(dp)::term_1, term_2, term_3
 
     term_1 = 1.24d-13 * (T**(-1.5d0))
-    term_2 = exp(-470000.d0/T)
-    term_3 = 1.d0 + (0.3d0 * exp(-94000.d0/T))
+    term_2 = safe_exp(-470000.d0/T)
+    term_3 = 1.d0 + (0.3d0 * safe_exp(-94000.d0/T))
     rate = term_1 * term_2 * term_3
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION dielectronic_recombination_cooling_HeII
 
@@ -165,8 +180,10 @@ FUNCTION collisional_excitation_cooling_HI(T) result(rate)
 
     term_1 = 7.5d-19
     term_2 = 1.d0 /(1.d0 + sqrt(T/1.d5))
-    term_3 = exp(-118348.d0/T)
+    term_3 = safe_exp(-118348.d0/T)
     rate = term_1 * term_2 * term_3
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_excitation_cooling_HI
 
@@ -176,7 +193,9 @@ FUNCTION collisional_excitation_cooling_HI_seon20(T) result(rate)
     real(dp), intent(in):: T
     real(dp):: rate
 
-    rate = 4.13d-19 * exp(-117744.0d0/T)
+    rate = 4.13d-19 * safe_exp(-117744.0d0/T)
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_excitation_cooling_HI_seon20
 
@@ -189,8 +208,10 @@ FUNCTION collisional_excitation_cooling_HeII(T) result(rate)
 
     term_1 = 5.54d-17 * (T**(-0.397d0))
     term_2 = 1.d0 /(1.d0 + sqrt(T/1.d5))
-    term_3 = exp(-473638.d0/T)
+    term_3 = safe_exp(-473638.d0/T)
     rate = term_1 * term_2 * term_3
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_excitation_cooling_HeII
 
@@ -239,19 +260,21 @@ FUNCTION H2_cooling(nH, nH2, T) result(rate)
     x3 = nH + (0.75d0 * nH2)
     x4 = nH + (0.05d0 * nH2)
 
-    f1 = 1.1d-25 * sqrt(T3) * exp(-0.51d0 / T3)
+    f1 = 1.1d-25 * sqrt(T3) * safe_exp(-0.51d0 / T3)
     f1 = f1 * (((0.7d0 * x1) / (1.d0 + (x1/n1))) + ((0.30d0 * x1)/(1.d0 + (x1/(10.d0*n1)))))
 
-    f2 = 2.0d-25 * T3 * exp(-1.d0 / T3)
+    f2 = 2.0d-25 * T3 * safe_exp(-1.d0 / T3)
     f2 = f2 * (((0.35d0 * x2) / (1.d0 + (x2/n2))) + ((0.65d0 * x2)/(1.d0 + (x2/(10.d0*n2)))))
 
-    f3 = 2.4d-24 * (T3**1.50d0) * exp(-2.0d0 / T3)
+    f3 = 2.4d-24 * (T3**1.50d0) * safe_exp(-2.0d0 / T3)
     f3 = f3 * (x3 / (1.d0 + (x3/n3)))
 
-    f4 = 1.7d-23 * (T3**1.50d0) * exp(-4.0d0 / T3)
+    f4 = 1.7d-23 * (T3**1.50d0) * safe_exp(-4.0d0 / T3)
     f4 = f4 * (((0.45d0 * x4) / (1.d0 + (x4/n4))) + ((0.55d0 * x4)/(1.d0 + (x4/(10.d0*n4)))))
 
     rate = nH2 * (f1 + f2 + f3 + f4)
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION H2_cooling
 
@@ -276,6 +299,8 @@ FUNCTION H2_cooling_G15(T) result(rate)
     rate = rate - (2.2148338d0 * logT3**7.d0)
     rate = rate + (1.8161874d0 * logT3**8.d0)
     rate = (10.d0**(rate))
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION H2_cooling_G15
 
@@ -395,6 +420,8 @@ FUNCTION H2_cooling_GA08(T, n_e, n_HI, n_HII, n_HeI, n_H2) result(rate)
 
     rate = n_H2*gphdl/(1.d0 + gphdl/galdl) ! erg/cm^3/s
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION H2_cooling_GA08
 
 FUNCTION cooling_H2GP(nH,nH2,Tgas) result(rate)
@@ -422,9 +449,9 @@ FUNCTION cooling_H2GP(nH,nH2,Tgas) result(rate)
     end if
 
     !high density limit
-    HDLR = ((9.5e-22*t3**3.76)/(1.+0.12*t3**2.1)*exp(-(0.13/t3)**3)+&
-        3.e-24*exp(-0.51/t3)) !erg/s
-    HDLV = (6.7e-19*exp(-5.86/t3) + 1.6e-18*exp(-11.7/t3)) !erg/s
+    HDLR = ((9.5e-22*t3**3.76)/(1.+0.12*t3**2.1)*safe_exp(-(0.13/t3)**3)+&
+        3.e-24*safe_exp(-0.51/t3)) !erg/s
+    HDLV = (6.7e-19*safe_exp(-5.86/t3) + 1.6e-18*safe_exp(-11.7/t3)) !erg/s
     HDL  = HDLR + HDLV !erg/s
 
     !to avoid division by zero
@@ -433,6 +460,8 @@ FUNCTION cooling_H2GP(nH,nH2,Tgas) result(rate)
     else
         rate = nH2/(1d0/HDL+1d0/LDL) !erg/cm3/s
     endif
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION cooling_H2GP
 
@@ -735,7 +764,7 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     t_max = 9.d0
     dt = 0.05d0
     rate = 0.d0
-    t_scale_fac = exp(-1.d0 * ((2000.d0/loc_T)**5.d0))
+    t_scale_fac = safe_exp(-1.d0 * ((2000.d0/loc_T)**5.d0))
 
     ! bounds for temperature --> no cooling
     if (log_T < t_min) then
@@ -833,6 +862,8 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     end do
 
     rate = rate * t_scale_fac
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION get_high_t_cooling_rates
 
@@ -942,9 +973,9 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     B_21 = (g_1 / g_2) * B_12
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10**3.d0) / (C_CGS*C_CGS)) / (exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
-    B_nu_20 = (2.d0 * H_PLANCK * (nu_20**3.d0) / (C_CGS*C_CGS)) / (exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
-    B_nu_21 = (2.d0 * H_PLANCK * (nu_21**3.d0) / (C_CGS*C_CGS)) / (exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
+    B_nu_10 = (2.d0 * H_PLANCK * (nu_10**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    B_nu_20 = (2.d0 * H_PLANCK * (nu_20**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
+    B_nu_21 = (2.d0 * H_PLANCK * (nu_21**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
 
     ! Find temperature index
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -998,9 +1029,9 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     C_20 = (q20_e * ne) + (q20_H * nH) + (q20_Hp * nHp) + (q20_oH2 * 0.75d0 * nH2) + (q20_pH2 * 0.25d0 * nH2) + (q20_He * nHe) + (q20_Hep * nHep) + (q20_Hepp * nHepp)
     C_21 = (q21_e * ne) + (q21_H * nH) + (q21_Hp * nHp) + (q21_oH2 * 0.75d0 * nH2) + (q21_pH2 * 0.25d0 * nH2) + (q21_He * nHe) + (q21_Hep * nHep) + (q21_Hepp * nHepp)
 
-    C_01 = C_10 * (g_1/g_0) * exp(-1.d0 * E_10 / T)
-    C_02 = C_20 * (g_2/g_0) * exp(-1.d0 * E_20 / T)
-    C_12 = C_21 * (g_2/g_1) * exp(-1.d0 * E_21 / T)
+    C_01 = C_10 * (g_1/g_0) * safe_exp(-1.d0 * E_10 / T)
+    C_02 = C_20 * (g_2/g_0) * safe_exp(-1.d0 * E_20 / T)
+    C_12 = C_21 * (g_2/g_1) * safe_exp(-1.d0 * E_21 / T)
 
     C_01 = C_01 + (B_01*B_nu_10)
     C_02 = C_02 + (B_02*B_nu_20)
@@ -1098,7 +1129,7 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     B_10 = (g_0 / g_1) * B_01
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10**3.d0) / (C_CGS*C_CGS)) / (exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    B_nu_10 = (2.d0 * H_PLANCK * (nu_10**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
 
     ! Find temperature index.
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -1134,7 +1165,7 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     ! Net collision strengths note the 75-25 ortho-para H2
     C_10 = (q10_e * ne) + (q10_H * nH) + (q10_Hp * nHp) + (q10_oH2 * 0.75d0 * nH2) + (q10_pH2 * 0.25d0 * nH2) + (q10_He * nHe) + (q10_Hep * nHep) + (q10_Hepp * nHepp)
     
-    C_01 = C_10 * (g_1/g_0) * exp(-1.d0 * E_10 / T)
+    C_01 = C_10 * (g_1/g_0) * safe_exp(-1.d0 * E_10 / T)
 
     ! Analytic solution to the 2 level system (modified version of paul goldsmith papers)
     ! Done this way to avoid numerical errors
@@ -1187,6 +1218,8 @@ FUNCTION OI_fine_structure(T, n_ion, nH, nHp, &
                         z, T, &
                         n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                         8, 9, 10)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION OI_fine_structure
 
 ! OIII fine structure calculation function 
@@ -1221,6 +1254,8 @@ FUNCTION OIII_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        13, 14, 15)
+    
+    rate = MAX(rate,1.d-100)
 END FUNCTION OIII_fine_structure
 
 FUNCTION CI_fine_structure(T, n_ion, nH, nHp, &
@@ -1254,6 +1289,8 @@ FUNCTION CI_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        2, 3, 4)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION CI_fine_structure
 
 FUNCTION CII_fine_structure(T, n_ion, nH, nHp, &
@@ -1282,6 +1319,8 @@ FUNCTION CII_fine_structure(T, n_ion, nH, nHp, &
                     z, T, &
                     n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                     1)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION CII_fine_structure
 
 FUNCTION NII_fine_structure(T, n_ion, nH, nHp, &
@@ -1315,6 +1354,8 @@ FUNCTION NII_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        5, 6, 7)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION NII_fine_structure
 
 FUNCTION SiI_fine_structure(T, n_ion, nH, nHp, &
@@ -1348,6 +1389,8 @@ FUNCTION SiI_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        22, 23, 24)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION SiI_fine_structure
 
 FUNCTION SiII_fine_structure(T, n_ion, nH, nHp, &
@@ -1376,6 +1419,8 @@ FUNCTION SiII_fine_structure(T, n_ion, nH, nHp, &
                     z, T, &
                     n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                     12)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION SiII_fine_structure
 
 FUNCTION NeII_fine_structure(T, n_ion, nH, nHp, &
@@ -1404,6 +1449,8 @@ FUNCTION NeII_fine_structure(T, n_ion, nH, nHp, &
                     z, T, &
                     n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                     11)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION NeII_fine_structure
 
 FUNCTION FeI_fine_structure(T, n_ion, nH, nHp, &
@@ -1437,6 +1484,8 @@ FUNCTION FeI_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        16, 17, 18)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION FeI_fine_structure
 
 FUNCTION FeII_fine_structure(T, n_ion, nH, nHp, &
@@ -1470,6 +1519,8 @@ FUNCTION FeII_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        19, 20, 21)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION FeII_fine_structure
 
 FUNCTION SI_fine_structure(T, n_ion, nH, nHp, &
@@ -1503,6 +1554,8 @@ FUNCTION SI_fine_structure(T, n_ion, nH, nHp, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
                        25, 26, 27)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION SI_fine_structure
 
 FUNCTION dust_recombination_cooling(T, G0, ne, f_dg, nH) result(rate)
@@ -1515,6 +1568,8 @@ FUNCTION dust_recombination_cooling(T, G0, ne, f_dg, nH) result(rate)
     beta_drc = 0.74d0 / (T**0.068d0)
     rate = (1.5d0 * 4.65d-30) * (T**0.94d0) * ((G0 * sqrt(T) / (0.5*ne))**beta_drc) * ne * 0.5d0 * f_dg * nH
     ! rate = 4.65d-30 * (T**0.94d0) * ((G0 * sqrt(T) / (0.5*ne))**beta_drc) * ne * 0.5d0 * f_dg * nH
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION dust_recombination_cooling
 
@@ -1531,7 +1586,9 @@ FUNCTION dust_recombination_cooling_WD01(T, G0, ne, f_dg, nH) result(rate)
     D2 = -6.266d0
     D3 = 1.442d0
     D4 = 0.05089d0
-    rate = 1d-28 * ne * nH * f_dg * (T**(D0 + D1/Gfac)) * exp(D2 + D3*Gfac - D4*Gfac*Gfac)
+    rate = 1d-28 * ne * nH * f_dg * (T**(D0 + D1/Gfac)) * safe_exp(D2 + D3*Gfac - D4*Gfac*Gfac)
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION dust_recombination_cooling_WD01
 
@@ -1546,9 +1603,11 @@ FUNCTION dust_gas_collisional_cooling(T, G0, xH2, aexp, nH, f_dg) result(rate)
     T_dust = 16.4d0 * ((1.7d0 * G0)**(1.d0/6.d0))
     T_dust = max( T_dust, 2.725d0 * ( (1.d0/aexp) - 1.d0 ) ) ! Limit dust temp minimum to CMB temp
 
-    rate = dust_hc_const * sqrt(T) * (T - T_dust) * ( 1.d0 - ( 0.8d0 * exp(-75.d0/T) ) )
+    rate = dust_hc_const * sqrt(T) * (T - T_dust) * ( 1.d0 - ( 0.8d0 * safe_exp(-75.d0/T) ) )
     ! rate = 1.5d0 * rate * nH * nH * f_dg
     rate = rate * nH * nH * f_dg
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION dust_gas_collisional_cooling
 
@@ -1562,6 +1621,8 @@ FUNCTION PE_efficiency(G0, T, ne) result(rate)
     fact = G0 * sqrt(T) / (ne * phi_pah)
     rate = (4.9d-2/(1.d0 + 4.d-3 * (fact**0.73d0))) + (3.7d-2 * ((T/1.d4)**0.7d0) / (1.d0 + 2.d-4 * fact))
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION PE_efficiency
 
 FUNCTION photoelectric_heating(T, G0, ne, f_dg, nH) result(rate)
@@ -1573,6 +1634,8 @@ FUNCTION photoelectric_heating(T, G0, ne, f_dg, nH) result(rate)
     eps_PE = PE_efficiency(G0, T, ne)
     rate = 1.5d0 * 1.3d-24 * eps_PE * G0 * f_dg * nH ! [erg/cm3/s]
     ! rate = 1.3d-24 * eps_PE * G0 * f_dg * nH ! [erg/cm3/s]
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION photoelectric_heating
 
@@ -1595,6 +1658,8 @@ FUNCTION photoelectric_heating_WD01(T, G0, ne, f_dg, nH) result(rate)
     Gfac = 1.7d0 * G0 * sqrt(T) / ne
     rate = 1.7d-26 * G0 * f_dg * nH * (C0 + C1 * (T**C4))
     rate = rate / (1.d0 + C2 * (Gfac**C5) * (1.d0 + C3 * (Gfac**C6)))
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION photoelectric_heating_WD01
 
@@ -1674,6 +1739,8 @@ FUNCTION cosmic_ray_heating(xe, n_HI, n_HeI, n_H2, ne, xi_h_cr, &
 
     end do ! END LOOP OVER ELEMENTS
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION cosmic_ray_heating
 
 FUNCTION photoheating_UVB(element_number_densities, element_ion_fractions) result(rate)
@@ -1708,6 +1775,8 @@ FUNCTION photoheating_UVB(element_number_densities, element_ion_fractions) resul
 
     end do ! END LOOP OVER ELEMENTS
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION photoheating_UVB
 
 FUNCTION photoheating_UVB_G0(G0, element_number_densities, element_ion_fractions) result(rate)
@@ -1740,6 +1809,8 @@ FUNCTION photoheating_UVB_G0(G0, element_number_densities, element_ion_fractions
     
     end do
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION photoheating_UVB_G0
 
 FUNCTION Epump(nH, T, xH2, xHI) result(Ep)
@@ -1750,7 +1821,7 @@ FUNCTION Epump(nH, T, xH2, xHI) result(Ep)
     real(dp):: Ep
     real(dp):: Crad, Cdex, Cfrac
     Crad = 2.0d-7     !radiation de-excitation rate Burton 1990
-    Cdex = (1.0d-12)*((1.4d0*xH2*exp(-18100.d0/(T + 1200.d0))) + (1.d0*xHI*exp(-1000.d0/T)))*sqrt(T)*nH !collisional de-excitation rate Burton 1990
+    Cdex = (1.0d-12)*((1.4d0*xH2*safe_exp(-18100.d0/(T + 1200.d0))) + (1.d0*xHI*safe_exp(-1000.d0/T)))*sqrt(T)*nH !collisional de-excitation rate Burton 1990
     Cfrac = Cdex / (Cdex + Crad)
     Ep = 2.d0 * Cfrac * EV_2_ERG  !ergs
 END FUNCTION Epump
@@ -1801,6 +1872,8 @@ FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr) re
     
     rate = Hrate_H2_pd + Hrate_H2_form + Hrate_H2_pump
 
+    rate = MAX(rate,1.d-100)
+
 END FUNCTION H2_heating_bialy
 
 FUNCTION H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr) result(rate)
@@ -1827,6 +1900,8 @@ FUNCTION H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr) result(r
     ! Heating from H2 formation
     H2_formation_rate = alpha_H2(T, f_dg, xe, xi_h2_cr, G0, xHI, xHII, nH)
     rate = rate + (2.4d-12 * H2_formation_rate * xHI * nH * nH) ! [cm3 s-1]
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION H2_heating
 
@@ -1923,6 +1998,8 @@ FUNCTION local_photoheating(dNp, element_number_densities, element_ion_fractions
           end do
        end if
     end do
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION local_photoheating
 
 FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
@@ -1936,10 +2013,12 @@ FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
     T_pivot = 3080.d0
     rot = n * nCO * 4.d0*((kB*T)**2.d0)*9.7d-8 / (n * 2.76d0 * kB * (1.d0 + (3.3d6 * (T/1.d3)**(3.d0/4.d0)/n) + 1.5d0*((3.3d6 * (T/1.d3)**(3.d0/4.d0)/n)**0.5d0)))
 
-    vib_H2 = nH2 * nCO * T_pivot * kB * 4.3d-14 * T * EXP(-(3.14d5/T)**0.333d0) * EXP(-T_pivot/T)
-    vib_H = nHI * nCO * T_pivot * kB * 3.0d-12 * (T**0.5d0) * EXP(-(2000.d0/T)**3.43d0) * EXP(-T_pivot/T)
+    vib_H2 = nH2 * nCO * T_pivot * kB * 4.3d-14 * T * safe_exp(-(3.14d5/T)**0.333d0) * safe_exp(-T_pivot/T)
+    vib_H = nHI * nCO * T_pivot * kB * 3.0d-12 * (T**0.5d0) * safe_exp(-(2000.d0/T)**3.43d0) * safe_exp(-T_pivot/T)
 
     rate = (rot + vib_H2 + vib_H)
+
+    rate = MAX(rate,1.d-100)
 END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
@@ -2280,7 +2359,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     end if
 
     !////////////////////////////////////////////////////
-    !//           Calculate Heatint & Cooling          //
+    !//           Calculate Heating & Cooling          //
     !////////////////////////////////////////////////////
     
     !!!!!! Sum all of the cooling rates

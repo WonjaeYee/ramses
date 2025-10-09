@@ -9,6 +9,7 @@ module rtz_module
       integer(KIND=4) :: atomic_number
       integer(KIND=4) :: n_ions
       integer(KIND=4) :: n_mol
+      integer(KIND=4) :: u_hydro_idx
       real(dp)   :: atomic_mass
       real(dp)   :: z_solar
       real(dp)   :: G0_photo_rate
@@ -39,6 +40,7 @@ SUBROUTINE initialize_elements()
       elements(i)%depletion = 1.0
       elements(i)%element_name = "NANANANANANANANANANA"
       elements(i)%symbol = "XX"
+      elements(i)%u_hydro_idx = -1
    enddo
 
    ! Element 1: Hydrogen

@@ -16,6 +16,7 @@ module constants
   real(dp),parameter ::hplanck      = 6.6260702d-27 ! Planck const. [erg s]; SI
   real(dp),parameter ::eV2erg       = 1.6021766d-12 ! Electronvolt [erg]; SI
   real(dp),parameter ::kB           = 1.3806490d-16 ! Boltzmann const. [erg K-1]; SI
+  real(dp),parameter ::sb           = 5.6703744d-05 ! Stefan-Boltzmann const. [erg cm−2 s−1 K−4]
   real(dp),parameter ::c_cgs        = 2.9979246d+10 ! Speed of light [cm s-1]; SI
   real(dp),parameter ::a_r          = 7.5657233d-15 ! Radiation density const. [erg cm-3 K-4]; SI (derived)
   real(dp),parameter ::mH           = 1.6605390d-24 ! H atom mass [g] = amu, i.e. atomic mass unit; NIST

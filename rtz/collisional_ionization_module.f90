@@ -5,6 +5,9 @@ module collisional_ionization_module
 
   private  ! everything is private by default
   public :: collisional_ionization
+  public :: dE_carbon, dE_oxygen, dE_nitrogen
+  public :: dE_neon, dE_magnesium, dE_silicon
+  public :: dE_sulfur, dE_iron
 
   ! Carbon
   real(dp), parameter :: dE_carbon(6)  = [11.3d0, 24.4d0, 47.9d0, 64.5d0, 392.1d0, 490.0d0]
@@ -79,6 +82,7 @@ module collisional_ionization_module
 CONTAINS
 
 FUNCTION coll_ion(T, dE, A, X, K, P) result(rate)
+    use safe_math, only: safe_exp
     implicit none
     real(dp), intent(in) :: T, dE, A, X, K, P
     real(dp) :: rate
@@ -86,10 +90,11 @@ FUNCTION coll_ion(T, dE, A, X, K, P) result(rate)
 
     ! Eqn 1 of Voronov 1997
     U = dE / (T * 8.61732814974056D-05)
-    rate = A * (1.D0 + P * sqrt(U)) * U**K * exp(-U) / (X + U)
+    rate = A * (1.D0 + P * sqrt(U)) * U**K * safe_exp(-U) / (X + U)
 end FUNCTION coll_ion
 
 FUNCTION collisional_ionization(T, ion, element_idx) result(rate)
+    use safe_math, only: safe_exp
     implicit none
     real(dp), intent(in) :: T
     integer, intent(in) :: ion, element_idx
@@ -102,16 +107,16 @@ FUNCTION collisional_ionization(T, ion, element_idx) result(rate)
       case (1) ! Hydrogen
         T5 = T / 1D5
         f = 1.D0 + sqrt(T5)
-        rate = 5.85D-11 * (sqrt(T) / f) * exp(-157809.1D0 / T)
+        rate = 5.85D-11 * (sqrt(T) / f) * safe_exp(-157809.1D0 / T)
 
       case (2) ! Helium
         T5 = T / 1.D5
         f = 1.D0 + sqrt(T5)
           select case (ion)
             case (1) ! HeI -> HeII
-              rate = 2.38D-11 * (sqrt(T) / f) * exp(-285335.4D0 / T)
+              rate = 2.38D-11 * (sqrt(T) / f) * safe_exp(-285335.4D0 / T)
             case (2) ! HeII -> HeIII
-              rate = 5.68D-12 * (sqrt(T) / f) * exp(-631515.0D0 / T)
+              rate = 5.68D-12 * (sqrt(T) / f) * safe_exp(-631515.0D0 / T)
           end select
 
       case (6) ! Carbon
@@ -139,6 +144,8 @@ FUNCTION collisional_ionization(T, ion, element_idx) result(rate)
         rate = coll_ion(T, dE_iron(ion), A_iron(ion), X_iron(ion), K_iron(ion), P_iron(ion))
 
     end select
+
+    rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_ionization
 

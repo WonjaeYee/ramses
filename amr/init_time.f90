@@ -13,7 +13,8 @@ subroutine init_time
   use photoionization_UVB_module, only: load_UVB_data, update_UVB
   use charge_exchange_module, only: load_ct_rates
   use rtz_coolrates_module, only: initialize_high_temperature_metal_cooling, initialize_fine_structure_tables
-  use metal_yields_module, only: initialize_portinari_yields
+  use metal_yields_module, only: initialize_SN_yields
+  use molecules_module, only: initialize_SCO_table
 #else
   use rt_cooling_module
 #endif
@@ -295,8 +296,11 @@ subroutine init_time
         ! Reonization redshift has to be later than starting redshift
         z_reion=min(1d0/(1.1d0*aexp_ini)-1d0,z_reion)
 #ifdef RTZ
-        call rtz_set_model(dble(h0/100.),dble(omega_b),dble(omega_m),dble(omega_l), &
-             & dble(aexp_ini),T2_sim)
+      !   call rtz_set_model(dble(h0/100.),dble(omega_b),dble(omega_m),dble(omega_l), &
+      !        & dble(aexp_ini),T2_sim)
+        ! Grab the initial temperature from the parameter file. This should be
+        ! computed with recfast or equivalent
+        T2_sim = init_T
 #else
         call rt_set_model(dble(h0/100.),dble(omega_b),dble(omega_m),dble(omega_l), &
              & dble(aexp_ini),T2_sim)
@@ -340,8 +344,14 @@ subroutine init_time
   ! Initialize the low temperature cooling tables
   call initialize_fine_structure_tables()
 
+  ! Initialize tables for CO self-shielding
+  call initialize_SCO_table()
+
   ! Initialize the metal yields
-  call initialize_portinari_yields()
+  call initialize_SN_yields()
+
+  ! Initialize rt
+  call update_rt_c
 
 #endif
 

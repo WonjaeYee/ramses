@@ -79,6 +79,7 @@ module hydro_parameters
   real(dp),dimension(1:NVAR-NHYDRO-NENER)::err_grad_var=-1
 #endif
   real(dp),dimension(1:MAXLEVEL)::jeans_refine=-1
+  real(dp),dimension(1:MAXLEVEL)::strom_refine=-1
 
   ! Initial conditions hydro variables
   real(dp),dimension(1:MAXREGION)::d_region=0

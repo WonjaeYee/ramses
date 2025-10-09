@@ -1,6 +1,7 @@
 ! recombination_module.f90
 module recombination_module
   use amr_parameters, only: dp
+  use safe_math, only: safe_exp
   implicit none
 
   private  ! everything is private by default
@@ -527,7 +528,7 @@ FUNCTION alpha_RR(T, RR_rates) result(rate)
   T2 = RR_rates(6)
 
   ! Update B if C and T2 are non-zero
-  B = B + (C * exp(-T2 / T))
+  B = B + (C * safe_exp(-T2 / T))
 
 
   ! Compute components
@@ -551,7 +552,7 @@ FUNCTION alpha_DR(T, DR_rates_e, DR_rates_c) result(rate)
 
   do i = 1, 9
     if (DR_rates_e(i) > 0.0d0) then
-      rate = rate + T**(-1.5d0) * DR_rates_c(i) * exp(-DR_rates_e(i) / T)
+      rate = rate + T**(-1.5d0) * DR_rates_c(i) * safe_exp(-DR_rates_e(i) / T)
     end if
   end do
 
@@ -614,7 +615,7 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
       B  = DR_rates_alt_sulfur(2,ion)
       T0 = DR_rates_alt_sulfur(3,ion)
       T1 = DR_rates_alt_sulfur(4,ion)
-      rate = rate + A * T**(-1.5d0) * exp(-T0 / T) * (1.0d0 + B * exp(-T1 / T))
+      rate = rate + A * T**(-1.5d0) * safe_exp(-T0 / T) * (1.0d0 + B * safe_exp(-T1 / T))
     end if
 
   case (26) ! Iron
@@ -626,10 +627,12 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
       rate = A * (T / 1.0d4)**(-B)
 
       do i = 1, 4
-        rate = rate + T**(-1.5d0) * DR_rates_alt_iron(i+4,ion) * exp(-DR_rates_alt_iron(i,ion) / (8.617333262145d-5 * T))
+        rate = rate + T**(-1.5d0) * DR_rates_alt_iron(i+4,ion) * safe_exp(-DR_rates_alt_iron(i,ion) / (8.617333262145d-5 * T))
       end do
     end if
   end select
+
+  rate = MAX(rate,1.d-100)
 
 END FUNCTION recombination
 

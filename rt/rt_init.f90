@@ -148,7 +148,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rtz_include_collisional_ionization, rtz_include_photoionization&
        & ,rtz_include_cosmic_ray_ionization, rtz_include_charge_exchange &
        & ,rtz_include_dust_recombination, rtz_include_HM12_UVB           &
-       & ,isH2_rtz, isCO_rtz, rtz_UV_background_G0                       &
+       & ,isH2_rtz, isCO_rtz, rtz_UV_background_G0, rtz_H2_clumping      &
        & ,rtz_primary_cosmic_ray_ionization_rate, rtz_max_cool_timestep  &
        & ,rtz_eqm_min_its                                                &
 #endif
@@ -166,7 +166,8 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rt_n_source, rt_u_source, rt_v_source, rt_w_source             &
        ! RT boundary (for boundary conditions)                           &
        & ,rt_n_bound,rt_u_bound,rt_v_bound,rt_w_bound                    &
-       & ,rt_AGN, rt_sink                                                
+       ! Sink RT parameters
+       & ,rt_AGN, rt_sink, rt_sink_central_cloud                                                
 
 
 
@@ -284,10 +285,12 @@ SUBROUTINE read_rt_params(nml_ok)
 #endif
   endif
 
+#ifndef INDIVIDUAL_SINK_STARS
   if(rt_sink.and.(.not.stellar))then
      write(*,*) 'Enable stellar particles to use rt_sink'
      nml_ok=.false.
   endif
+#endif
 
   call read_rt_groups()
 112 format (' Using a level-variable speed of light, with f_c= '20(1pe12.3))
@@ -307,10 +310,12 @@ SUBROUTINE read_rt_groups()
 #ifdef RTZ
   use rtz_cooling_module
   use cross_sections_module
+  use collisional_ionization_module
 #endif
   use SED_module
   implicit none
   integer::i,igroup_HI=0, igroup_HII=0, igroup_HeII=0, igroup_HeIII=0
+  integer::iElement,iIon
 !-------------------------------------------------------------------------
   namelist/rt_groups/group_csn, group_cse, group_egy, spec2group         &
        & , groupL0, groupL1, kappaAbs, kappaSc, group_egy_AGNfrac
@@ -416,6 +421,29 @@ SUBROUTINE read_rt_groups()
   ! in the case of RTZ, perform initialization after reading in group
   ! energies
 
+  ! Initialize the ionization energies
+  ! Loop over elements
+  ionEvs(1,1) = ionEv_HII
+  ionEvs(1,3) = 15.2d0 ! TODO(code): check this
+  ionEvs(2,1) = ionEv_HeII
+  ionEvs(2,2) = ionEv_HeIII
+  do iElement=1, n_elements
+     ! Check if we actually use the element
+     if (elements(iElement)%atomic_number.gt.0) then
+        ! Loop over ionization states
+        do iIon=1,elements(iElement)%n_ions-1 !loop over ionization states
+           if (iElement.eq.6)  ionEvs(iElement,iIon) = dE_carbon(iIon)
+           if (iElement.eq.7)  ionEvs(iElement,iIon) = dE_nitrogen(iIon)
+           if (iElement.eq.8)  ionEvs(iElement,iIon) = dE_oxygen(iIon)
+           if (iElement.eq.10) ionEvs(iElement,iIon) = dE_neon(iIon)
+           if (iElement.eq.12) ionEvs(iElement,iIon) = dE_magnesium(iIon)
+           if (iElement.eq.14) ionEvs(iElement,iIon) = dE_silicon(iIon)
+           if (iElement.eq.16) ionEvs(iElement,iIon) = dE_sulfur(iIon)
+           if (iElement.eq.26) ionEvs(iElement,iIon) = dE_iron(iIon)
+        end do ! End loop over ionization states
+     end if
+  end do ! End loop over elements
+
   ! Frist initialize the cross sections data
   call initialize_cross_sections()
 
@@ -424,6 +452,19 @@ SUBROUTINE read_rt_groups()
 
   ! Initialize group energies for the same black body
   call initialize_group_energies_from_blackbody(1.d5, groupL0, groupL1, group_egy)
+
+#ifdef INDIVIDUAL_SINK_STARS
+  ! Load in Pop II stellar properties
+  call init_popII_stellar_properties
+
+  ! Get the number of photons emitted by each Pop II star
+  ! in each photon group
+  call init_popII_table(groupL0, groupL1)
+
+  ! Get the number of photons emitted by each Pop III star
+  ! in each photon group
+  call init_popIII_table(groupL0, groupL1)
+#endif
 
 #endif
 
@@ -439,7 +480,11 @@ SUBROUTINE read_rt_groups()
         if((groupL0(i) .ge. 11.2) .and. (groupL1(i) .le. 13.6)          &
            .and. (groupL0(i) .le. 13.6) .and. (groupL1(i) .ge. 11.2))then
            ssh2(i) = 4d2 ! H2 self-shielding factor
+#ifndef RTZ
            isLW(i) = 1d0 ! Index for LW groups
+#else
+           isLW(i) = 1 ! Index for LW groups
+#endif
         endif
     enddo
   endif

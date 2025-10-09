@@ -389,6 +389,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
+         if (loopcnt.gt.100000) then
+            write(*,*)ilevel,rt_c_cgs(ilevel)
+            write(*,*) "Too high loopcnt",loopcnt
+            stop
+         end if
          nAct_next=0                     ! Active cells for the next iteration
          do ia=1,nAct                             ! Loop over the active cells
             i = indAct(ia)                        !                 Cell index
@@ -493,7 +498,7 @@ contains
     integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
     integer:: i_current_Ion
     real(dp):: Zsolar, total_G0
-    real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, f_shd
+    real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, f_shd, f_shd_CO
     real(dp):: nElement_dep(n_elements)
 #ifdef CO
     real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -535,8 +540,12 @@ contains
 #endif
 
     f_shd = 1.d0
+    f_shd_CO = 1.d0
     if (isH2_rtz) then
        f_shd = comp_SH2(nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(nElement_dep(1)*dXion(1,1), nElement_dep(1)*dXion(1,3), dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
+    end if
+    if (isCO_rtz) then
+       f_shd_CO = comp_SCO(nCO(icell), nElement_dep(1)*dXion(1,3), dx_SS_H2)
     end if
 
 #ifdef RT
@@ -615,7 +624,7 @@ contains
 
           ! Deal with molecules separately
           if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-             if (isLW(igroup).eq.1.d0) then 
+             if (isLW(igroup).eq.1) then 
                 phAbs(igroup) = 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
              else
                 phAbs(igroup) = 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
@@ -823,10 +832,10 @@ contains
        ! Photodissociation from the local radiation field
        if (rtz_include_photoionization.and.rt_advect) then
           do igroup=1,nGroups
-             if (isLW(igroup).eq.1.d0) then
+             if (isLW(igroup).eq.1) then
                 de_H2 = de_H2 + (dXion(1,3) * SUM(signc(igroup,1,3) * dNp * f_shd))
              else
-                de_H2 = de_H2 + (dXion(1,3) * SUM(signc(igroup,1,3) * dNp * f_shd))
+                de_H2 = de_H2 + (dXion(1,3) * SUM(signc(igroup,1,3) * dNp))
              end if  
           end do
        end if
@@ -858,76 +867,78 @@ contains
     de_CO = 0.d0
     dUU = 0.d0
     if (isCO_rtz) then
-       n_C_og = n_CII + nCO(icell)
-       n_O_og = n_OI + nCO(icell)
-       n_CII = nElement_dep(6) * dXion(6,2)
-       n_OI  = nElement_dep(8) * dXion(8,1)
-       n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
-       x_OI  = n_OI / nElement_dep(1)
+       if ((nElement_dep(6) + nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then 
+         n_C_og = n_CII + nCO(icell)
+         n_O_og = n_OI + nCO(icell)
+         n_CII = nElement_dep(6) * dXion(6,2)
+         n_OI  = nElement_dep(8) * dXion(8,1)
+         n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
+         x_OI  = n_OI / nElement_dep(1)
 
-       !! Creation !!
-       cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, x_OI)
+         !! Creation !!
+         cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, x_OI)
 
-       !! Destruction !!
-       de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate)
+         !! Destruction !!
+         de_CO = beta_CO(total_G0*f_shd_CO, H2_cosmic_ray_ionization_rate)
 
-       ! Compute the initial guess of new nCO
-       nCO_new = (nCO(icell) + cr_CO*ddt(icell)) / (1.d0 + de_CO*ddt(icell))
+         ! Compute the initial guess of new nCO
+         nCO_new = (nCO(icell) + cr_CO*ddt(icell)) / (1.d0 + de_CO*ddt(icell))
 
-       ! Tentative update
-       delta_CO = nCO_new - nCO(icell)
+         ! Tentative update
+         delta_CO = nCO_new - nCO(icell)
 
-       ! Enforce positivity floors: don't destroy more CO than exists,
-       ! and don't create more than allowed by available CII and OI
-       max_delta_CO = min(n_CII - 1.d-30, n_OI - 1.d-30)
-       min_delta_CO = -nCO(icell) + 1.d-30       
+         ! Enforce positivity floors: don't destroy more CO than exists,
+         ! and don't create more than allowed by available CII and OI
+         max_delta_CO = min(n_CII - 1.d-30, n_OI - 1.d-30)
+         min_delta_CO = -nCO(icell) + 1.d-30       
 
-       ! Clip delta_CO to enforce physical bounds
-       delta_CO = max(min(delta_CO, max_delta_CO), min_delta_CO)
+         ! Clip delta_CO to enforce physical bounds
+         delta_CO = max(min(delta_CO, max_delta_CO), min_delta_CO)
 
-       ! Apply updates
-       nCO_new  = nCO(icell) + delta_CO
-       nCII_new = n_CII - delta_CO
-       nOI_new  = n_OI  - delta_CO
+         ! Apply updates
+         nCO_new  = nCO(icell) + delta_CO
+         nCII_new = n_CII - delta_CO
+         nOI_new  = n_OI  - delta_CO
 
-       ! Now update the ion fractions for C and O
-       tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
-       tot_C = tot_C + nCII_new
-       do iIon = 1, elements(6)%n_ions
-          if (iIon.ne.2) then 
-             dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-          else
-             dXion(6,iIon) = nCII_new / tot_C
-          end if
-       end do
+         ! Now update the ion fractions for C and O
+         tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
+         tot_C = tot_C + nCII_new
+         do iIon = 1, elements(6)%n_ions
+            if (iIon.ne.2) then 
+               dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
+            else
+               dXion(6,iIon) = nCII_new / tot_C
+            end if
+         end do
 
-       tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
-       tot_O = tot_O + nOI_new
-       do iIon = 1, elements(8)%n_ions
-          if (iIon.ne.1) then 
-             dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
-          else
-             dXion(8,iIon) = nOI_new / tot_O
-          end if
-       end do
+         tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
+         tot_O = tot_O + nOI_new
+         do iIon = 1, elements(8)%n_ions
+            if (iIon.ne.1) then 
+               dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
+            else
+               dXion(8,iIon) = nOI_new / tot_O
+            end if
+         end do
 
-       ! Check for convergence
-       dUU = MAX(dUU,ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)))
-       dUU = dUU * one_over_x_FRAC
-       fracMax=MAX(fracMax,dUU)
-       if(dUU .gt. 1.d0) then
-         !  write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-          dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-          code=6 !TODO(code) update this code for each ion
-          RETURN
+         ! Check for convergence
+         dUU = MAX(dUU,ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)))
+         dUU = dUU * one_over_x_FRAC
+         fracMax=MAX(fracMax,dUU)
+         if(dUU .gt. 1.d0) then
+            !  write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
+            dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+            code=6 !TODO(code) update this code for each ion
+            RETURN
+         end if
+
+         ! Update species number densities --> need to fix this in case other species fail
+         dCO = nCO_new
+         dnElement(6) = dnElement(6) - delta_CO
+         nElement_dep(6) = nElement_dep(6) - delta_CO
+         dnElement(8) = dnElement(8) - delta_CO
+         nElement_dep(8) = nElement_dep(8) - delta_CO
        end if
-
-       ! Update species number densities --> need to fix this in case other species fail
-       dCO = nCO_new
-       dnElement(6) = dnElement(6) - delta_CO
-       nElement_dep(6) = nElement_dep(6) - delta_CO
-       dnElement(8) = dnElement(8) - delta_CO
-       nElement_dep(8) = nElement_dep(8) - delta_CO
     end if
 #endif
 
@@ -941,6 +952,9 @@ contains
     ! Loop over all elements
     do iElement = 1,n_elements
        if (elements(iElement)%atomic_number > 0) then
+          if (nElement_dep(iElement)/nElement_dep(1).le.1e-10) then
+             cycle
+          end if
 
           ! Get the atomic number
           atomic_number = elements(iElement)%atomic_number
@@ -1106,6 +1120,7 @@ contains
                 end if
              end if
 #endif
+
              !/////////////////////////
              !//   Charge Transfer   //
              !/////////////////////////
@@ -1223,10 +1238,10 @@ contains
 #endif
     ! Now the dUs are really changes, not new values
     ! Update the timestep for the next iteration:
-   !  dt_rec = 0.5d0 * ddt(icell) / ((0.01d0 + fracMax)**0.5d0)
+    ! dt_rec = 0.5d0 * ddt(icell) / ((0.01d0 + fracMax)**0.5d0)
     dt_rec = 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
-    dt_rec = min(dt_rec,1E12 * min(TK/100.0,1.0) * min((1.0/nElement_dep(1)),1.0) * min(sqrt(1.0/UV_background_G0),1.0))
-    dt_rec = min(dt_rec,rtz_max_cool_timestep)
+    ! dt_rec = min(dt_rec,1E12 * min(TK/100.0,1.0) * min((1.0/nElement_dep(1)),1.0) * min(sqrt(1.0/max(UV_background_G0,1.d-10)),1.0))
+    ! dt_rec = min(dt_rec,rtz_max_cool_timestep)
     dt_ok = .true.
     code=0
 
@@ -1418,6 +1433,7 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
   sigec(:,:,:) = group_cse*rt_c_cgs(ilevel)        ! [cm3 s-1]
 
   !Photoheating rates for photons on ions
+  !HK note -- photoheating ignored for molecules (accounted for elsewhere)
   do iP = 1,nGroups
      do iE = 1,n_elements
         if (elements(iE)%atomic_number.gt.0) then 
@@ -1425,7 +1441,7 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
               PHrate(iP,iE,iI) =  eV2erg * &    ! See eq (19) in Aubert(08)
                  (sigec(iP,iE,iI) * group_egy(iP)  &
                  -signc(iP,iE,iI)*ionEvs(iE,iI))
-              PHrate(iP,iE,iI) = max(PHrate(iP,iE,iI),0d0)!Heating>0
+              PHrate(iP,iE,iI) = max(PHrate(iP,iE,iI),0d0) !Heating > 0
            end do
         end if
       end do ! End element loop

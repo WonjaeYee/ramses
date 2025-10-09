@@ -417,6 +417,7 @@ subroutine read_amr_params(namelist_unit,nml_ok)
    ! Verify input
    levelmin=MAX(levelmin,1)
    nlevelmax=levelmax
+   levelmax_current=nlevelmax
    if(nlevelmax<levelmin)then
       if(myid==1)write(*,*)'Error in the namelist:'
       if(myid==1)write(*,*)'levelmax should not be lower than levelmin'
