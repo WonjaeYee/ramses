@@ -36,6 +36,11 @@ recursive subroutine amr_step(ilevel,icount)
 
   if(verbose)write(*,999)icount,ilevel
 
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'from `amr_step`, right after called'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!  end if
+
   !-------------------------------------------
   ! Make new refinements and update boundaries
   !-------------------------------------------
@@ -287,6 +292,9 @@ recursive subroutine amr_step(ilevel,icount)
      end if
   end if
 
+  ! to use sink with poisson=.false., comment this line
+  if(sink.and.hydro)call collect_acczone_avg(ilevel)
+
 #ifdef RT
   ! Turn on RT in case of rt_stars and first stars just created:
   ! Update photon packages according to star particles and sink particles
@@ -358,6 +366,11 @@ recursive subroutine amr_step(ilevel,icount)
   if(hydro.and.star.and.eta_sn>0)call thermal_feedback(ilevel)
 #endif
 
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, before `grow_sink`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
   ! Density threshold or Bondi accretion onto sink particle
 #if NDIM==3
   if(sink.and.hydro)then
@@ -365,6 +378,11 @@ recursive subroutine amr_step(ilevel,icount)
      call grow_sink(ilevel,.false.)
   end if
 #endif
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, after `grow_sink`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
   !-----------
   ! Hydro step
   !-----------
@@ -374,11 +392,21 @@ recursive subroutine amr_step(ilevel,icount)
                                call timer('hydro - godunov','start')
      call godunov_fine(ilevel)
 
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, after `godunov_fine`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
      ! Reverse update boundaries
                                call timer('hydro - rev ghostzones','start')
      do ivar=1,nvar_all
         call make_virtual_reverse_dp(unew(1,ivar),ilevel)
      end do
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, after `make_virtual_reverse_dp`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
      ! MC Tracer
      ! Communicate fluxes accross boundaries
      if(MC_tracer)then
@@ -402,16 +430,31 @@ recursive subroutine amr_step(ilevel,icount)
         call add_gravity_source_terms(ilevel)
      end if
 
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, after `add_gravity_source_terms`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
      ! Add non conservative pdV terms to unew
      ! for thermal and/or non-thermal energies
      if(pressure_fix.OR.nener>0)then
         call add_pdv_source_terms(ilevel)
      endif
 
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, before `set_uold`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
      ! Set uold equal to unew
                                call timer('hydro - set uold','start')
      call set_uold(ilevel)
 
+!  if(myid==9.and.ilevel==8) then
+!   write(*,*) 'in `amr_step`, after `set_uold`'
+!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
+!  end if
      ! Add gravity source term with half time step and old force
      ! in order to complete the time step
                                call timer('poisson','start')
@@ -432,6 +475,11 @@ recursive subroutine amr_step(ilevel,icount)
 
   endif
 
+ ! if(myid==9.and.ilevel==8) then
+ !  write(*,*) 'from `amr_step`'
+ !  write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
+ ! end if
+
   !---------------------
   ! Do RT/Chemistry step
   !---------------------
@@ -444,6 +492,7 @@ recursive subroutine amr_step(ilevel,icount)
      ! actually doing radiative transfer (i.e. rt==false):
                                call timer('cooling','start')
      if(hydro .and. (neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos))call cooling_fine(ilevel)
+     ! to temporarily disable RTZ cooling, comment line one above
   endif
   ! Regular updates and book-keeping:
   if(ilevel==levelmin) then
@@ -462,6 +511,7 @@ recursive subroutine amr_step(ilevel,icount)
                                call timer('cooling','start')
   if((hydro).and.(.not.static_gas)) then
     if(neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos)call cooling_fine(ilevel)
+    ! to temporarily disable RTZ cooling, comment line one above
   endif
 #endif
 
@@ -476,6 +526,7 @@ recursive subroutine amr_step(ilevel,icount)
         call move_fine(ilevel) ! Only remaining particles
      end if
   end if
+  ! to temporarily disable sink movement, comment block above
 
   !----------------------------------
   ! Star formation in leaf cells only
@@ -635,6 +686,7 @@ subroutine rt_step(ilevel)
 
                                call timer('cooling','start')
      if(neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos)call cooling_fine(ilevel)
+     ! to temporarily disable RTZ cooling, comment line one above
                                call timer('radiative transfer','start')
 
      do ivar=1,nrtvar

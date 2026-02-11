@@ -18,7 +18,7 @@ module amr_parameters
 #else
   integer,parameter::qdp=kind(1.0_8) ! real*8
 #endif
-  integer,parameter::MAXOUT=1000
+  integer,parameter::MAXOUT=2500
   integer,parameter::MAXLEVEL=100
 
   ! Define integer types (for particle IDs mostly)

@@ -125,6 +125,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   integer:: counter, e_counter, jj
 #endif
 
+   integer::err_idx
+
   ! Mesh spacing in that level
   dx=0.5D0**ilevel
   nx_loc=(icoarse_max-icoarse_min+1)
@@ -581,9 +583,29 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         endif
 
         ! Solve cooling
+        err_idx = 0
         call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
                               ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
-                              ,dx_SS_H2)
+                              ,dx_SS_H2, err_idx)
+        if (err_idx > 0) then
+           write(*,*) 'This is raised in `coolfine1`'
+           write(*,*) '            myid:', myid
+           write(*,*) '          ilevel:', ilevel
+           write(*,*) '        ind_leaf:', ind_leaf(err_idx)
+           write(*,*) '              nH:', nH(err_idx)
+           write(*,*) '              T2:', T2(err_idx)
+           write(*,*) '         density:', uold(ind_leaf(err_idx),1)
+           write(*,*) '          energy:', uold(ind_leaf(err_idx),neul)
+           write(*,*) '   uold*scale_T2:', uold(ind_leaf(err_idx),neul)*scale_T2
+           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx),iIons:iIons+53) ! /uold(ind_leaf(err_idx),1)
+           write(*,*) 'chemicals (xion):', uold(ind_leaf(err_idx),iIons:iIons+53)/uold(ind_leaf(err_idx),1)
+           write(*,*) 'for comparison, adjacent cells'
+           !write(*,*) 'uold:', uold(ind_leaf(err_idx)-1, neul)
+           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
+           !write(*,*) 'uold:', uold(ind_leaf(err_idx)+1, neul)
+           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:iIons+53)
+           stop
+        end if
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &

@@ -454,12 +454,13 @@ SUBROUTINE read_rt_groups()
   call initialize_group_energies_from_blackbody(1.d5, groupL0, groupL1, group_egy)
 
 #ifdef INDIVIDUAL_SINK_STARS
+! <<WJ>> temporarily disable popII routines
   ! Load in Pop II stellar properties
-  call init_popII_stellar_properties
+  ! call init_popII_stellar_properties
 
   ! Get the number of photons emitted by each Pop II star
   ! in each photon group
-  call init_popII_table(groupL0, groupL1)
+  ! call init_popII_table(groupL0, groupL1)
 
   ! Get the number of photons emitted by each Pop III star
   ! in each photon group

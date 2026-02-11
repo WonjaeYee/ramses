@@ -5,6 +5,9 @@ subroutine init_sink
   use amr_parameters, only:levelmin
   use constants, only:M_sun
   use mpi_mod
+#ifdef INDIVIDUAL_SINK_STARS
+  use use_mist
+#endif
   implicit none
 #ifndef WITHOUTMPI
   integer,parameter::tag=1112,tag2=1113
@@ -146,144 +149,154 @@ subroutine init_sink
         fileloc='output_'//TRIM(nchar)//'/sink_'//TRIM(nchar)//'.csv'
      endif
 
-     ! Wait for the token
-#ifndef WITHOUTMPI
-     if(IOGROUPSIZE>0) then
-        if (mod(myid-1,IOGROUPSIZE)/=0) then
-           call MPI_RECV(dummy_io,1,MPI_INTEGER,myid-1-1,tag,&
-                & MPI_COMM_WORLD,MPI_STATUS_IGNORE,info2)
-        end if
-     endif
-#endif
-
-     nsink=0
-     open(10,file=fileloc,form='formatted')
-     eof=.false.
-     ! scrolling over the comment lines
-     read(10,'(A200)')comment_line
-     read(10,'(A200)')comment_line
-     do
-#ifdef INDIVIDUAL_SINK_STARS
-        ! TODO(code): this is currently hardcoded for 10 metal species, need to generalize
-        read(10,'(I10,21(A1,ES17.10),A1,I10,A1,ES17.10,A1,I10,A1,ES17.10,10(A1,ES17.10))',end=104)sid,co, sm1,co,&
-                           sx1,co,sx2,co,sx3,co, &
-                           sv1,co,sv2,co,sv3,co, &
-                           sl1,co,sl2,co,sl3,co, &
-                           stform,co, sacc_rate,co, &
-                           sacc_mass,co, &
-                           srho_gas,co, sc2_gas,co, seps_sink,co, &
-                           svg1,co,svg2,co,svg3,co, &
-                           sm2,co,dmf,co,slevel,co, &
-                           sm1a,co,sef,co,stms,co, &
-                           smet1,co,smet2,co,smet3,co, &
-                           smet4,co,smet5,co,smet6,co, &
-                           smet7,co,smet8,co,smet9,co, &
-                           smet10
-#else
-        read(10,'(I10,21(A1,ES21.10),A1,I10)',end=104)sid,co, sm1,co,&
-                           sx1,co,sx2,co,sx3,co, &
-                           sv1,co,sv2,co,sv3,co, &
-                           sl1,co,sl2,co,sl3,co, &
-                           stform,co, sacc_rate,co, &
-                           sacc_mass,co, &
-                           srho_gas,co, sc2_gas,co, seps_sink,co, &
-                           svg1,co,svg2,co,svg3,co, &
-                           sm2,co,dmf,co,slevel
-#endif
-        nsink=nsink+1
-        idsink(nsink)=sid
-        msink(nsink)=sm1
-        xsink(nsink,1)=sx1
-        xsink(nsink,2)=sx2
-        xsink(nsink,3)=sx3
-        vsink(nsink,1)=sv1
-        vsink(nsink,2)=sv2
-        vsink(nsink,3)=sv3
-        lsink(nsink,1)=sl1
-        lsink(nsink,2)=sl2
-        lsink(nsink,3)=sl3
-        tsink(nsink)=stform
-        dMBHoverdt(nsink)=sacc_rate
-        delta_mass(nsink)=sacc_mass
-        rho_gas(nsink)=srho_gas
-        c2sink(nsink)=sc2_gas
-        eps_sink(nsink)=seps_sink
-        vel_gas(nsink,1)=svg1
-        vel_gas(nsink,2)=svg2
-        vel_gas(nsink,3)=svg3
-        new_born(nsink)=.false. ! this is a restart
-        msmbh(nsink)=sm2
-        dmfsink(nsink)=dmf
-        vsold(nsink,1:ndim,slevel)=vsink(nsink,1:ndim)
-        vsnew(nsink,1:ndim,slevel)=vsink(nsink,1:ndim)
-#ifdef INDIVIDUAL_SINK_STARS
-        msink_actual(nsink)=sm1a
-        evolution_flag(nsink)=sef
-        main_sequence_time(nsink)=stms
-        !TODO(code): hard coded for 10 metals, need to generalize
-        sink_metallicity(nsink,1)=smet1
-        sink_metallicity(nsink,2)=smet2
-        sink_metallicity(nsink,3)=smet3
-        sink_metallicity(nsink,4)=smet4
-        sink_metallicity(nsink,5)=smet5
-        sink_metallicity(nsink,6)=smet6
-        sink_metallicity(nsink,7)=smet7
-        sink_metallicity(nsink,8)=smet8
-        sink_metallicity(nsink,9)=smet9
-        sink_metallicity(nsink,10)=smet10
-#endif
-     end do
-104  continue
-     sinkint_level=slevel
-     if(nsink>0)then
-        nindsink=idsink(nsink)
-     end if
-     close(10)
-
-     ! Send the token
-#ifndef WITHOUTMPI
-     if(IOGROUPSIZE>0) then
-        if(mod(myid,IOGROUPSIZE)/=0 .and.(myid.lt.ncpu))then
-           dummy_io=1
-           call MPI_SEND(dummy_io,1,MPI_INTEGER,myid-1+1,tag, &
-                & MPI_COMM_WORLD,info2)
-        end if
-     endif
-#endif
-
+  ! If we want to set initial condition for sinks at the beginning
+  else
+     ! for now, just use `ic_sink_indi` only (ic_sink will be read again below)
+     if (myid==1) write(*,*) 'reading ic_sink_indi'
+     fileloc='ic_sink_indi'
   end if
+
+  nsinkold=0
+  filename = ''
+  ! Wait for the token
+#ifndef WITHOUTMPI
+  if(IOGROUPSIZE>0) then
+     if (mod(myid-1,IOGROUPSIZE)/=0) then
+        call MPI_RECV(dummy_io,1,MPI_INTEGER,myid-1-1,tag,&
+             & MPI_COMM_WORLD,MPI_STATUS_IGNORE,info2)
+     end if
+  endif
+#endif
+
+  nsink=0
+  open(10,file=fileloc,form='formatted')
+  eof=.false.
+  ! scrolling over the comment lines
+  read(10,'(A200)')comment_line
+  read(10,'(A200)')comment_line
+  do
+#ifdef INDIVIDUAL_SINK_STARS
+     ! TODO(code): this is currently hardcoded for 10 metal species, need to generalize
+     read(10,'(I10,21(A1,ES20.10E3),A1,I10,A1,ES20.10E3,A1,I10,A1,ES20.10E3,10(A1,ES20.10E3))',end=104)sid,co, sm1,co,&
+                        sx1,co,sx2,co,sx3,co, &
+                        sv1,co,sv2,co,sv3,co, &
+                        sl1,co,sl2,co,sl3,co, &
+                        stform,co, sacc_rate,co, &
+                        sacc_mass,co, &
+                        srho_gas,co, sc2_gas,co, seps_sink,co, &
+                        svg1,co,svg2,co,svg3,co, &
+                        sm2,co,dmf,co,slevel,co, &
+                        sm1a,co,sef,co,stms,co, &
+                        smet1,co,smet2,co,smet3,co, &
+                        smet4,co,smet5,co,smet6,co, &
+                        smet7,co,smet8,co,smet9,co, &
+                        smet10
+#else
+     read(10,'(I10,21(A1,ES21.10),A1,I10)',end=104)sid,co, sm1,co,&
+                        sx1,co,sx2,co,sx3,co, &
+                        sv1,co,sv2,co,sv3,co, &
+                        sl1,co,sl2,co,sl3,co, &
+                        stform,co, sacc_rate,co, &
+                        sacc_mass,co, &
+                        srho_gas,co, sc2_gas,co, seps_sink,co, &
+                        svg1,co,svg2,co,svg3,co, &
+                        sm2,co,dmf,co,slevel
+#endif
+     nsink=nsink+1
+     idsink(nsink)=sid
+     msink(nsink)=sm1
+     xsink(nsink,1)=sx1
+     xsink(nsink,2)=sx2
+     xsink(nsink,3)=sx3
+     vsink(nsink,1)=sv1
+     vsink(nsink,2)=sv2
+     vsink(nsink,3)=sv3
+     lsink(nsink,1)=sl1
+     lsink(nsink,2)=sl2
+     lsink(nsink,3)=sl3
+     tsink(nsink)=stform
+     dMBHoverdt(nsink)=sacc_rate
+     delta_mass(nsink)=sacc_mass
+     rho_gas(nsink)=srho_gas
+     c2sink(nsink)=sc2_gas
+     eps_sink(nsink)=seps_sink
+     vel_gas(nsink,1)=svg1
+     vel_gas(nsink,2)=svg2
+     vel_gas(nsink,3)=svg3
+     new_born(nsink)=.false. ! this is a restart
+     msmbh(nsink)=sm2
+     dmfsink(nsink)=dmf
+     vsold(nsink,1:ndim,slevel)=vsink(nsink,1:ndim)
+     vsnew(nsink,1:ndim,slevel)=vsink(nsink,1:ndim)
+#ifdef INDIVIDUAL_SINK_STARS
+     msink_actual(nsink)=sm1a
+     evolution_flag(nsink)=sef
+     main_sequence_time(nsink)=stms
+     !TODO(code): hard coded for 10 metals, need to generalize
+     sink_metallicity(nsink,1)=smet1
+     sink_metallicity(nsink,2)=smet2
+     sink_metallicity(nsink,3)=smet3
+     sink_metallicity(nsink,4)=smet4
+     sink_metallicity(nsink,5)=smet5
+     sink_metallicity(nsink,6)=smet6
+     sink_metallicity(nsink,7)=smet7
+     sink_metallicity(nsink,8)=smet8
+     sink_metallicity(nsink,9)=smet9
+     sink_metallicity(nsink,10)=smet10
+#endif
+  end do
+104  continue
+  sinkint_level=slevel
+  if(nsink>0)then
+     nindsink=idsink(nsink)
+  end if
+  close(10)
+
+  if(myid==1) write(*,*) 'nsink:', nsink
+  ! Send the token
+#ifndef WITHOUTMPI
+  if(IOGROUPSIZE>0) then
+     if(mod(myid,IOGROUPSIZE)/=0 .and.(myid.lt.ncpu))then
+        dummy_io=1
+        call MPI_SEND(dummy_io,1,MPI_INTEGER,myid-1+1,tag, &
+             & MPI_COMM_WORLD,info2)
+     end if
+  endif
+#endif
+
+  ! end if
 
   ! Loading sinks from the ICs (ic_sink or ic_sink_restart)
-  if (nrestart>0)then
-     nsinkold=nsink
-     if(TRIM(initfile(levelmin)).NE.' ')then
-        filename=TRIM(initfile(levelmin))//'/ic_sink_restart'
-     else
-        filename='ic_sink_restart'
-     end if
-     INQUIRE(FILE=filename, EXIST=ic_sink)
-     if (myid==1)write(*,*)'Looking for file ic_sink_restart: ',filename
-     if (.not. ic_sink)then
-        filename='ic_sink_restart'
-        INQUIRE(FILE=filename, EXIST=ic_sink)
-     end if
-  else
-     nsink=0
-     nindsink=0
-     nsinkold=0
-     if(TRIM(initfile(levelmin)).NE.' ')then
-        filename=TRIM(initfile(levelmin))//'/ic_sink'
-     else
-        filename='ic_sink'
-     end if
-     INQUIRE(FILE=filename, EXIST=ic_sink)
-     if (myid==1)write(*,*)'Looking for file ic_sink: ',filename
-     if (.not. ic_sink)then
-        filename='ic_sink'
-        INQUIRE(FILE=filename, EXIST=ic_sink)
-     end if
-  end if
-
+!   if (nrestart>0)then
+!      nsinkold=nsink
+!      if(TRIM(initfile(levelmin)).NE.' ')then
+!         filename=TRIM(initfile(levelmin))//'/ic_sink_restart'
+!      else
+!         filename='ic_sink_restart'
+!      end if
+!      INQUIRE(FILE=filename, EXIST=ic_sink)
+!      if (myid==1)write(*,*)'Looking for file ic_sink_restart: ',filename
+!      if (.not. ic_sink)then
+!         filename='ic_sink_restart'
+!         INQUIRE(FILE=filename, EXIST=ic_sink)
+!      end if
+!   else
+!      nsink=0
+!      nindsink=0
+!      nsinkold=0
+!      if(TRIM(initfile(levelmin)).NE.' ')then
+!         filename=TRIM(initfile(levelmin))//'/ic_sink'
+!      else
+!         filename='ic_sink'
+!      end if
+!      INQUIRE(FILE=filename, EXIST=ic_sink)
+!      if (myid==1)write(*,*)'Looking for file ic_sink: ',filename
+!      if (.not. ic_sink)then
+!         filename='ic_sink'
+!         INQUIRE(FILE=filename, EXIST=ic_sink)
+!      end if
+!   end if
+! 
   if (ic_sink)then
 
      ! Wait for the token
@@ -361,6 +374,11 @@ subroutine init_sink
         direct_force_sink(isink)=.False.
      end do
   endif
+
+! load sampled mist data
+#ifdef INDIVIDUAL_SINK_STARS
+  call load_sample
+#endif
 
 end subroutine init_sink
 !################################################################

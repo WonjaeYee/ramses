@@ -400,13 +400,23 @@ subroutine make_virtual_fine_dp(xx,ilevel)
 
 #endif
 
+  character(len=2)::temp_char
+
   if(numbtot(1,ilevel)==0)return
+  ! if (myid==1) then
+  !   write(*,*) 'this is make_virtual_fine_dp'
+  !   write(*,*) 'given xx:', xx
+  ! end if
   if(verbose)write(*,111)ilevel
+
+  call timer('make_virtual_fine_dp', 'start')
 
 #ifndef WITHOUTMPI
 
 #ifdef LIGHT_MPI_COMM
   allocate(reqsend(emission(ilevel)%nactive))
+
+  call timer('test mpi time 1', 'start')
 
   ! Allocate temporary communication buffers
   do icpu=1,ncpu
@@ -420,6 +430,8 @@ subroutine make_virtual_fine_dp(xx,ilevel)
   end do
   allocate(emission(ilevel)%u(1:emission(ilevel)%ngrids_tot*twotondim, 1:1))
 #endif
+
+  call timer('test mpi time 2', 'start')
 
   ! Receive all messages
   countrecv=0
@@ -436,6 +448,8 @@ subroutine make_virtual_fine_dp(xx,ilevel)
 #endif
      end if
   end do
+
+  call timer('test mpi time 3', 'start')
 
   ! Gather emission array
 #ifdef LIGHT_MPI_COMM
@@ -464,6 +478,8 @@ subroutine make_virtual_fine_dp(xx,ilevel)
   end do
 #endif
 
+  call timer('test mpi time 4', 'start')
+
   ! Send all messages
 #ifdef LIGHT_MPI_COMM
   offset=1
@@ -485,8 +501,13 @@ subroutine make_virtual_fine_dp(xx,ilevel)
   end do
 #endif
 
+  write(temp_char,'(I2)') ilevel
+  call timer('test mpi time 5 lv'//trim(temp_char), 'start')
+
   ! Wait for full completion of receives
   call MPI_WAITALL(countrecv,reqrecv,statuses,info)
+
+  call timer('test mpi time 6', 'start')
 
   ! Scatter reception array
   do icpu=1,ncpu
@@ -504,6 +525,8 @@ subroutine make_virtual_fine_dp(xx,ilevel)
       end do
     end if
   end do
+
+  call timer('test mpi time 7', 'start')
 
   ! Wait for full completion of sends
 #ifdef LIGHT_MPI_COMM
@@ -524,6 +547,8 @@ subroutine make_virtual_fine_dp(xx,ilevel)
 #endif
 
 111 format('   Entering make_virtual_fine for level ',I2)
+
+  call timer('temp_else', 'start')
 
 end subroutine make_virtual_fine_dp
 !################################################################

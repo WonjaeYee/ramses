@@ -200,6 +200,8 @@ subroutine flag_formation_sites
         ok=ok.and.max_dens(jj)>d_sink
 #ifdef INDIVIDUAL_SINK_STARS
         ok=ok.and.max_dens(jj)>n_sink * mH / scale_d
+        ! Jeans length criterion
+        ok=ok.and.dx_min**2 > (pi/factG) * thermal_support(jj)/3.d0/clump_vol(jj) / max_dens(jj)**2
 #endif
         ! Clump has to be massive enough
         ok=ok.and.clump_mass4(jj)>mass_sink_seed*M_sun/(scale_d*scale_l**3)
@@ -217,6 +219,10 @@ subroutine flag_formation_sites
         endif
         ! Then create a sink at the peak position
         if (ok)then
+           write(*,*) 'in `flag_formation_sites`, Jeans criterion:', dx_min**2 > (pi/factG) * thermal_support(jj)/3.d0/clump_vol(jj) / max_dens(jj)**2
+           write(*,*) 'dx_min:', dx_min
+           write(*,*) 'thermal_support:', thermal_support(jj)/3.d0/clump_vol(jj)
+           write(*,*) 'max_dens:', max_dens(jj)
            form(jj)=1
            pos(1,1:3)=peak_pos(jj,1:3)
            call cmp_cpumap(pos,cc,1)
@@ -627,6 +633,7 @@ subroutine compute_clump_properties_round2
            end do
 
            ! Check wether clump is contracting fast enough along all axis
+           ! Here, for A1=0.0, adding tiny seems not to be help; NaN can emerge up here
            contracting(j)=contracting(j) .and. contractions(j,1)/(A1+tiny(0d0)) < cont_speed
            contracting(j)=contracting(j) .and. contractions(j,2)/(A2+tiny(0d0)) < cont_speed
            contracting(j)=contracting(j) .and. contractions(j,3)/(A3+tiny(0d0)) < cont_speed

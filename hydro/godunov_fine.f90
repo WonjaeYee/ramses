@@ -61,6 +61,11 @@ subroutine set_unew(ilevel)
      do ivar=1,nvar
         do i=1,active(ilevel)%ngrid
            unew(active(ilevel)%igrid(i)+iskip,ivar) = uold(active(ilevel)%igrid(i)+iskip,ivar)
+!           if(ivar==1.and.unew(active(ilevel)%igrid(i)+iskip,1).le.0.0)then
+!            write(*,*) 'in `set_unew`, negative density is generated'
+!            write(*,*) 'myid:', myid
+!            write(*,*) 'index:', active(ilevel)%igrid(i)+iskip
+!           end if
         end do
      end do
      if(momentum_feedback>0)then
@@ -164,6 +169,11 @@ subroutine set_uold(ilevel)
      ! L. Romano 13.06.2023 -- Catch advection errors due to smallr
 #if NVAR > NHYDRO+NENER
      do i=1,active(ilevel)%ngrid
+!        if(myid==9.and.active(ilevel)%igrid(i)+iskip==68849) then
+!           write(*,*) 'in `set_uold`, before all steps'
+!           write(*,*) 'uold(68849,18:)', uold(68849, 18:)
+!           write(*,*) 'unew(68849,18:)', unew(68849, 18:)
+!        end if
         if(uold(active(ilevel)%igrid(i)+iskip,1).lt.smallr.and.unew(active(ilevel)%igrid(i)+iskip,1).gt.uold(active(ilevel)%igrid(i)+iskip,1))then
            ! inflow into previously floored cell: fix concentrations
            do ivar = nhydro+1+nener, nvar
@@ -175,6 +185,11 @@ subroutine set_uold(ilevel)
               unew(active(ilevel)%igrid(i)+iskip,ivar) = uold(active(ilevel)%igrid(i)+iskip,ivar) * smallr / max(uold(active(ilevel)%igrid(i)+iskip, 1), smallr)
            end do
         end if
+!        if(myid==9.and.active(ilevel)%igrid(i)+iskip==68849) then
+!           write(*,*) 'in `set_uold`, after changing unew'
+!           write(*,*) 'uold(68849,18:)', uold(68849, 18:)
+!           write(*,*) 'unew(68849,18:)', unew(68849, 18:)
+!        end if
      end do
 #endif
      ! -------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -182,6 +197,11 @@ subroutine set_uold(ilevel)
      do ivar=1,nvar
         do i=1,active(ilevel)%ngrid
            uold(active(ilevel)%igrid(i)+iskip,ivar) = unew(active(ilevel)%igrid(i)+iskip,ivar)
+!           if(myid==9.and.active(ilevel)%igrid(i)+iskip==68849.and.ivar==nvar) then
+!            write(*,*) 'in `set_uold`'
+!            write(*,*) 'uold(68849,18:)', uold(68849, 18:)
+!            write(*,*) 'unew(68849,18:)', unew(68849, 18:)
+!           end if
         end do
      end do
      if(momentum_feedback>0)then

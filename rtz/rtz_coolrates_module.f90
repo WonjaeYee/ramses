@@ -779,8 +779,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     ! Prepare for 1D interpolation
     idx_low = floor((log_T - t_min)/dt) + 1
 
-    frac_high = (log_T - high_t_cooling_temp(idx_low)) / (high_t_cooling_temp(idx_low+1) - high_t_cooling_temp(idx_low))
-    frac_low = 1.0 - frac_high
+    ! temporal fix: in case of log_T == t_max
+    if (1<=idx_low .and. idx_low<=120) then
+        frac_high = (log_T - high_t_cooling_temp(idx_low)) / (high_t_cooling_temp(idx_low+1) - high_t_cooling_temp(idx_low))
+        frac_low = 1.0 - frac_high
+    else
+        idx_low = 120
+        frac_high = 1.0
+        frac_low = 0.0
+    end if
 
     ! Use NGP interpolation for CIE --> temperature spacing is very fine so ok
     CIE_Tidx = 1 + NINT((log_T - LOG10(high_t_cooling_temp_CIE(1))) / (LOG10(high_t_cooling_temp_CIE(2)) - LOG10(high_t_cooling_temp_CIE(1))))

@@ -1,3 +1,8 @@
+# Compile note
+# 2026.01.08
+# using updated RTZ module, do the Stromgren test again
+# to use a reflective boundary condition, stellar radiation is divided by 8
+
 #############################################################################
 # If you have problems with this makefile, contact Romain.Teyssier@gmail.com
 #############################################################################
@@ -30,9 +35,9 @@ TURB_GRID_SIZE = 64
 MPI = 1
 MPIF90 = mpif90
 # Root name of executable
-EXEC = /work/project-imf/bin/ramses_dev_CheckUpdate_$(TURB_GRID_SIZE)_
+EXEC = /work/projects/imf/bin/ramses_260210-debug-loopcnt_
 # Number of additional energies
-NENER = 0
+NENER = 1
 # Use Grackle cooling? 1=Yes, 0=No
 GRACKLE = 0
 # Number of metal species
@@ -40,7 +45,7 @@ NMETALS = 10
 # Use ATON? 1=Yes, 0=No
 ATON = 0
 # Number of photon groups for RT
-NGROUPS = 1
+NGROUPS = 8
 # Number of passive scalars
 NPSCAL = 1
 # Light MPI communicator structure (for > 10k MPI processes)
@@ -59,6 +64,9 @@ N_SILICON_IONS = 6
 N_SULFUR_IONS = 6
 N_IRON_IONS = 6
 CO = 1
+
+# Individual stars
+INDI_STAR = 1
 
 # Number of ions for RT
 ifeq ($(RTZ),1)
@@ -135,55 +143,72 @@ endif
 ifeq ($(LIGHT_MPI_COMM), 1)
    DEFINES += -DLIGHT_MPI_COMM
 endif
+
+# For individual stars
+ifeq ($(INDI_STAR),1)
+   DEFINES += -DINDIVIDUAL_SINK_STARS
+endif
 #############################################################################
 # Fortran compiler options and directives
 
-# GNU compiler (gfortran)
-ifeq ($(COMPILER),GNU)
-   FFLAGS = -cpp $(DEFINES)
-   ifeq ($(MPI),1)
-      F90 = $(MPIF90)
-      FC = gfortran
-   else
-      F90 = gfortran
-      FC = gfortran
-      FFLAGS += -DWITHOUTMPI
-   endif
-   F90 += -ffree-line-length-none -fimplicit-none -fPIE
-   FC += -ffree-line-length-none -fimplicit-none -fPIE
-   ifeq ($(GCOV),1)
-         F90 += -O0 -fprofile-arcs -ftest-coverage
-   else
-      ifeq ($(DEBUG),1)
-         F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
-         # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
-      else
-         F90 += -O3 -mcmodel=medium
-      endif
-   endif
-endif
+FFLAGS = -cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+F90 = $(MPIF90) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 
-# Intel compiler
-ifeq ($(COMPILER),INTEL)
-   FFLAGS = -cpp $(DEFINES)
-   ifeq ($(MPI),1)
-      F90 = $(MPIF90)
-      FC = ifort
-      FFLAGS += -DNOSYSTEM
-   else
-      F90 = ifort
-      FC = ifort
-      FFLAGS += -DWITHOUTMPI
-   endif
-   F90 += -fp-model source
-   FC += -fp-model source
-   ifeq ($(DEBUG),1)
-      F90 += -warn all -O0 -g -traceback -check bounds
-      FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
-   else
-      F90 += -O2
-   endif
-endif
+# temporal use to traceback NaN errors
+# FFLAGS = -cpp $(DEFINES)
+# F90 = $(MPIF90) -O0 -ffree-line-length-none -fimplicit-none -fPIE
+# FC  = gfortran  -O0 -ffree-line-length-none -fimplicit-none -fPIE
+# 
+# F90 += -g -fbacktrace -ffpe-trap=invalid,zero,overflow -fcheck=bounds
+# FC  += -g -fbacktrace -ffpe-trap=invalid,zero,overflow -fcheck=bounds
+
+# GNU compiler (gfortran)
+# ifeq ($(COMPILER),GNU)
+#    FFLAGS = -cpp $(DEFINES)
+#    ifeq ($(MPI),1)
+#       F90 = $(MPIF90)
+#       FC = gfortran
+#    else
+#       F90 = gfortran
+#       FC = gfortran
+#       FFLAGS += -DWITHOUTMPI
+#    endif
+#    F90 += -ffree-line-length-none -fimplicit-none -fPIE
+#    FC += -ffree-line-length-none -fimplicit-none -fPIE
+#    ifeq ($(GCOV),1)
+#          F90 += -O0 -fprofile-arcs -ftest-coverage
+#    else
+#       ifeq ($(DEBUG),1)
+#          F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
+#          # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
+#       else
+#          F90 += -O3 -mcmodel=medium
+#       endif
+#    endif
+# endif
+
+# # Intel compiler
+# ifeq ($(COMPILER),INTEL)
+#    FFLAGS = -cpp $(DEFINES)
+#    ifeq ($(MPI),1)
+#       F90 = $(MPIF90)
+#       FC = ifort
+#       FFLAGS += -DNOSYSTEM
+#    else
+#       F90 = ifort
+#       FC = ifort
+#       FFLAGS += -DWITHOUTMPI
+#    endif
+#    F90 += -fp-model source
+#    FC += -fp-model source
+#    ifeq ($(DEBUG),1)
+#       F90 += -warn all -O0 -g -traceback -check bounds
+#       FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
+#    else
+#       F90 += -O2
+#    endif
+# endif
 
 #############################################################################
 MOD = mod
@@ -205,6 +230,7 @@ ifeq ($(USE_TURB),1)
    # LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
    # LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
    # LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
+   FFTW_LIBRARY_PATH = /opt/spack-installed/fftw/3.3.10/gcc-13.3.0-psmbqz7bbtbqa7u3fjw5vippcsmpthpw
    LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
    LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
 endif
@@ -223,10 +249,15 @@ ifeq ($(RTZ),1)
    VPATH += ../rtz:
 endif
 VPATH += ../hydro:../pm:../poisson:../amr:../io
+###
+# For individual stars
+ifeq ($(INDI_STAR),1)
+   VPATH += ../patch/indi_star:../patch/rt/stars-are-sinks:
+endif
 #############################################################################
 # All objects
 MODOBJ = mpi_mod.o amr_parameters.o amr_commons.o amr_constants.o random.o pm_parameters.o sink_feedback_parameters.o \
-         pm_commons.o poisson_parameters.o collapse_parameters.o dump_utils.o constants.o safe_math.o file_module.o
+         pm_commons.o poisson_parameters.o collapse_parameters.o dump_utils.o constants.o safe_math_module.o file_module.o
 ifeq ($(GRACKLE),1)
    MODOBJ += grackle_parameters.o
 endif
@@ -249,12 +280,17 @@ endif
 ifeq ($(USE_TURB),1)
    MODOBJ += turb_parameters.o turb_commons.o
 endif
+###
+# For individual stars
+ifeq ($(INDI_STAR),1)
+   MODOBJ += use_mist.o imf_module.o
+endif
 
 AMROBJ = read_params.o init_amr.o init_time.o init_refine.o tracer_utils.o adaptive_loop.o \
          amr_step.o update_time.o timer.o output_amr.o flag_utils.o \
          physical_boundaries.o virtual_boundaries.o refine_utils.o \
          nbors_utils.o hilbert.o load_balance.o title.o sort.o cooling_fine.o \
-         eos.o units.o light_cone.o movie.o memory.o end.o
+         eos.o units.o light_cone.o movie_lines_module.o movie.o memory.o end.o
 # Particle-Mesh objects
 PMOBJ = init_part.o output_part.o rho_fine.o synchro_fine.o move_fine.o \
         newdt_fine.o particle_tree.o add_list.o remove_list.o star_formation.o \

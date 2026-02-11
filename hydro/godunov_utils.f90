@@ -140,6 +140,24 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
   end if
 #endif
 
+! To allow refinement according to the ionization fractions
+#if NVAR>NHYDRO+NENER
+  ! recycle the variable ^_^
+  do irad=1,NVAR-NHYDRO-NENER
+     if(err_grad_var(irad) >= 0.) then
+        do k=1,nn
+           dg=min(1d0,max(0d0,ug(k,irad+NHYDRO+NENER)))
+           dm=min(1d0,max(0d0,um(k,irad+NHYDRO+NENER)))
+           dd=min(1d0,max(0d0,ud(k,irad+NHYDRO+NENER)))
+           error=2.0d0*max( &
+                & abs((dd-dm)/(dd+dm+err_grad_floor(irad))), &
+                & abs((dm-dg)/(dm+dg+err_grad_floor(irad))))
+           ok(k) = ok(k) .or. error > err_grad_var(irad)
+        end do
+      end if
+   end do
+#endif
+
 end subroutine hydro_refine
 !###########################################################
 !###########################################################

@@ -77,6 +77,7 @@ module hydro_parameters
 #endif
 #if NVAR>NHYDRO+NENER
   real(dp),dimension(1:NVAR-NHYDRO-NENER)::err_grad_var=-1
+  real(dp),dimension(1:NVAR-NHYDRO-NENER)::err_grad_floor=0
 #endif
   real(dp),dimension(1:MAXLEVEL)::jeans_refine=-1
   real(dp),dimension(1:MAXLEVEL)::strom_refine=-1

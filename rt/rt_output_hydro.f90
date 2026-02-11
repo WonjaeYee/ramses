@@ -280,6 +280,7 @@ SUBROUTINE output_rt_stats
   if (neq_chem .and. rt_output_coolstats) then
      cells_all = 0 ; tot_all = 0 ; max_all = 0 ; loopCodes_all = 0
 #ifndef WITHOUTMPI
+call timer('output_rt_stats', 'start')
      call MPI_ALLREDUCE(n_cool_cells,         cells_all,     1, &
           MPI_INTEGER,          MPI_SUM, MPI_COMM_WORLD, info)
      call MPI_ALLREDUCE(tot_cool_loopcnt,     tot_all,       1, &
@@ -328,4 +329,5 @@ SUBROUTINE output_rt_stats
   end if
 113 format(' SED feedback(phot/step/1d50, phot/tot/1d50, *, */Msun , dt[yr])= '  &
                                                              , 10(1pe9.2))
+call timer('radiative transfer','start')
 END SUBROUTINE output_rt_stats

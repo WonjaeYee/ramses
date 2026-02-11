@@ -5,6 +5,9 @@ subroutine read_params
 #ifdef RTZ 
   use rtz_module
 #endif
+#ifdef INDIVIDUAL_SINK_STARS
+  use use_mist
+#endif
   implicit none
   !--------------------------------------------------
   ! Local variables
@@ -127,16 +130,25 @@ subroutine read_params
 
   ! Read parameter blocks
   call read_run_params(1,nml_ok)  !should be read first
+  if(myid==1) write(*,*) 'after read_run_params(1,nml_ok):', nml_ok
   call read_amr_params(1,nml_ok)
+  if(myid==1) write(*,*) 'after read_amr_params(1,nml_ok):', nml_ok
   call read_output_params(1,nml_ok)
+  if(myid==1) write(*,*) 'after read_output_params(1,nml_ok):', nml_ok
   call read_movie_params(1,nml_ok)
+  if(myid==1) write(*,*) 'after read_movie_params(1,nml_ok):', nml_ok
   call read_lightcone_params(1,nml_ok)
+  if(myid==1) write(*,*) 'after read_lightcone_params(1,nml_ok):', nml_ok
   call read_tracer_params(1,nml_ok)
+  if(myid==1) write(*,*) 'after read_tracer_params(1,nml_ok):', nml_ok
   call read_poisson_params(1,nml_ok)
+  if(myid==1) write(*,*) 'after read_poisson_params(1,nml_ok):', nml_ok
 
   call read_hydro_params(nml_ok)
+  if(myid==1) write(*,*) 'after read_hydro_params(nml_ok):', nml_ok
 #ifdef RT
   call read_rt_params(nml_ok)
+  if(myid==1) write(*,*) 'after read_rt_params(nml_ok):', nml_ok
 #endif
 #if NDIM==3
   if (sink)call read_sink_params
@@ -146,10 +158,15 @@ subroutine read_params
   if (make_mergertree)call read_mergertree_params
 #if USE_TURB==1
   call read_turb_params(nml_ok)
+  if(myid==1) write(*,*) 'after read_turb_params(nml_ok):', nml_ok
 #endif
 #endif
 
   ! DEV INFO: add here your call for new namelist blocks
+
+#ifdef INDIVIDUAL_SINK_STARS
+  call read_mist_parameters
+#endif
 
   ! Close namelist
   close(1)

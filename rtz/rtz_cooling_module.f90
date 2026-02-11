@@ -79,7 +79,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef RT
      & Np, Fp, p_gas, dNpdt, dFpdt, ilevel, &
 #endif
-     & dt, nCell, dx_SS_H2)
+     & dt, nCell, dx_SS_H2, &
+       err_idx)
   ! Semi-implicitly solve for new temperature, ionization states,
   ! photon density/flux, and gas velocity in a number of cells.
   ! Parameters:
@@ -148,6 +149,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
   character(len=20), dimension(1:50)::saved_cooling_rates_names
   real(dp)::TK_to_save(1:nvector), mu_to_save(1:nvector)
 
+  ! temporal index to check problem
+  integer::err_idx
+  real(dp):: print_neInit, print_ne, print_nElement_dep(n_elements)
+
+  print_neInit = 0d0
+  print_ne = 0d0
+  print_nElement_dep=0d0
+
 #ifdef RT
   call rtz_updateRTGroups_CoolConstants(ilevel)
 #endif
@@ -183,7 +192,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       if (rtz_equilibrium_test.eq.1) then 
          !!! USE FOR EQM TESTS WITH COOLING AT CONSTANT RHO
-         T2 = 1.d5 ! --> initialize at high temperature
+         T2 = 1.d4 ! --> initialize at high temperature
          ! Set the ionization states to neutral
          xion = 0.d0
          do iElement=1,n_elements
@@ -208,7 +217,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !!! USE FOR EQM TESTS WITH COOLING AT CONSTANT RHO
             ! Interpolate over density
             nElement(1:n_elements,1:ncell)  = 0.d0  ! Initialize to zero
-            nElement(1,1:ncell)  = 10.d0**(((5.d0 - (-2.d0)) * (real(i_interp,dp) - 1.d0)/(300.d0-1.d0)) + (-2.d0))   
+            nElement(1,1:ncell)  = 10.d0**(((8.d0 - (-3.d0)) * (real(i_interp,dp) - 1.d0)/(300.d0-1.d0)) + (-3.d0))   
             nElement(2,1:ncell)  = nElement(1,1:ncell) * 8.51d-02 ! Helium
             nElement(6,1:ncell)  = nElement(1,1:ncell) * 2.69d-04 * z_ave ! Carbon
             nElement(7,1:ncell)  = nElement(1,1:ncell) * 6.76d-05 * z_ave ! Nitrogen
@@ -236,19 +245,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! Make sure the ionization fractions don't go below the min or max
             xion(1:n_elements,1:n_elements,i) = MIN(MAX(xion(1:n_elements,1:n_elements,i), x_MIN),1d0)
 
-            ! Loop over each element and ensure that the ionization fractions
-            ! sum to 1
-            do iElement=1,n_elements
-               ! Check if we are actually using that element
-               if (elements(iElement)%atomic_number .gt. 0) then
-                  ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
-                  ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
-                  current_mass_frac = sum(xion(iElement,1:ion_fracs,i))
-                  do iIon=1,ion_fracs
-                     xion(iElement,iIon,i) = xion(iElement,iIon,i) + ((1.d0 - current_mass_frac) * (xion(iElement,iIon,i) / current_mass_frac))
-                  end do
-               end if
-            end do
+            ! Loop over each element and ensure that the ionization fractions sum to 1
+            ! do iElement=1,n_elements
+            !    ! Check if we are actually using that element
+            !    if (elements(iElement)%atomic_number .gt. 0) then
+            !       ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
+            !       ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
+            !       current_mass_frac = sum(xion(iElement,1:ion_fracs,i))
+            !       do iIon=1,ion_fracs
+            !          xion(iElement,iIon,i) = xion(iElement,iIon,i) + ((1.d0 - current_mass_frac) * (xion(iElement,iIon,i) / current_mass_frac))
+            !       end do
+            !    end if
+            ! end do
          end do
 
          ! Loop until all cells have tleft=0
@@ -307,15 +315,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
 
          if (rtz_equilibrium_test.eq.1) then
-            if (isH2_rtz) then 
-               if (isCO_rtz) then
-                  write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, nCO(i)/nH(i), (nCO(i)+nElement(6,i))/nH(i), (nCO(i)+nElement(8,i))/nH(i)
-               else
+            ! if (isH2_rtz) then 
+            !    if (isCO_rtz) then
+            !       write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, nCO(i)/nH(i), (nCO(i)+nElement(6,i))/nH(i), (nCO(i)+nElement(8,i))/nH(i)
+            !    else
                   write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
-               end if
-            else
-               write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1)
-            end if
+            !    end if
+            ! else
+               ! write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1)
+            ! end if
 
             ! Write the cooling and heating rates to file
             if (i_interp.eq.1) write(base_unit+100,'(*(A20, ", "))') 'rho', 'T', 'Tmu', 'mu', saved_cooling_rates_names
@@ -326,8 +334,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          do iElement = 1, n_elements
             if (elements(iElement)%atomic_number .gt. 0) then
                element_unit = base_unit + iElement
-               write(element_unit,'(ES15.6, I14, *(ES15.6))') rt_Tconst, loopcnt, &
-                  (xion(iElement,j,1), j=1,elements(i)%n_ions)
+               if (rtz_equilibrium_test.eq.2) then 
+                  write(element_unit,'(ES15.6, I14, *(ES15.6))') rt_Tconst, loopcnt, &
+                     (xion(iElement,j,1), j=1,elements(iElement)%n_ions + elements(iElement)%n_mol)
+               else if (rtz_equilibrium_test.eq.1) then 
+                  write(element_unit,'(ES15.6, ES15.6, I14, *(ES15.6))') nH(i), TK_to_save(i), loopcnt, &
+                     (xion(iElement,j,1), j=1,elements(iElement)%n_ions + elements(iElement)%n_mol)
+               end if
             end if
          end do
 
@@ -364,17 +377,32 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
          ! Loop over each element and ensure that the ionization fractions
          ! sum to 1
-         do iElement=1,n_elements
-            ! Check if we are actually using that element
-            if (elements(iElement)%atomic_number .gt. 0) then
-               ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
-               ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
-               current_mass_frac = sum(xion(iElement,1:ion_fracs,i))
-               do iIon=1,ion_fracs
-                  xion(iElement,iIon,i) = xion(iElement,iIon,i) + ((1.d0 - current_mass_frac) * (xion(iElement,iIon,i) / current_mass_frac))
-               end do
-            end if
-         end do
+         ! do iElement=1,n_elements
+         !    ! Check if we are actually using that element
+         !    if (elements(iElement)%atomic_number .gt. 0) then
+         !       ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
+         !       ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
+
+         !       ! New Method
+         !       current_mass_frac = sum(xion(iElement,2:ion_fracs,i))
+         !       xion(iElement,1,i) = 0.d0
+         !       if (current_mass_frac.ge.0.d0 .and. current_mass_frac.le.1.d0) then
+         !          xion(iElement,1,i) = 1.d0 - current_mass_frac
+         !       else if (current_mass_frac.gt.1.d0) then
+         !          do iIon=2,ion_fracs
+         !             xion(iElement,iIon,i) = xion(iElement,iIon,i) + ((1.d0 - current_mass_frac) * (xion(iElement,iIon,i) / current_mass_frac))
+         !          end do
+         !       else 
+         !          write(*,*) "NEGATIVE ION FRACTIONS...BIG PROBLEM"
+         !       end if
+
+         !       ! Old Method
+         !       ! current_mass_frac = sum(xion(iElement,1:ion_fracs,i))
+         !       ! do iIon=1,ion_fracs
+         !       !    xion(iElement,iIon,i) = xion(iElement,iIon,i) + ((1.d0 - current_mass_frac) * (xion(iElement,iIon,i) / current_mass_frac))
+         !       ! end do
+         !    end if
+         ! end do
 #ifdef RT
          do ig=1,nGroups
             Np(ig,i) = MAX(smallNp, Np(ig,i))
@@ -392,7 +420,80 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (loopcnt.gt.100000) then
             write(*,*)ilevel,rt_c_cgs(ilevel)
             write(*,*) "Too high loopcnt",loopcnt
-            stop
+            write(*,*) 'This is raised in `rtz_solve_cooling`'
+            write(*,*) '   tleft:', tLeft
+            write(*,*) '     ddt:', ddt
+            write(*,*) '  dt_rec:', dt_rec, new_line('')
+            write(*,*) 'code:', code
+            if (code==1) then
+               write(*,*) ' - from photon density Np update'
+               write(*,*) '      Np:', Np(:, i)
+               write(*,*) '     dNp:', dNp(:)
+               ! write(*,*) '  recRad:', recRad(:)
+               write(*,*) '   dNpdt:', dNpdt(:, i)
+               ! write(*,*) '   phAbs:', phAbs(:)
+            else if (code==2) then
+               write(*,*) ' - from photon flux Fp update'
+               write(*,*) '     Fp:', Fp(:, :, i)
+               write(*,*) '    dFp:', dFp(:, :)
+               write(*,*) '  dFpdt:', dFpdt(:, :, i)
+               ! write(*,*) '  phAbs:', phAbs(:)
+               ! write(*,*) '   phSc:', phSc(:)
+            else if (code==3) then
+               write(*,*) ' - from temperature T2 update'
+               write(*,*) '      T2:', T2(i)
+               write(*,*) '     dT2:', dT2
+               ! write(*,*) '    rate:', rate
+               ! write(*,*) '   dRate:', dRate
+               ! write(*,*) '   Crate:', Crate
+               ! write(*,*) '   dCdT2:', dCdT2
+               ! write(*,*) '  X_nHkb:', X_nHkb
+            else if (code==4) then
+               write(*,*) ' - from photon density Np update (if rt_isIR)'
+               write(*,*) '                   Np:', Np(iIR, i)
+               write(*,*) '                  dNp:', dNp(iIR)
+               ! write(*,*) '                 dE_T:', dE_T
+               write(*,*) '  one_over_egy_IR_erg:', one_over_egy_IR_erg
+            else if (code==5) then
+               write(*,*) ' - from temperature T2 update (if rt_isIR)'
+               write(*,*) '    T2:', T2(i)
+               write(*,*) '   dT2:', dT2
+               ! write(*,*) '    mu:', mu
+               ! write(*,*) '  dE_T:', dE_T
+            else if (code==6) then
+               write(*,*) ' - from H2 update'
+               write(*,*) '     xion:', xion(1,3,i)
+               write(*,*) '    dXion:', dXion(1,3)
+               ! write(*,*) '  xH2_loc:', xH2_loc
+               ! write(*,*) '    cr_H2:', cr_H2
+               ! write(*,*) '    de_H2:', de_H2
+            else if (code==7) then
+               write(*,*) ' - from CO update'
+               write(*,*) '       nCO:', nCO(i)
+               ! write(*,*) '   nCO_new:', nCO_new
+               ! write(*,*) '  delta_CO:', delta_CO
+               ! write(*,*) '     cr_CO:', cr_CO
+               ! write(*,*) '     de_CO:', de_CO
+            else if (code==8) then
+               write(*,*) ' - from ionization fraction xion update'
+               write(*,*) '  iElement:', iElement
+               write(*,*) '      iIon:', iIon
+               write(*,*) '      xion:', xion(iElement, iIon, i)
+               write(*,*) '     dXion:', dXion(iElement, iIon)
+               ! write(*,*) '        cr:', cr
+               ! write(*,*) '        de:', de
+            else if (code==9) then
+               write(*,*) ' - from electron ne update'
+               write(*,*) '      iElement:', iElement
+               write(*,*) '          iIon:', iIon
+               write(*,*) '        neInit:', print_neInit
+               write(*,*) '            ne:', print_ne
+               write(*,*) '          xion:', xion(:, :, i)
+               write(*,*) '         dXion:', dXion(:, :)
+               write(*,*) '  nElement_dep:', print_nElement_dep(:)
+            end if
+            err_idx = i
+            return ! to check other quantities, return instead of stop
          end if
          nAct_next=0                     ! Active cells for the next iteration
          do ia=1,nAct                             ! Loop over the active cells
@@ -467,6 +568,7 @@ contains
     use photoionization_UVB_module
     use cosmic_ray_ionization_module
     use molecules_module
+    ! use auger_ionization_module
     use rtz_coolrates_module, only: all_cooling
     implicit none
     integer, intent(in):: icell
@@ -506,6 +608,9 @@ contains
     real(dp):: tot_C, tot_O, x_OI
 #endif
     real(dp),dimension(1:27,10):: saved_rates
+    real(dp),dimension(1:27,1:10,1:NGROUPS)::auger_yields
+    real(dp)::loc_auger_prob
+    integer::i_a
     !-----------------------------------------------------------------------
 
     ! RTZ variable initialization
@@ -625,9 +730,9 @@ contains
           ! Deal with molecules separately
           if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
              if (isLW(igroup).eq.1) then 
-                phAbs(igroup) = 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
+                phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
              else
-                phAbs(igroup) = 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
+                phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
              end if
           end if
        end do
@@ -650,6 +755,7 @@ contains
           fracMax=MAX(fracMax,dUU)      ! To check if ddt can be increased
           if(dUU .gt. 1d0) then
              dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+             dt_rec = min(dt_rec,0.5d0*ddt(icell))
              code=1 ;   RETURN                        ! ddt(icell) too big
           endif
           
@@ -672,6 +778,7 @@ contains
              fracMax=MAX(fracMax,dUU)   ! To check if ddt can be increased
              if(dUU .gt. 1d0) then
                 dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                dt_rec = min(dt_rec,0.5d0*ddt(icell))
                 code=2 ;   RETURN                     ! ddt(icell) too big
              endif
           end do
@@ -742,8 +849,9 @@ contains
      
        fracMax=MAX(fracMax,dUU)
        if(dUU .gt. 1.) then                                     ! 10% rule
-         !  write(*,*) "Broken Temperature", T2(icell), dT2, ddt(icell)/1.d12, Crate
+         !  write(*,*) "Broken Temperature", T2(icell), nH(icell), dT2, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0), Crate, loopcnt, dUU
           dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+          dt_rec = min(dt_rec,0.5d0*ddt(icell))
           code=3 ; RETURN
        endif
        TK=dT2*mu
@@ -772,6 +880,7 @@ contains
           fracMax=MAX(fracMax,dUU)
           if(dUU .gt. 1.) then
              dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+             dt_rec = min(dt_rec,0.5d0*ddt(icell))
              code=4 ;   RETURN
           endif
 
@@ -779,6 +888,7 @@ contains
           fracMax=MAX(fracMax,dUU)
           if(dUU .gt. 1.) then                           ! 10% rule for T2
              dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+             dt_rec = min(dt_rec,0.5d0*ddt(icell))
              code=5 ; RETURN
           endif
           TK=dT2*mu
@@ -833,9 +943,9 @@ contains
        if (rtz_include_photoionization.and.rt_advect) then
           do igroup=1,nGroups
              if (isLW(igroup).eq.1) then
-                de_H2 = de_H2 + (dXion(1,3) * SUM(signc(igroup,1,3) * dNp * f_shd))
+                de_H2 = de_H2 + (SUM(signc(igroup,1,3) * dNp * f_shd))
              else
-                de_H2 = de_H2 + (dXion(1,3) * SUM(signc(igroup,1,3) * dNp))
+                de_H2 = de_H2 + (SUM(signc(igroup,1,3) * dNp))
              end if  
           end do
        end if
@@ -846,12 +956,13 @@ contains
        dXion(1,3) = 2.d0 * min(max(xH2_loc,x_MIN),0.5d0)
 
        ! Check for convergence
-       dUU = MAX(dUU,ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM)))
+       dUU = ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
        dUU = dUU * one_over_x_FRAC
        fracMax=MAX(fracMax,dUU)
        if(dUU .gt. 1.d0) then
          !  write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
           dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+          dt_rec = min(dt_rec,0.5d0*ddt(icell))
           code=6 !TODO(code) update this code for each ion
           RETURN
        end if
@@ -899,6 +1010,15 @@ contains
          nCO_new  = nCO(icell) + delta_CO
          nCII_new = n_CII - delta_CO
          nOI_new  = n_OI  - delta_CO
+         
+         if (sum(dXion(6,1:7)) < 0.99d0) then
+            write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+         end if
+
+         if (loopcnt==100000) then
+            write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
+            write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+         end if
 
          ! Now update the ion fractions for C and O
          tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
@@ -921,14 +1041,28 @@ contains
             end if
          end do
 
+         if (loopcnt==100000) then
+            write(*,*) 'nCO_new:', nCO_new
+            write(*,*) 'nCO    :', nCO(icell)
+            write(*,*) 'xion(6,1:elements(6)%n_ions,icell):', xion(6,1:elements(6)%n_ions,icell)
+            write(*,*) '     dXion(6,1:elements(6)%n_ions):', dXion(6,1:elements(6)%n_ions)
+            write(*,*) '          tot_C:', tot_C
+            write(*,*) 'nElement_dep(6):', nElement_dep(6)
+            write(*,*) 'sum(dXion(6,1:elements(6)%n_ions)):', sum(dXion(6,1:elements(6)%n_ions))
+            write(*,*) 'n_CII   :', n_CII
+            write(*,*) 'nCII_new:', nCII_new
+            write(*,*) 'delta_CO:', delta_CO
+         end if
+
          ! Check for convergence
-         dUU = MAX(dUU,ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)))
+         dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
          dUU = dUU * one_over_x_FRAC
          fracMax=MAX(fracMax,dUU)
          if(dUU .gt. 1.d0) then
             !  write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
             dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-            code=6 !TODO(code) update this code for each ion
+            dt_rec = min(dt_rec,0.5d0*ddt(icell))
+            code=7 !TODO(code) update this code for each ion
             RETURN
          end if
 
@@ -969,13 +1103,18 @@ contains
           ! recombination rates are 0 for ground state
           saved_rates(1,2) = collisional_ionization(TK, 1, iElement)
 
+          ! Compute the Auger yields
+         !  if (rtz_include_auger_ionization) then 
+         !     call get_auger_yields(iElement,n_ions,group_egy,auger_yields)
+         !  end if
+
           ! Loop over the number of ions
           do iIon = 1,n_ions
              ! Make sure we have the rates of all next ions
              ! previous ions are already computed
              if (iIon.lt.n_ions) then
                 saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
-                saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
+                if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
                 saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, UV_background_G0, ne)
              end if
 
@@ -1008,14 +1147,14 @@ contains
              end if
 
              ! UVB Photoionization of the less excited state
-             if (rtz_include_photoionization) then 
+             if (rtz_include_HM12_UVB) then 
                if (iIon.gt.1) then 
                   cr = cr + (HM12_UVB_z(iElement,iIon-1,1) * ss_factor * dXion(iElement,iIon-1))
                end if
              end if
 
              ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
-             if (rtz_include_HM12_UVB) then 
+             if (rtz_include_photoionization) then 
                if (iIon.eq.2) then 
                   cr = cr + (UV_background_G0 * elements(iElement)%G0_photo_rate * dXion(iElement,iIon-1))
                end if
@@ -1046,8 +1185,19 @@ contains
 #ifdef RT
              ! Photoionization of less excited state from the local radiation field
              if (rtz_include_photoionization.and.rt_advect) then
-                if (iIon > 1) then 
-                   cr = cr + (dXion(iElement,iIon-1) * SUM(signc(:,iElement,iIon-1)*dNp))
+                if (iIon .gt. 1) then 
+                  !  if (rtz_include_auger_ionization .and. iElement.gt.2) then 
+                  !     do igroup=1,nGroups ! Loop over groups
+                  !        do i_a = iIon-1,1,-1 ! Loop over lesser ions
+                  !           if (iIon - i_a .le. 10) then 
+                  !              loc_auger_prob = auger_yields(i_a,iIon - i_a,igroup)
+                  !              cr = cr + (dXion(iElement,iIon-1) * signc(igroup,iElement,iIon-1)*dNp(igroup)) * loc_auger_prob
+                  !           end if
+                  !        end do ! End loop over lesser ions
+                  !    end do ! End loop over groups
+                  !  else
+                      cr = cr + (dXion(iElement,iIon-1) * SUM(signc(:,iElement,iIon-1)*dNp))
+                   !end if
                 end if
              end if
 #endif
@@ -1116,7 +1266,7 @@ contains
              ! Photoionization  from the local radiation field
              if (rtz_include_photoionization.and.rt_advect) then
                 if (iIon .lt. n_ions) then 
-                   de = de + (dXion(iElement,iIon) * SUM(signc(:,iElement,iIon)*dNp))
+                   de = de + SUM(signc(:,iElement,iIon)*dNp)
                 end if
              end if
 #endif
@@ -1189,13 +1339,14 @@ contains
              end if
 
              ! Check for convergence -- Fractional change in ion
-             dUU = MAX(dUU,ABS((dXion(iElement,iIon)-xion(iElement,iIon,icell))/(xion(iElement,iIon,icell)+x_FM)))
+             dUU = ABS((dXion(iElement,iIon)-xion(iElement,iIon,icell))/(xion(iElement,iIon,icell)+x_FM))
              dUU = dUU * one_over_x_FRAC
              fracMax=MAX(fracMax,dUU)
              if(dUU .gt. 1.) then
-               !  write(*,*) "Broken element/ion", iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell)
+               !  write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                 dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-                code=6 !TODO(code) update this code for each ion
+                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                code=8 !TODO(code) update this code for each ion
                 RETURN
              end if
 
@@ -1203,20 +1354,46 @@ contains
              dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
              fracMax=MAX(fracMax,dUU)
              if(dUU .gt. 1.) then
-               !  write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM)
+               !  write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                 dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-                code=8
+                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                print_neInit = neInit
+                print_ne = ne
+                print_nElement_dep = nElement_dep
+                code=9
                 RETURN
-             endif
+             end if
 
           end do ! END ION LOOP
 
           ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
           ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
-          current_mass_frac = sum(dXion(iElement,1:ion_fracs))
-          do iIon=1,ion_fracs
-             dXion(iElement,iIon) = dXion(iElement,iIon) + ((1.d0 - current_mass_frac) * (dXion(iElement,iIon) / current_mass_frac))
-          end do
+
+          if (iElement.le.2) then 
+               current_mass_frac = sum(dXion(iElement,2:ion_fracs))
+
+               dXion(iElement,1) = 0.d0
+
+               if (current_mass_frac.ge.0.d0) then
+                  if (current_mass_frac.le.1.d0) then
+                     dXion(iElement,1) = 1.d0 - current_mass_frac
+                  else
+                     do iIon=1,ion_fracs
+                        dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
+                     end do
+                  end if
+               else
+                  dXion(iElement,1) = 1.d0
+                  dXion(iElement,2:ion_fracs) = 0.d0
+               end if
+            ! end if
+          else 
+            current_mass_frac = sum(dXion(iElement,1:ion_fracs))
+            do iIon=1,ion_fracs
+               !  dXion(iElement,iIon) = dXion(iElement,iIon) + ((1.d0 - current_mass_frac) * (dXion(iElement,iIon) / current_mass_frac))
+               dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
+            end do
+          end if
        end if
     end do ! END ELEMENT LOOP
 
@@ -1238,10 +1415,14 @@ contains
 #endif
     ! Now the dUs are really changes, not new values
     ! Update the timestep for the next iteration:
-    ! dt_rec = 0.5d0 * ddt(icell) / ((0.01d0 + fracMax)**0.5d0)
+   !  dt_rec = 0.5d0 * ddt(icell) / ((0.07d0 + fracMax)**0.5d0)
     dt_rec = 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
-    ! dt_rec = min(dt_rec,1E12 * min(TK/100.0,1.0) * min((1.0/nElement_dep(1)),1.0) * min(sqrt(1.0/max(UV_background_G0,1.d-10)),1.0))
-    ! dt_rec = min(dt_rec,rtz_max_cool_timestep)
+    dt_rec = min(dt_rec,2.*ddt(icell))
+    dt_rec = min(dt_rec,rtz_max_cool_timestep)
+    ! Don't let timestep go above 100 years in very dense gas!!!
+    if (nH(icell).ge.8.d4) then 
+       dt_rec = min(dt_rec,100.d0 * 365.25d0 * 24.d0 * 60.d0 * 60.d0 * 1.d5 / nH(icell))
+    end if
     dt_ok = .true.
     code=0
 

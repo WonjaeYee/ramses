@@ -29,7 +29,7 @@ subroutine output_sink_csv(filename)
   end do
   write(123, *) ! Move to a new line
   do isink=1,nsink
-     write(123,'(I10,21(A1,ES17.10),A1,I10,A1,ES17.10,A1,I10,A1,ES17.10)',advance='no')idsink(isink),',',msink(isink),&
+     write(123,'(I10,21(A1,ES20.10E3),A1,I10,A1,ES20.10E3,A1,I10,A1,ES20.10E3)',advance='no')idsink(isink),',',msink(isink),&
           ',',xsink(isink,1),',',xsink(isink,2),',',xsink(isink,3),&
           ',',vsink(isink,1),',',vsink(isink,2),',',vsink(isink,3),&
           ',',lsink(isink,1),',',lsink(isink,2),',',lsink(isink,3),&
@@ -40,7 +40,7 @@ subroutine output_sink_csv(filename)
           ',',msmbh(isink),',',dmfsink(isink),',',sinkint_level,',',msink_actual(isink),&
           ',',evolution_flag(isink),',',main_sequence_time(isink)
      do i = 1, NMETALS
-        write(123, '(A1,ES17.10)', advance='no') ',',sink_metallicity(isink, i)
+        write(123, '(A1,ES20.10E3)', advance='no') ',',sink_metallicity(isink, i)
      end do
      write(123, *) ! Move to a new line
 
