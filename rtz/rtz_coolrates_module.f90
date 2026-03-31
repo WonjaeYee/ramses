@@ -469,13 +469,14 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     ! Cloudy tables of metal line cooling
     ! which are valid at high temperature
     use amr_commons, only: myid
+    use hydro_parameters, only: data_dir
     implicit none
     integer :: unit_num, ios, i, j
 
     if(myid.eq.1) write(*,*) 'Initializing High Temperature Metal Cooling Rates'
 
     ! Load temperatures
-    open(newunit=unit_num, file='./data/high_T_cooling/temperatures.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/temperatures.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high T temperatures file'
         return
@@ -492,7 +493,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     high_t_cooling_rates = -50.d0
 
     ! CARBON
-    open(newunit=unit_num, file='./data/high_T_cooling/CARBON/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CARBON/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling carbon rates'
         return
@@ -505,7 +506,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! NITROGEN
-    open(newunit=unit_num, file='./data/high_T_cooling/NITROGEN/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/NITROGEN/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling nitrogen rates'
         return
@@ -518,7 +519,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! OXYGEN
-    open(newunit=unit_num, file='./data/high_T_cooling/OXYGEN/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/OXYGEN/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling oxygen rates'
         return
@@ -531,7 +532,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! NEON
-    open(newunit=unit_num, file='./data/high_T_cooling/NEON/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/NEON/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling neon rates'
         return
@@ -544,7 +545,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! MAGNESIUM
-    open(newunit=unit_num, file='./data/high_T_cooling/MAGNESIUM/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/MAGNESIUM/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling magnesium rates'
         return
@@ -557,7 +558,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! SILICON
-    open(newunit=unit_num, file='./data/high_T_cooling/SILICON/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/SILICON/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling silicon rates'
         return
@@ -570,7 +571,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! SULFUR
-    open(newunit=unit_num, file='./data/high_T_cooling/SULPHUR/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/SULPHUR/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling sulfur rates'
         return
@@ -583,7 +584,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! IRON
-    open(newunit=unit_num, file='./data/high_T_cooling/IRON/all_cool.dat', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/IRON/all_cool.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling iron rates'
         return
@@ -626,7 +627,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     ! Now we have to do the same thing, but load in the CIE data
 
     ! Load temperatures
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/T_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/T_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high T CIE temperatures file'
         return
@@ -639,7 +640,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! CARBON
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/C_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/C_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling carbon CIE fracs'
         return
@@ -652,7 +653,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! NITROGEN
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/N_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/N_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling nitrogen CIE fracs'
         return
@@ -665,7 +666,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! OXYGEN
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/O_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/O_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling oxygen CIE fracs'
         return
@@ -678,7 +679,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! NEON
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/Ne_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/Ne_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling neon CIE fracs'
         return
@@ -691,7 +692,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! MAGNESIUM
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/Mg_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/Mg_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling oxygen CIE fracs'
         return
@@ -704,7 +705,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! SILICON
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/Si_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/Si_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling silicon CIE fracs'
         return
@@ -717,7 +718,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! SULFUR
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/S_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/S_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling sulfur CIE fracs'
         return
@@ -730,7 +731,7 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     close(unit_num)
 
     ! IRON
-    open(newunit=unit_num, file='./data/high_T_cooling/CIE/Fe_CIE.txt', status='old', action='read', iostat=ios)
+    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CIE/Fe_CIE.txt', status='old', action='read', iostat=ios)
     if (ios /= 0) then
         write(*,*) 'Error: Could not open high temperature cooling iron CIE fracs'
         return
@@ -877,6 +878,7 @@ END FUNCTION get_high_t_cooling_rates
 SUBROUTINE initialize_fine_structure_tables()
     ! Initialization for fine structure cooling tables
     use amr_commons, only: myid
+    use hydro_parameters, only: data_dir
     implicit none
     integer :: unit_num, ios, i, j
     integer, parameter::N_LINES = 27
@@ -894,7 +896,7 @@ SUBROUTINE initialize_fine_structure_tables()
     ! Check that all files exist and load them in
     do i=1,N_LINES
         ! Open the fine structure file
-        open(newunit=unit_num, file='./data/fine_structure_data/'//trim(file_names(i)), status='old', action='read', iostat=ios)
+        open(newunit=unit_num, file=trim(data_dir)//'/fine_structure_data/'//trim(file_names(i)), status='old', action='read', iostat=ios)
         if (ios /= 0) then
             write(*,*) 'Error: Could not open '//trim(file_names(i))//' high temperature cooling iron rates'
             return

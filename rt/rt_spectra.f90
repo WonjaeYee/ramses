@@ -1382,12 +1382,13 @@ END SUBROUTINE initialize_group_energies_from_blackbody
 #ifdef INDIVIDUAL_SINK_STARS
 SUBROUTINE init_popII_stellar_properties()
   use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
   implicit none
 
   if (myid.eq.1) write(*,*) "Loading in Pop. II stellar data"
 
   ! Harley formatted this in python so we should be able to simply read it in as a 3D array
-  open(unit=10, file='./data/popII_data/mist_stellar_props.bin', access='stream', form='unformatted', status='old', action='read')
+  open(unit=10, file=trim(data_dir)//'/popII_data/mist_stellar_props.bin', access='stream', form='unformatted', status='old', action='read')
   read(10) mist_stellar_props
   close(10)
 

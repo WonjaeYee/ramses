@@ -192,7 +192,7 @@ module amr_parameters
   real(dp),dimension(1:3)::accel_gr=0 ! constant external grain force
   integer,dimension(1:MAXOUT)::trajectories=0 ! determines whether or not to output trajectories, which particles to output, and how many.
   logical :: supersonic_drag=.true.   ! if true, Epstein drag is used. If false, drag depends only on density and the sound speed.
-  integer :: ndust=1                  ! Determines how many dust grains we has as a multiple of the resolution.
+  integer :: ndust_pic=1              ! Determines how many dust grains we has as a multiple of the resolution.
   real(dp):: ddex=0.0                 ! Determines how many decades the dust spectrum spans.
   real(dp):: charge_slope=0.0         ! Determines how the grain charge scales with grain size (power law option)
 

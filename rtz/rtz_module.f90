@@ -1,5 +1,6 @@
 module rtz_module
   use amr_parameters, only: dp
+  use hydro_parameters, only: n_elements
   implicit none
 
   private
@@ -19,7 +20,7 @@ module rtz_module
   end type Element
 
   ! RTZ STUFF
-  integer, parameter :: n_elements = 27
+  
   type(Element) :: elements(n_elements)
 
 CONTAINS

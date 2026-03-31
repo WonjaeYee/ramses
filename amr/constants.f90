@@ -26,6 +26,8 @@ module constants
   real(dp),parameter ::L_sun        = 3.8280000d+33 ! Solar Lum [erg s-1]; IAU
   real(dp),parameter ::rhoc         = 1.8800000d-29 ! Crit. density [g cm-3]
   real(dp),parameter ::one_over_clight=3.335640484668562d-11 ! Save some computation
+  real(dp),parameter ::elementary_e = 1.6021766d-19 ! Elementary charge [C]; SI
+  real(dp),parameter ::four_pi_eps0 = 1.1126501d-19 ! 4 pi x vacuum permittivity [F nm-1]
 
   ! Conversion factors - distance
   ! IAU 2012 convention:

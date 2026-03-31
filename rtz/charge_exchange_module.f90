@@ -15,6 +15,7 @@ SUBROUTINE load_ct_rates()
   !Load the charge transfer ionization
   !and recombination rates from file
   use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
   implicit none
 
   integer:: i, j, k, unit_num, ios
@@ -22,7 +23,7 @@ SUBROUTINE load_ct_rates()
   if(myid.eq.1) write(*,*) 'Initializing charge exchange rates'
 
   ! Load charge exchange file
-  open(newunit=unit_num, file='./data/charge_transfer/ct_ionization.dat', status='old', action='read', iostat=ios)
+  open(newunit=unit_num, file=trim(data_dir)//'/charge_transfer/ct_ionization.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
       write(*,*) 'Error: Could not open CT Ionization file'
       return
@@ -46,7 +47,7 @@ SUBROUTINE load_ct_rates()
   end do
 
   ! Load Recombination
-  open(newunit=unit_num, file='./data/charge_transfer/ct_recombination.dat', status='old', action='read', iostat=ios)
+  open(newunit=unit_num, file=trim(data_dir)//'/charge_transfer/ct_recombination.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
       write(*,*) 'Error: Could not open CT Recombination file'
       return

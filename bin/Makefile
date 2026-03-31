@@ -28,6 +28,8 @@ PATCH =
 RT = 0
 # Use RTZ? 1=Yes, 0=No (note, do not set both RT and RTZ to 1!)
 RTZ = 1
+# Use CALIMA dust and PAH chemistry modelling? 1=Yes, 0=No
+CALIMA = 1
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
 USE_TURB = 1
 TURB_GRID_SIZE = 64
@@ -35,7 +37,7 @@ TURB_GRID_SIZE = 64
 MPI = 1
 MPIF90 = mpif90
 # Root name of executable
-EXEC = /work/projects/imf/bin/ramses_260210-debug-loopcnt_
+EXEC = ramses
 # Number of additional energies
 NENER = 1
 # Use Grackle cooling? 1=Yes, 0=No
@@ -80,6 +82,11 @@ else
 NIONS = 0
 endif
 
+# Scalar quantitites for CALIMA
+NDUST = 4
+NPAH = 2
+NDCHEMTYPE = 2
+
 # Compute NVAR
 NHYDRO = 2+$(NDIM)
 ifeq ($(SOLVER),mhd)
@@ -94,6 +101,9 @@ ifeq ($(RTZ),1)
 endif
 ifeq ($(CO),1)
    NVAR := $(NVAR)+1
+endif
+ifeq ($(CALIMA),1)
+   NVAR := $(NVAR)+$(NDUST)+$(NPAH)
 endif
 
 # Set to one to use 'include "mpif.h"' instead of more recent "use mpi"
@@ -142,6 +152,9 @@ ifeq ($(USE_TURB),1)
 endif
 ifeq ($(LIGHT_MPI_COMM), 1)
    DEFINES += -DLIGHT_MPI_COMM
+endif
+ifeq ($(CALIMA),1)
+   DEFINES += -DCALIMA -DNDUST=$(NDUST) -DNPAH=$(NPAH) -DNDCHEMTYPE=$(NDCHEMTYPE)
 endif
 
 # For individual stars
@@ -230,7 +243,7 @@ ifeq ($(USE_TURB),1)
    # LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
    # LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
    # LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
-   FFTW_LIBRARY_PATH = /opt/spack-installed/fftw/3.3.10/gcc-13.3.0-psmbqz7bbtbqa7u3fjw5vippcsmpthpw
+   FFTW_LIBRARY_PATH = /opt/homebrew/opt/fftw
    LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
    LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
 endif
@@ -247,6 +260,9 @@ endif
 ifeq ($(RTZ),1)
    VPATH += ../rt:
    VPATH += ../rtz:
+endif
+ifeq ($(CALIMA),1)
+   VPATH += ../calima:
 endif
 VPATH += ../hydro:../pm:../poisson:../amr:../io
 ###
@@ -265,12 +281,23 @@ MODOBJ += poisson_commons.o hydro_parameters.o hydro_commons.o \
           cooling_module.o bisection.o sparse_mat.o clfind_commons.o \
           gadgetreadfile.o write_makefile.o write_patch.o write_gitinfo.o \
           metal_yields_module.o sink_sn_feedback.o
+ifeq ($(CALIMA),1)
+   ifeq ($(RTZ),1)
+      MODOBJ += rtz_module.o
+   endif
+   MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_cooling.o \
+               dust_dynamics.o dust_photophysics.o dust_seeding.o dust_surface_chemistry.o \
+               dust_rates.o dust_init.o dust_solver.o
+endif
 ifeq ($(RT),1)
    MODOBJ += rt_parameters.o rt_hydro_commons.o coolrates_module.o \
              rt_spectra.o rt_cooling_module.o rt_flux_module.o
 endif
 ifeq ($(RTZ),1)
-   MODOBJ += rtz_module.o rt_parameters.o rt_hydro_commons.o cross_sections_module.o \
+   ifeq ($(CALIMA),0)
+      MODOBJ += rtz_module.o
+   endif
+   MODOBJ += rt_parameters.o rt_hydro_commons.o cross_sections_module.o \
              rt_spectra.o rt_flux_module.o \
              collisional_ionization_module.o recombination_module.o \
              cosmic_ray_ionization_module.o photoionization_UVB_module.o \

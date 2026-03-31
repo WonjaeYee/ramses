@@ -35,6 +35,29 @@ module hydro_parameters
 #endif
   integer,parameter::nvar_all=nvar
 
+  ! Global parameters that need to be use by RTZ and CALIMA
+  integer, parameter :: n_elements = 27
+#ifdef CALIMA
+#ifdef NDUST
+  integer, parameter :: ndust = NDUST
+#else
+  integer, parameter :: ndust = 0
+#endif
+#ifdef NPAH
+  integer, parameter :: npah = NPAH
+#else
+  integer, parameter :: npah = 0
+#endif
+#ifdef NDCHEMTYPE
+  integer, parameter :: ndchemtype = NDCHEMTYPE
+#else
+  integer, parameter :: ndchemtype = 1
+#endif
+#endif
+
+  ! Where the tables for RTZ and CALIMA are stored
+  character(LEN=256)::data_dir='../data/'
+
   ! Size of hydro kernel
   integer,parameter::iu1=-1
   integer,parameter::iu2=+4
@@ -120,5 +143,7 @@ module hydro_parameters
   integer::ivirial1=nhydro+1
   integer::ivirial2=nhydro+1
   integer::inener=nhydro+1
+  integer::idust=nhydro+1
+  integer::ipah=nhydro+1
 
 end module hydro_parameters
