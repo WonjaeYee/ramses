@@ -1,6 +1,6 @@
 module dust_rates
     use amr_parameters, only: dp
-    use constants, only: yr2sec,Myr2sec,kB
+    use constants, only: yr2sec,Myr2sec,kB,mH,amu2g,e2instatC
     use dust_commons
     use dust_utils
 
@@ -18,7 +18,7 @@ contains
                                        lead_elem,nions_lead,int_ratd_switch, &
                                        boost_acc,boost_coa,rhoZ_lim, &
                                        t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
-                                       do_precompute,do_sputtering,do_accretion,do_coagulation,do_shattering,do_ratd, &
+                                       do_sputtering,do_accretion,do_coagulation,do_shattering,do_ratd, &
                                        do_pah_sputtering,do_pah_sublimation,do_pah_coalescence,do_pah_freezing,do_pah_evaporation)
         implicit none
 
@@ -32,15 +32,13 @@ contains
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
-        logical, intent(in), optional :: do_precompute,do_sputtering,do_accretion,do_coagulation,do_shattering,do_ratd
+        logical, intent(in), optional :: do_sputtering,do_accretion,do_coagulation,do_shattering,do_ratd
         logical, intent(in), optional :: do_pah_sputtering,do_pah_sublimation,do_pah_coalescence,do_pah_freezing,do_pah_evaporation
 
         integer :: ii, jj, kk, jj1, jj2, kk1, kk2, nd_ctype
-        logical :: run_precompute,run_sputtering,run_accretion,run_coagulation,run_shattering,run_ratd
+        logical :: run_sputtering,run_accretion,run_coagulation,run_shattering,run_ratd
         logical :: run_pah_sputtering,run_pah_sublimation,run_pah_coalescence,run_pah_freezing,run_pah_evaporation
 
-        run_precompute = Coulomb_precompute
-        if (present(do_precompute)) run_precompute = do_precompute
         run_sputtering = dust_sputtering
         if (present(do_sputtering)) run_sputtering = do_sputtering
         run_accretion = dust_accretion
@@ -63,8 +61,6 @@ contains
         run_pah_evaporation = pah_cluster_evaporation
         if (present(do_pah_evaporation)) run_pah_evaporation = do_pah_evaporation
 
-        if (run_precompute) call precompute_Coulomb_focusing_table
-
         if (run_sputtering) call compute_t_sputtering
         if (run_accretion) call compute_t_accretion
         if (run_coagulation) call compute_t_coagulation
@@ -84,7 +80,6 @@ contains
             ! Using local gas properties, this routine
             ! allows for the computation of the accretion timescale
             ! for the full range of dust species and sizes used
-            use cooling_module, only:kB,mH
             implicit none
             integer::k
             real(dp)::mx,fx,tacc_max,t
@@ -92,10 +87,6 @@ contains
             t_acc = 1d15 * yr2sec
 
             tacc_max = 5
-
-            if (dust_acc_coulomb) then
-                call compute_Coulomb_enhancement
-            end if
             select case (accretion_model)
                 case ('subgrid')
                     if(Tk.gt.1d4.or.nH.lt.0.1d0 &
@@ -234,7 +225,7 @@ contains
                     jj2 = jj1 + dustbins_per_chemtype(jj) - 1
                     do ii = 1, nions_lead(jj)
                         do k=jj1,jj2
-                            t_acc(k,ii) = t_acc(k,ii) / dustbins_props(k)%Coulomb_enhance_ion(ii)
+                            t_acc(k,ii) = t_acc(k,ii) / dust_helper%Coulomb_factor(k,ii-1)
                         end do
                     end do
                 end do
@@ -250,7 +241,6 @@ contains
             ! This routine allows for the computation of 
             ! coagulation timescales from the small to the large grains
             ! for different species.
-            use cooling_module, only:kB,mH
             implicit none
             integer::k
             !TODO: Add all the cases from Yohan
@@ -365,7 +355,6 @@ contains
             ! This routine allows for the computation of 
             ! shattering timescales from the large to the small grains
             ! for different species.
-            use cooling_module, only:kB,mH
             implicit none
             integer::k
             real(dp)::mx,fx,sfunc
@@ -622,14 +611,12 @@ contains
             ! for different species.
             use cooling_module, only:mH
             use constants, only:eV2erg
-            use dust_charging, only: compute_Coulomb_focusing
             implicit none
             integer::k, iel, iion, iphi0, nT_loc, nphi_loc
             real(dp)::ngas
             real(dp)::lT,ySi,yC,y,rate_total,T6
-            real(dp)::phi1,phi2,Zion,xion,irate,Dtemp
-            integer :: izion
-            real(dp), dimension(1:1) :: temp_dist, temp_charge
+            real(dp)::xion,irate,phi_charge
+            integer :: izion,nions_loc
             
             t_spu = 1d15 * yr2sec
             T6 = Tk / 1d6
@@ -672,31 +659,25 @@ contains
                 lT = log10(Tk)
                 do k = 1, ndust
                     rate_total = 0d0
-                    temp_charge(1) = Zmean_dust(k)
-                    temp_dist(1) = 1d0
-                    phi1 = - Zmean_dust(k) * e2instatC / (dustbins_props(k)%asize_cm * eV2erg)
                     do iel = 1, n_elements
                         if (.not. dustbins_props(k)%sputtering_tab(iel)%initialised) cycle
                         if (nElement(iel) <= 1d-20) cycle ! Ignore elements with negligible abundance
                         nT_loc = dustbins_props(k)%sputtering_tab(iel)%npts(1)
                         nphi_loc = dustbins_props(k)%sputtering_tab(iel)%npts(2)
-#ifdef RTZ
                         if (dust_sputtering_charge) then
-                            do iion = 1, elements(iel)%n_ions
+                            nions_loc = n_elements
+#ifdef RTZ
+                            nions_loc = max(1,elements(iel)%n_ions)
+#endif
+                            do iion = 1, nions_loc
                                 if (xelem_ions(iel,iion) <= 1d-10) cycle ! Ignore ionisation states with negligible abundance
-                                Zion = dble(iion-1)
-                                if (Coulomb_precompute) then
-                                    izion = max(-1, min(10, iion-1))
-                                    Dtemp = dustbins_props(k)%Coulomb_focus_ion(izion)
-                                else
-                                    call compute_Coulomb_focusing(Tk,dustbins_props(k)%asize_cm,temp_dist,temp_charge,Zion,Dtemp)
-                                end if
-                                phi2 = Zion * phi1
+                                izion = iion-1
+                                phi_charge = Zmean_dust(k) * dustbins_props(k)%phi_prefact(izion)
                                 call interpolate2D(dustbins_props(k)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
                                     dustbins_props(k)%sputtering_tab(iel)%tab1d(1:nphi_loc,2), &
                                     dustbins_props(k)%sputtering_tab(iel)%tab2d(1:nT_loc,1:nphi_loc,1), &
-                                    dustbins_props(k)%sputtering_tab(iel)%npts(1), dustbins_props(k)%sputtering_tab(iel)%npts(2), lT, phi2, irate)
-                                rate_total = rate_total + nElement(iel) * xelem_ions(iel,iion) * Dtemp * 10d0**irate
+                                    dustbins_props(k)%sputtering_tab(iel)%npts(1), dustbins_props(k)%sputtering_tab(iel)%npts(2), lT, phi_charge, irate)
+                                rate_total = rate_total + nElement(iel) * xelem_ions(iel,iion) * dust_helper%Coulomb_factor(k,izion) * 10d0**irate
                             end do
                         else
                             iphi0 = dustbins_props(k)%sputtering_tab(iel)%ipos_zero(2)
@@ -705,13 +686,6 @@ contains
                                 dustbins_props(k)%sputtering_tab(iel)%npts(1), lT, irate)
                             rate_total = rate_total + nElement(iel) * 10d0**irate
                         end if
-#else
-                        iphi0 = dustbins_props(k)%sputtering_tab(iel)%ipos_zero(2)
-                        call interpolate1D(dustbins_props(k)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
-                            dustbins_props(k)%sputtering_tab(iel)%tab2d(1:nT_loc,iphi0,1), &
-                            dustbins_props(k)%sputtering_tab(iel)%npts(1), lT, irate)
-                        rate_total = rate_total + nElement(iel) * 10d0**irate
-#endif
                     end do
                     if (rate_total > 0d0) then
                         t_spu(k) = dustbins_props(k)%asize / (3d0 * rate_total) * yr2sec
@@ -958,7 +932,7 @@ contains
         subroutine compute_t_pah_freezing
             use constants, only: pi,eV2erg,pc2cm
             use dust_dynamics, only: grain_relative_velocity
-            use dust_charging, only: compute_dust_charge_dist, compute_dust_charge_dist_Ibanez2019, compute_Coulomb_focusing
+            use dust_charging, only: compute_dust_charge_dist, compute_Coulomb_focusing
             ! This routine compute the freezing (or sequestration) of PAHs
             ! on the surface of small and large carbonaceous grains
 
@@ -995,11 +969,7 @@ contains
                     ! 2. Compute the dust grain charge distribution and the consequent Coulomb
                     !   focusing caused by it (similar to metal accretion, PAH freezing is affected
                     !   by the relative charge of the PAH and the dust grain)
-                    if (trim(charging_model).eq.'Ibanez2019') then
-                        call compute_dust_charge_dist_Ibanez2019(G0_total,Tk,ne,1,dustbins_props(kk)%asize_cm,Z_grain,fcharge_grain)
-                    else
-                        call compute_dust_charge_dist(kk,G0_total,Tk,ne,Z_grain,fcharge_grain)
-                    end if
+                    call compute_dust_charge_dist(kk,G0_total,Tk,ne,Z_grain,fcharge_grain)
                     D_av = 0.0d0
                     do ii = 1, pahbins_props(k)%ncharge_states
                         Z_single = pahbins_props(k)%charge_states(ii)
@@ -1026,97 +996,6 @@ contains
         end subroutine compute_t_pah_freezing
 #endif
 
-        subroutine precompute_Coulomb_focusing_table
-            ! Precompute Coulomb focusing for each dust grain and ion charge state
-            ! over a fixed range used across accretion/cooling/sputtering paths.
-            use dust_charging, only: compute_dust_charge_dist, compute_dust_charge_dist_Ibanez2019, compute_Coulomb_focusing
-            implicit none
-
-            integer :: icharge
-            real(dp) :: Zel, Dtemp
-            real(dp), dimension(:), allocatable :: Zvals
-            real(dp), dimension(:), allocatable :: fcharge
-
-            do jj = 1, ndchemtype
-                jj1 = istart_chemtype(jj)
-                jj2 = jj1 + dustbins_per_chemtype(jj) - 1
-                do kk = jj1, jj2
-                    if (trim(charging_model).eq.'Ibanez2019') then
-                        call compute_dust_charge_dist_Ibanez2019(G0_total,Tk,ne,jj,dustbins_props(kk)%asize,Zvals,fcharge)
-                    else
-                        call compute_dust_charge_dist(kk,G0_total,Tk,ne,Zvals,fcharge)
-                    end if
-                    do icharge = -1, 10
-                        Zel = dble(icharge)
-                        call compute_Coulomb_focusing(Tk,dustbins_props(kk)%asize_cm,fcharge,Zvals,Zel,Dtemp)
-                        dustbins_props(kk)%Coulomb_focus_ion(icharge) = Dtemp
-                    end do
-#ifdef RTZ
-                    if (allocated(dustbins_props(kk)%Coulomb_enhance_ion)) then
-                        do ii = 1, size(dustbins_props(kk)%Coulomb_enhance_ion)
-                            icharge = max(-1, min(10, ii-1))
-                            dustbins_props(kk)%Coulomb_enhance_ion(ii) = dustbins_props(kk)%Coulomb_focus_ion(icharge)
-                        end do
-                    end if
-#endif
-                    deallocate(Zvals,fcharge)
-                end do
-            end do
-        end subroutine precompute_Coulomb_focusing_table
-
-        subroutine compute_Coulomb_enhancement
-            ! This routine computes the Coulomb enhancement of accretion
-            ! of gas metals into dust grains caused by the acquired
-            ! charge of the grain depending on: UV photo-charging, CR-induced
-            ! photo-charging and collisional charging
-            ! The charge distribution depends on the charging parameter
-            ! G sqrt(T)/ne, so this can be computed based on the local
-            ! conditions
-            use cooling_module, only: kB
-            use constants, only: pi
-            use dust_charging, only: compute_dust_charge_dist, compute_dust_charge_dist_Ibanez2019, compute_Coulomb_focusing
-            implicit none
-
-            integer :: icharge
-            real(dp) :: Zel, Dtemp
-            real(dp),dimension(:),allocatable :: Zvals
-            real(dp),dimension(:),allocatable :: fcharge
-
-            if (Coulomb_precompute) then
-                do jj = 1, ndchemtype
-                    jj1 = istart_chemtype(jj)
-                    jj2 = jj1 + dustbins_per_chemtype(jj) - 1
-                    do kk = jj1, jj2
-                        if (.not. allocated(dustbins_props(kk)%Coulomb_enhance_ion)) cycle
-                        do ii = 1, size(dustbins_props(kk)%Coulomb_enhance_ion)
-                            icharge = max(-1, min(10, ii-1))
-                            dustbins_props(kk)%Coulomb_enhance_ion(ii) = dustbins_props(kk)%Coulomb_focus_ion(icharge)
-                        end do
-                    end do
-                end do
-                return
-            end if
-
-            do jj=1,ndchemtype
-                jj1 = istart_chemtype(jj)
-                jj2 = jj1 + dustbins_per_chemtype(jj) - 1
-                do kk = jj1, jj2
-                    ! Compute grain charge distribution
-                    if (trim(charging_model).eq.'Ibanez2019') then
-                        call compute_dust_charge_dist_Ibanez2019(G0_total,Tk,ne,jj,dustbins_props(kk)%asize,Zvals,fcharge)
-                    else
-                        call compute_dust_charge_dist(kk,G0_total,Tk,ne,Zvals,fcharge)
-                    end if
-                    ! Compute Coulomb focusing/enhancement
-                    do ii = 1, nions_lead(jj)
-                        Zel = dble(ii-1)
-                        call compute_Coulomb_focusing(Tk,dustbins_props(kk)%asize_cm,fcharge,Zvals,Zel,Dtemp)
-                        dustbins_props(kk)%Coulomb_enhance_ion(ii) = Dtemp
-                    end do
-                    deallocate(Zvals,fcharge)
-                end do
-            end do
-        end subroutine compute_Coulomb_enhancement
 
         subroutine compute_t_ratd
             ! Radiative torques induced by anisotropic radiation fields can accelerate
@@ -1211,7 +1090,7 @@ contains
                                      lead_elem,nions_lead,int_ratd_switch, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
-                                     do_sputtering=.true.,do_precompute=.false.)
+                                     do_sputtering=.true.)
     end subroutine compute_t_sputtering_rates
 
     subroutine compute_t_accretion_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
@@ -1238,7 +1117,7 @@ contains
                                      lead_elem,nions_lead,int_ratd_switch, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
-                                     do_accretion=.true.,do_precompute=.true.)
+                                     do_accretion=.true.)
     end subroutine compute_t_accretion_rates
 
     subroutine compute_t_coagulation_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
@@ -1265,7 +1144,7 @@ contains
                                      lead_elem,nions_lead,int_ratd_switch, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
-                                     do_coagulation=.true.,do_precompute=.false.)
+                                     do_coagulation=.true.)
     end subroutine compute_t_coagulation_rates
 
     subroutine compute_t_shattering_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
@@ -1292,7 +1171,7 @@ contains
                                      lead_elem,nions_lead,int_ratd_switch, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
-                                     do_shattering=.true.,do_precompute=.false.)
+                                     do_shattering=.true.)
     end subroutine compute_t_shattering_rates
 
     subroutine compute_t_ratd_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
@@ -1319,7 +1198,7 @@ contains
                                      lead_elem,nions_lead,int_ratd_switch, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
-                                     do_ratd=.true.,do_precompute=.false.)
+                                     do_ratd=.true.)
     end subroutine compute_t_ratd_rates
 
     subroutine compute_t_pah_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
@@ -1347,7 +1226,7 @@ contains
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_pah_sputtering=.true.,do_pah_sublimation=.true.,do_pah_coalescence=.true., &
-                                     do_pah_freezing=.true.,do_pah_evaporation=.true.,do_precompute=.false.)
+                                     do_pah_freezing=.true.,do_pah_evaporation=.true.)
     end subroutine compute_t_pah_rates
 
 end module dust_rates

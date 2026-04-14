@@ -108,7 +108,9 @@ FUNCTION alpha_H2(T, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionizatio
   rate = 0.d0
 
   ! Formation rate on dust. Consider only HI
-  rate = rate + alpha_H2_dust(T, dust_to_gas_mass_ratio_over_mw) * xHI * nH
+  if (dust_to_gas_mass_ratio_over_mw.gt.0d0) then
+     rate = rate + alpha_H2_dust(T, dust_to_gas_mass_ratio_over_mw) * xHI * nH
+  end if
 
   ! Primordial H- channel
   rate = rate + alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII) * xHI * nH
@@ -283,7 +285,7 @@ FUNCTION comp_Sd(nHI, nH2, dx_SS, Z) result(ss_factor)
   real(dp), intent(in)::nHI, nH2, dx_SS, Z
   real(dp):: ss_factor
   real(dp):: Sdeff, cNHI, cNH2
-
+  ! TODO: This needs to be updated to use the actual dust properties
   Sdeff = 2.34d-21    ! dust cross section cm^2 ! Updated for bare-gr-s
   cNHI = nHI*dx_SS    ! HI column density
   cNH2 = nH2*dx_SS    ! H2 column density

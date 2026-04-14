@@ -2,7 +2,7 @@ module dust_yields
     use hydro_parameters, only:ndust,ndchemtype,nvar,\
                                 imetal,idust,ipah
     use hydro_commons, only:nmetals
-    use constants, only:yr2sec,Myr2sec
+    use constants, only:yr2sec,Myr2sec,amu2g,mC_amu,mO_amu
     use dust_commons
 
     contains

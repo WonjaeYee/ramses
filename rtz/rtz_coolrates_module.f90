@@ -1835,11 +1835,11 @@ FUNCTION Epump(nH, T, xH2, xHI) result(Ep)
     Ep = 2.d0 * Cfrac * EV_2_ERG  !ergs
 END FUNCTION Epump
 
-FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr) result(rate)
+FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr, h2_formation_dust) result(rate)
     ! Heating from H2 formation and destruction following Bialy 2018
     use molecules_module, only: alpha_H2_dust, alpha_H2_prim
     implicit none
-    real(dp), intent(in):: G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr
+    real(dp), intent(in):: G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr, h2_formation_dust
     real(dp):: rate
     real(dp):: D0, I_UV, E_pump, ncrit_factor, n_crit
     real(dp):: Hrate_H2_pump
@@ -1868,7 +1868,13 @@ FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr) re
     ! heating from H2 formation --> dust channel
     E_form1_dust = 0.2d0 * EV_2_ERG
     E_form2_dust = 4.48d0 * EV_2_ERG * ncrit_factor
-    H2_formation_rate_dust = alpha_H2_dust(T, f_dg)
+    if (h2_formation_dust .eq. -1d0) then
+        ! This means that either CALIMA is not active or H2ondust=.false.
+        H2_formation_rate_dust = alpha_H2_dust(T, f_dg)
+    else
+        ! Use the precomputed H2 formation rate from CALIMA (see dust_surface_chemistry.f90)
+        H2_formation_rate_dust = h2_formation_dust
+    end if
 
     Hrate_H2_form = Hrate_H2_form + (H2_formation_rate_dust * (E_form1_dust + E_form2_dust) * nH * nH * xHI) ! erg/s/cm^3
 
@@ -2047,6 +2053,10 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     use rtz_module, only: elements
     use rt_parameters, only: nGroups, isH2_rtz, rt_advect, rtz_include_charge_exchange, &
                              rtz_include_cosmic_ray_ionization, rtz_include_HM12_UVB
+#ifdef CALIMA
+    use dust_commons, only: dust_helper
+    use dust_interface, only: compute_dust_coolrates
+#endif
     implicit none
     real(dp), intent(in):: T, ne, aexp, G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, nCO
     real(dp), intent(in):: element_number_densities(27)
@@ -2076,12 +2086,13 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: cosmic_ray_heat
     real(dp):: uvb_photoheat
     real(dp):: uvb_photoheat_G0
-    real(dp):: h2_heat
+    real(dp):: h2_heat,h2_formation_dust
     real(dp):: charge_transfer_heat_cool
     real(dp):: photoheating
     real(dp):: total_cooling, total_heating
     integer:: save_cooling_counter
 
+    h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
 
@@ -2303,9 +2314,20 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     total_fine_structure = total_fine_structure * metal_cool_smooth_f2
 
     ! Dust cooling
+#ifndef CALIMA
     dust_rec_cooling = dust_recombination_cooling(T, G0, ne, f_dg, element_number_densities(1))
     ! dust_rec_cooling = dust_recombination_cooling_WD01(T, G0, ne, f_dg, element_number_densities(1))
     dust_coll_cooling =  dust_gas_collisional_cooling(T, G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+    
+    ! Photoelectric heating --> note factor of 1.7 is because IUV
+    photoelectric_heat = photoelectric_heating(T, G0, ne, f_dg, element_number_densities(1))
+    ! photoelectric_heat = photoelectric_heating_WD01(T, G0, ne, f_dg, element_number_densities(1))
+
+#else
+    call compute_dust_coolrates(dust_helper, G0, T, ne, element_number_densities(:),&
+                                element_ion_fractions(:,:),nH2,nCO,dust_rec_cooling,&
+                                photoelectric_heat,dust_coll_cooling,h2_formation_dust,dNp)
+#endif
     dust_cooling = dust_rec_cooling + dust_coll_cooling
     
     ! Save cooling rates
@@ -2316,10 +2338,6 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     CO_cooling = CO_cooling_koyama_00(nH, nH2, nH_I, nCO, T)
     saved_cooling_rates(save_cooling_counter) = CO_cooling; saved_cooling_rates_names(save_cooling_counter) = 'cool_CO'; save_cooling_counter = save_cooling_counter + 1
 #endif
-
-    ! Photoelectric heating --> note factor of 1.7 is because IUV
-    photoelectric_heat = photoelectric_heating(T, G0, ne, f_dg, element_number_densities(1))
-    ! photoelectric_heat = photoelectric_heating_WD01(T, G0, ne, f_dg, element_number_densities(1))
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = photoelectric_heat; saved_cooling_rates_names(save_cooling_counter) = 'heat_PE'; save_cooling_counter = save_cooling_counter + 1
@@ -2348,7 +2366,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Heating from H2 formation and destruction
     ! h2_heat = H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr)
-    h2_heat = H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr)
+    h2_heat = H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr,h2_formation_dust)
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = h2_heat; saved_cooling_rates_names(save_cooling_counter) = 'heat_H2'; save_cooling_counter = save_cooling_counter + 1

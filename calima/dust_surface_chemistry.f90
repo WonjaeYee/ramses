@@ -1,11 +1,11 @@
 module dust_surface_chemistry
-    use amr_parameters
-    use hydro_commons, only:nmetals
-    use cooling_module, only: X, kB, mH
-    use constants, only: twopi,pi
+    use amr_parameters, only:dp
+    use constants, only:twopi,pi,kB,mH,amu2g,mC_amu
     use dust_commons
 
     implicit none
+
+    private
 
     ! Parameters from Cazaux & Spaans (2004)
     ! (https://iopscience.iop.org/article/10.1086/422087/pdf)
@@ -20,6 +20,7 @@ module dust_surface_chemistry
 
     real(dp),parameter :: Ns = 2D15 ! Fixed number of sites per cm2 on the surface of the grain
 
+    public :: grain_h2_formation_rate
     contains
 
     function h2_sticking_coef(Tgas,Td)
@@ -88,11 +89,11 @@ module dust_surface_chemistry
         h_flux = nH * vH / Ns
     end function h_flux
 
-    function recombination_efficiency(Tgas,Td,nH,vH,F,dust_index)
+    function recombination_efficiency(Tgas,Td,vH,F,dust_index)
         ! Recombination effiency from Cazaux & Tielens (2002) -- Eq 15
         ! (https://iopscience.iop.org/article/10.1086/342607/pdf)
         implicit none
-        real(dp) :: Tgas,Td,nH,vH,F
+        real(dp) :: Tgas,Td,vH,F
         real(dp) :: recombination_efficiency
         integer   :: dust_index
 
@@ -103,61 +104,42 @@ module dust_surface_chemistry
         recombination_efficiency = a1 * a2
     end function recombination_efficiency
 
-    function h2_formation_rate(nH,Tgas,G0_total,rho_dust,T_dust,rho_pah,fcharge_pahs)
+    function grain_h2_formation_rate(nHI,Tgas,rho_dust,T_dust)
+        ! H2 formation rate on dust grains following the formalism of
+        ! Cazaux & Spaans (2004) and Cazaux & Tielens (2002).
+        ! nHI --> neutral hydrogen density [cm-3]
+        ! Tgas --> gas temperature [K]
+        ! rho_dust --> dust mass density for each dust bin [g/cm3]
+        ! T_dust --> dust temperature for each dust bin [K]
+        ! h2_formation_rate <--- H2 formation rate in cm3/s
         implicit none
-        real(dp) :: nH,Tgas,G0_total
-        real(dp),dimension(1:ndust) :: rho_dust,T_dust
-        real(dp),dimension(1:npah),optional :: rho_pah
-        real(dp),dimension(:,:),optional :: fcharge_pahs
 
+        ! ---- Input parameters ----
+        real(dp) :: nHI,Tgas
+        real(dp),dimension(1:ndust) :: rho_dust,T_dust
+
+        ! ---- Local variables ----
         integer :: j,ilow,ihigh
         real(dp) :: R_H2,vH,F,sdust
-        real(dp) :: h2_formation_rate
-        real(dp) :: chi,x_frac,R_PAHs
 
-        h2_formation_rate = 0d0
+        ! ---- Output ----
+        real(dp) :: grain_h2_formation_rate
 
-        if (H2ondust) then
-            ! Formation rate of H2 onto dust grains from Cazaux & Spaans (2004)
-            ! (https://iopscience.iop.org/article/10.1086/422087/pdf)
-            vH = sqrt(2D0 * kB * Tgas / mH) ! thermal velocity (assuming Mawell-Boltzmann distribution)
-            F = h_flux(nH,vH)
+        grain_h2_formation_rate = 0d0
 
-            
-            ! Add the contribution from each dust grain
-            do j = 1, ndust
-                sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * twopi * (dustbins_props(j)%asize*1D-4)**2D0
-                R_H2 = sdust * recombination_efficiency(Tgas,T_dust(j),nH,vH,F,dustbins_props(j)%interact_group)
-                h2_formation_rate = h2_formation_rate + R_H2 * h2_sticking_coef(Tgas,T_dust(j))
-            end do
-            h2_formation_rate = 5D-1 * nH * vH * h2_formation_rate ! in cm-3*s-1
-        end if
-
+        ! Formation rate of H2 onto dust grains from Cazaux & Spaans (2004)
+        ! (https://iopscience.iop.org/article/10.1086/422087/pdf)
+        vH = sqrt(2D0 * kB * Tgas / mH) ! thermal velocity (assuming Mawell-Boltzmann distribution)
+        F = h_flux(nHI,vH)
         
-        if (present(rho_pah) .and. dust_pahs .and. H2onpah) then
-            select case(pah_h2_model)
-            case ('LePage09')
-                ! Fitting parameters to power law H2 rate from Le Page et al. (2009) on PAHs
-                ! (https://ui.adsabs.harvard.edu/abs/2009ApJ...704..274L/abstract)
-                ! The mechanism involves the chemical trapping of H atoms on the periphery of the PAH
-                ! carbon skeleton and the subsequent release of H2 through dissociative recombination
-                ! of the hydrogenated ion with an electron.
-                ! Additionnaly we include a scaling with the number of carbon atoms, as it is seen
-                ! in the work of Le Page et al. (2009)
-                ! Convert G0 to Draine ISRF units
-                chi = 1.69d0 * G0_total
-                x_frac = nH / chi
-                do j=1,npah
-                    R_PAHs = 10**(-15.269d0 - 1.098d0*log10(x_frac**0.916d0 + 11.090d0)) &
-                                & * (50d0/dble(pahbins_props(j)%nc)) * nH * (rho_pah(j)/(pahbins_props(j)%nc*mC_amu*amu2g)) ! [cm-3*s-1]
-                    h2_formation_rate = h2_formation_rate + R_PAHs
-                end do
-            case ('RM2026')
-                ! Compute the H2 formation rate following CALIMA (Rodriguez Montero+2026)
-                h2_formation_rate = h2_formation_rate + pah_h2_formation_rate(rho_pah,fcharge_pahs,G0_total,nH,Tgas)
-            end select
-        end if
-    end function h2_formation_rate
+        ! Add the contribution from each dust grain
+        do j = 1, ndust
+            sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * twopi * (dustbins_props(j)%asize_cm)**2D0
+            R_H2 = sdust * recombination_efficiency(Tgas,T_dust(j),vH,F,dustbins_props(j)%interact_group)
+            grain_h2_formation_rate = grain_h2_formation_rate + R_H2 * h2_sticking_coef(Tgas,T_dust(j))
+        end do
+        grain_h2_formation_rate = 5D-1 * vH * grain_h2_formation_rate ! in cm3*s-1
+    end function grain_h2_formation_rate
 
     subroutine compute_dehydrogenated_fraction(G0,nH,f_dh)
         implicit none
@@ -203,60 +185,4 @@ module dust_surface_chemistry
         end if
         f_sh = max(f_sh,0d0)
     end subroutine compute_superhydrogenated_fraction
-
-    function pah_h2_formation_rate(rho_pah,fcharge,G0,nH,Tgas)
-        ! H2 FORMATION RATE ON PAHS (CALIMA) - Rodriguez Montero et al. (2026)
-        ! The modelling of H2 formation provided by this function considers the H2
-        ! abstraction by the Eley-Rideal mechanism in super-hydrogenated PAHs
-        ! (affecting both small and large PAH clusters), and the removal of H2 due
-        ! to UV photo-dissociation in normally hydrogenated and partially
-        ! de-hydrogenated PAHs (only contemplated for small PAHs).
-        ! For further details, check the explanation of the full model in 
-        ! Rodriguez Montero et al. (2024).
-        ! WARNING: This does not work for more than two PAH sizes!
-        implicit none
-        real(dp),intent(in) :: G0,nH,Tgas
-        real(dp),dimension(1:npah),intent(in) :: rho_pah
-        real(dp),dimension(:,:),intent(in) :: fcharge
-        real(dp) :: pah_h2_formation_rate
-
-        integer :: i, nstates
-        real(dp) :: k_ER,kH2,f_dehydro,f_pdhydro,f_suphydro
-        real(dp) :: RPAH
-        pah_h2_formation_rate = 0d0
-        RPAH = 0d0
-
-        ! 1. Compute the Eley-Rideal rate and H2 dissociation rate
-        k_ER = 8.7d-13 * sqrt(Tgas/1d2) * nH ! [s-1]
-        kH2 = 3.428d-16 * (1.69d0 * G0)      ! [s-1] G0 needs to go from Habing to Draine ISRF
-
-        ! 2. First compute for the small PAHs
-        ! 3. Determine the fractions of de-hydrogenated and super-hydrogenated PAHs
-        call compute_dehydrogenated_fraction(G0,nH,f_dehydro)
-        f_pdhydro = f_dehydro / (1d0 + exp((f_dehydro-0.99d0)/8d-4))
-        call compute_superhydrogenated_fraction(G0,nH,f_suphydro)
-
-        ! 3. Add contribution for each of the PAH charges
-        nstates = pahbins_props(1)%ncharge_states
-        do i = 1, nstates
-            if (i .le. 2) then
-                RPAH = RPAH + (kH2 * f_pdhydro + k_ER * f_suphydro) * fcharge(i,1)
-            else
-                RPAH = RPAH + kH2 * f_pdhydro * fcharge(i,1)
-            end if
-        end do
-        pah_h2_formation_rate = pah_h2_formation_rate + RPAH * rho_pah(1)/(dble(pahbins_props(1)%nc)*mC_amu*amu2g)
-
-        RPAH = 0d0
-        ! 2. Now compute for the large PAHs (if they are present)
-        if (npah .ge. 2) then
-            nstates = pahbins_props(2)%ncharge_states
-            do i = 1, nstates
-                if (i .le. 2) then
-                    RPAH = RPAH + k_ER * f_suphydro * fcharge(i,2)
-                end if
-            end do
-            pah_h2_formation_rate = pah_h2_formation_rate + RPAH * rho_pah(2)/(dble(pahbins_props(2)%nc)*mC_amu*amu2g)
-        end if
-    end function pah_h2_formation_rate
 end module dust_surface_chemistry

@@ -19,6 +19,10 @@ subroutine init_time
   use rt_cooling_module
 #endif
 #endif
+#ifdef CALIMA
+  use rt_parameters, only: nGroups
+  use dust_init, only: init_CALIMA_dust
+#endif
   use mpi_mod
   implicit none
   integer::i,Nmodel
@@ -355,6 +359,14 @@ subroutine init_time
 
 #endif
 
+#endif
+
+#ifdef CALIMA
+#if defined(RT) || defined(RTZ)
+  call init_CALIMA_dust(nGroups)
+#else
+   call init_CALIMA_dust(1)
+#endif
 #endif
 
 end subroutine init_time

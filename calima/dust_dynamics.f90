@@ -1,7 +1,6 @@
 module dust_dynamics
     use amr_parameters
-    use cooling_module, only: kB, mH
-    use constants, only: twopi,pi
+    use constants, only: twopi, pi, e2instatC, kB, mH
     use hydro_parameters, only: n_elements,nvar
     use dust_commons
 

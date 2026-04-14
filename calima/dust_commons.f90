@@ -67,6 +67,7 @@ module dust_commons
     character(LEN=30)::coagulation_model='Aoyama2017' ! Model for the coagulation dispersion velocity
     character(LEN=30)::dust_velocity_model='Ormel2007' ! Model for the relative velocity of grains
     character(LEN=30)::charging_model='Ibanez2019'     ! Model for the grain charge distribution
+    integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
 
     ! ==== PAH modelling options (read from nml) ====
     character(LEN=30)::sublimation_model='Galliano'         ! Model for UV sublimation of PAHs
@@ -98,7 +99,7 @@ module dust_commons
     real(dp),dimension(1:ndchemtype)::surf_energy=25d0    ! Dust surface energy (erg/cm2)
     real(dp),dimension(1:ndchemtype)::work_function=8.0d0 ! Dust work function (eV)
     real(dp),dimension(1:ndchemtype)::band_gap=5.0d0      ! Dust band gap (eV)
-    real(dp),dimension(1:ndchemtype)::e_escape_length=1.0d0 ! Dust electron escape length (in nm)
+    real(dp),dimension(1:ndchemtype)::e_escape_length=1.0d-7 ! Dust electron escape length (in cm)
     logical,dimension(1:ndchemtype) ::separate_refractive_index=.false. ! Whether the dust bin has separate refractive index tables for parallel and perpendicular waves
     real(dp)::slope_frag_func=1.3D0/3D0                  ! Fragment distribution (shattering and RATD) power-law slope
     real(dp)::zdmax=1.0d0             ! Maximum allowed dust-to-metal ratio (1d-2)
@@ -111,7 +112,6 @@ module dust_commons
     real(dp)::smallr_dust=1d-12       ! Minimum dust mass for a cell to be considered as a dust cell
 
 
-
     ! ==== Dust grain and PAHs bin properties (read from nml)====
     real(dp),dimension(1:ndust,1:n_elements) ::dust_composition=0d0
     integer,dimension(1:ndust) ::dust_interact_group=0
@@ -121,6 +121,7 @@ module dust_commons
     real(dp),dimension(1:ndust):: sgrain=1d0                            ! Grain material density (in g/cm^3) divided by 3 g/cm^3
     real(dp),dimension(1:ndust):: amin=1d-2                             ! Minimum grain size of underlying distribution (in microns)
     real(dp),dimension(1:ndust):: amax=1d0                              ! Maximum grain size of underlying distribution (in microns)
+    real(dp),dimension(1:ndust)::fmass_ej=0.0d0                         ! Fraction of the total dust mass in SN ejecta that is injected in each dust bin
     real(dp),dimension(1:npah)::pah_size=5d-4 ! PAH size (in microns) of distribution peak (Def: 5d-4 micron corresponding to 54 C)
     real(dp),dimension(1:npah)::spah=2d0      ! PAH density (in g/cm^3) (Def: 2 g/cm^3 more appropiate for hydrocarbon)
     real(dp),dimension(1:npah)::mpah=1.5D-21  ! grain mass (in g)
@@ -129,10 +130,32 @@ module dust_commons
     real(dp),dimension(1:npah)::pah_maxsize=1d-4    ! PAH max size for underlying distribution (in microns)
     real(dp),dimension(1:npah)::pah_maxmass=1.5D-21 ! PAH max mass for underlying distribution (in g)
     real(dp),dimension(1:npah)::pah_SNdest_eff=0.1d0   ! PAH SN destruction efficiency
+    real(dp),dimension(1:npah)::fpah_inwind=0.5d0 ! Fraction of AGB wind PAH mass in each PAH size bin
     integer,dimension(1:npah)::pah_nc=54      ! Number of carbon atoms in central PAH size
     integer,dimension(1:npah)::pah_ncharge_states=4 ! Number of charge states for PAHs in charging calculations
+    
+    ! ==== ISM depletion factors on dust (read from nml) ====
+    ! These values are used for starting isolated sims and tests
+    ! following the fractional contributions of the BARE-GR-S model
+    ! from Zubko et al. (2004) - see Table 6
+    ! (https://ui.adsabs.harvard.edu/abs/2004ApJS..152..211Z/abstract)
+    ! and Dopita et al. (2000) - see Table 1 (N,Fe,Si,C)
+    ! (https://ui.adsabs.harvard.edu/abs/2000ApJ...539..742D/abstract)
+    real(dp),dimension(1:n_elements)::fDust_depletions=(/0d0,0d0,0d0,0d0,0d0,4.9881d-1,3.9744d-1,2.72d-1,&
+                                                        0d0,0d0,0d0,8.37d-1,0d0,9.d-1,0d0,3.9744d-1,0d0,0d0,&
+                                                        0d0,0d0,0d0,0d0,0d0,0d0,0d0,9.9d-1,0d0/)
+    real(dp)::fCDust_inPAH=1.342d-1
+    real(dp)::GD_solar=162d0 ! Gas-to-dust ratio in the solar neighbourhood (Def: 162 as given by Zubko et al. 2004)
+    real(dp)::DTM_solar=0.458d0 ! Dust-to-metal ratio in the solar neighbourhood (Def: 0.458 as given by Zubko et al. 2004)
+    real(dp),dimension(1:ndust)::fdustmass_ini=1d0/max(dble(ndust),1d0) ! Initial dust mass fraction in each dust bin (Def: same for every bin)
+    real(dp),dimension(1:npah)::fpahmass_ini=1d0/max(dble(npah),1d0) ! Initial PAH mass fraction in each PAH bin (Def: same for every bin)
 
 
+    ! ==== Radiation parameters (read from nml)====
+    real(dp)::fixed_rad_ani=-1d0                                        ! Fixed radiation file anisotropy for tests of RATD
+    real(dp)::fixed_lambda_mean=-1d0                                    ! Fixed mean radiation wavelength for tests of RATD (in microns)
+
+    ! ==== Element parameters in the case of no RTZ module ====
 #ifndef RTZ
     real(dp),dimension(1:n_elements) :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
                                                                 10.811d0, 12.0107d0, 14.0067d0, 15.9994d0, 18.9984032d0, &
@@ -149,55 +172,24 @@ module dust_commons
                                                                 'V','Cr','Mn','Fe', &
                                                                 'Co'/)
 #endif
+
+    ! ==== Global dust and PAH bin properties ====
     type(DustBin),dimension(1:ndust) ::dustbins_props
 #if NPAH>0
     type(PAHBin),dimension(1:npah) ::pahbins_props
 #endif
-    
+    real(dp),dimension(:,:),allocatable ::group_csa_dust,group_css_dust,group_csr_dust
+    real(dp),dimension(:,:),allocatable ::group_csa_pah,group_css_pah,group_csr_pah
+    real(dp),dimension(:,:),allocatable ::sigca_dust,sigcs_dust,sigcr_dust
+    real(dp),dimension(:,:),allocatable ::sigca_pah,sigcs_pah,sigcr_pah
+    real(dp),dimension(:,:),allocatable ::att_len_dust
 
-    ! ==== Radiation parameters ====
-    real(dp)::fixed_rad_ani=-1d0                                        ! Fixed radiation file anisotropy for tests of RATD
-    real(dp)::fixed_lambda_mean=-1d0                                    ! Fixed mean radiation wavelength for tests of RATD (in microns)
 
-    ! ==== ISM depletion factors on dust ====
-    ! These values are used for starting isolated sims and tests
-    ! following the fractional contributions of the BARE-GR-S model
-    ! from Zubko et al. (2004) - see Table 6
-    ! (https://ui.adsabs.harvard.edu/abs/2004ApJS..152..211Z/abstract)
-    ! and Dopita et al. (2000) - see Table 1 (N,Fe,Si,C)
-    ! (https://ui.adsabs.harvard.edu/abs/2000ApJ...539..742D/abstract)
-    real(dp),dimension(1:n_elements)::fDust_depletions=(/0d0,0d0,0d0,0d0,0d0,4.9881d-1,3.9744d-1,2.72d-1,&
-                                                        0d0,0d0,0d0,8.37d-1,0d0,9.d-1,0d0,3.9744d-1,0d0,0d0,&
-                                                        0d0,0d0,0d0,0d0,0d0,0d0,0d0,9.9d-1,0d0/)
-    real(dp)::fCDust_inPAH=1.342d-1
-    real(dp)::GD_solar=162d0 ! Gas-to-dust ratio in the solar neighbourhood (Def: 162 as given by Zubko et al. 2004)
-    real(dp)::DTM_solar=0.458d0 ! Dust-to-metal ratio in the solar neighbourhood (Def: 0.458 as given by Zubko et al. 2004)
-    real(dp),dimension(1:ndust)::fdustmass_ini=1d0/max(dble(ndust),1d0) ! Initial dust mass fraction in each dust bin (Def: same for every bin)
-    real(dp),dimension(1:npah)::fpahmass_ini=1d0/max(dble(npah),1d0) ! Initial PAH mass fraction in each PAH bin (Def: same for every bin)
-
-    ! Coefficients of the polynomial fit from Hu+19
+    ! ==== Coefficients of the polynomial fit from Hu+19 ====
     real(dp),dimension(1:6)::aCth=(/-2.34333937d2,1.38485732d2,-3.39021615d1,&
                                     & 4.17705353d0,-2.58281473d-1,6.38827523d-3/)
     real(dp),dimension(1:6)::aSith=(/-2.34790500d2,1.33208637d2,-3.13027448d1,&
                                     & 3.71345730d0,-2.21823668d-1,5.31746427d-3/)
-
-    ! ==== Dust enrichment parameters ====
-    real(dp),dimension(1:ndust)::fmass_ej=0.0d0
-    real(dp),dimension(1:npah)::fpah_inwind=0.5d0 ! Fraction of AGB wind PAH mass in each PAH size
-
-    ! ==== Constants ====
-    real(dp), parameter::amu2g = 1.66054d-24       ! Atomic mass units in grams
-    real(dp), parameter::mH_amu = 1.007825d0       ! Hydrogen molecular weight [amu]
-    real(dp), parameter::mHe_amu = 4.002602d0      ! Helium molecular weight [amu]
-    real(dp), parameter::mO_amu = 15.9994d0        ! Oxygen molecular weight [amu]
-    real(dp), parameter::mC_amu = 12.0107d0        ! Carbon molecular weight [amu]
-    real(dp), parameter::mMg_amu = 24.305d0        ! Magnesium molecular weight [amu]
-    real(dp), parameter::mSi_amu = 28.0855d0       ! Silicon molecular weight [amu]
-    real(dp), parameter::mFe_amu = 55.854d0        ! Iron molecular weight [amu]
-    real(dp), parameter::sq2pi = 2.5066283d0       ! Square root of 2pi
-    real(dp), parameter::e2instatC = 2.3070776d-19 ! Elemental charge squared [statC^2]
-    real(dp), parameter::einstatC = 4.80320427d-10  ! Elementary charge [statC]
-    real(dp), parameter::sigma_sb  = 5.6704d-5     ! Stefan-Boltzmann constant [g s-3 K-4]
 
 
     ! ==== Global counters ====
@@ -256,8 +248,18 @@ module dust_commons
     real(dp),dimension(1:ndust+npah)::total_dust_mass_species=0d0,total_dust_mass_species_all=0d0
 
     ! ==== Internal flags and variables ====
+    integer::ncharge_pah_max=0                      ! Maximum number of PAH charge states across all PAH bins (for charging calculations)
+    type(DustChemistryInfo) :: dust_helper  ! Reusable per-rank dust chemistry workspace
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical ::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
+
+    ! ==== Some internal constants ====
+    ! Mathis et al. (1983) ISRF energy density in erg/cm3
+    ! This is obtained using the CALIMA python library
+    ! using the parametrisation of the ISRF from Mathis et al.
+    ! (1983) as described in Eq. 31 of Weingartner & Draine (2001)
+    ! and integrated from 0.1-13.6 eV
+    real(dp),parameter ::u_Mathis1983=8.635471d-13 ! [erg/cm3]
 
     ! ==== External dust files ====
     character(LEN=256)::dust_tables_dir='../lib/dust_tables'    ! Name of folder holding optical properties files

@@ -16,10 +16,12 @@ module dust_chemistry_solver
     use amr_parameters
     use hydro_parameters, only:ndust,ndchemtype,n_elements
     use hydro_commons, only:nmetals
-    use constants, only:yr2sec,Myr2sec
+    use constants, only:yr2sec,Myr2sec,amu2g,mH,kB
     use dust_commons
     use dust_utils
-    use dust_rates, only: compute_t_sputtering_rates, compute_t_accretion_rates, compute_t_coagulation_rates, compute_t_shattering_rates, compute_t_ratd_rates, compute_t_pah_rates
+    use dust_rates, only: compute_t_sputtering_rates, compute_t_accretion_rates,&
+                            compute_t_coagulation_rates, compute_t_shattering_rates,&
+                            compute_t_ratd_rates, compute_t_pah_rates
 #ifdef RTZ
     use rtz_module, only: elements
 #endif
@@ -172,7 +174,6 @@ module dust_chemistry_solver
         ! sigma    => local velocity dispersion
         ! nX       => number density of element X in the gas phase
 
-        use cooling_module, only: X, kB, mH
         use hydro_parameters
         implicit none
         real(dp), intent(in)                      :: ddt

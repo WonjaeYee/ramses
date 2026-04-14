@@ -29,7 +29,7 @@ RT = 0
 # Use RTZ? 1=Yes, 0=No (note, do not set both RT and RTZ to 1!)
 RTZ = 1
 # Use CALIMA dust and PAH chemistry modelling? 1=Yes, 0=No
-CALIMA = 0
+CALIMA = 1
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
 USE_TURB = 1
 TURB_GRID_SIZE = 64
@@ -49,7 +49,7 @@ ATON = 0
 # Number of photon groups for RT
 NGROUPS = 8
 # Number of passive scalars
-NPSCAL = 0
+NPSCAL = 1
 # Light MPI communicator structure (for > 10k MPI processes)
 LIGHT_MPI_COMM = 0
 
@@ -83,9 +83,9 @@ NIONS = 0
 endif
 
 # Scalar quantitites for CALIMA
-NDUST = 0
-NPAH = 0
-NDCHEMTYPE = 0
+NDUST = 4
+NPAH = 2
+NDCHEMTYPE = 2
 
 # Compute NVAR
 NHYDRO = 2+$(NDIM)

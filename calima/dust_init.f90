@@ -1,9 +1,11 @@
 module dust_init
     use amr_parameters, only: dp
     use hydro_parameters, only:ndust,ndchemtype,npah,nmetals
+    use constants
     use dust_utils
     use dustbin_types
     use dust_commons
+    use dust_cooling, only: init_dust_coll_heating_BH80_cache
 #ifdef RTZ
     use rtz_module, only:elements
 #endif
@@ -331,13 +333,15 @@ module dust_init
         GD_RR14 = 10**y
     end function GD_RR14
 
-    subroutine init_dust_constants
+    subroutine init_CALIMA_dust(nGroups)
         ! This function initialises dust constants that will be used
         ! for the dust routines, such that they only need to be computed at startup
-        ! This is called during read_hydro_params.f90
-        use constants, only:yr2sec,pi
+        ! This is called during init_time.f90
         use hydro_parameters
+        use amr_commons, only:myid
+        use dust_photoelectric_heating, only: most_negative_allowed_charge
         implicit none
+        integer, intent(in) :: nGroups
         logical :: check_for_pahs
         integer :: ii,jj,kk,n_el,nd_ctype,id_start,id_end,ichemtype
         integer :: idust_pah_interact
@@ -382,10 +386,12 @@ module dust_init
                     dustbins_props(ii)%el_atomic_number(kk) = elements(jj)%atomic_number
                     dustbins_props(ii)%el_index(kk) = jj
                     if (elements(jj)%atomic_mass .le. 0d0) then
-                        write(*,*)'ERROR: the element ', elements(jj)%symbol, &
-                            & ' has an atomic mass of ', elements(jj)%atomic_mass, &
-                            & ' but is needed for dust bin ', ii, &
-                            & ' with composition ', dust_composition(ii,jj)
+                        if (myid == 1) then
+                            write(*,*)'ERROR: the element ', elements(jj)%symbol, &
+                                & ' has an atomic mass of ', elements(jj)%atomic_mass, &
+                                & ' but is needed for dust bin ', ii, &
+                                & ' with composition ', dust_composition(ii,jj)
+                        end if
                         stop
                     end if
                     dustbins_props(ii)%el_mfractions(kk) = elements(jj)%atomic_mass * dust_composition(ii,jj)
@@ -403,10 +409,6 @@ module dust_init
 #endif
                 end if
             end do
-#ifdef RTZ
-            allocate(dustbins_props(ii)%Coulomb_enhance_ion(1:maxval(dustbins_props(ii)%el_nions)))
-            dustbins_props(ii)%Coulomb_enhance_ion(:) = 1d0
-#endif
 
             dustbins_props(ii)%el_mfractions(:) = dustbins_props(ii)%el_mfractions(:) / sum(dustbins_props(ii)%el_mfractions(:)) ! Normalise the mass fractions
             dustbins_props(ii)%el_conv_factors(:) = dustbins_props(ii)%el_mfractions(:) / sum(dustbins_props(ii)%el_mfractions(:)) &
@@ -415,7 +417,9 @@ module dust_init
             ! 1.4 Set the dust interaction properties
             dustbins_props(ii)%interact_group = ichemtype
             if (ichemtype==0 .or. ichemtype > ndchemtype) then
-                write(*,*) 'Error: dust_interact_group for dust bin', ii, 'is not set correctly.'
+                if (myid == 1) then
+                    write(*,*) 'Error: dust_interact_group for dust bin', ii, 'is not set correctly.'
+                end if
                 stop
             end if
             if (istart_chemtype(ichemtype)==0) istart_chemtype(ichemtype) = ii
@@ -441,6 +445,13 @@ module dust_init
             dustbins_props(ii)%band_gap = band_gap(ichemtype)
             dustbins_props(ii)%e_escape_length = e_escape_length(ichemtype)
             dustbins_props(ii)%separate_refractive_index = separate_refractive_index(ichemtype)
+            dustbins_props(ii)%Zmin = most_negative_allowed_charge(dustbins_props(ii)%asize_cm,&
+                                                            &separate_refractive_index(ichemtype))
+            allocate(dustbins_props(ii)%phi_prefact(-1:n_elements))
+            dustbins_props(ii)%phi_prefact(:) = 1d0
+            do jj = -1, n_elements
+                dustbins_props(ii)%phi_prefact(jj) = - dble(jj) * e2instatC / (dustbins_props(ii)%asize_cm * eV2erg)
+            end do
 
             ! 1.6 Initialise the dust timescales and parameters
             dustbins_props(ii)%t0_spu = t_sputter_ref * yr2sec * asize(ii) / 0.1d0
@@ -487,6 +498,7 @@ module dust_init
                 pahbins_props(ii)%SNdest_eff = pah_SNdest_eff(ii)
 
                 ! 2.4 Set the PAH charges
+                ncharge_pah_max = max(ncharge_pah_max, pah_ncharge_states(ii))
                 pahbins_props(ii)%ncharge_states = pah_ncharge_states(ii)
                 allocate(pahbins_props(ii)%charge_states(1:pah_ncharge_states(ii)))
                 ! Charge states start from -1, then 0, then +1, etc.
@@ -503,6 +515,22 @@ module dust_init
                     pahbins_props(ii)%cation_start_idx = pahbins_props(ii)%ncharge_states + 1
                 end if
             end do
+        end if
+
+        ! Allocate the reusable dust chemistry workspace once per rank.
+        call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)
+
+        ! Allocate the sigca_dust, etc.
+        if (ndust>0) then
+            allocate(group_csa_dust(1:nGroups,1:ndust),sigca_dust(1:nGroups,1:ndust))
+            allocate(group_css_dust(1:nGroups,1:ndust),sigcs_dust(1:nGroups,1:ndust))
+            allocate(group_csr_dust(1:nGroups,1:ndust),sigcr_dust(1:nGroups,1:ndust))
+            allocate(att_len_dust(1:nGroups,1:ndust))
+        end if
+        if (npah>0) then
+            allocate(group_csa_pah(1:nGroups,1:npah),sigca_pah(1:nGroups,1:npah))
+            allocate(group_css_pah(1:nGroups,1:npah),sigcs_pah(1:nGroups,1:npah))
+            allocate(group_csr_pah(1:nGroups,1:npah),sigcr_pah(1:nGroups,1:npah))
         end if
 
         ! 3. Add the RAT-D parameters
@@ -668,7 +696,15 @@ module dust_init
         ! 10. Read the dust charging tables
         call init_dust_charging_tables
 
-    end subroutine init_dust_constants
+        ! 10b. Cache the BH80 collisional heating factors that only depend on the dust bins
+        call init_dust_coll_heating_BH80_cache
+
+        ! 11. Print the CALIMA dust properties for the user
+        if (myid == 1) then
+            call print_dust_parameters
+        end if
+
+    end subroutine init_CALIMA_dust
 
     subroutine cmp_lim_elem(dust_index,n_el,el_density,lim_index)
         implicit none
