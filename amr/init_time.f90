@@ -365,7 +365,7 @@ subroutine init_time
 #if defined(RT) || defined(RTZ)
   call init_CALIMA_dust(nGroups)
 #else
-   call init_CALIMA_dust(1)
+  call init_CALIMA_dust(1)
 #endif
 #endif
 

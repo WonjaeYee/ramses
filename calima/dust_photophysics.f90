@@ -9,12 +9,13 @@ module dust_optics
     use dust_utils
 
     contains
-    subroutine init_dust_efficiency_tables
+    subroutine init_dust_efficiency_tables(nGroups)
         ! Read dust and PAH optical properties from header-rich text files.
         ! Data lines are parsed after skipping blank/comment lines.
         !-------------------------------------------------------------------------
         use amr_commons,only:myid
         implicit none
+        integer, intent(in) :: nGroups
 
         logical :: ok_dust,ok_pah
         logical :: ok_dust_all,ok_pah_all
@@ -33,8 +34,8 @@ module dust_optics
         ok_dust_all = .true.
         ok_pah_all = .true.
         do i=1,ndust
-            write(i_str, '(I0)') i
-            write(fDust(i),'(a,a,a,a)')trim(dust_tables_dir),'averaged_cross_section_dustbin_',trim(i_str)
+            write(i_str, '(I2.2)') i
+            write(fDust(i),'(a,a,a,a)')trim(dust_tables_dir),'averaged_cross_section_DustBin_',trim(i_str),'.txt'
             inquire(file=fDust(i),exist=ok_dust)
             ok_dust_all = ok_dust_all .and. ok_dust
         end do
@@ -52,10 +53,10 @@ module dust_optics
             call clean_stop
         end if
 
-        if (dust_pahs) then
+        if (npah > 0) then
             do i=1,npah
-                write(i_str, '(I0)') i
-                write(fPAH(i),'(a,a,a)')trim(dust_tables_dir),'averaged_cross_section_PAHbin_',trim(i_str)
+                write(i_str, '(I2.2)') i
+                write(fPAH(i),'(a,a,a,a)')trim(dust_tables_dir),'averaged_cross_section_PAHBin_',trim(i_str),'.txt'
                 inquire(file=fPAH(i),exist=ok_pah)
                 ok_pah_all = ok_pah_all .and. ok_pah
             end do
@@ -143,9 +144,10 @@ module dust_optics
                 if (myid.eq.1) write(*,*) 'ERROR parsing ISRF averages in file ', trim(fDust(i))
                 call clean_stop
             end if
-            dustbins_props(i)%Pabs_isrf = dustbins_props(i)%Pabs_isrf * pi * dustbins_props(i)%asize_cm**2d0 * c_cgs * u_Mathis1983
-            dustbins_props(i)%Psc_isrf = dustbins_props(i)%Psc_isrf * pi * dustbins_props(i)%asize_cm**2d0 * c_cgs * u_Mathis1983
-            dustbins_props(i)%Prp_isrf = dustbins_props(i)%Prp_isrf * pi * dustbins_props(i)%asize_cm**2d0 * c_cgs * u_Mathis1983
+
+            dustbins_props(i)%Pabs_isrf = dustbins_props(i)%Pabs_isrf * c_cgs * u_Mathis1983
+            dustbins_props(i)%Psc_isrf  = dustbins_props(i)%Psc_isrf  * c_cgs * u_Mathis1983
+            dustbins_props(i)%Prp_isrf  = dustbins_props(i)%Prp_isrf  * c_cgs * u_Mathis1983
 
             do k = 1, nwav
                 call read_next_data_line(20,line,ios)
@@ -158,7 +160,6 @@ module dust_optics
                     if (myid.eq.1) write(*,*) 'ERROR parsing wavelength row ', k, ' in file ', trim(fDust(i))
                     call clean_stop
                 end if
-
                 dustbins_props(i)%cs_abs_tab%tab1d(k,1) = wav_read
                 dustbins_props(i)%cs_scat_tab%tab1d(k,1) = wav_read
                 dustbins_props(i)%cs_ext_tab%tab1d(k,1) = wav_read
@@ -168,13 +169,21 @@ module dust_optics
                 dustbins_props(i)%cs_ext_tab%tab2d(k,1,1) = crp_read
             end do
             close(20)
-
             dustbins_props(i)%cs_abs_tab%initialised = .true.
             dustbins_props(i)%cs_scat_tab%initialised = .true.
             dustbins_props(i)%cs_ext_tab%initialised = .true.
         end do
 
-        if (dust_pahs) then
+        if (ndust>0) then
+            allocate(group_csa_dust(1:nGroups,1:ndust),&
+                     group_css_dust(1:nGroups,1:ndust),&
+                     group_csr_dust(1:nGroups,1:ndust))
+            allocate(sigca_dust(1:nGroups,1:ndust),&
+                     sigcs_dust(1:nGroups,1:ndust),&
+                     sigcr_dust(1:nGroups,1:ndust))
+        end if
+
+        if (npah > 0) then
             do isize=1,npah
                 open(unit=12,file=fPAH(isize),status='old',form='formatted',action='read',iostat=ios)
                 if (ios /= 0) then
@@ -308,51 +317,33 @@ module dust_optics
             end do
         end if
 
-    contains
-
-        subroutine read_next_data_line(iunit, out_line, io_status)
-            integer, intent(in) :: iunit
-            character(len=*), intent(out) :: out_line
-            integer, intent(out) :: io_status
-
-            do
-                read(iunit,'(A)',iostat=io_status) out_line
-                if (io_status /= 0) return
-                out_line = adjustl(out_line)
-                if (len_trim(out_line) == 0) cycle
-                if (out_line(1:1) == '#') cycle
-                return
-            end do
-        end subroutine read_next_data_line
-
-        subroutine replace_pipe_with_space(str)
-            character(len=*), intent(inout) :: str
-            integer :: ipos
-
-            ipos = index(str, '|')
-            do while (ipos > 0)
-                str(ipos:ipos) = ' '
-                ipos = index(str, '|')
-            end do
-        end subroutine replace_pipe_with_space
+        if (npah>0) then
+            allocate(group_csa_pah(1:nGroups,1:npah),&
+                     group_css_pah(1:nGroups,1:npah),&
+                     group_csr_pah(1:nGroups,1:npah))
+            allocate(sigca_pah(1:nGroups,1:npah),&
+                     sigcs_pah(1:nGroups,1:npah),&
+                     sigcr_pah(1:nGroups,1:npah))
+        end if
 
     end subroutine init_dust_efficiency_tables
 
-    subroutine init_dust_dieletric_tables
+    subroutine init_dust_dielectric_tables
         use amr_commons,only:myid
         implicit none
 
         logical :: ok_per,ok_par,ok_iso
-        integer :: i,j,istat,nwav,ntables
-        real(dp) :: wav_read,val_read,wav_ref
+        integer :: i,j,istat,ntables
+        integer, dimension(1:2) :: nwav
+        real(dp) :: wav_read,val_read
         character(len=128) :: f_per,f_par,f_iso,dustlabel
 
         ! Read dielectric tables by dust bin and store them in dustbins_props(i)%Im_n.
         do i = 1, ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', i
+            write(dustlabel, '(A,I2.2)') 'DustBin_', i
             write(f_iso,'(a,a,a)') trim(dust_tables_dir), 'Im_n_', trim(dustlabel)
-            write(f_per,'(a,a,a)') trim(dust_tables_dir), 'Im_n_', trim(dustlabel)//'_Gra_pe'
-            write(f_par,'(a,a,a)') trim(dust_tables_dir), 'Im_n_', trim(dustlabel)//'_Gra_pa'
+            write(f_per,'(a,a,a)') trim(dust_tables_dir), 'Im_n_', trim(dustlabel)//'_pe'
+            write(f_par,'(a,a,a)') trim(dust_tables_dir), 'Im_n_', trim(dustlabel)//'_pa'
 
             inquire(file=f_per,exist=ok_per)
             inquire(file=f_par,exist=ok_par)
@@ -381,21 +372,21 @@ module dust_optics
                     if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_iso)
                     call clean_stop
                 end if
-                read(20,'(i8)') nwav
+                read(20,'(i8)') nwav(1)
 
                 if (allocated(dustbins_props(i)%Im_n(1)%npts)) deallocate(dustbins_props(i)%Im_n(1)%npts)
                 allocate(dustbins_props(i)%Im_n(1)%npts(1:1))
                 dustbins_props(i)%Im_n(1)%ndim = 1
-                dustbins_props(i)%Im_n(1)%npts(1) = nwav
+                dustbins_props(i)%Im_n(1)%npts(1) = nwav(1)
                 if (allocated(dustbins_props(i)%Im_n(1)%ipos_zero)) deallocate(dustbins_props(i)%Im_n(1)%ipos_zero)
                 allocate(dustbins_props(i)%Im_n(1)%ipos_zero(1:1))
                 dustbins_props(i)%Im_n(1)%ipos_zero(1) = 1
                 if (allocated(dustbins_props(i)%Im_n(1)%tab1d)) deallocate(dustbins_props(i)%Im_n(1)%tab1d)
-                allocate(dustbins_props(i)%Im_n(1)%tab1d(1:nwav,1:1))
+                allocate(dustbins_props(i)%Im_n(1)%tab1d(1:nwav(1),1:1))
                 if (allocated(dustbins_props(i)%Im_n(1)%tab2d)) deallocate(dustbins_props(i)%Im_n(1)%tab2d)
-                allocate(dustbins_props(i)%Im_n(1)%tab2d(1:nwav,1:1,1:1))
+                allocate(dustbins_props(i)%Im_n(1)%tab2d(1:nwav(1),1:1,1:1))
 
-                do j=1,nwav
+                do j=1,nwav(1)
                     read(20,*) wav_read,val_read
                     dustbins_props(i)%Im_n(1)%tab1d(j,1) = log10(wav_read)
                     dustbins_props(i)%Im_n(1)%tab2d(j,1,1) = log10(val_read)
@@ -409,23 +400,30 @@ module dust_optics
                     if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_per)
                     call clean_stop
                 end if
-                read(20,'(i8)') nwav
+                read(20,'(i8)') nwav(1)
+
+                open(unit=21,file=f_par,status='old',action='read',iostat=istat)
+                if (istat /= 0) then
+                    if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_par)
+                    call clean_stop
+                end if
+                read(21,'(i8)') nwav(2)
 
                 do j = 1, 2
                     if (allocated(dustbins_props(i)%Im_n(j)%npts)) deallocate(dustbins_props(i)%Im_n(j)%npts)
                     allocate(dustbins_props(i)%Im_n(j)%npts(1:1))
                     dustbins_props(i)%Im_n(j)%ndim = 1
-                    dustbins_props(i)%Im_n(j)%npts(1) = nwav
+                    dustbins_props(i)%Im_n(j)%npts(1) = nwav(j)
                     if (allocated(dustbins_props(i)%Im_n(j)%ipos_zero)) deallocate(dustbins_props(i)%Im_n(j)%ipos_zero)
                     allocate(dustbins_props(i)%Im_n(j)%ipos_zero(1:1))
                     dustbins_props(i)%Im_n(j)%ipos_zero(1) = 1
                     if (allocated(dustbins_props(i)%Im_n(j)%tab1d)) deallocate(dustbins_props(i)%Im_n(j)%tab1d)
-                    allocate(dustbins_props(i)%Im_n(j)%tab1d(1:nwav,1:1))
+                    allocate(dustbins_props(i)%Im_n(j)%tab1d(1:nwav(j),1:1))
                     if (allocated(dustbins_props(i)%Im_n(j)%tab2d)) deallocate(dustbins_props(i)%Im_n(j)%tab2d)
-                    allocate(dustbins_props(i)%Im_n(j)%tab2d(1:nwav,1:1,1:1))
+                    allocate(dustbins_props(i)%Im_n(j)%tab2d(1:nwav(j),1:1,1:1))
                 end do
 
-                do j=1,nwav
+                do j=1,nwav(1)
                     read(20,*) wav_read,val_read
                     dustbins_props(i)%Im_n(1)%tab1d(j,1) = log10(wav_read)
                     dustbins_props(i)%Im_n(1)%tab2d(j,1,1) = log10(val_read)
@@ -433,25 +431,9 @@ module dust_optics
                 close(20)
                 dustbins_props(i)%Im_n(1)%initialised = .true.
 
-                open(unit=21,file=f_par,status='old',action='read',iostat=istat)
-                if (istat /= 0) then
-                    if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_par)
-                    call clean_stop
-                end if
-                read(21,'(i8)') j
-                if (j /= nwav) then
-                    if (myid.eq.1) write(*,*) 'ERROR: parallel dielectric table has inconsistent grid for ', trim(dustlabel)
-                    call clean_stop
-                end if
-
-                do j=1,nwav
+                do j=1,nwav(2)
                     read(21,*) wav_read,val_read
-                    wav_ref = 10d0**dustbins_props(i)%Im_n(1)%tab1d(j,1)
-                    if (abs(wav_read-wav_ref) > 1d-10 * max(abs(wav_ref),1d0)) then
-                        if (myid.eq.1) write(*,*) 'ERROR: dielectric wavelength mismatch for ', trim(dustlabel)
-                        call clean_stop
-                    end if
-                    dustbins_props(i)%Im_n(2)%tab1d(j,1) = dustbins_props(i)%Im_n(1)%tab1d(j,1)
+                    dustbins_props(i)%Im_n(2)%tab1d(j,1) = log10(wav_read)
                     dustbins_props(i)%Im_n(2)%tab2d(j,1,1) = log10(val_read)
                 end do
                 close(21)
@@ -460,7 +442,7 @@ module dust_optics
             end if
         end do
 
-    end subroutine init_dust_dieletric_tables
+    end subroutine init_dust_dielectric_tables
 
     function photon_attenuation_length(wav,Im_n_1,use_separate_refractive_index,Im_n_2) result(la)
         ! General photon attenuation length from dielectric properties.
@@ -682,11 +664,12 @@ module dust_optics
         end if
     end subroutine planck_mean_derivative
     
-
-    subroutine init_dust_mean_cross_sections
+    subroutine init_dust_mean_cross_sections(sed_dir_in)
 
         use amr_commons,only:myid
         implicit none
+        character(len=*), intent(in) :: sed_dir_in
+        character(len=256) :: sed_dir_loc
         real(dp) :: log_Tmin, log_Tmax, log_step, T_val
         real(dp) :: dplanck_abs_dT, P_emit, dP_emit_dT
         integer :: i,j,k
@@ -765,24 +748,24 @@ module dust_optics
                 dustbins_props(i)%Planck_tab%tab1d(j,1) = T_val
 
                 ! Compute and store Rosseland means (absorption, scattering, extinction)
-                call rosseland_mean(dustbins_props(i)%cs_abs_tab%tab1d(1:k,1)*1e-8, &
+                call rosseland_mean(dustbins_props(i)%cs_abs_tab%tab1d(1:k,1)*1.0d-8, &
                                     dustbins_props(i)%cs_abs_tab%tab2d(1:k,1,1), &
                                     T_val, dustbins_props(i)%Rosseland_tab%tab2d(j,1,1))
-                call rosseland_mean(dustbins_props(i)%cs_scat_tab%tab1d(1:k,1)*1e-8, &
+                call rosseland_mean(dustbins_props(i)%cs_scat_tab%tab1d(1:k,1)*1.0d-8, &
                                     dustbins_props(i)%cs_scat_tab%tab2d(1:k,1,1), &
                                     T_val, dustbins_props(i)%Rosseland_tab%tab2d(j,1,2))
-                call rosseland_mean(dustbins_props(i)%cs_ext_tab%tab1d(1:k,1)*1e-8, &
+                call rosseland_mean(dustbins_props(i)%cs_ext_tab%tab1d(1:k,1)*1.0d-8, &
                                     dustbins_props(i)%cs_ext_tab%tab2d(1:k,1,1), &
                                     T_val, dustbins_props(i)%Rosseland_tab%tab2d(j,1,3))
 
                 ! Compute and store Planck means (absorption, scattering, extinction)
-                call planck_mean(dustbins_props(i)%cs_abs_tab%tab1d(1:k,1)*1e-8, &
+                call planck_mean(dustbins_props(i)%cs_abs_tab%tab1d(1:k,1)*1.0d-8, &
                                  dustbins_props(i)%cs_abs_tab%tab2d(1:k,1,1), &
                                  T_val, dustbins_props(i)%Planck_tab%tab2d(j,1,1))
-                call planck_mean(dustbins_props(i)%cs_scat_tab%tab1d(1:k,1)*1e-8, &
+                call planck_mean(dustbins_props(i)%cs_scat_tab%tab1d(1:k,1)*1.0d-8, &
                                  dustbins_props(i)%cs_scat_tab%tab2d(1:k,1,1), &
                                  T_val, dustbins_props(i)%Planck_tab%tab2d(j,1,2))
-                call planck_mean(dustbins_props(i)%cs_ext_tab%tab1d(1:k,1)*1e-8, &
+                call planck_mean(dustbins_props(i)%cs_ext_tab%tab1d(1:k,1)*1.0d-8, &
                                  dustbins_props(i)%cs_ext_tab%tab2d(1:k,1,1), &
                                  T_val, dustbins_props(i)%Planck_tab%tab2d(j,1,3))
 
@@ -811,10 +794,21 @@ module dust_optics
 
         ! 3. Write the tables to files for verification
         if (myid==1) then
+            ! Resolve SED directory: prefer provided argument, then envvar
+            if (trim(sed_dir_in).eq.'') then
+                call get_environment_variable('RAMSES_SED_DIR', sed_dir_loc)
+            else
+                sed_dir_loc = trim(sed_dir_in)
+            end if
+            if (trim(sed_dir_loc).eq.'') then
+                sed_dir_loc = './SEDtables'
+            end if
+
+            ! Create subdirectory for dust tables
             do i = 1, ndust
-                write(i_str, '(I0)') i  ! convert i to string without leading spaces
-                open(unit=20+i,file='./SEDtables/rosseland_mean_dustbin_'//trim(i_str)//'.list',status='unknown')
-                open(unit=30+i,file='./SEDtables/planck_mean_dustbin_'// trim(i_str)//'.list',status='unknown')
+                write(i_str, '(I2.2)') i  ! convert i to string without leading spaces
+                open(unit=20+i,file=trim(sed_dir_loc)//'/rosseland_mean_DustBin_'//trim(i_str)//'.list',status='unknown')
+                open(unit=30+i,file=trim(sed_dir_loc)//'/planck_mean_DustBin_'// trim(i_str)//'.list',status='unknown')
                 do j = 1, 100
                     write(20+i,'(2e14.6)') dustbins_props(i)%Rosseland_tab%tab1d(j,1), dustbins_props(i)%Rosseland_tab%tab2d(j,1,1)
                     write(20+i,'(2e14.6)') dustbins_props(i)%Rosseland_tab%tab1d(j,1), dustbins_props(i)%Rosseland_tab%tab2d(j,1,2)
@@ -828,6 +822,278 @@ module dust_optics
             end do
         end if
     end subroutine init_dust_mean_cross_sections
+
+    subroutine initialize_cross_sections_from_blackbody_dust_pah(T, group_L0, group_L1, nGroups)
+        ! This subroutine initializes per-group dust and PAH cross-sections
+        ! using a blackbody spectrum at temperature T, following the same strategy
+        ! as initialize_cross_sections_from_blackbody for gas/ions.
+        ! For each RT group, a blackbody spectrum is generated and per-bin 
+        ! cross-sections are integrated over the group's energy range [L0, L1].
+        !
+        ! T         --> reference temperature for blackbody [K]
+        ! group_L0  --> lower energy bound of each RT group [eV] (nGroups)
+        ! group_L1  --> upper energy bound of each RT group [eV] (nGroups)
+        ! nGroups   --> number of RT groups
+        !
+        ! Populates:
+        !   group_csa_dust(nGroups, ndust) - absorption cross-section per group
+        !   group_css_dust(nGroups, ndust) - scattering cross-section per group
+        !   group_csr_dust(nGroups, ndust) - rad-pressure cross-section per group
+        !   att_len_dust(nGroups, ndust)   - photon attenuation length per group
+        !   group_csa_pah(nGroups, npah)   - PAH absorption cross-section per group
+        !   group_css_pah(nGroups, npah)   - PAH scattering cross-section per group
+        !   group_csr_pah(nGroups, npah)   - PAH rad-pressure cross-section per group
+        !
+        use constants, only: c_cgs, hplanck, eV2erg
+        implicit none
+
+        real(kind=8), intent(in) :: T
+        real(kind=8), intent(in) :: group_L0(nGroups), group_L1(nGroups)
+        integer, intent(in) :: nGroups
+
+        real(kind=8) :: lambda_min, lambda_max, delta_lambda, tmp
+        real(kind=8) :: X(1000), Y(1000)
+        real(kind=8) :: B_lam, norm, result
+        integer :: ip, ii, isize
+        logical :: skip_group
+
+        ! Allocate group arrays if not already done
+        if (.not. allocated(group_csa_dust)) allocate(group_csa_dust(nGroups, ndust))
+        if (.not. allocated(group_css_dust)) allocate(group_css_dust(nGroups, ndust))
+        if (.not. allocated(group_csr_dust)) allocate(group_csr_dust(nGroups, ndust))
+        if (.not. allocated(att_len_dust)) allocate(att_len_dust(nGroups, ndust))
+
+        if (npah > 0) then
+            if (.not. allocated(group_csa_pah)) allocate(group_csa_pah(nGroups, npah))
+            if (.not. allocated(group_css_pah)) allocate(group_css_pah(nGroups, npah))
+            if (.not. allocated(group_csr_pah)) allocate(group_csr_pah(nGroups, npah))
+        end if
+
+        ! Initialize to zero
+        group_csa_dust = 0.d0
+        group_css_dust = 0.d0
+        group_csr_dust = 0.d0
+        att_len_dust = 0.d0
+        if (npah > 0) then
+            group_csa_pah = 0.d0
+            group_css_pah = 0.d0
+            group_csr_pah = 0.d0
+        end if
+
+        ! Loop over groups
+        do ip = 1, nGroups
+            ! Skip non-SED groups (where L0 <= 0 or L1 <= 0 or L0 >= L1)
+            if (group_L0(ip) <= 0.d0 .or. group_L1(ip) <= 0.d0 .or. &
+                group_L0(ip) >= group_L1(ip)) cycle
+
+            ! Convert group energy bounds [eV] to wavelengths [Angstrom]
+            ! lambda [A] = hc / E [eV] -> hc / E * 1e8
+            lambda_max = (hplanck * c_cgs / (group_L0(ip) * eV2erg)) * 1d8  ! [A]
+            lambda_min = (hplanck * c_cgs / (group_L1(ip) * eV2erg)) * 1d8  ! [A]
+            delta_lambda = (lambda_max - lambda_min) / 999.d0
+
+            ! Fill wavelength grid X and blackbody spectrum Y
+            do ii = 1, 1000
+                X(ii) = lambda_min + (delta_lambda * (dble(ii) - 1.d0))
+                tmp = X(ii) * 1.d-8  ! convert A to cm
+                Y(ii) = planck_function(tmp, T)
+            end do
+
+            ! Compute normalization factor (integral of Y over the wavelength range)
+            norm = integrate_spectrum_simple(X, Y, 1000)
+
+            ! Process each dust bin
+            do isize = 1, ndust
+                ! Absorption cross-section: integral of f*Y*lambda*sigma_abs over wavelength
+                result = integrate_dust_absorbtion(X, Y, 1000, isize)
+                group_csa_dust(ip, isize) = result / norm
+                
+                ! Scattering cross-section: integral of f*Y*lambda*sigma_scat over wavelength
+                result = integrate_dust_scattering(X, Y, 1000, isize)
+                group_css_dust(ip, isize) = result / norm
+                
+                ! Radiation pressure cross-section: integral of f*Y*lambda*sigma_rp over wavelength
+                result = integrate_dust_radpressure(X, Y, 1000, isize)
+                group_csr_dust(ip, isize) = result / norm
+                
+                ! Attenuation length: integral of f*Y*lambda*la over wavelength
+                result = integrate_dust_attenuationlength(X, Y, 1000, isize)
+                att_len_dust(ip, isize) = result / norm
+            end do
+
+            ! Process each PAH bin
+            if (npah > 0) then
+                do isize = 1, npah
+                    ! For neutral PAHs (ion=1)
+                    result = integrate_pah_absorbtion(X, Y, 1000, isize, 1)
+                    group_csa_pah(ip, isize) = result / norm
+                    
+                    result = integrate_pah_scattering(X, Y, 1000, isize, 1)
+                    group_css_pah(ip, isize) = result / norm
+                    
+                    result = integrate_pah_radpressure(X, Y, 1000, isize, 1)
+                    group_csr_pah(ip, isize) = result / norm
+                end do
+            end if
+        end do  ! end loop over groups
+
+    end subroutine initialize_cross_sections_from_blackbody_dust_pah
+
+    ! Helper integration functions
+    function integrate_spectrum_simple(X, Y, N) result(integral)
+        implicit none
+        integer, intent(in) :: N
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            integral = integral + 0.5d0 * (Y(i) + Y(i+1)) * (X(i+1) - X(i))
+        end do
+    end function integrate_spectrum_simple
+
+    function integrate_dust_absorbtion(X, Y, N, isize) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            sigma = getAbsCrosssection(X(i), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getAbsCrosssection(X(i+1), isize)) &
+                                  * (X(i+1) - X(i))
+        end do
+    end function integrate_dust_absorbtion
+
+    function integrate_dust_scattering(X, Y, N, isize) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            sigma = getScCrosssection(X(i), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getScCrosssection(X(i+1), isize)) &
+                                  * (X(i+1) - X(i))
+        end do
+    end function integrate_dust_scattering
+
+    function integrate_dust_radpressure(X, Y, N, isize) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            sigma = getRpCrosssection(X(i), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getRpCrosssection(X(i+1), isize)) &
+                                  * (X(i+1) - X(i))
+        end do
+    end function integrate_dust_radpressure
+
+    function integrate_dust_attenuationlength(X, Y, N, isize) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, la
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            la = getla_dustbin(X(i), isize)
+            if (la < huge(1.d0)) then
+                integral = integral + 0.5d0 * (Y(i)*X(i)*la + Y(i+1)*X(i+1)*getla_dustbin(X(i+1), isize)) &
+                                      * (X(i+1) - X(i))
+            end if
+        end do
+    end function integrate_dust_attenuationlength
+
+    function integrate_pah_absorbtion(X, Y, N, isize, ion) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize, ion
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            if (ion == 1) then
+                sigma = getAbsCrosssection_pah_n(X(i), isize)
+            else
+                sigma = getAbsCrosssection_pah_i(X(i), isize)
+            end if
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+        end do
+    end function integrate_pah_absorbtion
+
+    function integrate_pah_scattering(X, Y, N, isize, ion) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize, ion
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            if (ion == 1) then
+                sigma = getScCrosssection_pah_n(X(i), isize)
+            else
+                sigma = getScCrosssection_pah_i(X(i), isize)
+            end if
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+        end do
+    end function integrate_pah_scattering
+
+    function integrate_pah_radpressure(X, Y, N, isize, ion) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize, ion
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+        
+        integral = 0.d0
+        do i = 1, N - 1
+            if (ion == 1) then
+                sigma = getRpCrosssection_pah_n(X(i), isize)
+            else
+                sigma = getRpCrosssection_pah_i(X(i), isize)
+            end if
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+        end do
+    end function integrate_pah_radpressure
+
+
+    ! getla_graphite removed: use getla_dustbin() for all dust bins.
+
+    FUNCTION flaLambda_dust(lambda,f,species,ion)
+        implicit none
+        real(kind=8):: flaLambda_dust, lambda, f
+        integer :: species, ion
+        integer :: isize
+
+        if (npah > 0) then
+            isize = species - npah*2
+        else
+            isize = species
+        end if
+
+        if (isize < 1 .or. isize > ndust) then
+            flaLambda_dust = huge(1d0)
+            return
+        end if
+
+        ! Use unified getla_dustbin for all grain types; it handles
+        ! single- and double-refractive-index tables via
+        ! dustbins_props(isize)%separate_refractive_index.
+        flaLambda_dust = f * lambda * getla_dustbin(lambda,isize)
+    END FUNCTION flaLambda_dust
 
     function getAbsCrosssection(lambda,isize)
         ! Compute absorption cross section for regular grains
@@ -1041,7 +1307,7 @@ module dust_optics
 
         real(dp) :: agrain,atrans
 
-        agrain = asize(isize)*1d-4 ! size from micron to cm
+        agrain = dustbins_props(isize)%asize_cm
         l2AA   = lambda / 1d8 ! Wavelength from Angstrom to cm
         atrans = l2AA / 1.8d0
 
@@ -1055,89 +1321,89 @@ module dust_optics
         getRATCrosssection = pi * (agrain)**2 * getRATCrosssection
     end function getRATCrosssection
 
-    FUNCTION fRATLambda_dust(lambda, f, species)
+    FUNCTION fRATLambda_dust(lambda, f, species, ion)
         implicit none
         real(kind=8):: fRATLambda_dust, lambda, f
-        integer :: species
+        integer :: species, ion
         integer :: isize
 
         isize = species - npah*2
         fRATLambda_dust = f * lambda * getRATCrosssection(lambda,isize)
     END FUNCTION fRATLambda_dust
+
+    FUNCTION fAbsLambda_pah(lambda, f, species, ion)
+        implicit none
+        real(kind=8):: fAbsLambda_pah, lambda, f
+        integer :: species, ion
+        integer :: isize
+
+        isize = int(species/2) + mod(species,2)
+        if (mod(species,2) .ne. 0) then
+            ! Neutral PAHs are the first
+            fAbsLambda_pah = f * lambda * getAbsCrosssection_pah_n(lambda,isize)
+        else
+            ! While ionised PAHs are the second
+            fAbsLambda_pah = f * lambda * getAbsCrosssection_pah_i(lambda,isize)
+        end if
+    END FUNCTION fAbsLambda_pah
+
+    FUNCTION fScLambda_pah(lambda, f, species, ion)
+        implicit none
+        real(kind=8):: fScLambda_pah, lambda, f
+        integer :: species, ion
+        integer :: isize
+
+        isize = int(species/2) + mod(species,2)
+        if (mod(species,2) .ne. 0) then
+            ! Neutral PAHs are the first
+            fScLambda_pah = f * lambda * getScCrosssection_pah_n(lambda,isize)
+        else
+            ! While ionised PAHs are the second
+            fScLambda_pah = f * lambda * getScCrosssection_pah_i(lambda,isize)
+        end if
+    END FUNCTION fScLambda_pah
+
+    FUNCTION fRpLambda_pah(lambda, f, species, ion)
+        implicit none
+        real(kind=8):: fRpLambda_pah, lambda, f
+        integer :: species, ion
+        integer :: isize
+
+        isize = int(species/2) + mod(species,2)
+        if (mod(species,2) .ne. 0) then
+            ! Neutral PAHs are the first
+            fRpLambda_pah = f * lambda * getRpCrosssection_pah_n(lambda,isize)
+        else
+            ! While ionised PAHs are the second
+            fRpLambda_pah = f * lambda * getRpCrosssection_pah_i(lambda,isize)
+        end if
+    END FUNCTION fRpLambda_pah
     
-    FUNCTION fAbsLambda_dust(lambda, f, species)
+    FUNCTION fAbsLambda_dust(lambda, f, species, ion)
         implicit none
         real(kind=8):: fAbsLambda_dust, lambda, f
-        integer :: species
+        integer :: species, ion
         integer :: isize
-        if (dust_pahs) then
-            if (species <= npah*2) then
-                isize = int(species/2) + mod(species,2)
-                if (mod(species,2) .ne. 0) then
-                    ! Neutral PAHs are the first
-                    fAbsLambda_dust = f * lambda * getAbsCrosssection_pah_n(lambda,isize)
-                else
-                    ! While ionised PAHs are the second
-                    fAbsLambda_dust = f * lambda * getAbsCrosssection_pah_i(lambda,isize)
-                end if
-            else
-                isize = species - npah*2
-                fAbsLambda_dust = f * lambda * getAbsCrosssection(lambda,isize)
-            end if
-        else
-            isize = species - npah*2
-            fAbsLambda_dust = f * lambda * getAbsCrosssection(lambda,isize)
-        end if
+        isize = species
+        fAbsLambda_dust = f * lambda * getAbsCrosssection(lambda,isize)
     END FUNCTION fAbsLambda_dust
 
-    FUNCTION fScLambda_dust(lambda, f, species)
+    FUNCTION fScLambda_dust(lambda, f, species, ion)
         implicit none
         real(kind=8):: fScLambda_dust, lambda, f
-        integer :: species
+        integer :: species, ion
         integer :: isize
-        if (dust_pahs) then
-            if (species <= npah*2) then
-                isize = int(species/2) + mod(species,2)
-                if (mod(species,2) .ne. 0) then
-                    ! Neutral PAHs are the first
-                    fScLambda_dust = f * lambda * getScCrosssection_pah_n(lambda,isize)
-                else
-                    ! While ionised PAHs are the second
-                    fScLambda_dust = f * lambda * getScCrosssection_pah_i(lambda,isize)
-                end if
-            else
-                isize = species - npah*2
-                fScLambda_dust = f * lambda * getScCrosssection(lambda,isize)
-            end if
-        else
-            isize = species - npah*2
-            fScLambda_dust = f * lambda * getScCrosssection(lambda,isize)
-        end if
+        isize = species
+        fScLambda_dust = f * lambda * getScCrosssection(lambda,isize)
     END FUNCTION fScLambda_dust
 
-    FUNCTION fRpLambda_dust(lambda, f, species)
+    FUNCTION fRpLambda_dust(lambda, f, species, ion)
         implicit none
         real(kind=8):: fRpLambda_dust, lambda, f
-        integer :: species
+        integer :: species, ion
         integer :: isize
-        if (dust_pahs) then
-            if (species <= npah*2) then
-                isize = int(species/2) + mod(species,2)
-                if (mod(species,2) .ne. 0) then
-                    ! Neutral PAHs are the first
-                    fRpLambda_dust = f * lambda * getRpCrosssection_pah_n(lambda,isize)
-                else
-                    ! While ionised PAHs are the second
-                    fRpLambda_dust = f * lambda * getRpCrosssection_pah_i(lambda,isize)
-                end if
-            else
-                isize = species - npah*2
-                fRpLambda_dust = f * lambda * getRpCrosssection(lambda,isize)
-            end if
-        else
-            isize = species - npah*2
-            fRpLambda_dust = f * lambda * getRpCrosssection(lambda,isize)
-        end if
+        isize = species
+        fRpLambda_dust = f * lambda * getRpCrosssection(lambda,isize)
     END FUNCTION fRpLambda_dust
 end module dust_optics
 
@@ -1273,7 +1539,7 @@ module dust_radiation
         real(dp),intent(in) :: recomb_heat,pe_heat
         real(dp),dimension(1:n_elements),intent(in) :: nElement
         real(dp),dimension(1:n_elements,1:n_elements),intent(in) :: xelem_ions
-        real(dp),dimension(1:n_elements),intent(in) :: Coulomb_factor
+        real(dp),dimension(-1:n_elements),intent(in) :: Coulomb_factor
         real(dp),intent(inout) :: T
 
         integer :: iter
@@ -2254,6 +2520,10 @@ module dust_photoelectric_heating
             Zmix = (/real(zlo,dp), real(zhi,dp), 0d0/)
             wmix = (/wlo, whi, 0d0/)
             used_two_point = .true.
+        case (3)
+            call three_point_charge_mix(Zdust,Zsigma,zmin_mix,z1,z2,z3,w1,w2,w3,used_two_point)
+            Zmix = (/real(z1,dp), real(z2,dp), real(z3,dp)/)
+            wmix = (/w1, w2, w3/)
         case default
             call three_point_charge_mix(Zdust,Zsigma,zmin_mix,z1,z2,z3,w1,w2,w3,used_two_point)
             Zmix = (/real(z1,dp), real(z2,dp), real(z3,dp)/)
@@ -2394,8 +2664,7 @@ module dust_photoelectric_heating
         ! 3. Convert to volumetric rates
         ngrains = rho_dust / dustbins_props(i_dust)%mgrain
         Pinj = peh_rate  * ngrains * (G0 / 1.13d0) ! [erg/cm^3/s]
-        Prec = cool_rate * ngrains * (G0 / 1.13d0) ! [erg/cm^3/s]
-
+        Prec = cool_rate * ngrains  ! [erg/cm^3/s]
     end subroutine interpolate_dust_peh_rate
     
 
@@ -3001,9 +3270,9 @@ module pah_photoelectric_heating
                            pahbins_props(i_pah)%peh_pabs_tab%tab2d(1:ngamma,1,1), &
                            ngamma,log10(gamma),Pabs_pah)
         ! Scale by the value of G0 and the number density of PAHs
-        ! NOTE: Convert G0 to the Draine (2011) units
+        ! NOTE: Convert G0 to the Mathis ISRF by dividing by 1.13 (see Mathis et al. 1983)
         if (present(Pabs_pah)) then
-            Pabs_pah = (10d0**Pabs_pah) * nmolecules * (G0 / 1.71d0) ! [erg/cm3/s]
+            Pabs_pah = (10d0**Pabs_pah) * nmolecules * (G0 / 1.13d0) ! [erg/cm3/s]
         end if
         ! 3. Get the injected power into the gas by the PAH molecules
         if (present(Pinj_pah)) then

@@ -139,15 +139,15 @@ module dust_cooling
         real(dp), intent(in) :: ne
         real(dp), dimension(1:n_elements), intent(in) :: nElement
         real(dp), dimension(1:n_elements,1:n_elements), intent(in) :: xelem_ions
-        real(dp), dimension(1:n_elements),intent(in) :: Coulomb_factor
+        real(dp), dimension(-1:n_elements),intent(in) :: Coulomb_factor
         real(dp), intent(in) :: nH2,nCO
         real(dp), intent(in) :: Tgas
         real(dp), intent(in) :: Td,dust_charge
 
         real(dp), intent(inout) :: Hcoll
 
-        integer :: j,iel,iphi0,nT,nphi,nions_loc,izion
-        real(dp) :: lT,cooling_rate
+        integer :: j,iel,iphi0,nT,nphi,nions_loc,izion,jj
+                real(dp) :: lT,cooling_rate
         real(dp) :: agrain,D
         real(dp) :: dT
         real(dp) :: xion,phi_charge
@@ -211,7 +211,7 @@ module dust_cooling
                 ! No charge dependence: just add contribution from the total abundance of this element
                 iphi0 = dustbins_props(i_dust)%collisional_tab(iel)%ipos_zero(2)
                 call interpolate1D(dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nT,1), &
-                                    dustbins_props(i_dust)%collisional_tab(iel)%tab2d(1:nT,iphi0,j), &
+                                    dustbins_props(i_dust)%collisional_tab(iel)%tab2d(1:nT,iphi0,1), &
                                     nT, lT, cooling_rate)
                 cooling_rate = 10d0**cooling_rate
                 Hcoll = Hcoll + nElement(iel) * cooling_rate * dT

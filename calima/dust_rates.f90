@@ -127,7 +127,7 @@ contains
                             end do
                         enddo
                     endif
-                case ('bourlot')
+                case ('LeBourlot2012')
                     ! Taken from Le Bourlot+2012 (https://ui.adsabs.harvard.edu/abs/2012A%26A...541A..76L/abstract)
                     do jj=1,ndchemtype
                         jj1 = istart_chemtype(jj)
@@ -145,7 +145,7 @@ contains
                             end do
                         end do
                     end do
-                case ('chaabouni')
+                case ('Chaabouni2012')
                     ! Taken from Chaabouni+2012 (https://ui.adsabs.harvard.edu/#abs/2012A%26A...538A.128C)
                     do jj=1,ndchemtype
                         jj1 = istart_chemtype(jj)
@@ -163,7 +163,7 @@ contains
                             end do
                         end do
                     end do
-                case ('LDW85')
+                case ('LDW1985')
                     ! Taken from the fittings to the experimetal data of Leitch-Devlin & Williams (1985) done by
                     ! Grassi+2014 (https://ui.adsabs.harvard.edu/abs/2017MNRAS.466.1259G/abstract) for the KROME code
                     do jj=1,ndchemtype
@@ -183,7 +183,7 @@ contains
                             end do
                         end do
                     end do
-                case ('dubois24')
+                case ('Dubois2024')
                     ! Same as our prescription, but in the original Dubois+2024 paper there is no
                     ! smoothing function, but rather a sharp threshold at nH=0.1 cm**-3.
                     ! NOTE: The temperature at which accretion is taking place is fixed at 100 K
@@ -392,7 +392,7 @@ contains
                         end if
                     end if
                 end if
-            case ('granato21')
+            case ('Granato2021')
                 ! This models follows the prescription by Granato+2021
                 ! Eq. 8 and 9 in https://ui.adsabs.harvard.edu/abs/2021MNRAS.503..511G/abstract
                 if (nH < 1.0d0) then
@@ -418,7 +418,7 @@ contains
                         end do
                     end do
                 end if
-            case ('dubois24')
+            case ('Dubois2024')
                 ! This model follows the prescription by Dubois+2024
                 ! which is basically the same as for Granato+2021, with the 
                 ! exception that the suppression is not exponential but sharp
@@ -891,7 +891,7 @@ contains
             t_coal = 1d15 * yr2sec
 
             select case(trim(coalescence_model))
-            case ('Totton12')
+            case ('Totton2012')
                 ! 1. Compute the reduced mass in g
                 reduced_mass = 5d-1 * pahbins_props(1)%mpah
                 
@@ -906,7 +906,7 @@ contains
                 ! 4. And finally the timescale
                 coll_section = 4d0*pi*(pahbins_props(1)%apah_cm)**2d0
                 t_coal(1) = pahbins_props(1)%mpah / (coll_section * dV_thermal * C_eff * rho)
-            case ('Tielens21')
+            case ('Tielens2021')
                 nstates = pahbins_props(1)%ncharge_states
                 cation_start = pahbins_props(1)%cation_start_idx
                 if (cation_start <= nstates) then

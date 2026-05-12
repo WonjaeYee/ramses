@@ -38,21 +38,25 @@ module hydro_parameters
   ! Global parameters that need to be use by RTZ and CALIMA
   integer, parameter :: n_elements = 27
 #ifdef CALIMA
-#ifdef NDUST
-  integer, parameter :: ndust = NDUST
-#else
-  integer, parameter :: ndust = 0
+#ifndef NDUST
+#error CALIMA requires NDUST to be defined and > 0
 #endif
-#ifdef NPAH
-  integer, parameter :: npah = NPAH
-#else
-  integer, parameter :: npah = 0
+#ifndef NPAH
+#error CALIMA requires NPAH to be defined and > 0
+#endif
+#if NDUST <= 0
+#error CALIMA requires NDUST to be defined and > 0
+#endif
+#if NPAH <= 0
+#error CALIMA requires NPAH to be defined and > 0
 #endif
 #ifdef NDCHEMTYPE
   integer, parameter :: ndchemtype = NDCHEMTYPE
 #else
   integer, parameter :: ndchemtype = 1
 #endif
+  integer, parameter :: ndust = NDUST
+  integer, parameter :: npah = NPAH
 #endif
 
   ! Where the tables for RTZ and CALIMA are stored

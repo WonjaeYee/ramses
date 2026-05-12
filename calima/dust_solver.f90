@@ -76,7 +76,7 @@ module dust_chemistry_solver
         end do
         if (.not.has_tracked_elements) tiny_tracked_metals = .true.
 
-        if (all(rho_dust/rho.lt.1d-40).and.all(rho_pah/rho.lt.1d-40)&
+        if (all(rho_dust/rho.lt.smallr_dust).and.all(rho_pah/rho.lt.smallr_dust)&
             .and.tiny_tracked_metals) check_update_dust = .false.
 
         ! 2. If all timescales are much longer than the age of the Universe
@@ -111,7 +111,7 @@ module dust_chemistry_solver
             if(pah_freezing) dM_fre(ii) = dM_fre(ii) + drhoD_fre(ii)
         enddo
         
-        if (dust_pahs) then
+        if (npah>0) then
             do ii=1,npah
                 if(pah_accretion) dM_acc(ii) = dM_acc(ii) + drhoD_acc(ii)
                 if(pah_sputtering) dM_spu(ii) = dM_spu(ii) + drhoD_spu(ii)
@@ -233,7 +233,7 @@ module dust_chemistry_solver
         drhoD_sha(:)=0.0d0;drhoD_ratd(:)=0d0;drhoD_ratd_dest(:)=0.0d0;drhoD_subl(:)=0.0d0
         drhoD_sha_dest(:)=0.0d0
         drhoD_coal(:)=0.0d0;drhoD_fre(:)=0.0d0;drhoD_deso(:)=0.0d0;drhoD_evap(:)=0.0d0
-        if (dust_pahs) then
+        if (npah>0) then
             jj1 = istart_chemtype(pahbins_props(1)%dust_index_interact)
             jj2 = jj1 + dustbins_per_chemtype(pahbins_props(1)%dust_index_interact) - 1
             allocate(t_sha_pah(jj1:jj2,jj1:jj2,1:npah))
@@ -253,7 +253,7 @@ module dust_chemistry_solver
 
         ! Add up all the dust mass
         if (dust_log) then
-            if (dust_pahs) then
+            if (npah>0) then
                 do ii=1,npah
                     total_mdust(ii) = total_mdust(ii) + rho_pah(ii) * vol_loc
                 end do
@@ -351,7 +351,7 @@ module dust_chemistry_solver
             rhoGZ00(jj,1:nions_lead(jj)) = rhoZ0(jj,1:nions_lead(jj))
 
             ! Now add the dust density to the total gas + dust metal densities
-            if (dust_pahs .and. dustbins_props(jj1)%interact_pah) then
+            if (npah>0 .and. dustbins_props(jj1)%interact_pah) then
                 rhoZ0(jj,:) = rhoZ0(jj,:) + SUM(rho_pah(:)) + SUM(rho_dust(jj1:jj2))
             else
                 rhoZ0(jj,:) = rhoZ0(jj,:) + SUM(rho_dust(jj1:jj2))
@@ -396,7 +396,7 @@ module dust_chemistry_solver
             oneovertratd(1:ndust) = 1d0/t_ratd(1+npah:ndust+npah)
             oneovertratd_dest(1:ndust) = 1d0/t_ratd_dest(1+npah:ndust+npah)
         end if
-        if (dust_pahs) then
+        if (npah>0) then
             if(pah_sputtering) oneovertspu_pah = 1d0/t_spu_pah
             if(pah_accretion) oneovertacc(1:npah,:) = 1d0/t_acc
             if(pah_uv_destruction) oneovertsubl_pah = 1d0/t_subl_pah
@@ -418,7 +418,7 @@ module dust_chemistry_solver
                                   t0(ii,6) = 0.1d0 * t_ratd_dest(ii)
             end if
         enddo
-        if (dust_pahs) then
+        if (npah>0) then
             do ii=1,npah
                 if(pah_accretion)    t0(ii,1) = 0.1d0 * minval(t_acc(1,:))
                 if(pah_sputtering) t0(ii,2) = 0.1d0 * t_spu_pah(ii)
@@ -543,7 +543,7 @@ module dust_chemistry_solver
                             renorm_chi_frag_ratd = sum(dustbins_props(ii-npah)%chi_frag_ratd(0:npah+ratd_source_local-1))
                             rhoGZ0(jj,1) = rhoGZ0(jj,1) + rho_dust(ii) * dustbins_props(ii-npah)%chi_frag_ratd(0)/renorm_chi_frag_ratd
                             drhoD_ratd_dest(ii) = drhoD_ratd_dest(ii) -rho_dust(ii) * dustbins_props(ii-npah)%chi_frag_ratd(0)/renorm_chi_frag_ratd
-                            if (dust_pahs) then
+                            if (npah>0) then
                                 do kk=1,npah
                                     if (update_switch(kk)) then
                                         rho_pah(kk) = rho_pah(kk) + rho_dust(ii) * dustbins_props(ii-npah)%chi_frag_ratd(kk)/renorm_chi_frag_ratd
@@ -644,7 +644,7 @@ module dust_chemistry_solver
         end do rkloop
 
         ! Check that the pahs and dust densities are not negative
-        if (dust_pahs) then
+        if (npah>0) then
             do ii=1,npah
                 if (rho_pah(ii)<0d0.or.rho_pah(ii).ne.rho_pah(ii)) then
                     write(*,*)'Negative PAH density: ',rho_pah(ii)
@@ -702,7 +702,7 @@ module dust_chemistry_solver
             write(*,*)'rhoZ0 = ',rhoZ0
             write(*,*)'lead_elem = ',lead_elem
             write(*,*)'rho_dust = ',rho_dust
-            if (dust_pahs) write(*,*)'rho_pah = ',rho_pah
+            if (npah>0) write(*,*)'rho_pah = ',rho_pah
             stop
         end if
         ! Add changes to counting global variables
@@ -722,8 +722,7 @@ module dust_chemistry_solver
 
                 if(pah_freezing) drhoD_fre(ii) = drhoD_fre(ii)*vol_loc
             enddo
-#if NPAH>0
-            if (dust_pahs) then
+            if (npah>0) then
                 do ii=1,npah
                     if(pah_sputtering) drhoD_spu(ii) = drhoD_spu(ii)*vol_loc 
                     if(pah_uv_destruction) drhoD_subl(ii) = drhoD_subl(ii)*vol_loc
@@ -734,7 +733,6 @@ module dust_chemistry_solver
                     if(ratd_switch) drhoD_ratd(ii) = drhoD_ratd(ii)*vol_loc
                 end do
             end if
-#endif
         end if
 
         if (dust_acc_coulomb) then
@@ -787,7 +785,7 @@ module dust_chemistry_solver
                                    lead_elem,nions_lead,int_ratd_switch, &
                                    boost_acc,boost_coa,rhoZ0_lim, &
                                    t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
-            if(dust_pahs) call compute_t_pah_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
+            if(npah>0) call compute_t_pah_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                    T_dust,Zdust_mean,gamma_RAT,FIR, &
                                    nElement,xelem_ions,fcharge_pahs, &
                                    lead_elem,nions_lead,int_ratd_switch, &

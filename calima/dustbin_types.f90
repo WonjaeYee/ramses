@@ -82,7 +82,7 @@ module dustbin_types
         real(dp) :: surf_energy             ! Surface energy (erg/cm2)
         real(dp) :: work_function           ! Work function (eV)
         real(dp) :: band_gap                ! Band gap (eV)
-        real(dp) :: e_escape_length         ! Electron escape length (in nm)
+        real(dp) :: e_escape_length         ! Electron escape length (in cm)
         real(dp) :: Zmin                    ! Minimum grain charge allowed for this dust bin
         real(dp) :: amin                    ! Minimum grain size (in microns)
         real(dp) :: amax                    ! Maximum grain size (in microns)
@@ -93,7 +93,8 @@ module dustbin_types
         real(dp) :: AGB_cond_eff            ! AGB condensation efficiency
         real(dp) :: w_disr                  ! Rotation rate at which grain disruption occurs (rad/s)
         real(dp) :: grain_inertia           ! Grain moment of inertia (g cm2)
-        real(dp) :: tau_gas_0               ! Reference rotation dust damping timescale (1/g/cm^4)
+        real(dp) :: tau_gas_0               ! Reference gas damping time (s)
+        real(dp) :: SNsha_eff               ! SN shattering efficiency for grain size
         real(dp) :: t0_coa                  ! Reference time for coagulation (s)
         real(dp) :: t0_sha                  ! Reference time for shattering (s)
         real(dp) :: t0_spu                  ! Reference time for sputtering (s)
@@ -116,7 +117,6 @@ module dustbin_types
         real(dp),dimension(:),allocatable :: el_conv_factors       ! Element conversion factors
         real(dp),dimension(:),allocatable :: el_lim_factors        ! Element limiting factors
         real(dp),dimension(:),allocatable :: chi_frag_ratd         ! Fragment distribution for RATD
-        real(dp),dimension(:),allocatable :: SNsha_eff             ! SN shattering efficiency for grain size
         integer,dimension(:),allocatable  :: idend_coag            ! Index of the dust bin that is the destination of coagulation
         real(dp),dimension(:),allocatable :: vthresh_coag          ! Threshold velocity for coagulation
         real(dp),dimension(:),allocatable :: phi_prefact           ! Prefactors to quickly compute phi=Z_dust*q/a
@@ -143,6 +143,9 @@ module dustbin_types
         integer  :: pah_index               ! Index of the PAH bin
         integer  :: u_hydro_idx             ! Variable index in uold
         integer  :: nc                      ! Number of carbon atoms in the PAH
+        integer  :: nc_min                  ! Minimum number of carbon atoms in the PAH
+        integer  :: nc_max                  ! Maximum number of carbon atoms in the PAH
+        integer  :: n                       ! Number of hydrogen atoms in the PAH
         integer  :: C_index                 ! Index of the carbon element in the full element list
         integer  :: dust_index_interact     ! Index of the starting dust bin that interacts with this PAH bin
         integer  :: nd_bins                 ! Number of carbonaceous grain bins that interact with this PAH bin
@@ -152,8 +155,6 @@ module dustbin_types
         real(dp) :: apah_cm                 ! PAH size (in cm)
         real(dp) :: spah                    ! PAH material density (in g/cm^3)
         real(dp) :: mpah                    ! PAH mass (in g)
-        real(dp) :: amin                    ! Minimum PAH size (in microns)
-        real(dp) :: amax                    ! Maximum PAH size (in microns)
         real(dp) :: mpah_min                ! Minimum PAH mass (in g)
         real(dp) :: mpah_max                ! Maximum PAH mass (in g)
         real(dp) :: AGB_cond_eff            ! AGB condensation efficiency
@@ -289,6 +290,10 @@ contains
         if (allocated(this%dustAbs)) deallocate(this%dustAbs)
         allocate(this%dustAbs(1:this%nGroups))
         this%dustAbs = 0d0
+
+        if (allocated(this%l_a)) deallocate(this%l_a)
+        allocate(this%l_a(1:this%nGroups,1:this%ndust))
+        this%l_a = 0d0
 
         if (allocated(this%pahAbs)) deallocate(this%pahAbs)
         allocate(this%pahAbs(1:this%nGroups))

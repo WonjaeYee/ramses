@@ -131,12 +131,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef CALIMA
   real(dp) :: sigma2
   real(dp),dimension(1:nvector) :: sigma
-#if NDUST>0
   real(dp),dimension(1:nvector,1:ndust) :: rho_dust
-#endif
-#if NPAH>0
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
-#endif
 #endif
 
    integer::err_idx
@@ -498,38 +494,32 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
 #ifdef CALIMA
       ! Get the quantities necessary for CALIMA dust modelling
-      if (dust) then
-         ! Compute the local velocity dispersion sigma in cm/s
-         sigma(1:nvector) = 0.0d0
-         if (comp_sigma_turb) then
-            do i=1,nleaf
-               call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
-               sigma(i) = sqrt(sigma2)
-            end do
-         endif
-#if NDUST>0
-         ! Dust densities in g/cm^3
+      ! Compute the local velocity dispersion sigma in cm/s
+      sigma(1:nvector) = 0.0d0
+      if (comp_sigma_turb) then
          do i=1,nleaf
-            rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+            call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
+            sigma(i) = sqrt(sigma2)
          end do
-         if (any(rho_dust(i,:).lt.0d0)) then
-            write(*,*) 'Negative dust density in cell ', ind_leaf(i)
-            write(*,*) 'Dust density: ', rho_dust(i,:)
-            call clean_stop
-         end if
-#endif
-#if NPAH>0
-         ! PAH densities in g/cm^3
-         do i=1,nleaf
-            rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
-         end do
-         if (any(rho_pah(i,:).lt.0d0)) then
-            write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
-            write(*,*) 'PAH density: ', rho_pah(i,:)
-            call clean_stop
-         end if
-#endif
       endif
+      ! Dust densities in g/cm^3
+      do i=1,nleaf
+         rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+      end do
+      if (any(rho_dust(i,:).lt.0d0)) then
+         write(*,*) 'Negative dust density in cell ', ind_leaf(i)
+         write(*,*) 'Dust density: ', rho_dust(i,:)
+         call clean_stop
+      end if
+      ! PAH densities in g/cm^3
+      do i=1,nleaf
+         rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+      end do
+      if (any(rho_pah(i,:).lt.0d0)) then
+         write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
+         write(*,*) 'PAH density: ', rho_pah(i,:)
+         call clean_stop
+      end if
 #endif
 
      ! grackle tabular cooling
@@ -780,18 +770,12 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
 #ifdef CALIMA
       ! Update dust and PAH densities for CALIMA
-      if (dust) then
-#if NDUST>0
-         do i=1,nleaf
-            uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
-         end do
-#endif
-#if NPAH>0
-         do i=1,nleaf
-            uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
-         end do
-#endif
-      end if
+      do i=1,nleaf
+         uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
+      end do
+      do i=1,nleaf
+         uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
+      end do
 #endif
 #ifdef RT
      if(neq_chem) then

@@ -17,6 +17,7 @@ module rtz_cooling_module
                            group_csa_dust, group_css_dust, group_csr_dust,&
                            group_csa_pah, group_css_pah, group_csr_pah,&
                            att_len_dust
+   use dust_init, only: init_dust_depletion_tests
 #endif
    implicit none
 
@@ -90,12 +91,8 @@ module rtz_cooling_module
       err_idx &
 #ifdef CALIMA
       , sigma &
-#if NDUST>0
       , rho_dust &
-#endif
-#if NPAH>0
       , rho_pah &
-#endif
 #endif
    )
    ! Semi-implicitly solve for new temperature, ionization states,
@@ -136,12 +133,8 @@ module rtz_cooling_module
    integer::ncell
 #ifdef CALIMA
    real(dp),dimension(1:nvector),intent(in) :: sigma
-#if NDUST>0
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
-#endif
-#if NPAH>0
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
-#endif
 #endif
 !--------------------------------------------------------
    real(dp),dimension(1:nvector):: tLeft, ddt
@@ -175,12 +168,8 @@ module rtz_cooling_module
    character(len=20), dimension(1:50)::saved_cooling_rates_names
    real(dp)::TK_to_save(1:nvector), mu_to_save(1:nvector)
 #ifdef CALIMA
-#if NDUST>0
    real(dp),dimension(1:ndust)::drho_dust
-#endif
-#if NPAH>0
    real(dp),dimension(1:npah)::drho_pah
-#endif
 #endif
 
    ! temporal index to check problem
@@ -262,6 +251,9 @@ module rtz_cooling_module
             nElement(16,1:ncell) = nElement(1,1:ncell) * 1.32d-05 * z_ave ! Sulfur
             nElement(26,1:ncell) = nElement(1,1:ncell) * 3.16d-05 * z_ave ! Iron
             nCO(1:ncell) = 0.0 ! CO
+#ifdef CALIMA
+            call init_dust_depletion_tests(nElement,rho_dust,rho_pah)
+#endif
          end if
 
          tleft(1:ncell) = 1.d40             ! Set to an arbitrarily large number
@@ -320,12 +312,8 @@ module rtz_cooling_module
                nCO(i) = nCO(i) + dCO
 #endif
 #ifdef CALIMA
-#if NDUST>0
                rho_dust(i,1:ndust) = rho_dust(i,1:ndust) + drho_dust(1:ndust)
-#endif
-#if NPAH>0
                rho_pah(i,1:npah) = rho_pah(i,1:npah) + drho_pah(1:npah)
-#endif
 #endif
                if (convergence_counter .gt. rtz_eqm_min_its) then
                   tleft(i) = 0.0 ! Finish the cell if we have reached convergence
@@ -567,12 +555,8 @@ module rtz_cooling_module
             p_gas(:,i) = p_gas(:,i) + dp_gas(:)
 #endif
 #ifdef CALIMA
-#if NDUST>0
             rho_dust(i,1:ndust) = rho_dust(i,1:ndust) + drho_dust(1:ndust)
-#endif
-#if NPAH>0
             rho_pah(i,1:npah) = rho_pah(i,1:npah) + drho_pah(1:npah)
-#endif
 #endif
             tleft(i)=tleft(i)-ddt(i)
             if(tleft(i) .gt. 0.) then           ! Not finished with this cell
@@ -705,12 +689,8 @@ module rtz_cooling_module
 
       ! 2. Compute the total density and metallicity
       rho_dust_tot = 0.d0
-#if NDUST>0
       rho_dust_tot = sum(rho_dust(icell,1:ndust))
-#endif
-#if NPAH>0
       rho_dust_tot = rho_dust_tot + sum(rho_pah(icell,1:npah))
-#endif
       rho = rho + rho_dust_tot
       dust_to_gas_mass_ratio_over_mw = rho_dust_tot / rho * GD_solar
       Zsolar = 12.d0 + log10((nElement(8, icell)+1.d-20)/(nElement(1, icell)+1.d-20))
@@ -736,7 +716,6 @@ module rtz_cooling_module
 #endif
 #ifdef CALIMA
       dust_helper%G0_background = UV_background_G0
-#if NDUST>0
       drho_dust(:) = rho_dust(icell,1:ndust)
       dust_helper%rho_dust = rho_dust(icell,1:ndust)
       do ii = 1, ndust
@@ -745,8 +724,6 @@ module rtz_cooling_module
          dust_helper%csr_dust(:,ii) = sigcr_dust(:, ii)
          dust_helper%l_a(:,ii) = att_len_dust(:, ii)
       end do
-#endif
-#if NPAH>0
       drho_pah(:) = rho_pah(icell,1:npah)
       dust_helper%rho_pah = rho_pah(icell,1:npah)
       do ii = 1, npah
@@ -754,7 +731,6 @@ module rtz_cooling_module
          dust_helper%css_pah(:,ii) = sigcs_pah(:, ii)
          dust_helper%csr_pah(:,ii) = sigcr_pah(:, ii)
       end do
-#endif
 #endif
 
       f_shd = 1.d0
@@ -967,18 +943,14 @@ module rtz_cooling_module
 #ifdef RT
                                  ,dNp(:))
       if (rt_isIR) then
-#if NDUST>0
          do ii = 1, ndust
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
                   group_egy_erg(iIR)
          end do
-#endif
-#if NPAH>0
          do ii = 1, npah
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
                   group_egy_erg(iIR)
          end do
-#endif
       end if
 #else
                     & )
@@ -1065,6 +1037,14 @@ module rtz_cooling_module
             call reduce_flux(dFp(:,iIR),dNp(iIR)*rt_c_cgs(ilevel))
          endif
       endif
+#endif
+
+#ifdef CALIMA
+      !/////////////////////////////////////////
+      !//          UPDATE DUST & PAHs         //
+      !/////////////////////////////////////////
+      drho_dust(:) = rho_dust(icell,1:ndust) - drho_dust(:)
+      drho_pah(:) = rho_pah(icell,1:npah) - drho_pah(:)
 #endif
 
       !/////////////////////////////////////////
@@ -1195,7 +1175,7 @@ module rtz_cooling_module
                write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
             end if
 
-            if (loopcnt==100000) then
+            if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
                write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
                write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
             end if
@@ -1221,7 +1201,7 @@ module rtz_cooling_module
                end if
             end do
 
-            if (loopcnt==100000) then
+            if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
                write(*,*) 'nCO_new:', nCO_new
                write(*,*) 'nCO    :', nCO(icell)
                write(*,*) 'xion(6,1:elements(6)%n_ions,icell):', xion(6,1:elements(6)%n_ions,icell)
@@ -1232,6 +1212,7 @@ module rtz_cooling_module
                write(*,*) 'n_CII   :', n_CII
                write(*,*) 'nCII_new:', nCII_new
                write(*,*) 'delta_CO:', delta_CO
+               write(*,*) 'loopCodes:',loopCodes
             end if
 
             ! Check for convergence
@@ -1600,9 +1581,10 @@ module rtz_cooling_module
       dt_rec = min(dt_rec,2.*ddt(icell))
       dt_rec = min(dt_rec,rtz_max_cool_timestep)
       ! Don't let timestep go above 100 years in very dense gas!!!
-      if (nH(icell).ge.8.d4) then 
-         dt_rec = min(dt_rec,100.d0 * yr2sec * 1.d5 / nH(icell))
-      end if
+      ! if (nH(icell).ge.8.d4) then 
+      !    dt_rec = min(dt_rec,100.d0 * yr2sec * 1.d5 / nH(icell))
+      ! end if
+      dt_rec = min(dt_rec,10.d0**(-0.57142857 * log10(nH(icell)) + 10.85714286))
       dt_ok = .true.
       code=0
 
@@ -1788,7 +1770,8 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
    use dust_commons, only: sigca_dust,sigcs_dust,sigcr_dust,&
                            sigca_pah,sigcs_pah,sigcr_pah,&
                            group_csa_dust, group_css_dust, group_csr_dust, &
-                           group_csa_pah, group_css_pah, group_csr_pah
+                           group_csa_pah, group_css_pah, group_csr_pah, &
+                           dust
 #endif
    implicit none
 #ifdef RT

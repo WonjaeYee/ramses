@@ -104,10 +104,11 @@ module dust_surface_chemistry
         recombination_efficiency = a1 * a2
     end function recombination_efficiency
 
-    function grain_h2_formation_rate(nHI,Tgas,rho_dust,T_dust)
+    function grain_h2_formation_rate(nHI,nH,Tgas,rho_dust,T_dust)
         ! H2 formation rate on dust grains following the formalism of
         ! Cazaux & Spaans (2004) and Cazaux & Tielens (2002).
         ! nHI --> neutral hydrogen density [cm-3]
+        ! nH --> total hydrogen density [cm-3]
         ! Tgas --> gas temperature [K]
         ! rho_dust --> dust mass density for each dust bin [g/cm3]
         ! T_dust --> dust temperature for each dust bin [K]
@@ -115,7 +116,7 @@ module dust_surface_chemistry
         implicit none
 
         ! ---- Input parameters ----
-        real(dp) :: nHI,Tgas
+        real(dp) :: nHI,nH,Tgas
         real(dp),dimension(1:ndust) :: rho_dust,T_dust
 
         ! ---- Local variables ----
@@ -134,11 +135,11 @@ module dust_surface_chemistry
         
         ! Add the contribution from each dust grain
         do j = 1, ndust
-            sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * twopi * (dustbins_props(j)%asize_cm)**2D0
-            R_H2 = sdust * recombination_efficiency(Tgas,T_dust(j),vH,F,dustbins_props(j)%interact_group)
-            grain_h2_formation_rate = grain_h2_formation_rate + R_H2 * h2_sticking_coef(Tgas,T_dust(j))
+            sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * twopi * (dustbins_props(j)%asize_cm)**2D0 ! in cm-1
+            R_H2 = sdust * recombination_efficiency(Tgas,T_dust(j),vH,F,dustbins_props(j)%interact_group) ! in cm-1
+            grain_h2_formation_rate = grain_h2_formation_rate + R_H2 * h2_sticking_coef(Tgas,T_dust(j)) ! in cm-1
         end do
-        grain_h2_formation_rate = 5D-1 * vH * grain_h2_formation_rate ! in cm3*s-1
+        grain_h2_formation_rate = 5D-1 * vH / nH * grain_h2_formation_rate ! in cm3*s-1
     end function grain_h2_formation_rate
 
     subroutine compute_dehydrogenated_fraction(G0,nH,f_dh)

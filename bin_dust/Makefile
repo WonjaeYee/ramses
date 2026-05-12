@@ -49,7 +49,7 @@ ATON = 0
 # Number of photon groups for RT
 NGROUPS = 8
 # Number of passive scalars
-NPSCAL = 1
+NPSCAL = 0
 # Light MPI communicator structure (for > 10k MPI processes)
 LIGHT_MPI_COMM = 0
 
@@ -164,8 +164,8 @@ endif
 #############################################################################
 # Fortran compiler options and directives
 
-FFLAGS = -cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
-F90 = $(MPIF90) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+FFLAGS = -cpp -O0 -free -fallow-argument-mismatch $(DEFINES)  -g -fbacktrace #-cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+F90 = $(MPIF90)
 FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 
 # temporal use to traceback NaN errors
@@ -364,11 +364,11 @@ ATON_OBJ = observe.o init_radiation.o rad_init.o rad_boundary.o rad_stars.o \
            rad_backup.o ../aton/atonlib/libaton.a
 #############################################################################
 ramses:	$(MODOBJ) $(AMRLIB) ramses.o
-	$(F90) $(MODOBJ) $(AMRLIB) ramses.o -o $(EXEC)$(NDIM)d $(LIBS)
+	$(F90) $(FFLAGS) $(MODOBJ) $(AMRLIB) ramses.o -o $(EXEC)$(NDIM)d $(LIBS)
 	rm write_makefile.f90
 	rm write_patch.f90
 ramses_aton: $(MODOBJ) $(ATON_MODOBJ) $(AMRLIB) $(ATON_OBJ) ramses.o
-	$(F90) $(MODOBJ) $(ATON_MODOBJ) $(AMRLIB) $(ATON_OBJ) ramses.o \
+	$(F90) $(FFLAGS) $(MODOBJ) $(ATON_MODOBJ) $(AMRLIB) $(ATON_OBJ) ramses.o \
 		-o $(EXEC)$(NDIM)d $(LIBS) $(LIBCUDA)
 	rm write_makefile.f90
 	rm write_patch.f90

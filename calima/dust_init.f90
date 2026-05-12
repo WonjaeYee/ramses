@@ -31,7 +31,7 @@ module dust_init
             write(*,*)'dust chemical group ',ii,' has ',dustbins_per_chemtype(ii),' dust bins',' starting with dust bin ',istart_chemtype(ii)
             write(*,*)'composition: '
             do jj = 1, dustbins_props(istart_chemtype(ii))%nelements
-                write(composition_string,'(A,I2,A,F6.3)') '   element ',dustbins_props(istart_chemtype(ii))%el_names(jj),' (',dustbins_props(istart_chemtype(ii))%el_index(jj),') : ',dustbins_props(istart_chemtype(ii))%stoichiometry(jj)
+                write(composition_string,'(A,A,A,I2,A,F6.3)') '   element ',dustbins_props(istart_chemtype(ii))%el_names(jj),' (',dustbins_props(istart_chemtype(ii))%el_index(jj),') : ',dustbins_props(istart_chemtype(ii))%stoichiometry(jj)
                 write(*,'(A)') trim(composition_string)
             end do
             write(*,*)'sizes (µm) and densities (g/cm^3): '
@@ -75,21 +75,19 @@ module dust_init
 
         check_params_dust = .true.
 #if NDUST!=4
-        if (dust) then
-            if (myid==1)write(*,*)'ERROR: This only works for NDUST==4 :('
-            check_params_dust = .false.
-        end if
+        if (myid==1)write(*,*)'ERROR: This only works for NDUST==4 :('
+        check_params_dust = .false.
 #endif
         !-------------------------------------------------
         ! Check we have metals ON for dust
         !-------------------------------------------------
-        if(dust.and.(.not. metal))then
+        if(.not. metal)then
             if(myid==1)write(*,*)'Error: dust requires metal=.true.'
             check_params_dust = .false.
         end if
 #ifdef RTZ 
         metals_for_dust=(N_OXYGEN_IONS>0).and.(N_MAGNESIUM_IONS>0).and.(N_CARBON_IONS>0).and.(N_IRON_IONS>0).and.(N_SILICON_IONS>0)
-        if (dust .and. (.not. metals_for_dust)) then
+        if (.not. metals_for_dust) then
             write(*,*) "ERROR: you are missing metals required to track dust composition"
             write(*,*) "oxygen_ions,magnesium_ions,carbon_ions,iron_ions,silicon_ions"
             write(*,*) N_OXYGEN_IONS,N_MAGNESIUM_IONS,N_CARBON_IONS,N_IRON_IONS,N_SILICON_IONS
@@ -97,33 +95,13 @@ module dust_init
         end if
 #endif
         !-------------------------------------------------
-        ! Check variables for dust are ok for PAHs
+        ! Check variables for PAHs are ok
         !-------------------------------------------------
-        if(dust_pahs.and.(.not.dust)) then
-            if(myid==1)write(*,*)'Error: PAHs requires dust to be activated'
+        fpah_total = sum(fpah_inwind)
+        if (fpah_total.ne.1d0.and.pah_AGBwinds) then
+            if(myid==1)write(*,*)'Error: fpah_inwind needs to add up to 1'
             check_params_dust=.false.
         end if
-#if NPAH==0 
-        if(dust_pahs) then
-            if(myid==1)write(*,*)'Error: PAHs requires NPAH!=0'
-            check_params_dust=.false.
-        end if
-#endif
-#ifndef NPAH
-        if(dust_pahs) then
-            if(myid==1)write(*,*)'Error: PAHs requires NPAH to be defined'
-            check_params_dust=.false.
-        end if
-#endif
-#if NPAH>0
-        if (dust_pahs) then
-            fpah_total = sum(fpah_inwind)
-            if (fpah_total.ne.1d0) then
-                if(myid==1)write(*,*)'Error: fpah_inwind needs to add up to 1'
-                check_params_dust=.false.
-            end if
-        end if
-#endif
 
         if (dust_turbulent_model.and.dust_shattering) then
             if (trim(shattering_model).ne.'subgrid') then
@@ -309,6 +287,122 @@ module dust_init
         end if
     end subroutine init_dust_depletion
 
+    subroutine init_dust_depletion_tests(nElement,rho_dust,rho_pah)
+        ! This routine is for setting the dust and PAH abundances
+        ! for the equilibrium test runs in rtz_cooling_module.f90.
+        ! nElement <--> element number densities [cm^-3]
+        ! rho_dust <--> dust mass densities [g/cm^3]
+        ! rho_pah <--> PAH mass densities [g/cm^3]
+        implicit none
+
+        ! ---- Input/Output ----
+        real(dp),dimension(1:n_elements), intent(inout) :: nElement
+        real(dp),dimension(1:ndust), intent(inout) :: rho_dust
+        real(dp),dimension(1:npah), intent(inout) :: rho_pah
+
+        ! ---- Local variables ----
+        integer :: ii,ii1,ii2,jj,kk,ilim
+        real(dp) :: DTM_factor
+        real(dp) :: dustC,dustPAH,dustMass
+        real(dp) :: total_dust_pah, total_metals, dust_fraction
+        real(dp),dimension(:),allocatable :: M_el
+
+        DTM_factor = DTMinit / DTM_solar
+
+        do ii = 1, ndchemtype
+            ii1 = istart_chemtype(ii)
+            if (dustbins_props(ii1)%interact_pah .and. npah>0) then
+                ! In the case we follow PAHs and carbonaceous grains
+                kk = dustbins_props(ii1)%el_index(1)
+                dustC = dustbins_props(ii1)%el_atomic_masses_g(1) * &
+                        nElement(kk) * fDust_depletions(6) * DTM_factor
+                if (dust_pahs .and. (fpah_ini.eq.-1d0)) then
+                    dustPAH = fCDust_inPAH * dustC
+                elseif (dust_pahs) then
+                    dustPAH = min(max(fpah_ini,0d0),1.d0) * dustC
+                end if
+                ii2 = ii1 + dustbins_per_chemtype(ii) - 1
+                do jj = ii1, ii2
+                    rho_dust(jj) = fdustmass_ini(jj) * dustC
+                end do
+                if (dust_pahs) then
+                    do jj = 1, npah
+                        rho_pah(jj) = fpahmass_ini(jj) * dustPAH
+                    end do
+                end if
+                ! Deplete carbon
+                nElement(kk) = max(nElement(kk) - (dustC + dustPAH) / &
+                                dustbins_props(ii1)%el_atomic_masses_g(1),0d0)
+            else
+                ! Now for a general dust chemistry in which we look for the limiting element
+                allocate(M_el(1:dustbins_props(ii1)%nelements))
+                do jj = 1, dustbins_props(ii1)%nelements
+                    kk = dustbins_props(ii1)%el_index(jj)
+                    M_el(jj) = fDust_depletions(dustbins_props(ii1)%el_atomic_number(jj)) &
+                                * nElement(kk) * dustbins_props(ii1)%el_atomic_masses_g(jj)
+                end do
+                call cmp_lim_elem(ii1,dustbins_props(ii1)%nelements,M_el,ilim)
+                dustMass = DTM_factor * M_el(ilim)
+                ii2 = ii1 + dustbins_per_chemtype(ii) - 1
+                do jj = ii1, ii2
+                    rho_dust(jj) = fdustmass_ini(jj) * dustMass
+                end do
+                ! Deplete the elements
+                do jj = 1, dustbins_props(ii1)%nelements
+                    kk = dustbins_props(ii1)%el_index(jj)
+                    nElement(kk) = max(nElement(kk) - (dustMass * dustbins_props(ii1)%el_mfractions(jj))&
+                                    / dustbins_props(ii1)%el_atomic_masses_g(jj),0d0)
+                end do
+                deallocate(M_el)
+            end if
+        end do
+
+        ! Safety check: depletion setup must not produce negative densities.
+        if (any(nElement(1:n_elements) < 0d0)) then
+            write(*,*) 'NEGATIVE METAL DENSITY IN INIT DUST DEPLETION TESTS!!'
+            write(*,*) 'nElement:', nElement(1:n_elements)
+            stop
+        end if
+        if (any(rho_dust(1:ndust) < 0d0)) then
+            write(*,*) 'NEGATIVE DUST DENSITY IN INIT DUST DEPLETION TESTS!!'
+            write(*,*) 'rho_dust:', rho_dust(1:ndust)
+            stop
+        end if
+        if (npah > 0) then
+            if (any(rho_pah(1:npah) < 0d0)) then
+                write(*,*) 'NEGATIVE PAH DENSITY IN INIT DUST DEPLETION TESTS!!'
+                write(*,*) 'rho_pah:', rho_pah(1:npah)
+                stop
+            end if
+        end if
+
+        ! Verify that dust+PAH fractions are consistent with DTMinit
+        if (DTMinit > 0d0) then
+            total_dust_pah = sum(rho_dust(1:ndust))
+            if (npah > 0) total_dust_pah = total_dust_pah + sum(rho_pah(1:npah))
+            ! Convert element number densities [cm^-3] to mass density [g/cm^3]
+            total_metals = 0d0
+            do jj = 1, n_elements
+#ifdef RTZ
+                total_metals = total_metals + nElement(jj) * elements(jj)%atomic_mass * amu2g
+#else
+                total_metals = total_metals + nElement(jj) * el_atomic_masses_amu(jj) * amu2g
+#endif
+            end do
+            if (total_metals > 0d0) then
+                ! The dust/metal ratio should be DTM_factor (which is DTMinit/DTM_solar scaled by depletion factors)
+                dust_fraction = total_dust_pah / total_metals
+                if (dust_fraction > DTMinit) then
+                    write(*,*) 'DUST DEPLETION TEST CHECK:'
+                    write(*,*) '  DTMinit=', DTMinit, ' DTM_solar=', DTM_solar, ' DTM_factor=', DTM_factor
+                    write(*,*) '  total_dust_pah=', total_dust_pah, ' g/cm^3'
+                    write(*,*) '  total_metals=', total_metals, 'g/cm^3'
+                    write(*,*) '  dust_fraction=', dust_fraction, ' (dust mass / metal number density)'
+                end if
+            end if
+        end if
+    end subroutine init_dust_depletion_tests
+
     function GD_RR14(Omass_frac,Hmass_frac)
         ! This function returns an estimate of the gas to dust ration
         ! (G/D) based on a broken power-law fit by Remy-Ruyer et al. (2014)
@@ -347,20 +441,46 @@ module dust_init
         integer :: idust_pah_interact
         real(dp) :: mf_max,mf_min,prefactor,chi_total,frac_tot,mcoag
         real(dp) :: R
+        integer :: iend_chemtype
+
+        ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
+        if (sum(dustbins_per_chemtype) /= ndust) then
+            if (myid == 1) then
+                write(*,*) 'ERROR: sum(dustbins_per_chemtype)=', sum(dustbins_per_chemtype), &
+                    & ' but ndust=', ndust
+            end if
+            call clean_stop()
+        end if
+        if (any(dustbins_per_chemtype <= 0)) then
+            if (myid == 1) then
+                write(*,*) 'ERROR: all dustbins_per_chemtype entries must be > 0'
+            end if
+            call clean_stop()
+        end if
+        istart_chemtype(1) = 1
+        do ii = 2, ndchemtype
+            istart_chemtype(ii) = istart_chemtype(ii-1) + dustbins_per_chemtype(ii-1)
+        end do
 
         ! 1. Loop over dust bins and set up their properties based on the namelist parameters
         idust_pah_interact = 0
+        ichemtype = 1
+        iend_chemtype = dustbins_per_chemtype(1)
         do ii = 1, ndust
+            do while (ii > iend_chemtype .and. ichemtype < ndchemtype)
+                ichemtype = ichemtype + 1
+                iend_chemtype = iend_chemtype + dustbins_per_chemtype(ichemtype)
+            end do
+
             ! 1.1 Set the dust variable ordering
             dustbins_props(ii)%dust_index = ii
             dustbins_props(ii)%u_hydro_idx = idust + ii - 1
-            ichemtype = dust_interact_group(ii)
 
             ! 1.2 Get the number of elements followed for the dust bin
             n_el = 0
             check_for_pahs = .false.
             do jj = 1, n_elements
-                if (dust_composition(ii,jj) > 0d0) then 
+                if (dust_composition(ichemtype,jj) > 0d0) then
                     n_el = n_el + 1
                     if (jj == 6) check_for_pahs = .true. ! Check if the grain follows carbon
                 end if
@@ -368,6 +488,15 @@ module dust_init
             dustbins_props(ii)%nelements = n_el
 
             ! 1.3 Allocate and set the composition arrays
+            if (allocated(dustbins_props(ii)%el_index)) deallocate(dustbins_props(ii)%el_index)
+            if (allocated(dustbins_props(ii)%stoichiometry)) deallocate(dustbins_props(ii)%stoichiometry)
+            if (allocated(dustbins_props(ii)%el_mfractions)) deallocate(dustbins_props(ii)%el_mfractions)
+            if (allocated(dustbins_props(ii)%el_atomic_masses_amu)) deallocate(dustbins_props(ii)%el_atomic_masses_amu)
+            if (allocated(dustbins_props(ii)%el_atomic_masses_g)) deallocate(dustbins_props(ii)%el_atomic_masses_g)
+            if (allocated(dustbins_props(ii)%el_conv_factors)) deallocate(dustbins_props(ii)%el_conv_factors)
+            if (allocated(dustbins_props(ii)%el_nions)) deallocate(dustbins_props(ii)%el_nions)
+            if (allocated(dustbins_props(ii)%el_names)) deallocate(dustbins_props(ii)%el_names)
+            if (allocated(dustbins_props(ii)%el_atomic_number)) deallocate(dustbins_props(ii)%el_atomic_number)
             allocate(dustbins_props(ii)%el_index(1:n_el), &
                      dustbins_props(ii)%stoichiometry(1:n_el), &
                      dustbins_props(ii)%el_mfractions(1:n_el), &
@@ -379,9 +508,9 @@ module dust_init
                      dustbins_props(ii)%el_atomic_number(1:n_el))
             kk = 0
             do jj = 1, n_elements
-                if (dust_composition(ii,jj) > 0d0) then
+                if (dust_composition(ichemtype,jj) > 0d0) then
                     kk = kk + 1
-                    dustbins_props(ii)%stoichiometry(kk) = dust_composition(ii,jj)
+                    dustbins_props(ii)%stoichiometry(kk) = dust_composition(ichemtype,jj)
 #ifdef RTZ
                     dustbins_props(ii)%el_atomic_number(kk) = elements(jj)%atomic_number
                     dustbins_props(ii)%el_index(kk) = jj
@@ -390,11 +519,11 @@ module dust_init
                             write(*,*)'ERROR: the element ', elements(jj)%symbol, &
                                 & ' has an atomic mass of ', elements(jj)%atomic_mass, &
                                 & ' but is needed for dust bin ', ii, &
-                                & ' with composition ', dust_composition(ii,jj)
+                                & ' with composition ', dust_composition(ichemtype,jj)
                         end if
                         stop
                     end if
-                    dustbins_props(ii)%el_mfractions(kk) = elements(jj)%atomic_mass * dust_composition(ii,jj)
+                    dustbins_props(ii)%el_mfractions(kk) = elements(jj)%atomic_mass * dust_composition(ichemtype,jj)
                     dustbins_props(ii)%el_atomic_masses_amu(kk) = elements(jj)%atomic_mass
                     dustbins_props(ii)%el_atomic_masses_g(kk) = elements(jj)%atomic_mass * amu2g
                     dustbins_props(ii)%el_nions(kk) = elements(jj)%n_ions
@@ -402,7 +531,7 @@ module dust_init
 #else
                     dustbins_props(ii)%el_atomic_number(kk) = real(jj,kind=dp)
                     dustbins_props(ii)%el_index(kk) = jj
-                    dustbins_props(ii)%el_mfractions(kk) = el_atomic_masses_amu(jj) * dust_composition(ii,jj)
+                    dustbins_props(ii)%el_mfractions(kk) = el_atomic_masses_amu(jj) * dust_composition(ichemtype,jj)
                     dustbins_props(ii)%el_atomic_masses_amu(kk) = el_atomic_masses_amu(jj)
                     dustbins_props(ii)%el_atomic_masses_g(kk) = el_atomic_masses_amu(jj) * amu2g
                     dustbins_props(ii)%el_names(kk) = el_names(jj)
@@ -416,14 +545,6 @@ module dust_init
 
             ! 1.4 Set the dust interaction properties
             dustbins_props(ii)%interact_group = ichemtype
-            if (ichemtype==0 .or. ichemtype > ndchemtype) then
-                if (myid == 1) then
-                    write(*,*) 'Error: dust_interact_group for dust bin', ii, 'is not set correctly.'
-                end if
-                stop
-            end if
-            if (istart_chemtype(ichemtype)==0) istart_chemtype(ichemtype) = ii
-            dustbins_per_chemtype(ichemtype) = dustbins_per_chemtype(ichemtype) + 1
             dustbins_props(ii)%interact_pah = check_for_pahs .and. (n_el.eq.1) ! If it has only one element and is carbonaceous
             if (dustbins_props(ii)%interact_pah .and. idust_pah_interact == 0) idust_pah_interact = ii
             ! 1.5 Set the dust grain properties and distribution limits
@@ -438,7 +559,7 @@ module dust_init
             dustbins_props(ii)%Youngs_modulus = Youngs_modulus(ichemtype)
             dustbins_props(ii)%Poisson_ratio = Poisson_ratio(ichemtype)
             dustbins_props(ii)%shear_modulus = Youngs_modulus(ichemtype) / (2d0 * (1d0 + Poisson_ratio(ichemtype)))
-            dustbins_props(ii)%catastrophic_spec_energy = shear_modulus(ichemtype) / (2D0 * sgrain(ii))
+            dustbins_props(ii)%catastrophic_spec_energy = dustbins_props(ii)%shear_modulus / (2D0 * sgrain(ii))
             dustbins_props(ii)%tensile_strength = tensile_strength(ichemtype)
             dustbins_props(ii)%surf_energy = surf_energy(ichemtype)
             dustbins_props(ii)%work_function = work_function(ichemtype)
@@ -447,6 +568,7 @@ module dust_init
             dustbins_props(ii)%separate_refractive_index = separate_refractive_index(ichemtype)
             dustbins_props(ii)%Zmin = most_negative_allowed_charge(dustbins_props(ii)%asize_cm,&
                                                             &separate_refractive_index(ichemtype))
+            if (allocated(dustbins_props(ii)%phi_prefact)) deallocate(dustbins_props(ii)%phi_prefact)
             allocate(dustbins_props(ii)%phi_prefact(-1:n_elements))
             dustbins_props(ii)%phi_prefact(:) = 1d0
             do jj = -1, n_elements
@@ -483,15 +605,15 @@ module dust_init
                 pahbins_props(ii)%nd_bins = dustbins_per_chemtype(dustbins_props(idust_pah_interact)%interact_group)
 
                 ! 2.2 Set the PAH properties and distribution limits
-                pahbins_props(ii)%apah = pah_size(ii)
-                pahbins_props(ii)%apah_cm = pah_size(ii)*1d-4
-                pahbins_props(ii)%spah = spah(ii)
-                pahbins_props(ii)%mpah = mpah(ii)
-                pahbins_props(ii)%amin = pah_minsize(ii)
-                pahbins_props(ii)%amax = pah_maxsize(ii)
-                pahbins_props(ii)%mpah_min = pah_minmass(ii)
-                pahbins_props(ii)%mpah_max = pah_maxmass(ii)
                 pahbins_props(ii)%nc = pah_nc(ii)
+                pahbins_props(ii)%nc_min = pah_nc_min(ii)
+                pahbins_props(ii)%nc_max = pah_nc_max(ii)
+                pahbins_props(ii)%apah_cm = Nc_to_a(pahbins_props(ii)%nc)
+                pahbins_props(ii)%apah = pahbins_props(ii)%apah_cm * 1d4
+                pahbins_props(ii)%spah = spah(ii)
+                pahbins_props(ii)%mpah = Nc_to_mass(pahbins_props(ii)%nc)
+                pahbins_props(ii)%mpah_min = Nc_to_mass(pahbins_props(ii)%nc_min)
+                pahbins_props(ii)%mpah_max = Nc_to_mass(pahbins_props(ii)%nc_max)
 
                 ! 2.3 Set the PAH injection and destruction parameters
                 pahbins_props(ii)%AGB_cond_eff = fpah_inwind(ii)
@@ -500,6 +622,7 @@ module dust_init
                 ! 2.4 Set the PAH charges
                 ncharge_pah_max = max(ncharge_pah_max, pah_ncharge_states(ii))
                 pahbins_props(ii)%ncharge_states = pah_ncharge_states(ii)
+                if (allocated(pahbins_props(ii)%charge_states)) deallocate(pahbins_props(ii)%charge_states)
                 allocate(pahbins_props(ii)%charge_states(1:pah_ncharge_states(ii)))
                 ! Charge states start from -1, then 0, then +1, etc.
                 pahbins_props(ii)%charge_states = [(jj-2, jj=1,int(pahbins_props(ii)%ncharge_states))]
@@ -520,23 +643,10 @@ module dust_init
         ! Allocate the reusable dust chemistry workspace once per rank.
         call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)
 
-        ! Allocate the sigca_dust, etc.
-        if (ndust>0) then
-            allocate(group_csa_dust(1:nGroups,1:ndust),sigca_dust(1:nGroups,1:ndust))
-            allocate(group_css_dust(1:nGroups,1:ndust),sigcs_dust(1:nGroups,1:ndust))
-            allocate(group_csr_dust(1:nGroups,1:ndust),sigcr_dust(1:nGroups,1:ndust))
-            allocate(att_len_dust(1:nGroups,1:ndust))
-        end if
-        if (npah>0) then
-            allocate(group_csa_pah(1:nGroups,1:npah),sigca_pah(1:nGroups,1:npah))
-            allocate(group_css_pah(1:nGroups,1:npah),sigcs_pah(1:nGroups,1:npah))
-            allocate(group_csr_pah(1:nGroups,1:npah),sigcr_pah(1:nGroups,1:npah))
-        end if
-
         ! 3. Add the RAT-D parameters
         if (dust_ratd) then
             do ii = 1, ndust
-                ichemtype = dust_interact_group(ii)
+                ichemtype = dustbins_props(ii)%interact_group
                 ! Maximum rotational rate for centrifugal disruption [rad/s]
                 dustbins_props(ii)%w_disr = 2d0 / (asize(ii) * 1d-4) * sqrt(tensile_strength(ichemtype)/sgrain(ii))
 
@@ -554,21 +664,23 @@ module dust_init
                 prefactor = 1d0 / (mf_max**slope_frag_func - mf_min**slope_frag_func)
                 nd_ctype = dustbins_per_chemtype(dustbins_props(ii)%interact_group)
                 if (dustbins_props(ii)%interact_pah .and. npah>0) then
+                    if (allocated(dustbins_props(ii)%chi_frag_ratd)) deallocate(dustbins_props(ii)%chi_frag_ratd)
                     allocate(dustbins_props(ii)%chi_frag_ratd(0:npah+nd_ctype))
-                    if (pah_minmass(1)<mf_min) then
+                    if (pahbins_props(ii)%mpah_min<mf_min) then
                         dustbins_props(ii)%chi_frag_ratd(0) = 0d0
                     else
-                        dustbins_props(ii)%chi_frag_ratd(0) = prefactor * (pah_minmass(1)**slope_frag_func - mf_min**slope_frag_func)
+                        dustbins_props(ii)%chi_frag_ratd(0) = prefactor * (pahbins_props(ii)%mpah_min**slope_frag_func - mf_min**slope_frag_func)
                     end if
                     ! Loop over PAH bins
                     do jj = 1, npah
-                        if ((mf_min.ge.pah_maxmass(jj)).or.(mf_max<pah_minmass(jj))) then
+                        if ((mf_min.ge.pahbins_props(jj)%mpah_max).or.(mf_max<pahbins_props(jj)%mpah_min)) then
                             dustbins_props(ii)%chi_frag_ratd(jj) = 0d0
                         else
-                            dustbins_props(ii)%chi_frag_ratd(jj) = prefactor * (min(pah_maxmass(jj),mf_max)**slope_frag_func-max(pah_minmass(jj),mf_min)**slope_frag_func)
+                            dustbins_props(ii)%chi_frag_ratd(jj) = prefactor * (min(pahbins_props(jj)%mpah_max,mf_max)**slope_frag_func-max(pahbins_props(jj)%mpah_min,mf_min)**slope_frag_func)
                         end if
                     end do
                 else
+                    if (allocated(dustbins_props(ii)%chi_frag_ratd)) deallocate(dustbins_props(ii)%chi_frag_ratd)
                     allocate(dustbins_props(ii)%chi_frag_ratd(0:nd_ctype))
                     if (dustbins_props(ii)%mgrain_min<mf_min) then
                         dustbins_props(ii)%chi_frag_ratd(0) = 0d0
@@ -617,9 +729,11 @@ module dust_init
 
         ! 5. Determine to what dust bins the individual grain coagulation events should transfer mass to
         do ii = 1, ndust
-            ichemtype = dust_interact_group(ii)
+            ichemtype = dustbins_props(ii)%interact_group
             nd_ctype = dustbins_per_chemtype(ichemtype)
             ! 5.1 Allocate the array
+            if (allocated(dustbins_props(ii)%idend_coag)) deallocate(dustbins_props(ii)%idend_coag)
+            if (allocated(dustbins_props(ii)%vthresh_coag)) deallocate(dustbins_props(ii)%vthresh_coag)
             allocate(dustbins_props(ii)%idend_coag(1:nd_ctype))
             allocate(dustbins_props(ii)%vthresh_coag(1:nd_ctype))
             id_start = ii - istart_chemtype(ichemtype) + 1
@@ -696,10 +810,13 @@ module dust_init
         ! 10. Read the dust charging tables
         call init_dust_charging_tables
 
-        ! 10b. Cache the BH80 collisional heating factors that only depend on the dust bins
+        ! 11. Read the dust photoelectric heating tables
+        call init_dust_peh_tables
+
+        ! 12. Cache the BH80 collisional heating factors that only depend on the dust bins
         call init_dust_coll_heating_BH80_cache
 
-        ! 11. Print the CALIMA dust properties for the user
+        ! 13. Print the CALIMA dust properties for the user
         if (myid == 1) then
             call print_dust_parameters
         end if
@@ -743,7 +860,7 @@ module dust_init
         ! 1. Check first that all files are in the expected place
         ok_all = .true.
         do ii = 1, ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -753,7 +870,7 @@ module dust_init
 #endif
                 write(Zi_str, '(I0)') Zi
                 write(collisional_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'collisional_', trim(dustlabel), '_Z_', trim(Zi_str)
+                    'cooling_', trim(dustlabel), '_Z_', trim(Zi_str)
                 inquire(file=collisional_filename, exist=ok)
                 ok_all = ok_all .and. ok
             end do
@@ -771,7 +888,7 @@ module dust_init
 
         ! 2. Read the files for each dust bin and element
         do ii = 1, ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -781,7 +898,7 @@ module dust_init
 #endif
                 write(Zi_str, '(I0)') Zi
                 write(collisional_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'collisional_', trim(dustlabel), '_Z_', trim(Zi_str)
+                    'cooling_', trim(dustlabel), '_Z_', trim(Zi_str)
 
                 open(25, file=trim(collisional_filename), status='old', action='read', iostat=istat)
                 if (istat /= 0) then
@@ -843,6 +960,83 @@ module dust_init
 
                 deallocate(phi_grid, T_grid)
             end do
+
+            ! Ensure electron collisional table (index 0) is present for this dust bin.
+            ! Try to read an explicit electron table file named with Z_0; if not found,
+            ! fall back to copying the first initialized element table (usually H).
+            write(Zi_str, '(I0)') 0
+            write(collisional_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
+                'cooling_', trim(dustlabel), '_Z_', trim(Zi_str)
+            inquire(file=trim(collisional_filename), exist=ok)
+            if (.not. ok) then
+                write(*,*) 'ERROR: electron collisional table not found for dust bin:', trim(dustlabel)
+                write(*,*) '  Expected file:', trim(collisional_filename)
+                stop 1
+            end if
+
+            open(25, file=trim(collisional_filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*,*) 'ERROR: could not open electron collisional file for', trim(dustlabel)
+                write(*,*) '  File:', trim(collisional_filename), ' iostat=', istat
+                stop 1
+            end if
+
+            read(25, *, iostat=istat) nT, nphi
+            if (istat /= 0) then
+                write(*,*) 'ERROR: failed reading header (nT,nphi) from', trim(collisional_filename), ' iostat=', istat
+                close(25)
+                stop 1
+            end if
+
+            if (allocated(dustbins_props(ii)%collisional_tab(0)%npts)) then
+                deallocate(dustbins_props(ii)%collisional_tab(0)%npts)
+            end if
+            allocate(dustbins_props(ii)%collisional_tab(0)%npts(1:2))
+            dustbins_props(ii)%collisional_tab(0)%ndim = 2
+            dustbins_props(ii)%collisional_tab(0)%npts(1) = nT
+            dustbins_props(ii)%collisional_tab(0)%npts(2) = nphi
+            if (allocated(dustbins_props(ii)%collisional_tab(0)%ipos_zero)) then
+                deallocate(dustbins_props(ii)%collisional_tab(0)%ipos_zero)
+            end if
+            allocate(dustbins_props(ii)%collisional_tab(0)%ipos_zero(1:2))
+            dustbins_props(ii)%collisional_tab(0)%ipos_zero(:) = 1
+            nmax = max(nT, nphi)
+            if (allocated(dustbins_props(ii)%collisional_tab(0)%tab1d)) then
+                deallocate(dustbins_props(ii)%collisional_tab(0)%tab1d)
+            end if
+            allocate(dustbins_props(ii)%collisional_tab(0)%tab1d(1:nmax, 1:2))
+            dustbins_props(ii)%collisional_tab(0)%tab1d = 0d0
+            if (allocated(dustbins_props(ii)%collisional_tab(0)%tab2d)) then
+                deallocate(dustbins_props(ii)%collisional_tab(0)%tab2d)
+            end if
+            allocate(dustbins_props(ii)%collisional_tab(0)%tab2d(1:nT, 1:nphi, 1:1))
+            allocate(phi_grid(1:nphi)); allocate(T_grid(1:nT))
+
+            read(25, *, iostat=istat) phi_grid(1:nphi)
+            if (istat /= 0) then
+                write(*,*) 'ERROR: failed reading phi grid from', trim(collisional_filename), ' iostat=', istat
+                close(25)
+                stop 1
+            end if
+
+            dustbins_props(ii)%collisional_tab(0)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
+            iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
+            dustbins_props(ii)%collisional_tab(0)%ipos_zero(2) = iphi0
+
+            do j = 1, nT
+                read(25, *, iostat=istat) T_grid(j), dustbins_props(ii)%collisional_tab(0)%tab2d(j, 1:nphi, 1)
+                if (istat /= 0) then
+                    write(*,*) 'ERROR: failed reading temperature/row', j, 'from', trim(collisional_filename), ' iostat=', istat
+                    close(25)
+                    stop 1
+                end if
+            end do
+
+            dustbins_props(ii)%collisional_tab(0)%tab1d(1:nT, 1) = T_grid(1:nT)
+            dustbins_props(ii)%collisional_tab(0)%initialised = .true.
+            close(25)
+            if (allocated(phi_grid)) deallocate(phi_grid)
+            if (allocated(T_grid)) deallocate(T_grid)
         end do
 
     end subroutine init_dust_collisional_tables
@@ -871,7 +1065,7 @@ module dust_init
         ! 1. Check first that all files are in the expected place
         ok_all = .true.
         do ii = 1, ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -881,7 +1075,7 @@ module dust_init
 #endif
                 write(Zi_str, '(I0)') Zi
                 write(sputtering_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'thermal_sputtering_', trim(dustlabel), '_Z_', trim(Zi_str)
+                    'sputtering_', trim(dustlabel), '_Z_', trim(Zi_str)
                 inquire(file=sputtering_filename, exist=ok)
                 ok_all = ok_all .and. ok
             end do
@@ -899,7 +1093,7 @@ module dust_init
 
         ! 2. Read the files for each dust bin and element
         do ii = 1, ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -909,7 +1103,7 @@ module dust_init
 #endif
                 write(Zi_str, '(I0)') Zi
                 write(sputtering_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'thermal_sputtering_', trim(dustlabel), '_Z_', trim(Zi_str)
+                    'sputtering_', trim(dustlabel), '_Z_', trim(Zi_str)
 
                 open(25, file=trim(sputtering_filename), status='old', action='read', iostat=istat)
                 if (istat /= 0) then
@@ -985,7 +1179,7 @@ module dust_init
         implicit none
 
         logical :: ok, ok_all
-        integer :: ngamma,nT,nmax,istat,ii,j,k
+        integer :: ngamma,nT,nmax,istat,ii,j,k,n
         character(len=20) :: dustlabel
         character(len=128) :: charge_filename,sigma_filename
         real(dp), allocatable :: gamma_grid(:), T_grid(:)
@@ -993,7 +1187,7 @@ module dust_init
         ! 1. Check first that all files are in the expected place
         ok_all = .true.
         do ii=1,ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
             write(charge_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_Z_vs_T_', trim(dustlabel)
             inquire(file=charge_filename,exist=ok)
             ok_all = ok_all .and. ok
@@ -1015,7 +1209,7 @@ module dust_init
 
         ! 2. Read per-grain charging tables into dustbins_props DustTables
         do ii=1,ndust
-            write(dustlabel, '(A,I3.3)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
             write(charge_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_Z_vs_T_', trim(dustlabel)
             write(sigma_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_sigma_vs_T_', trim(dustlabel)
 
@@ -1030,9 +1224,12 @@ module dust_init
                 call clean_stop
             end if
             
-            ! Skip the first line 
-            read(26,*)
-            read(27,*)
+            ! Skip the 6 first lines of the header
+            do n = 1, 6
+                 read(26,*)
+                 read(27,*)
+            end do
+  
             ! Read the number of gamma and T points
             read(26,*) ngamma,nT
             read(27,*) j,k
@@ -1040,9 +1237,6 @@ module dust_init
                 write(*,*) 'Error: charge table dimensions mismatch for grain ', ii
                 call clean_stop
             end if
-            ! Skip this header line
-            read(26,*)
-            read(27,*)
 
             ! Allocate charging DustTables for this grain
             nmax = max(ngamma,nT)
@@ -1082,10 +1276,6 @@ module dust_init
             end if
             read(27,*,iostat=istat) 
 
-            ! Skip this header line
-            read(26,*)
-            read(27,*)
-
             ! Read and store the gamma grid
             read(26,*,iostat=istat) (gamma_grid(j), j=1,ngamma)
             if (istat /= 0) then
@@ -1093,10 +1283,6 @@ module dust_init
                 call clean_stop
             end if
             read(27,*,iostat=istat)
-
-            ! Skip this header line
-            read(26,*)
-            read(27,*)
 
             ! Read the data
             do j = 1, ngamma
@@ -1128,7 +1314,149 @@ module dust_init
 
     end subroutine init_dust_charging_tables
 
-#if NPAH>0
+    subroutine init_dust_peh_tables
+        ! Initialize per-dust-bin PE heating / recombination tables.
+        ! Each dust bin reads its own files from dust_tables_dir:
+        !   - dust_rates_peh_DustBin_XX.dat
+        !   - dust_rates_rec_DustBin_XX.dat
+        use amr_commons,only:myid
+        implicit none
+
+        logical :: ok_peh, ok_rec, ok_all
+        integer :: ngamma, nT, istat, i, j, k, nmax, n
+        character(len=20) :: dustlabel
+        character(len=128) :: peh_filename, rec_filename
+        real(dp), allocatable :: gamma_grid(:), T_grid(:)
+
+        ok_all = .true.
+        do i = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', i
+            write(peh_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_peh_', trim(dustlabel)//'.dat'
+            write(rec_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_rec_', trim(dustlabel)//'.dat'
+            inquire(file=trim(peh_filename), exist=ok_peh)
+            inquire(file=trim(rec_filename), exist=ok_rec)
+            ok_all = ok_all .and. ok_peh .and. ok_rec
+        end do
+
+        if (.not. ok_all) then
+            if (myid.eq.1) then
+                write(*,*) 'ERROR IN PE HEATING / RECOMBINATION TABLES'
+                write(*,*) 'Missing per-bin PEH/rec grid or rate tables in ', trim(dust_tables_dir)
+                write(*,*) 'Expected names like dust_rates_peh_DustBin_01.dat, and dust_rates_rec_DustBin_01.dat'
+            end if
+            call clean_stop
+        end if
+
+        do i = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', i
+            write(peh_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_peh_', trim(dustlabel)//'.dat'
+            write(rec_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_rec_', trim(dustlabel)//'.dat'
+
+            open(28, file=trim(peh_filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                if (myid.eq.1) write(*,*) 'Error opening file: ', trim(peh_filename)
+                call clean_stop
+            end if
+            open(29, file=trim(rec_filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                if (myid.eq.1) write(*,*) 'Error opening file: ', trim(rec_filename)
+                call clean_stop
+            end if
+
+            ! Skip the 6 header lines of file 28 and 29
+            do n = 1, 6
+                read(28,*)
+                read(29,*)
+            end do
+            read(28,*,iostat=istat) nT, ngamma
+            if (istat /= 0) then
+                if (myid.eq.1) write(*,*) 'Error reading ngamma and nT: ', trim(peh_filename)
+                call clean_stop
+            end if
+            read(29,*,iostat=istat) j,k
+            if (istat /= 0) then
+                if (myid.eq.1) write(*,*) 'Error reading ngamma and nT: ', trim(rec_filename)
+                call clean_stop
+            end if
+            if (j /= ngamma .or. k /= nT) then
+                if (myid.eq.1) write(*,*) 'Error: PEH/rec table dimensions mismatch for grain ', i
+                call clean_stop
+            end if
+            if (allocated(dustbins_props(i)%peh_tab%npts)) deallocate(dustbins_props(i)%peh_tab%npts)
+            allocate(dustbins_props(i)%peh_tab%npts(1:2))
+            dustbins_props(i)%peh_tab%ndim = 2
+            dustbins_props(i)%peh_tab%npts(1) = ngamma
+            dustbins_props(i)%peh_tab%npts(2) = nT
+            if (allocated(dustbins_props(i)%peh_tab%ipos_zero)) deallocate(dustbins_props(i)%peh_tab%ipos_zero)
+            allocate(dustbins_props(i)%peh_tab%ipos_zero(1:2))
+            dustbins_props(i)%peh_tab%ipos_zero(:) = 1
+            nmax = max(ngamma, nT)
+            if (allocated(dustbins_props(i)%peh_tab%tab1d)) deallocate(dustbins_props(i)%peh_tab%tab1d)
+            allocate(dustbins_props(i)%peh_tab%tab1d(1:nmax,1:2))
+            dustbins_props(i)%peh_tab%tab1d = 0d0
+            if (allocated(dustbins_props(i)%peh_tab%tab2d)) deallocate(dustbins_props(i)%peh_tab%tab2d)
+            allocate(dustbins_props(i)%peh_tab%tab2d(1:ngamma,1:nT,1:1))
+
+            if (allocated(dustbins_props(i)%rec_tab%npts)) deallocate(dustbins_props(i)%rec_tab%npts)
+            allocate(dustbins_props(i)%rec_tab%npts(1:2))
+            dustbins_props(i)%rec_tab%ndim = 2
+            dustbins_props(i)%rec_tab%npts(1) = ngamma
+            dustbins_props(i)%rec_tab%npts(2) = nT
+            if (allocated(dustbins_props(i)%rec_tab%ipos_zero)) deallocate(dustbins_props(i)%rec_tab%ipos_zero)
+            allocate(dustbins_props(i)%rec_tab%ipos_zero(1:2))
+            dustbins_props(i)%rec_tab%ipos_zero(:) = 1
+            if (allocated(dustbins_props(i)%rec_tab%tab1d)) deallocate(dustbins_props(i)%rec_tab%tab1d)
+            allocate(dustbins_props(i)%rec_tab%tab1d(1:nmax,1:2))
+            dustbins_props(i)%rec_tab%tab1d = 0d0
+            if (allocated(dustbins_props(i)%rec_tab%tab2d)) deallocate(dustbins_props(i)%rec_tab%tab2d)
+            allocate(dustbins_props(i)%rec_tab%tab2d(1:ngamma,1:nT,1:1))
+
+            if (allocated(gamma_grid)) deallocate(gamma_grid)
+            if (allocated(T_grid)) deallocate(T_grid)
+            allocate(gamma_grid(1:ngamma))
+            allocate(T_grid(1:nT))
+
+            read(28,*,iostat=istat) (T_grid(j), j=1,nT)
+            read(28,*,iostat=istat) (gamma_grid(j), j=1,ngamma)
+            if (istat /= 0) then
+                if (myid.eq.1) write(*,*) 'Error reading gamma grid from file: ', trim(peh_filename)
+                call clean_stop
+            end if
+            read(29,*,iostat=istat) ! Skip the T grid since its the same as in file 28
+            read(29,*,iostat=istat) ! Skip the gamma grid since its the same as in file 28
+            if (istat /= 0) then
+                if (myid.eq.1) write(*,*) 'Error reading T grid from file: ', trim(rec_filename)
+                call clean_stop
+            end if
+
+            dustbins_props(i)%peh_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
+            dustbins_props(i)%peh_tab%tab1d(1:nT,2) = T_grid(1:nT)
+            dustbins_props(i)%rec_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
+            dustbins_props(i)%rec_tab%tab1d(1:nT,2) = T_grid(1:nT)
+
+            do j = 1, ngamma
+                read(28,*,iostat=istat) (dustbins_props(i)%peh_tab%tab2d(j,k,1), k=1,nT)
+                if (istat /= 0) then
+                    if (myid.eq.1) write(*,*) 'Error reading PEH table row ', j, ' from file: ', trim(peh_filename)
+                    call clean_stop
+                end if
+                read(29,*,iostat=istat) (dustbins_props(i)%rec_tab%tab2d(j,k,1), k=1,nT)
+                if (istat /= 0) then
+                    if (myid.eq.1) write(*,*) 'Error reading rec table row ', j, ' from file: ', trim(rec_filename)
+                    call clean_stop
+                end if
+            end do
+
+            close(28)
+            close(29)
+
+            dustbins_props(i)%peh_tab%initialised = .true.
+            dustbins_props(i)%rec_tab%initialised = .true.
+
+            deallocate(gamma_grid, T_grid)
+        end do
+    end subroutine init_dust_peh_tables
+
     subroutine init_pah_sputtering_tables
         ! This subroutine reads at the initialisation of dust parameters
         ! the pre-computed rate constants for thermal sputtering of PAHs
@@ -1162,7 +1490,7 @@ module dust_init
         ! Read data and allocate DustTable structures for each PAH bin and element.
         ! Missing files are ignored; corresponding tables remain initialized=.false.
         do ipahbin = 1, npah
-            write(ipah_str, '(I3.3)') ipahbin
+            write(ipah_str, '(I2.2)') ipahbin
 
             ! Reset all PAH sputtering tables for this PAH bin.
             do iel = 0, n_elements
@@ -1174,7 +1502,7 @@ module dust_init
             Zi = 0
             write(Z_str, '(I0)') Zi
             write(pah_filename, '(A,A,A,A,A,A,A)') trim(dust_tables_dir), &
-                'pah_sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
+                'sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
             inquire(file=trim(pah_filename), exist=file_exists)
 
             if (file_exists) then
@@ -1226,7 +1554,7 @@ module dust_init
 #endif
                 write(Z_str, '(I0)') Zi
                 write(pah_filename, '(A,A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'pah_sputtering_pahbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
+                    'sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
 
                 inquire(file=trim(pah_filename), exist=file_exists)
                 if (.not. file_exists) cycle
@@ -1281,7 +1609,6 @@ module dust_init
 
                 deallocate(T_grid, rate_grid)
                 
-                if (myid.eq.1) write(*,*) 'Loaded PAH sputtering table: ', trim(pah_filename)
             end do
         end do        
     end subroutine init_pah_sputtering_tables
@@ -1311,8 +1638,8 @@ module dust_init
 
         do ipahbin = 1, npah
             ! Check first that the file is there
-            write(i_str, '(I0)') ipahbin
-            write(f_diss_filename, '(a,a,a,a)') trim(dust_tables_dir), 'acetylene_dissociation_table_PAHbin_', trim(i_str), '.dat'
+            write(i_str, '(I2.2)') ipahbin
+            write(f_diss_filename, '(a,a,a,a)') trim(dust_tables_dir), 'dissociation_PAHbin_', trim(i_str), '.dat'
             inquire(file=f_diss_filename,exist=ok_pah)
 
             if (.not. ok_pah) then
@@ -1388,8 +1715,8 @@ module dust_init
         ! Loop over the PAH sizes
         do i = 1, npah
             ! Check first that the file is there
-            write(i_str, '(I0)') i  ! convert i to string without leading spaces
-            write(f_peh_filename, '(a,a,a,a,a,a)')trim(dust_tables_dir),'peh_Pinj_ISRF_Draine_Draine_',trim(peh_attach_model),'_PAHbin_',trim(i_str),'.dat'
+            write(i_str, '(I2.2)') i  ! convert i to string without leading spaces
+            write(f_peh_filename, '(a,a,a,a,a,a)')trim(dust_tables_dir),'peh_ISRF_Mathis_Draine_',trim(peh_attach_model),'_PAHbin_',trim(i_str),'.dat'
             inquire(file=f_peh_filename,exist=ok_pah)
 
             if (.not. ok_pah) then
@@ -1399,6 +1726,7 @@ module dust_init
                     write(*,*)'Directory '//TRIM(dust_tables_dir)//' not found'
                     write(*,*)'You need to set this correctly for' // &
                              ' dust_tables_dir in the namelist.'
+                    write(*,*)'Missing file: ', trim(f_peh_filename)
                 endif
                 call clean_stop
             end if
@@ -1476,5 +1804,4 @@ module dust_init
             close(111)
         end do
     end subroutine init_pah_peh_tables
-#endif
 end module dust_init

@@ -14,7 +14,7 @@ module dust_commons
     implicit none
 
     ! ==== Flags and logicals (read from nml) ====
-    logical ::dust=.false.                       ! Activate dust
+    logical, parameter ::dust=.true.             ! CALIMA always includes dust
     logical ::dust_log=.false.                   ! Activate dust logging
     logical ::dust_10percent=.true.              ! Activate the 10% rule for the chemistry solver
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
@@ -39,11 +39,10 @@ module dust_commons
     logical ::dust_coll_charge=.false.           ! Activate the dependence of dust collisional cooling on grain and ion charge
     logical ::dust_pe_heating=.false.            ! Activate photo-electric heating by dust grains
     logical ::dust_pe_heating_isrf=.false.       ! Activate the simple dust PE heating based on an averaged ISRF G0
-    logical ::ratd_switch=.false.                ! Global switch to activate when rt_advect=.true., ratd_only_rtadv=.true. and dust_ratd=.true.
     logical ::ratd_only_rtadv=.false.            ! Only allow for RATD if the rt_advect=.true.
     logical ::poppe_ice_enhancement=.false.      ! Whether to use the empirical enhancement in coagulation threshold due to ice mantel
     logical ::H2ondust=.false.                   ! Activate H2 formation on dust
-    logical ::dust_pahs=.false.                  ! Activate PAHs
+    logical, parameter ::dust_pahs=.true.       ! CALIMA always includes PAHs
     logical ::dust_turbulent_model=.false.       ! Activate the subgrid model of turbulent shattering and coagulation
     logical ::pah_accretion=.false.              ! Activate the simple growth of PAH mass by accretion of gas phase C atoms
     logical ::pah_acc_spu=.false.                ! Activate the destruction of PAHs by accretion of C+
@@ -93,7 +92,6 @@ module dust_commons
     real(dp),dimension(1:ndchemtype)::dust_AGB_cond_eff=0.1d0 ! AGB condensation efficiency
     real(dp),dimension(1:ndchemtype)::Coulomb_enhance=1d0     ! Enhancement of ion accretion due to dust grain charge (basic model)
     real(dp),dimension(1:ndchemtype)::tensile_strength=1d7    ! Dust tensile strength (erg/cm3)
-    real(dp),dimension(1:ndchemtype)::shear_modulus=1d10    ! Dust shear modulus (erg/cm3)
     real(dp),dimension(1:ndchemtype)::Youngs_modulus=1d10   ! Dust Young's modulus (erg/cm3)
     real(dp),dimension(1:ndchemtype)::Poisson_ratio=0.25d0  ! Dust Poisson's ratio
     real(dp),dimension(1:ndchemtype)::surf_energy=25d0    ! Dust surface energy (erg/cm2)
@@ -102,19 +100,17 @@ module dust_commons
     real(dp),dimension(1:ndchemtype)::e_escape_length=1.0d-7 ! Dust electron escape length (in cm)
     logical,dimension(1:ndchemtype) ::separate_refractive_index=.false. ! Whether the dust bin has separate refractive index tables for parallel and perpendicular waves
     real(dp)::slope_frag_func=1.3D0/3D0                  ! Fragment distribution (shattering and RATD) power-law slope
-    real(dp)::zdmax=1.0d0             ! Maximum allowed dust-to-metal ratio (1d-2)
     real(dp)::errmax=0.1d0            ! Criterion for convergence in dust chemistry solver
     real(dp)::countmax=10000          ! Maximum number of iterations in dust chemistry solver
     real(dp)::GDinit=162d0            ! Initial gas-to-dust ratio (Def: 162 as given by Zubko et al. 2004)
     real(dp)::DTMinit=-1d0            ! Initial dust-to-metal ratio (Def: 1d-3)
     real(dp)::fpah_ini=0.1d0          ! Initial fraction of C locked in PAHs
-    real(dp)::min_dtg=1d-10           ! Minimum dust-to-gas ratio for the dust to be updated in a cell
     real(dp)::smallr_dust=1d-12       ! Minimum dust mass for a cell to be considered as a dust cell
 
 
     ! ==== Dust grain and PAHs bin properties (read from nml)====
-    real(dp),dimension(1:ndust,1:n_elements) ::dust_composition=0d0
-    integer,dimension(1:ndust) ::dust_interact_group=0
+    ! Dust composition is now provided per chemical type (not per dust bin).
+    real(dp),dimension(1:ndchemtype,1:n_elements) ::dust_composition=0d0
     integer,dimension(1:ndchemtype) ::dustbins_per_chemtype=0
     integer,dimension(1:ndchemtype) ::istart_chemtype=0
     real(dp),dimension(1:ndust):: asize=0.1d0                           ! Grain size (in microns)
@@ -122,16 +118,12 @@ module dust_commons
     real(dp),dimension(1:ndust):: amin=1d-2                             ! Minimum grain size of underlying distribution (in microns)
     real(dp),dimension(1:ndust):: amax=1d0                              ! Maximum grain size of underlying distribution (in microns)
     real(dp),dimension(1:ndust)::fmass_ej=0.0d0                         ! Fraction of the total dust mass in SN ejecta that is injected in each dust bin
-    real(dp),dimension(1:npah)::pah_size=5d-4 ! PAH size (in microns) of distribution peak (Def: 5d-4 micron corresponding to 54 C)
+    integer,dimension(1:npah)::pah_nc=0                             ! Number of carbon atoms in the PAH molecule
+    integer,dimension(1:npah)::pah_nc_min=0                         ! Minimum number of carbon atoms in the PAH molecule
+    integer,dimension(1:npah)::pah_nc_max=0                         ! Maximum number of carbon atoms in the PAH molecule
     real(dp),dimension(1:npah)::spah=2d0      ! PAH density (in g/cm^3) (Def: 2 g/cm^3 more appropiate for hydrocarbon)
-    real(dp),dimension(1:npah)::mpah=1.5D-21  ! grain mass (in g)
-    real(dp),dimension(1:npah)::pah_minsize=1d-4    ! PAH min size for underlying distribution (in microns)
-    real(dp),dimension(1:npah)::pah_minmass=1.5D-21 ! PAH min mass for underlying distribution (in g)
-    real(dp),dimension(1:npah)::pah_maxsize=1d-4    ! PAH max size for underlying distribution (in microns)
-    real(dp),dimension(1:npah)::pah_maxmass=1.5D-21 ! PAH max mass for underlying distribution (in g)
     real(dp),dimension(1:npah)::pah_SNdest_eff=0.1d0   ! PAH SN destruction efficiency
     real(dp),dimension(1:npah)::fpah_inwind=0.5d0 ! Fraction of AGB wind PAH mass in each PAH size bin
-    integer,dimension(1:npah)::pah_nc=54      ! Number of carbon atoms in central PAH size
     integer,dimension(1:npah)::pah_ncharge_states=4 ! Number of charge states for PAHs in charging calculations
     
     ! ==== ISM depletion factors on dust (read from nml) ====
@@ -175,9 +167,7 @@ module dust_commons
 
     ! ==== Global dust and PAH bin properties ====
     type(DustBin),dimension(1:ndust) ::dustbins_props
-#if NPAH>0
     type(PAHBin),dimension(1:npah) ::pahbins_props
-#endif
     real(dp),dimension(:,:),allocatable ::group_csa_dust,group_css_dust,group_csr_dust
     real(dp),dimension(:,:),allocatable ::group_csa_pah,group_css_pah,group_csr_pah
     real(dp),dimension(:,:),allocatable ::sigca_dust,sigcs_dust,sigcr_dust
@@ -252,6 +242,8 @@ module dust_commons
     type(DustChemistryInfo) :: dust_helper  ! Reusable per-rank dust chemistry workspace
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical ::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
+    logical ::ratd_switch=.false.                ! Global switch to activate when rt_advect=.true., ratd_only_rtadv=.true. and dust_ratd=.true.
+
 
     ! ==== Some internal constants ====
     ! Mathis et al. (1983) ISRF energy density in erg/cm3

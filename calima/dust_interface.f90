@@ -72,7 +72,7 @@ contains
 
         ! 1. Compute and add the different dust radiative rates
         dustAbs = 0d0; dustSc = 0d0; dustRp = 0d0
-        if (dinfo%ndust > 0 .and. dust) then
+        if (dinfo%ndust > 0) then
             do ii = 1, dinfo%nGroups
                 dustAbs(ii) = rad_dust_rate(dinfo%csa_dust(ii,:),dinfo%rho_dust(:)) ! [1/s]
                 dustSc (ii) = rad_dust_rate(dinfo%css_dust(ii,:),dinfo%rho_dust(:)) ! [1/s]
@@ -83,7 +83,7 @@ contains
 
         ! 2. Compute the different PAH radiative rates
         pahAbs = 0d0; pahSc = 0d0; pahRp = 0d0
-        if (dinfo%npah > 0 .and. dust_pahs) then
+        if (dinfo%npah > 0) then
             ! Before we move onto computing the PAH contribution
             ! to absorption and scattering, we need to compute the
             ! PAH charge distribution, since the PAH cross-sections
@@ -139,7 +139,7 @@ contains
         real(dp),dimension(:),allocatable :: Zvals
         real(dp),dimension(:),allocatable :: fcharge
         
-        if (dinfo%ndust > 0 .and. dust) then
+        if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
             do ii = 1, dinfo%ndust
                 call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii))
@@ -196,11 +196,11 @@ contains
             ! 5. Compute the H2 formation rate on dust grains
             if (H2ondust) then
                 nHI = nElement(1) * xelem_ions(1,1)
-                dinfo%H2_formation_rate = grain_h2_formation_rate(nHI,Tk,dinfo%rho_dust(:),dinfo%T_dust(:))
+                dinfo%H2_formation_rate = grain_h2_formation_rate(nHI,nElement(1),Tk,dinfo%rho_dust(:),dinfo%T_dust(:))
             end if
         end if
 
-        if (dinfo%npah > 0 .and. dust_pahs) then
+        if (dinfo%npah > 0) then
             ! 6. Compute the PAH PEH model
             if (pah_pe_heating .and. present(Np)) then
                 if (pah_pe_heating_isrf) then
@@ -309,6 +309,11 @@ contains
                 total_rec_power = sum(dinfo%Prec_dust)
                 total_inj_power = sum(dinfo%Pinj_dust)
                 total_col_power = sum(dinfo%Pcoll_dust)
+                ! if (total_rec_power .gt. total_inj_power) then
+                !     write(*,*) 'WARNING in compute_dust_coolrates: total recombination power exceeds total injection power for dust: Prec=',total_rec_power,' Pinj=',total_inj_power
+                !     write(*,*) 'G0_total=',G0_total,' Tk=',Tk,' ne=',ne,' gamma=',G0_total*1.13d0/ne/Tk**0.5
+                !     call clean_stop
+                ! end if
             end if
             if (dinfo%npah  > 0) then
                 total_rec_power = total_rec_power + sum(dinfo%Prec_pah)
@@ -326,7 +331,7 @@ contains
         total_col_power = 0d0
         H2_formation_rate = -1d0
 
-        if (dinfo%ndust > 0 .and. dust) then
+        if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
             do ii = 1, dinfo%ndust
                 call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii))
@@ -387,11 +392,11 @@ contains
             ! 5. Compute the H2 formation rate on dust grains
             if (H2ondust) then
                 nHI = nElement(1) * xelem_ions(1,1)
-                H2_formation_rate = grain_h2_formation_rate(nHI,Tk,dinfo%rho_dust(:),T_dust(:))
+                H2_formation_rate = grain_h2_formation_rate(nHI,nElement(1),Tk,dinfo%rho_dust(:),T_dust(:))
             endif
         end if
 
-        if (dinfo%npah > 0 .and. dust_pahs) then
+        if (dinfo%npah > 0) then
             ! 5. Compute the PAH PEH model
             if (pah_pe_heating .and. present(Np)) then
                 if (pah_pe_heating_isrf) then

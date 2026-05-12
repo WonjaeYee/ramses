@@ -2054,7 +2054,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     use rt_parameters, only: nGroups, isH2_rtz, rt_advect, rtz_include_charge_exchange, &
                              rtz_include_cosmic_ray_ionization, rtz_include_HM12_UVB
 #ifdef CALIMA
-    use dust_commons, only: dust_helper
+    use dust_commons, only: dust_helper,dust_pe_heating,dust_coll_cooling,pah_pe_heating
     use dust_interface, only: compute_dust_coolrates
 #endif
     implicit none
@@ -2080,7 +2080,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: cooling_fine_structure_SiI, cooling_fine_structure_SiII
     real(dp):: cooling_fine_structure_SI
     real(dp):: cooling_fine_structure_FeI, cooling_fine_structure_FeII
-    real(dp):: dust_cooling, dust_rec_cooling, dust_coll_cooling
+    real(dp):: dust_cooling, dust_rec_cooling_rate, dust_coll_cooling_rate
     real(dp):: CO_cooling
     real(dp):: photoelectric_heat
     real(dp):: cosmic_ray_heat
@@ -2315,9 +2315,9 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Dust cooling
 #ifndef CALIMA
-    dust_rec_cooling = dust_recombination_cooling(T, G0, ne, f_dg, element_number_densities(1))
+    dust_rec_cooling_rate = dust_recombination_cooling(T, G0, ne, f_dg, element_number_densities(1))
     ! dust_rec_cooling = dust_recombination_cooling_WD01(T, G0, ne, f_dg, element_number_densities(1))
-    dust_coll_cooling =  dust_gas_collisional_cooling(T, G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+    dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
     
     ! Photoelectric heating --> note factor of 1.7 is because IUV
     photoelectric_heat = photoelectric_heating(T, G0, ne, f_dg, element_number_densities(1))
@@ -2325,14 +2325,21 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
 #else
     call compute_dust_coolrates(dust_helper, G0, T, ne, element_number_densities(:),&
-                                element_ion_fractions(:,:),nH2,nCO,dust_rec_cooling,&
-                                photoelectric_heat,dust_coll_cooling,h2_formation_dust,dNp)
+                                element_ion_fractions(:,:),nH2,nCO,dust_rec_cooling_rate,&
+                                photoelectric_heat,dust_coll_cooling_rate,h2_formation_dust,dNp)
+    if ((.not.dust_pe_heating).and.(.not.pah_pe_heating)) then
+        dust_rec_cooling_rate = dust_recombination_cooling(T, G0, ne, f_dg, element_number_densities(1))
+        photoelectric_heat = photoelectric_heating(T, G0, ne, f_dg, element_number_densities(1))
+    end if
+    if (.not.dust_coll_cooling) then
+        dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+    end if
 #endif
-    dust_cooling = dust_rec_cooling + dust_coll_cooling
+    dust_cooling = dust_rec_cooling_rate + dust_coll_cooling_rate
     
     ! Save cooling rates
-    saved_cooling_rates(save_cooling_counter) = dust_rec_cooling; saved_cooling_rates_names(save_cooling_counter) = 'cool_dust_rec'; save_cooling_counter = save_cooling_counter + 1
-    saved_cooling_rates(save_cooling_counter) = dust_coll_cooling; saved_cooling_rates_names(save_cooling_counter) = 'cool_dust_col'; save_cooling_counter = save_cooling_counter + 1
+    saved_cooling_rates(save_cooling_counter) = dust_rec_cooling_rate; saved_cooling_rates_names(save_cooling_counter) = 'cool_dust_rec'; save_cooling_counter = save_cooling_counter + 1
+    saved_cooling_rates(save_cooling_counter) = dust_coll_cooling_rate; saved_cooling_rates_names(save_cooling_counter) = 'cool_dust_col'; save_cooling_counter = save_cooling_counter + 1
 
 #ifdef CO
     CO_cooling = CO_cooling_koyama_00(nH, nH2, nH_I, nCO, T)

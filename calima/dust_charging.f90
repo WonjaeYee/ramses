@@ -153,7 +153,6 @@ module dust_charging
             Zdust = 0d0
             return
         end if
-
         call interpolate2D(dustbins_props(i_dust)%mean_charg_tab%tab1d(1:dustbins_props(i_dust)%mean_charg_tab%npts(1),1), &
                            dustbins_props(i_dust)%mean_charg_tab%tab1d(1:dustbins_props(i_dust)%mean_charg_tab%npts(2),2), &
                            dustbins_props(i_dust)%mean_charg_tab%tab2d(1:dustbins_props(i_dust)%mean_charg_tab%npts(1),1:dustbins_props(i_dust)%mean_charg_tab%npts(2),1), &
@@ -285,188 +284,188 @@ module dust_charging
     end subroutine compute_Coulomb_focusing
 
     subroutine two_point_charge_mix(mu, zmin, zlo, zhi, wlo, whi)
-    implicit none
-    real(dp), intent(in)  :: mu
-    integer,  intent(in)  :: zmin
-    integer,  intent(out) :: zlo, zhi
-    real(dp), intent(out) :: wlo, whi
+        implicit none
+        real(dp), intent(in)  :: mu
+        integer,  intent(in)  :: zmin
+        integer,  intent(out) :: zlo, zhi
+        real(dp), intent(out) :: wlo, whi
 
-    zlo = ifloor(mu)
-    zhi = zlo + 1
+        zlo = ifloor(mu)
+        zhi = zlo + 1
 
-    whi = mu - real(zlo, dp)
-    wlo = 1.0_dp - whi
+        whi = mu - real(zlo, dp)
+        wlo = 1.0_dp - whi
 
-    ! Enforce physical lower bound exactly as in the Python logic.
-    if (zlo < zmin) then
-      zlo = zmin
-      zhi = zmin
-      wlo = 1.0_dp
-      whi = 0.0_dp
-    else if (zhi < zmin) then
-      zlo = zmin
-      zhi = zmin
-      wlo = 1.0_dp
-      whi = 0.0_dp
-    end if
-  end subroutine two_point_charge_mix
+        ! Enforce physical lower bound exactly as in the Python logic.
+        if (zlo < zmin) then
+        zlo = zmin
+        zhi = zmin
+        wlo = 1.0_dp
+        whi = 0.0_dp
+        else if (zhi < zmin) then
+        zlo = zmin
+        zhi = zmin
+        wlo = 1.0_dp
+        whi = 0.0_dp
+        end if
+    end subroutine two_point_charge_mix
 
 
-  subroutine three_point_charge_mix(mu, sigma, zmin, z1, z2, z3, w1, w2, w3, used_two_point)
-    implicit none
-    real(dp), intent(in)  :: mu, sigma
-    integer,  intent(in)  :: zmin
-    integer,  intent(out) :: z1, z2, z3
-    real(dp), intent(out) :: w1, w2, w3
-    logical,  intent(out) :: used_two_point
+    subroutine three_point_charge_mix(mu, sigma, zmin, z1, z2, z3, w1, w2, w3, used_two_point)
+        implicit none
+        real(dp), intent(in)  :: mu, sigma
+        integer,  intent(in)  :: zmin
+        integer,  intent(out) :: z1, z2, z3
+        real(dp), intent(out) :: w1, w2, w3
+        logical,  intent(out) :: used_two_point
 
-    real(dp), parameter :: tol = 1.0d-10
-    real(dp) :: sig, m2_target
-    integer  :: half_span, zl, zh
-    integer  :: i, j, k
-    real(dp) :: a, b, c, a2, b2, c2
-    real(dp) :: da, db, da2, db2, rhs1, rhs2, det
-    real(dp) :: ww1, ww2, ww3
-    real(dp) :: score_span, score_mid
-    real(dp) :: best_span, best_mid
-    logical  :: found_nonneg
+        real(dp), parameter :: tol = 1.0d-10
+        real(dp) :: sig, m2_target
+        integer  :: half_span, zl, zh
+        integer  :: i, j, k
+        real(dp) :: a, b, c, a2, b2, c2
+        real(dp) :: da, db, da2, db2, rhs1, rhs2, det
+        real(dp) :: ww1, ww2, ww3
+        real(dp) :: score_span, score_mid
+        real(dp) :: best_span, best_mid
+        logical  :: found_nonneg
 
-    ! Safe sigma handling.
-    sig = sigma
-    if (sig /= sig) sig = 0.0_dp
-    if (sig < 0.0_dp) sig = 0.0_dp
+        ! Safe sigma handling.
+        sig = sigma
+        if (sig /= sig) sig = 0.0_dp
+        if (sig < 0.0_dp) sig = 0.0_dp
 
-    m2_target = mu*mu + sig*sig
+        m2_target = mu*mu + sig*sig
 
-    ! Search window around mu.
-    half_span = max(3, iceil(4.0_dp*sig + 2.0_dp))
+        ! Search window around mu.
+        half_span = max(3, iceil(4.0_dp*sig + 2.0_dp))
 
-    zl = max(zmin, ifloor(mu) - half_span)
-    zh = iceil(mu) + half_span
-    if (zh - zl < 2) zh = zl + 2
+        zl = max(zmin, ifloor(mu) - half_span)
+        zh = iceil(mu) + half_span
+        if (zh - zl < 2) zh = zl + 2
 
-    found_nonneg = .false.
-    best_span = huge(1.0_dp)
-    best_mid  = huge(1.0_dp)
+        found_nonneg = .false.
+        best_span = huge(1.0_dp)
+        best_mid  = huge(1.0_dp)
 
-    ! Initialize outputs.
-    z1 = zl
-    z2 = zl + 1
-    z3 = zl + 2
-    w1 = 0.0_dp
-    w2 = 0.0_dp
-    w3 = 0.0_dp
+        ! Initialize outputs.
+        z1 = zl
+        z2 = zl + 1
+        z3 = zl + 2
+        w1 = 0.0_dp
+        w2 = 0.0_dp
+        w3 = 0.0_dp
 
-    do i = zl, zh - 2
-      do j = i + 1, zh - 1
-        do k = j + 1, zh
-          a = real(i, dp)
-          b = real(j, dp)
-          c = real(k, dp)
-          a2 = a*a
-          b2 = b*b
-          c2 = c*c
+        do i = zl, zh - 2
+        do j = i + 1, zh - 1
+            do k = j + 1, zh
+            a = real(i, dp)
+            b = real(j, dp)
+            c = real(k, dp)
+            a2 = a*a
+            b2 = b*b
+            c2 = c*c
 
-          ! Solve:
-          ! w1+w2+w3=1
-          ! w1*a + w2*b + w3*c = mu
-          ! w1*a2+w2*b2+w3*c2 = m2_target
-          !
-          ! Reduced 2x2 system for w1,w2 with w3=1-w1-w2.
-          da   = a - c
-          db   = b - c
-          da2  = a2 - c2
-          db2  = b2 - c2
-          rhs1 = mu - c
-          rhs2 = m2_target - c2
+            ! Solve:
+            ! w1+w2+w3=1
+            ! w1*a + w2*b + w3*c = mu
+            ! w1*a2+w2*b2+w3*c2 = m2_target
+            !
+            ! Reduced 2x2 system for w1,w2 with w3=1-w1-w2.
+            da   = a - c
+            db   = b - c
+            da2  = a2 - c2
+            db2  = b2 - c2
+            rhs1 = mu - c
+            rhs2 = m2_target - c2
 
-          det = da*db2 - db*da2
-          if (abs(det) <= 1.0d-18) cycle
+            det = da*db2 - db*da2
+            if (abs(det) <= 1.0d-18) cycle
 
-          ww1 = ( rhs1*db2 - rhs2*db ) / det
-          ww2 = ( da*rhs2  - da2*rhs1 ) / det
-          ww3 = 1.0_dp - ww1 - ww2
+            ww1 = ( rhs1*db2 - rhs2*db ) / det
+            ww2 = ( da*rhs2  - da2*rhs1 ) / det
+            ww3 = 1.0_dp - ww1 - ww2
 
-          if ((ww1 >= -tol) .and. (ww2 >= -tol) .and. (ww3 >= -tol)) then
-            ! Prefer compact support and center near mu.
-            score_span = real(k - i, dp)
-            score_mid  = abs(real(j, dp) - mu)
+            if ((ww1 >= -tol) .and. (ww2 >= -tol) .and. (ww3 >= -tol)) then
+                ! Prefer compact support and center near mu.
+                score_span = real(k - i, dp)
+                score_mid  = abs(real(j, dp) - mu)
 
-            if ((.not. found_nonneg) .or. &
-                (score_span < best_span) .or. &
-                (abs(score_span - best_span) <= 1.0d-12 .and. score_mid < best_mid)) then
-              found_nonneg = .true.
-              best_span = score_span
-              best_mid  = score_mid
+                if ((.not. found_nonneg) .or. &
+                    (score_span < best_span) .or. &
+                    (abs(score_span - best_span) <= 1.0d-12 .and. score_mid < best_mid)) then
+                found_nonneg = .true.
+                best_span = score_span
+                best_mid  = score_mid
 
-              z1 = i
-              z2 = j
-              z3 = k
-              w1 = ww1
-              w2 = ww2
-              w3 = ww3
+                z1 = i
+                z2 = j
+                z3 = k
+                w1 = ww1
+                w2 = ww2
+                w3 = ww3
+                end if
             end if
-          end if
 
+            end do
         end do
-      end do
-    end do
+        end do
 
-    if (found_nonneg) then
-      ! Clip tiny negatives and renormalize.
-      if (w1 < 0.0_dp) w1 = 0.0_dp
-      if (w2 < 0.0_dp) w2 = 0.0_dp
-      if (w3 < 0.0_dp) w3 = 0.0_dp
-      call renormalize3(w1, w2, w3)
-      used_two_point = .false.
-    else
-      ! Fallback: two-point method.
-      call two_point_charge_mix(mu, zmin, z1, z2, w1, w2)
-      z3 = z2
-      w3 = 0.0_dp
-      used_two_point = .true.
-    end if
-  end subroutine three_point_charge_mix
-
-
-  subroutine renormalize3(w1, w2, w3)
-    implicit none
-    real(dp), intent(inout) :: w1, w2, w3
-    real(dp) :: s
-
-    s = w1 + w2 + w3
-    if (s > 0.0_dp) then
-      w1 = w1 / s
-      w2 = w2 / s
-      w3 = w3 / s
-    else
-      ! Defensive fallback (should not happen in normal flow).
-      w1 = 1.0_dp
-      w2 = 0.0_dp
-      w3 = 0.0_dp
-    end if
-  end subroutine renormalize3
+        if (found_nonneg) then
+        ! Clip tiny negatives and renormalize.
+        if (w1 < 0.0_dp) w1 = 0.0_dp
+        if (w2 < 0.0_dp) w2 = 0.0_dp
+        if (w3 < 0.0_dp) w3 = 0.0_dp
+        call renormalize3(w1, w2, w3)
+        used_two_point = .false.
+        else
+        ! Fallback: two-point method.
+        call two_point_charge_mix(mu, zmin, z1, z2, w1, w2)
+        z3 = z2
+        w3 = 0.0_dp
+        used_two_point = .true.
+        end if
+    end subroutine three_point_charge_mix
 
 
-  integer function ifloor(x)
-    implicit none
-    real(dp), intent(in) :: x
-    integer :: t
+    subroutine renormalize3(w1, w2, w3)
+        implicit none
+        real(dp), intent(inout) :: w1, w2, w3
+        real(dp) :: s
 
-    t = int(x)
-    if (real(t, dp) > x) t = t - 1
-    ifloor = t
-  end function ifloor
+        s = w1 + w2 + w3
+        if (s > 0.0_dp) then
+        w1 = w1 / s
+        w2 = w2 / s
+        w3 = w3 / s
+        else
+        ! Defensive fallback (should not happen in normal flow).
+        w1 = 1.0_dp
+        w2 = 0.0_dp
+        w3 = 0.0_dp
+        end if
+    end subroutine renormalize3
 
 
-  integer function iceil(x)
-    implicit none
-    real(dp), intent(in) :: x
-    integer :: t
+    integer function ifloor(x)
+        implicit none
+        real(dp), intent(in) :: x
+        integer :: t
 
-    t = int(x)
-    if (real(t, dp) < x) t = t + 1
-    iceil = t
-  end function iceil
+        t = int(x)
+        if (real(t, dp) > x) t = t - 1
+        ifloor = t
+    end function ifloor
+
+
+    integer function iceil(x)
+        implicit none
+        real(dp), intent(in) :: x
+        integer :: t
+
+        t = int(x)
+        if (real(t, dp) < x) t = t + 1
+        iceil = t
+    end function iceil
 
 end module dust_charging

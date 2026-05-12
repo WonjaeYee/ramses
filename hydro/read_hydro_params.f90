@@ -6,7 +6,8 @@ subroutine read_hydro_params(nml_ok)
 #endif
 #ifdef CALIMA
   use dust_commons
-  use dust_init, only: check_params_dust
+  use dust_init, only: check_params_dust, init_CALIMA_dust
+  use rt_parameters,only: nGroups
 #endif
   use mpi_mod
   implicit none
@@ -120,10 +121,10 @@ subroutine read_hydro_params(nml_ok)
 #ifdef CALIMA
    namelist/calima_params/&
       ! Dust physics flags
-      dust,dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+      dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
       dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
       dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
-      dust_pe_heating,dust_pe_heating_isrf,ratd_switch,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_pahs,dust_turbulent_model,&
+      dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
       ! PAH physics flags
       pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_uv_destruction,pah_sn_destruction,pah_cluster_evaporation,&
       pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
@@ -135,12 +136,12 @@ subroutine read_hydro_params(nml_ok)
       t_sputter_ref,t_growth_ref,t_sha_ref,t_coa_ref,Sconstant,&
       nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
       dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
-      Coulomb_enhance,tensile_strength,shear_modulus,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
-      separate_refractive_index,slope_frag_func,zdmax,errmax,countmax,GDinit,DTMinit,fpah_ini,min_dtg,smallr_dust,&
+      Coulomb_enhance,tensile_strength,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
+      separate_refractive_index,slope_frag_func,errmax,countmax,GDinit,DTMinit,fpah_ini,smallr_dust,&
       ! Dust grain and PAHs bin properties
-      dust_composition,dust_interact_group,dustbins_per_chemtype,istart_chemtype,&
+      dust_composition,dustbins_per_chemtype,&
       asize,sgrain,amin,amax,fmass_ej,&
-      pah_size,spah,mpah,pah_minsize,pah_minmass,pah_maxsize,pah_maxmass,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
+      pah_nc,pah_nc_min,pah_nc_max,spah,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
       ! ISM depletion factors
       fDust_depletions,fCDust_inPAH,GD_solar,DTM_solar,fdustmass_ini,fpahmass_ini,&
       ! Radiation parameters
@@ -350,10 +351,8 @@ subroutine read_hydro_params(nml_ok)
   !--------------------------------------------------
   ! Check for CALIMA dust parameters
 #ifdef CALIMA
-  if (dust) then
-    check_dust = check_params_dust(myid)
-    if(.not.check_dust) nml_ok = .false.
-  end if
+  check_dust = check_params_dust(myid)
+  if(.not.check_dust) nml_ok = .false.
 #endif
 
   !-------------------------------------------------
@@ -553,16 +552,9 @@ subroutine read_hydro_params(nml_ok)
   idelay = idelay + 1
 #endif
 #ifdef CALIMA
-  if (dust) then
-      if (dust_pahs) then
-        ipah  = idelay
-        idust = idelay + npah
-        idelay = idelay + npah + ndust
-      else
-        idust  = idelay
-        idelay = idelay + ndust
-      end if
-  endif
+      ipah  = idelay
+      idust = idelay + npah
+      idelay = idelay + npah + ndust
 #endif
   ivirial1=idelay
   ivirial2=idelay

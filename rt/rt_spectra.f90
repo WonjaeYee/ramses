@@ -242,6 +242,12 @@ MODULE SED_module
 !_________________________________________________________________________
   use amr_parameters,only:dp
   use rt_parameters,only:nGroups
+#ifdef CALIMA
+  use dust_optics,only:flaLambda_dust,fRATLambda_dust,fAbsLambda_dust, &
+                      fScLambda_dust,fRpLambda_dust,fAbsLambda_pah, &
+                      fScLambda_pah,fRpLambda_pah, &
+                      initialize_cross_sections_from_blackbody_dust_pah
+#endif
   implicit none
 
   PUBLIC nSEDgroups                                                      &
@@ -994,6 +1000,122 @@ FUNCTION getSEDcse(X, Y, N, e0, e1, species, ion)
   getSEDcse = integrateSpectrum(X, Y, N, e0, e1, species, ion, fSig) / norm
 END FUNCTION getSEDcse
 
+#ifdef CALIMA
+!************************************************************************
+FUNCTION getSEDla_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged photon attenuation length for dust grains
+! in [cm], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDla_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDla_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, flaLambda_dust) / norm
+END FUNCTION getSEDla_dust
+!************************************************************************
+FUNCTION getSEDcsa_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged absorption cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDcsa_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDcsa_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fAbsLambda_dust) / norm
+END FUNCTION getSEDcsa_dust
+!************************************************************************
+FUNCTION getSEDcss_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged scattering cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDcss_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDcss_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fScLambda_dust) / norm
+END FUNCTION getSEDcss_dust
+!************************************************************************
+FUNCTION getSEDcsr_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged rad-pressure cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDcsr_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDcsr_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRpLambda_dust) / norm
+END FUNCTION getSEDcsr_dust
+
+!************************************************************************
+FUNCTION getSEDcsa_pah(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged absorption cross-section for PAHs
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species follows the PAH charge-state indexing used in fAbsLambda_pah.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(dp):: getSEDcsa_pah, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcsa_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fAbsLambda_pah) / norm
+END FUNCTION getSEDcsa_pah
+
+!************************************************************************
+FUNCTION getSEDcss_pah(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged scattering cross-section for PAHs
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species follows the PAH charge-state indexing used in fScLambda_pah.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(dp):: getSEDcss_pah, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcss_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fScLambda_pah) / norm
+END FUNCTION getSEDcss_pah
+
+!************************************************************************
+FUNCTION getSEDcsr_pah(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged rad-pressure cross-section for PAHs
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species follows the PAH charge-state indexing used in fRpLambda_pah.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(dp):: getSEDcsr_pah, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcsr_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRpLambda_pah) / norm
+END FUNCTION getSEDcsr_pah
+
+#endif
+
 !*************************************************************************
 SUBROUTINE rebin_log(xint_log, yint_log,                                 &
                data,       nx,       ny,     x,     y,     nz,           &
@@ -1133,7 +1255,7 @@ SUBROUTINE write_SEDtable()
 #endif
 
   do ip=1,nSEDgroups
-     write(filename,'(A, I1, A)') 'SEDtable', ip, '.list'
+     write(filename,'(A, I1, A)') './SEDtables/SEDtable', ip, '.list'
      open(10, file=filename, status='unknown')
      write(10,*) SED_nA, SED_nZ
 

@@ -1,5 +1,6 @@
 module dust_utils
     use amr_parameters, only:dp
+    use constants
     contains
 
     subroutine cmp_sigma_turb(icell,sigma2,ilevel)
@@ -231,6 +232,7 @@ module dust_utils
         c1 = (x2 - xi_copy) / (x2 - x1) * results(i, j+1) + (xi_copy - x1) / (x2 - x1) * results(i+1, j+1)
 
         interp_val = (y2 - yi_copy) / (y2 - y1) * c0 + (yi_copy - y1) / (y2 - y1) * c1
+        ! print*,'DEBUG: xi=',xi,' yi=',yi,' i=',i,' j=',j,' x1=',x1,' x2=',x2,' y1=',y1,' y2=',y2,' c0=',c0,' c1=',c1,' interp_val=',interp_val
     end subroutine interpolate2D
 
     subroutine interpolate3D(x,y,z,results,ni,nj,nk,xi,yi,zi,interp_val,non_eqw)
@@ -301,6 +303,34 @@ module dust_utils
         interp_val = (z2 - zi_copy) / (z2 - z1) * c0 + (zi_copy - z1) / (z2 - z1) * c1
     end subroutine interpolate3D
 
+    subroutine read_next_data_line(iunit, out_line, io_status)
+        implicit none
+        integer, intent(in) :: iunit
+        character(len=*), intent(out) :: out_line
+        integer, intent(out) :: io_status
+
+        do
+            read(iunit,'(A)',iostat=io_status) out_line
+            if (io_status /= 0) return
+            out_line = adjustl(out_line)
+            if (len_trim(out_line) == 0) cycle
+            if (out_line(1:1) == '#') cycle
+            return
+        end do
+    end subroutine read_next_data_line
+
+    subroutine replace_pipe_with_space(str)
+        implicit none
+        character(len=*), intent(inout) :: str
+        integer :: ipos
+
+        ipos = index(str, '|')
+        do while (ipos > 0)
+            str(ipos:ipos) = ' '
+            ipos = index(str, '|')
+        end do
+    end subroutine replace_pipe_with_space
+
     function sigmoid_function(k,x0,x)
         ! Sigmoid function, useful to smooth dust functions
         ! k     => steepness of transition
@@ -318,6 +348,7 @@ module dust_utils
 
     function planck_function(wavelength, T) result(emittance)
         use constants, only: hplanck, c_cgs, kB
+        use safe_math, only: safe_exp
         ! This function computes the Planck function for a given wavelength and temperature
         ! The Planck function is given by:
         ! B_lambda = (2 * h * c^2 / lambda^5) / (exp(h * c / (lambda * k * T)) - 1)
@@ -337,11 +368,12 @@ module dust_utils
 
         ! Compute the Planck function
         exponent = hplanck * c_cgs / (wavelength * kB * T)
-        emittance = (2.0d0 * hplanck * c_cgs**2 / wavelength**5) / (exp(exponent) - 1.0d0)
+        emittance = (2.0d0 * hplanck * c_cgs**2 / wavelength**5) / (safe_exp(exponent) - 1.0d0)
     end function planck_function
 
     function planck_function_derivative(wavelength, T) result(derivative)
         use constants, only: hplanck, c_cgs, kB
+        use safe_math, only: safe_exp
         ! This function computes the derivative of the Planck function for a given wavelength and temperature
         ! The derivative of the Planck function is given by:
         ! dB_lambda/dT = B_lambda^2 * (h * c / lambda) / (k * T^2)
@@ -357,12 +389,61 @@ module dust_utils
         ! Output
         real(dp) :: derivative               ! Derivative in erg/s/cm^2/cm/steradian/K
         ! Local variables
-        real(dp) :: exponent, B
+        real(dp) :: exponent, expo, prefactor
 
         ! Compute the Planck function derivative
         exponent = hplanck * c_cgs / (wavelength * kB * T)
-        B = (2.0d0 * hplanck * c_cgs**2 / wavelength**5) / (exp(exponent) - 1.0d0)
-        derivative = B**2 * (hplanck * c_cgs / wavelength) / (kB * T**2)
+        expo = safe_exp(exponent)
+        prefactor = 2.0d0 * hplanck * c_cgs**2 / wavelength**5
+        derivative = prefactor * expo * exponent / (T * (expo - 1.0d0)**2)
+        if (isnan(derivative)) derivative = 0d0
     end function planck_function_derivative
 
+    function a_to_Nc(a) result(Nc)
+        ! Converts PAH size in cm to number of carbon atoms using the relation:
+        ! Nc = 468 * (a / 1e-7 cm)^3
+        implicit none
+        real(dp), intent(in) :: a   ! PAH size in cm
+        integer :: Nc             ! Number of carbon atoms
+
+        Nc = int(468d0 * (a / 1d-7)**3)
+    end function a_to_Nc
+
+    function Nc_to_a(Nc) result(a)
+        ! Converts number of carbon atoms in a PAH to its size in cm using the relation:
+        ! a = 1e-7 cm * (Nc / 468)^(1/3)
+        implicit none
+        integer, intent(in) :: Nc  ! Number of carbon atoms
+        real(dp) :: a               ! PAH size in cm
+
+        a = 1d-7 * (real(Nc, dp) / 468d0)**(1d0/3d0)
+    end function Nc_to_a
+
+    function Nc_to_Nh(Nc) result(Nh)
+        ! Converts number of carbon atoms in a PAH
+        ! to the hydrogenated number of hydrogen atoms
+        implicit none
+        integer, intent(in) :: Nc  ! Number of carbon atoms
+        integer :: Nh              ! Number of hydrogen atoms
+
+        if (Nc <= 25) then
+            Nh = int(0.5d0 * Nc + 0.5d0)
+        else if (Nc <= 100) then
+            Nh = int(2.5d0 * sqrt(real(Nc, dp)) + 0.5d0)
+        else
+            Nh = int(0.25d0 * real(Nc, dp) + 0.5d0)
+        end if
+    end function Nc_to_Nh
+
+    function Nc_to_mass(Nc) result(mass)
+        ! Converts number of carbon atoms in a PAH to its mass in grams
+        implicit none
+        integer, intent(in) :: Nc  ! Number of carbon atoms
+
+        integer :: Nh              ! Number of hydrogen atoms
+        real(dp) :: mass           ! Mass in grams
+
+        Nh = Nc_to_Nh(Nc)
+        mass = (real(Nc, dp) * mC_amu + real(Nh, dp) * mH_amu) * amu2g
+    end function Nc_to_mass
 end module dust_utils
