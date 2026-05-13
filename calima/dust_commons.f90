@@ -169,8 +169,9 @@ module dust_commons
     type(DustBin),dimension(1:ndust) ::dustbins_props
     type(PAHBin),dimension(1:npah) ::pahbins_props
     real(dp),dimension(:,:),allocatable ::group_csa_dust,group_css_dust,group_csr_dust
+    real(dp),dimension(:,:),allocatable ::group_csrat_dust
     real(dp),dimension(:,:),allocatable ::group_csa_pah,group_css_pah,group_csr_pah
-    real(dp),dimension(:,:),allocatable ::sigca_dust,sigcs_dust,sigcr_dust
+    real(dp),dimension(:,:),allocatable ::sigca_dust,sigcs_dust,sigcr_dust,sigcrat_dust
     real(dp),dimension(:,:),allocatable ::sigca_pah,sigcs_pah,sigcr_pah
     real(dp),dimension(:,:),allocatable ::att_len_dust
 
@@ -242,7 +243,6 @@ module dust_commons
     type(DustChemistryInfo) :: dust_helper  ! Reusable per-rank dust chemistry workspace
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical ::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
-    logical ::ratd_switch=.false.                ! Global switch to activate when rt_advect=.true., ratd_only_rtadv=.true. and dust_ratd=.true.
 
 
     ! ==== Some internal constants ====

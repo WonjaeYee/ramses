@@ -13,7 +13,7 @@ module rtz_cooling_module
    use rtz_module  
 #ifdef CALIMA
    use dust_commons, only: dust_helper,sigca_dust,sigcs_dust,sigcr_dust,&
-                           sigca_pah,sigcs_pah,sigcr_pah,&
+                           sigcrat_dust,sigca_pah,sigcs_pah,sigcr_pah,&
                            group_csa_dust, group_css_dust, group_csr_dust,&
                            group_csa_pah, group_css_pah, group_csr_pah,&
                            att_len_dust
@@ -163,6 +163,8 @@ module rtz_cooling_module
    integer :: base_unit = 100
    integer :: element_unit, j, iIon
    character(len=50) :: element_filename
+   integer :: dust_unit, pah_unit
+   character(len=50) :: dust_filename, pah_filename
    real(dp), allocatable :: ytmp(:)
    real(dp), dimension(1:50)::saved_cooling_rates
    character(len=20), dimension(1:50)::saved_cooling_rates_names
@@ -212,6 +214,12 @@ module rtz_cooling_module
 
       ! Open file to save cooling and heating rates
       open(unit=base_unit+100, file='coolrates.dat', status='unknown')
+#ifdef CALIMA
+      dust_unit = base_unit + 200
+      pah_unit = base_unit + 201
+      open(unit=dust_unit, file='dust_rho.dat', status='unknown')
+      open(unit=pah_unit, file='pah_rho.dat', status='unknown')
+#endif
 
       if (rtz_equilibrium_test.eq.1) then 
          !!! USE FOR EQM TESTS WITH COOLING AT CONSTANT RHO
@@ -342,6 +350,10 @@ module rtz_cooling_module
             else
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1)
             end if
+#ifdef CALIMA
+            if (ndust > 0) write(dust_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_dust(i,1:ndust)
+            if (npah > 0) write(pah_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_pah(i,1:npah)
+#endif
          end if
 
          if (rtz_equilibrium_test.eq.1) then
@@ -358,6 +370,10 @@ module rtz_cooling_module
             ! Write the cooling and heating rates to file
             if (i_interp.eq.1) write(base_unit+100,'(*(A20, ", "))') 'rho', 'T', 'Tmu', 'mu', saved_cooling_rates_names
             write(base_unit+100,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), saved_cooling_rates
+#ifdef CALIMA
+            if (ndust > 0) write(dust_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_dust(i,1:ndust)
+            if (npah > 0) write(pah_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_pah(i,1:npah)
+#endif
          end if
 
          ! Write data to file
@@ -384,6 +400,10 @@ module rtz_cooling_module
       end do
 
       close(unit=base_unit+100)
+#ifdef CALIMA
+      close(unit=dust_unit)
+      close(unit=pah_unit)
+#endif
 
       write(*,*) '!************************************************!'
       stop "Program terminated due to equilibrium test"
@@ -611,7 +631,7 @@ module rtz_cooling_module
       ! use auger_ionization_module
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
-      use dust_commons, only: GD_solar,H2ondust
+      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating
       use dust_interface
 #endif
       implicit none
@@ -716,21 +736,21 @@ module rtz_cooling_module
 #endif
 #ifdef CALIMA
       dust_helper%G0_background = UV_background_G0
+      dust_helper%local_sigma = sigma(icell)
       drho_dust(:) = rho_dust(icell,1:ndust)
       dust_helper%rho_dust = rho_dust(icell,1:ndust)
       do ii = 1, ndust
          dust_helper%csa_dust(:,ii) = sigca_dust(:, ii)
          dust_helper%css_dust(:,ii) = sigcs_dust(:, ii)
          dust_helper%csr_dust(:,ii) = sigcr_dust(:, ii)
-         dust_helper%l_a(:,ii) = att_len_dust(:, ii)
+         if (dust_ratd) dust_helper%csrat_dust(:,ii) = sigcrat_dust(:, ii)
+         if (dust_pe_heating) dust_helper%l_a(:,ii) = att_len_dust(:, ii)
       end do
       drho_pah(:) = rho_pah(icell,1:npah)
       dust_helper%rho_pah = rho_pah(icell,1:npah)
-      do ii = 1, npah
-         dust_helper%csa_pah(:,ii) = sigca_pah(:, ii)
-         dust_helper%css_pah(:,ii) = sigcs_pah(:, ii)
-         dust_helper%csr_pah(:,ii) = sigcr_pah(:, ii)
-      end do
+      dust_helper%csa_pah = sigca_pah
+      dust_helper%css_pah = sigcs_pah
+      dust_helper%csr_pah = sigcr_pah
 #endif
 
       f_shd = 1.d0
@@ -750,6 +770,9 @@ module rtz_cooling_module
       ne = getNe(dXion, nElement_dep(:))
       neInit = ne
       mu = getMu_RTZ(ne, nElement_dep, dXion)
+#ifdef CALIMA
+      dust_helper%local_mu = mu
+#endif
       TK = dT2 * mu                                        !      Temperature
       if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
       fracMax = 0d0 ! Max fractional update, to check if dt can be increased
@@ -1043,8 +1066,14 @@ module rtz_cooling_module
       !/////////////////////////////////////////
       !//          UPDATE DUST & PAHs         //
       !/////////////////////////////////////////
-      drho_dust(:) = rho_dust(icell,1:ndust) - drho_dust(:)
-      drho_pah(:) = rho_pah(icell,1:npah) - drho_pah(:)
+      call compute_dust_update(dust_helper,total_G0,Tk,rho,ne,nElement_dep(:),dXion(:,:), &
+                              ddt(icell),dx_SS_H2&
+#ifdef RT
+                              ,dNp(:)&
+#endif
+                              )
+      if (ndust > 0) drho_dust(:) = dust_helper%rho_dust
+      if (npah  > 0) drho_pah(:)  = dust_helper%rho_pah
 #endif
 
       !/////////////////////////////////////////
@@ -1574,6 +1603,14 @@ module rtz_cooling_module
       dNp(:) = dNp(:)-Np(:,icell) ; dFp(:,:) = dFp(:,:)-Fp(:,:,icell)
       dp_gas(:)= dp_gas(:)-p_gas(:,icell)
 #endif
+#ifdef CALIMA
+      if (ndust > 0) then
+         drho_dust(:) = drho_dust(:) - rho_dust(icell,:)
+      end if
+      if (npah > 0) then
+         drho_pah(:) = drho_pah(:) - rho_pah(icell,:)
+      end if
+#endif
       ! Now the dUs are really changes, not new values
       ! Update the timestep for the next iteration:
       !  dt_rec = 0.5d0 * ddt(icell) / ((0.07d0 + fracMax)**0.5d0)
@@ -1767,11 +1804,11 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
    !------------------------------------------------------------------------
    use rt_parameters
 #ifdef CALIMA
-   use dust_commons, only: sigca_dust,sigcs_dust,sigcr_dust,&
+   use dust_commons, only: sigca_dust,sigcs_dust,sigcr_dust,sigcrat_dust,&
                            sigca_pah,sigcs_pah,sigcr_pah,&
                            group_csa_dust, group_css_dust, group_csr_dust, &
                            group_csa_pah, group_css_pah, group_csr_pah, &
-                           dust
+                           group_csrat_dust
 #endif
    implicit none
 #ifdef RT
@@ -1801,6 +1838,7 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
       sigca_dust(:,:) = group_csa_dust * rt_c_cgs(ilevel)
       sigcs_dust(:,:) = group_css_dust * rt_c_cgs(ilevel)
       sigcr_dust(:,:) = group_csr_dust * rt_c_cgs(ilevel)
+      sigcrat_dust(:,:) = group_csrat_dust * rt_c_cgs(ilevel)
    end if
    if (npah>0) then
       sigca_pah(:,:) = group_csa_pah * rt_c_cgs(ilevel)

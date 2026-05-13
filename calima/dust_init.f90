@@ -434,6 +434,7 @@ module dust_init
         use hydro_parameters
         use amr_commons, only:myid
         use dust_photoelectric_heating, only: most_negative_allowed_charge
+        use dust_optics, only:getRATCrosssection
         implicit none
         integer, intent(in) :: nGroups
         logical :: check_for_pahs
@@ -653,6 +654,10 @@ module dust_init
                 ! Grain moment of inertia (assuming sphere) [g cm^2]
                 dustbins_props(ii)%grain_inertia = 8d0 * pi * sgrain(ii) * (asize(ii) * 1d-4)**5d0 / 15d0
 
+                ! G0-averaged RAT torque [erg]
+                dustbins_props(ii)%RAT_torque_0 = getRATCrosssection(fixed_lambda_mean,ii) * u_Mathis1983 * fixed_rad_ani * &
+                    & (fixed_lambda_mean * 1d-4/twopi)
+
                 ! Reference gas rotation damping scale [1/g/cm^4]
 #ifdef RTZ
                 dustbins_props(ii)%tau_gas_0 = 3d0 / (4d0 * sqrt(pi) * elements(1)%atomic_mass * amu2g * (asize(ii) * 1d-4)**4d0)
@@ -782,8 +787,6 @@ module dust_init
         smallr_dust = smallr
 
         ! 7. Other constants and parameters
-        if(dust_ratd.and.(.not.ratd_only_rtadv))ratd_switch=.true.
-
 #if NPAH>0
         if (dust_pahs) then
             call init_pah_sputtering_tables

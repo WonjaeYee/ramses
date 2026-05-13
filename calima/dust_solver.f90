@@ -103,7 +103,7 @@ module dust_chemistry_solver
             if(dust_sputtering) dM_spu(ii) = dM_spu(ii) + drhoD_spu(ii)
             if(dust_coagulation) dM_coa(ii) = dM_coa(ii) + drhoD_coa(ii)
             if(dust_shattering) dM_sha(ii) = dM_sha(ii) + drhoD_sha(ii)
-            if(ratd_switch) then
+            if(dust_ratd) then
                                 dM_ratd(ii) = dM_ratd(ii) + drhoD_ratd(ii)
                                 dM_ratd_dest(ii) = dM_ratd_dest(ii) + drhoD_ratd_dest(ii)
             end if
@@ -121,7 +121,7 @@ module dust_chemistry_solver
                 if(pah_freezing) dM_fre(ii) = dM_fre(ii) + drhoD_fre(ii)
                 ! if(pah_desorption) dM_deso = dM_deso + drhoD_deso
                 dM_sha(ii) = dM_sha(ii) + drhoD_sha(ii)
-                if (ratd_switch) dM_ratd(ii) = dM_ratd(ii) + drhoD_ratd(ii)
+                if (dust_ratd) dM_ratd(ii) = dM_ratd(ii) + drhoD_ratd(ii)
             end do
         end if
     end subroutine update_dust_counter
@@ -156,9 +156,9 @@ module dust_chemistry_solver
                             , rho_dust, T_dust &
                             , Zdust_mean, fcharge_pahs &
                             , rho, G0_total &
-                            , ne, sigma,local_mu &
+                            , sigma,local_mu &
                             , gamma_RAT, FIR &
-                            , nElement &
+                            , ne, nElement &
                             , xelem_ions &
                             , global_check)
         ! Main routine for the update of dust during cooling
@@ -188,7 +188,7 @@ module dust_chemistry_solver
         real(dp),intent(inout)                    :: xelem_ions(1:n_elements,1:n_elements)
 
         logical                                   :: okdust,global_check
-        logical,dimension(1:ndchemtype)           :: int_ratd_switch=.false.,int_acc_switch=.false.
+        logical,dimension(1:ndchemtype)           :: int_dust_ratd=.false.,int_acc_switch=.false.
         logical,dimension(1:ndust+npah)           :: update_switch
         logical                                   :: has_pah_interaction
         logical,dimension(1:n_elements)           :: tracked_elements
@@ -392,7 +392,7 @@ module dust_chemistry_solver
 
         if(dust_shattering.and.dust_turbulent_model) oneovertsha_dest = 1d0/t_sha_dest
         if(dust_coagulation) oneovertcoa = 1d0/t_coa
-        if(ratd_switch) then
+        if(dust_ratd) then
             oneovertratd(1:ndust) = 1d0/t_ratd(1+npah:ndust+npah)
             oneovertratd_dest(1:ndust) = 1d0/t_ratd_dest(1+npah:ndust+npah)
         end if
@@ -403,7 +403,7 @@ module dust_chemistry_solver
             if(pah_coalescence) oneovertcoal = 1d0/t_coal
             if(pah_freezing) oneovertfre(1:npah,:) = 1d0/t_fre(1:npah,:)
             if(pah_cluster_evaporation) oneovertevap = 1d0/t_evap(1:npah)
-            if(ratd_switch) oneovertratd(1:npah) = 1d0/t_ratd(1:npah)
+            if(dust_ratd) oneovertratd(1:npah) = 1d0/t_ratd(1:npah)
             if(dust_shattering.and.dust_turbulent_model) oneovertsha_dest_pah = 1d0/t_sha_dest_pah
         end if
         
@@ -413,7 +413,7 @@ module dust_chemistry_solver
             if(dust_sputtering)   t0(ii,2) = 0.1d0 * t_spu(ii-npah)
             if(dust_shattering)   t0(ii,3) = 0.1d0 * minval(t_sha(ii-npah,ii-npah,:))
             if(dust_coagulation)  t0(ii,4) = 0.1d0 * minval(t_coa(ii-npah,:))
-            if(ratd_switch)then
+            if(dust_ratd)then
                                   t0(ii,5) = 0.1d0 * t_ratd(ii)
                                   t0(ii,6) = 0.1d0 * t_ratd_dest(ii)
             end if
@@ -427,7 +427,7 @@ module dust_chemistry_solver
                 ! if(pah_desorption) t0(ii,12) = 0.1d0 * t_deso(ii)
                 if(pah_freezing) t0(ii,13) = 0.1d0 * minval(t_fre(ii,:))
                 if(pah_cluster_evaporation) t0(ii,14) = 0.1d0 * t_evap(ii)
-                if(ratd_switch) t0(ii,5) = 0.1d0 * t_ratd(ii)
+                if(dust_ratd) t0(ii,5) = 0.1d0 * t_ratd(ii)
             end do
         end if
 
@@ -443,8 +443,11 @@ module dust_chemistry_solver
         end if
 
         global_check = check_update_dust(t0,ddt,rho,rho_dust,rho_pah,nElement,tracked_elements)
-
+        print*,'check_update_dust ',global_check,' t0 ',t0,' ddt ',ddt,' rho ',rho,' rho_dust ',rho_dust,' rho_pah ',rho_pah, ' tracked_elements ',tracked_elements,' nElement ',nElement
+        call clean_stop
         if (.not.global_check) return
+        print*,'t_acc ',t_acc
+        call clean_stop
 
         ! Now, loop over dust species and update their densities
         rkloop: do jj=1,ndchemtype
@@ -524,7 +527,7 @@ module dust_chemistry_solver
             ! TODO: This is a temporary fix
             ! If RATD timescales become incredibly tinny with high G0, we just
             ! destroy all dust and stop the update of that grain
-            if (ratd_switch) then
+            if (dust_ratd) then
                 do ii=jj2,jj1,-1
                     if (t_ratd(ii)/ddt < 1d-2) then
                         update_switch(ii) = .false.
@@ -714,7 +717,7 @@ module dust_chemistry_solver
                 if(dust_sputtering) drhoD_spu(ii) = drhoD_spu(ii)*vol_loc 
                 if(dust_coagulation) drhoD_coa(ii)= drhoD_coa(ii)*vol_loc 
                 if(dust_shattering) drhoD_sha(ii) = drhoD_sha(ii)*vol_loc 
-                if(ratd_switch) then
+                if(dust_ratd) then
                                     drhoD_ratd(ii) = drhoD_ratd(ii)*vol_loc
                                     drhoD_ratd_dest(ii) = drhoD_ratd_dest(ii)*vol_loc
                 end if
@@ -730,7 +733,7 @@ module dust_chemistry_solver
                     drhoD_sha(ii) = drhoD_sha(ii)*vol_loc
                     if(pah_coalescence) drhoD_coal(ii) = drhoD_coal(ii)*vol_loc 
                     if(pah_freezing) drhoD_fre(ii) = drhoD_fre(ii)*vol_loc
-                    if(ratd_switch) drhoD_ratd(ii) = drhoD_ratd(ii)*vol_loc
+                    if(dust_ratd) drhoD_ratd(ii) = drhoD_ratd(ii)*vol_loc
                 end do
             end if
         end if
@@ -758,37 +761,37 @@ module dust_chemistry_solver
             if(dust_sputtering) call compute_t_sputtering_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                          T_dust,Zdust_mean,gamma_RAT,FIR, &
                                          nElement,xelem_ions,fcharge_pahs, &
-                                         lead_elem,nions_lead,int_ratd_switch, &
+                                         lead_elem,nions_lead,int_dust_ratd, &
                                          boost_acc,boost_coa,rhoZ0_lim, &
                                          t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
             if(dust_accretion) call compute_t_accretion_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                        T_dust,Zdust_mean,gamma_RAT,FIR, &
                                        nElement,xelem_ions,fcharge_pahs, &
-                                       lead_elem,nions_lead,int_ratd_switch, &
+                                       lead_elem,nions_lead,int_dust_ratd, &
                                        boost_acc,boost_coa,rhoZ0_lim, &
                                        t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
             if(dust_coagulation) call compute_t_coagulation_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                            T_dust,Zdust_mean,gamma_RAT,FIR, &
                                            nElement,xelem_ions,fcharge_pahs, &
-                                           lead_elem,nions_lead,int_ratd_switch, &
+                                           lead_elem,nions_lead,int_dust_ratd, &
                                            boost_acc,boost_coa,rhoZ0_lim, &
                                            t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
             if(dust_shattering) call compute_t_shattering_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                          T_dust,Zdust_mean,gamma_RAT,FIR, &
                                          nElement,xelem_ions,fcharge_pahs, &
-                                         lead_elem,nions_lead,int_ratd_switch, &
+                                         lead_elem,nions_lead,int_dust_ratd, &
                                          boost_acc,boost_coa,rhoZ0_lim, &
                                          t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
-            if(ratd_switch) call compute_t_ratd_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
+            if(dust_ratd) call compute_t_ratd_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                    T_dust,Zdust_mean,gamma_RAT,FIR, &
                                    nElement,xelem_ions,fcharge_pahs, &
-                                   lead_elem,nions_lead,int_ratd_switch, &
+                                   lead_elem,nions_lead,int_dust_ratd, &
                                    boost_acc,boost_coa,rhoZ0_lim, &
                                    t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
             if(npah>0) call compute_t_pah_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                    T_dust,Zdust_mean,gamma_RAT,FIR, &
                                    nElement,xelem_ions,fcharge_pahs, &
-                                   lead_elem,nions_lead,int_ratd_switch, &
+                                   lead_elem,nions_lead,int_dust_ratd, &
                                    boost_acc,boost_coa,rhoZ0_lim, &
                                    t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl_pah,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         end subroutine compute_dust_local_rates
@@ -929,7 +932,7 @@ module dust_chemistry_solver
                         write(*,*)'stopping in dust processing ii,icount,idec_step>',ii,icount(jj1:jj2),idec_step(jj1:jj2)
                         write(*,*)'dtloc_init/ddt,dtloc/ddt,dtloc_bin/ddt,dtremain/ddt',dtloc_init/ddt,dtloc/ddt,dtloc_bin(jj1:jj2)/ddt,dtremain/ddt
                         write(*,*)'update_switch ',update_switch(jj1:jj2)
-                        write(*,*)'int_ratd_switch ',int_ratd_switch(jj)
+                        write(*,*)'int_dust_ratd ',int_dust_ratd(jj)
                         call print_tracked_elements_state('Tracked element number densities:')
                         write(*,*)'rhoD0',rhoD0
                         write(*,*)'rhoD',rhoD
@@ -1059,7 +1062,7 @@ module dust_chemistry_solver
                         coa_stage(ii)=coa_stage(ii) + stage_weight*dd
                     endif
                 end if
-                if(int_ratd_switch(jj).and.update_switch(jj1).and.(ii==jj2)) then
+                if(int_dust_ratd(jj).and.update_switch(jj1).and.(ii==jj2)) then
                     dd = rhoD_stage(ii)*oneovertratd_dest(ii)
                     k_gas_stage(1) = k_gas_stage(1) + dd
                     k_stage(ii)= k_stage(ii) - dd
@@ -1199,7 +1202,7 @@ module dust_chemistry_solver
                         k_stage(jj2)= k_stage(jj2) + dd_stage
                         coa_stage(jj2)= coa_stage(jj2) + stage_weight*dd_stage
                     end if
-                    if(int_ratd_switch(jj).and.(ii==jj2))then
+                    if(int_dust_ratd(jj).and.(ii==jj2))then
                         dd_stage = rhoD_stage(ii)*oneovertratd_dest(ii)
                         k_gas_stage(1) = k_gas_stage(1) + dd_stage
                         k_stage(ii) = k_stage(ii) - dd_stage
@@ -1403,7 +1406,7 @@ module dust_chemistry_solver
                         write(*,*)'stopping in dust+PAHs processing ii,icount,idec_step>',ii,icount(jj1:jj2),idec_step(jj1:jj2)
                         write(*,*)'dtloc_init/ddt,dtloc/ddt,dtloc_bin/ddt,dtremain/ddt',dtloc_init/ddt,dtloc/ddt,dtloc_bin(jj1:jj2)/ddt,dtremain/ddt
                         write(*,*)'update_switch ',update_switch(jj1:jj2)
-                        write(*,*)'int_ratd_switch ',int_ratd_switch(jj)
+                        write(*,*)'int_dust_ratd ',int_dust_ratd(jj)
                         call print_tracked_elements_state('Tracked element number densities:')
                         write(*,*)'rhoD0',rhoD0(jj1:jj2)
                         write(*,*)'rhoD',rhoD(jj1:jj2)

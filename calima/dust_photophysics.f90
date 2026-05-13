@@ -177,10 +177,12 @@ module dust_optics
         if (ndust>0) then
             allocate(group_csa_dust(1:nGroups,1:ndust),&
                      group_css_dust(1:nGroups,1:ndust),&
-                     group_csr_dust(1:nGroups,1:ndust))
+                     group_csr_dust(1:nGroups,1:ndust),&
+                     group_csrat_dust(1:nGroups,1:ndust))
             allocate(sigca_dust(1:nGroups,1:ndust),&
                      sigcs_dust(1:nGroups,1:ndust),&
-                     sigcr_dust(1:nGroups,1:ndust))
+                     sigcr_dust(1:nGroups,1:ndust),&
+                     sigcrat_dust(1:nGroups,1:ndust))
         end if
 
         if (npah > 0) then
@@ -318,12 +320,12 @@ module dust_optics
         end if
 
         if (npah>0) then
-            allocate(group_csa_pah(1:nGroups,1:npah),&
-                     group_css_pah(1:nGroups,1:npah),&
-                     group_csr_pah(1:nGroups,1:npah))
-            allocate(sigca_pah(1:nGroups,1:npah),&
-                     sigcs_pah(1:nGroups,1:npah),&
-                     sigcr_pah(1:nGroups,1:npah))
+            allocate(group_csa_pah(1:nGroups,1:2*npah),&
+                     group_css_pah(1:nGroups,1:2*npah),&
+                     group_csr_pah(1:nGroups,1:2*npah))
+            allocate(sigca_pah(1:nGroups,1:2*npah),&
+                     sigcs_pah(1:nGroups,1:2*npah),&
+                     sigcr_pah(1:nGroups,1:2*npah))
         end if
 
     end subroutine init_dust_efficiency_tables
@@ -839,6 +841,7 @@ module dust_optics
         !   group_csa_dust(nGroups, ndust) - absorption cross-section per group
         !   group_css_dust(nGroups, ndust) - scattering cross-section per group
         !   group_csr_dust(nGroups, ndust) - rad-pressure cross-section per group
+        !   group_csrat_dust(nGroups, ndust) - RAT cross-section per group
         !   att_len_dust(nGroups, ndust)   - photon attenuation length per group
         !   group_csa_pah(nGroups, npah)   - PAH absorption cross-section per group
         !   group_css_pah(nGroups, npah)   - PAH scattering cross-section per group
@@ -854,7 +857,7 @@ module dust_optics
         real(kind=8) :: lambda_min, lambda_max, delta_lambda, tmp
         real(kind=8) :: X(1000), Y(1000)
         real(kind=8) :: B_lam, norm, result
-        integer :: ip, ii, isize
+        integer :: ip, ii, isize, idx_n, idx_i
         logical :: skip_group
 
         ! Allocate group arrays if not already done
@@ -862,11 +865,14 @@ module dust_optics
         if (.not. allocated(group_css_dust)) allocate(group_css_dust(nGroups, ndust))
         if (.not. allocated(group_csr_dust)) allocate(group_csr_dust(nGroups, ndust))
         if (.not. allocated(att_len_dust)) allocate(att_len_dust(nGroups, ndust))
+        ! RAT cross-sections per group/dust-bin
+        if (.not. allocated(group_csrat_dust)) allocate(group_csrat_dust(nGroups, ndust))
 
         if (npah > 0) then
-            if (.not. allocated(group_csa_pah)) allocate(group_csa_pah(nGroups, npah))
-            if (.not. allocated(group_css_pah)) allocate(group_css_pah(nGroups, npah))
-            if (.not. allocated(group_csr_pah)) allocate(group_csr_pah(nGroups, npah))
+            ! PAH group arrays store neutral and ion interlaced: (nGroups, 2*npah)
+            if (.not. allocated(group_csa_pah)) allocate(group_csa_pah(nGroups, 2*npah))
+            if (.not. allocated(group_css_pah)) allocate(group_css_pah(nGroups, 2*npah))
+            if (.not. allocated(group_csr_pah)) allocate(group_csr_pah(nGroups, 2*npah))
         end if
 
         ! Initialize to zero
@@ -874,6 +880,7 @@ module dust_optics
         group_css_dust = 0.d0
         group_csr_dust = 0.d0
         att_len_dust = 0.d0
+        group_csrat_dust = 0.d0
         if (npah > 0) then
             group_csa_pah = 0.d0
             group_css_pah = 0.d0
@@ -919,20 +926,37 @@ module dust_optics
                 ! Attenuation length: integral of f*Y*lambda*la over wavelength
                 result = integrate_dust_attenuationlength(X, Y, 1000, isize)
                 att_len_dust(ip, isize) = result / norm
+
+                ! RAT cross-section: use helper trapezoidal integrator
+                result = integrate_dust_RAT(X, Y, 1000, isize)
+                group_csrat_dust(ip, isize) = result / norm
             end do
 
             ! Process each PAH bin
             if (npah > 0) then
                 do isize = 1, npah
-                    ! For neutral PAHs (ion=1)
+                    idx_n = 2*(isize-1) + 1  ! neutral index
+                    idx_i = 2*(isize-1) + 2  ! ion index
+
+                    ! Neutral PAHs (ion=1)
                     result = integrate_pah_absorbtion(X, Y, 1000, isize, 1)
-                    group_csa_pah(ip, isize) = result / norm
-                    
+                    group_csa_pah(ip, idx_n) = result / norm
+
                     result = integrate_pah_scattering(X, Y, 1000, isize, 1)
-                    group_css_pah(ip, isize) = result / norm
-                    
+                    group_css_pah(ip, idx_n) = result / norm
+
                     result = integrate_pah_radpressure(X, Y, 1000, isize, 1)
-                    group_csr_pah(ip, isize) = result / norm
+                    group_csr_pah(ip, idx_n) = result / norm
+
+                    ! Ionised PAHs (ion=2)
+                    result = integrate_pah_absorbtion(X, Y, 1000, isize, 2)
+                    group_csa_pah(ip, idx_i) = result / norm
+
+                    result = integrate_pah_scattering(X, Y, 1000, isize, 2)
+                    group_css_pah(ip, idx_i) = result / norm
+
+                    result = integrate_pah_radpressure(X, Y, 1000, isize, 2)
+                    group_csr_pah(ip, idx_i) = result / norm
                 end do
             end if
         end do  ! end loop over groups
@@ -1014,6 +1038,21 @@ module dust_optics
             end if
         end do
     end function integrate_dust_attenuationlength
+
+    function integrate_dust_RAT(X, Y, N, isize) result(integral)
+        implicit none
+        integer, intent(in) :: N, isize
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral, sigma
+        integer :: i
+
+        integral = 0.d0
+        do i = 1, N - 1
+            sigma = getRATCrosssection(X(i), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getRATCrosssection(X(i+1), isize)) &
+                                  * (X(i+1) - X(i))
+        end do
+    end function integrate_dust_RAT
 
     function integrate_pah_absorbtion(X, Y, N, isize, ion) result(integral)
         implicit none
@@ -1466,8 +1505,8 @@ module dust_radiation
             else
                 pah_ion_fraction = 0d0
             end if
-            rad_pah_rate = rad_pah_rate + ((1d0-pah_ion_fraction)*cross_sec((i-1)*npah+1) + &
-                            & pah_ion_fraction * cross_sec((i-1)*npah+2))* (rho_pah(i) / pahbins_props(i)%mpah)
+            rad_pah_rate = rad_pah_rate + ((1d0-pah_ion_fraction)*cross_sec((i-1)*2+1) + &
+                            & pah_ion_fraction * cross_sec((i-1)*2+2))* (rho_pah(i) / pahbins_props(i)%mpah)
         end do
     end function rad_pah_rate
 
@@ -1825,7 +1864,7 @@ module dust_radiative_torques
 
     contains
 
-    function total_radiative_torque(rad_anisotropy,dNp,group_egy_erg,G0,nGroups,local_c,csrat_dust)
+    function total_radiative_torque(rad_anisotropy,dNp,group_egy_erg,nGroups,local_c,csrat_dust)
         ! This function computes the local radiative torque caused
         ! by the different radiation bins on a particular dust grain
         ! based on the RAT model (see Hoang et al. 2020 for a review)
@@ -1834,7 +1873,7 @@ module dust_radiative_torques
         implicit none
         integer, intent(in) :: nGroups
         real(dp), dimension(1:nGroups) :: dNp,csrat_dust,group_egy_erg,rad_anisotropy
-        real(dp) :: G0,local_c
+        real(dp) :: local_c
         real(dp) :: total_radiative_torque
 
         integer  :: igroup,idim
@@ -1842,23 +1881,19 @@ module dust_radiative_torques
 
         total_radiative_torque = 0d0
 
-        lambda_mean = fixed_lambda_mean
-
         do igroup = 1, nGroups
             if (dNp(igroup) .lt. 0d0) cycle
 
             ! 1. Compute mean wavelength [cm] of radiation bin
-            if (fixed_lambda_mean .eq. -1d0) then
-                lambda_mean = hplanck * c_cgs / (group_egy_erg(igroup))
-            end if
+            lambda_mean = hplanck * c_cgs / (group_egy_erg(igroup))
 
-            ! 2. Compute radiation energy density (including the background G0) in [erg/cm^3]
-            rad_density = group_egy_erg(igroup) * dNp(igroup) + G0 * 5.29d-14
+            ! 2. Compute radiation energy density in [erg/cm^3]
+            rad_density = group_egy_erg(igroup) * dNp(igroup)
 
             ! 3. Get everything together into the formula of radiative torque [erg]
             !    (Eq. 13 in Hoang et al. (2021))
             total_radiative_torque = total_radiative_torque + csrat_dust(igroup) * &
-                                    & rad_density * rad_anisotropy(igroup) * (lambda_mean / (twopi))
+                                    & rad_density * rad_anisotropy(igroup) * (lambda_mean / (local_c * twopi))
         end do
     end function total_radiative_torque
 

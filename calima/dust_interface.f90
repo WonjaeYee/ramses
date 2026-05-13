@@ -7,7 +7,8 @@ module dust_interface
     private
 
     public :: compute_dust_rad_rates,compute_dust_precool,&
-            compute_dust_coolrates,compute_local_anisotropy_factor
+            compute_dust_coolrates,compute_local_anisotropy_factor,&
+            compute_dust_update
 
 contains
     subroutine compute_local_anisotropy_factor(dinfo,Fp,Np)
@@ -113,6 +114,17 @@ contains
     subroutine compute_dust_precool(dinfo, G0_total, Tk, ne,&
                                     &nElement, xelem_ions, nH2, nCO, &
                                     & Np)
+        ! Pre-computes the dust and PAH cooling and heating rates for the given local conditions, 
+        ! which can then be used in subsequent calls to compute_dust_coolrates to save computational time.
+        ! dinfo --> the DustChemistryInfo instance to update with the computed rates
+        ! G0_total --> local radiation field strength in units of the Habing field
+        ! Tk --> local gas temperature (K)
+        ! ne --> local electron density (cm^-3)
+        ! nElement --> array of number densities for each element (cm^-3)
+        ! xelem_ions --> array of ionization fractions for each element and ionization state
+        ! nH2 --> local molecular hydrogen density (cm^-3)
+        ! nCO --> local carbon monoxide density (cm^-3)
+        ! Np --> the radiation energy density (#/cm^3) for each radiation group
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
                                 compute_dust_charge_dist, compute_Coulomb_focusing
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
@@ -220,10 +232,10 @@ contains
                                                             dinfo%Pabs_pah(1,ii),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                            dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                            dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
-                                                            dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                            dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
+                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,dinfo%fcharge_pah(:,ii),&
@@ -242,10 +254,10 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                        dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                        dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
-                                                        dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                        dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
+                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,dinfo%fcharge_pah(:,ii))
@@ -265,6 +277,21 @@ contains
                                     &nElement, xelem_ions, nH2, nCO, &
                                     &total_rec_power, total_inj_power, total_col_power,&
                                     &H2_formation_rate,Np)
+        ! Computes the dust and PAH cooling and heating rates for the given local conditions,
+        ! using the pre-computed rates from compute_dust_precool if available to save computational time.
+        ! dinfo --> the DustChemistryInfo instance to update with the computed rates
+        ! G0_total --> local radiation field strength in units of the Habing field
+        ! Tk --> local gas temperature (K)
+        ! ne --> local electron density (cm^-3)
+        ! nElement --> array of number densities for each element (cm^-3)
+        ! xelem_ions --> array of ionization fractions for each element and ionization state
+        ! nH2 --> local molecular hydrogen density (cm^-3)
+        ! nCO --> local carbon monoxide density (cm^-3)
+        ! total_rec_power --> output total recombination cooling power from dust and PAHs (erg/s/cm^3)
+        ! total_inj_power --> output total photoelectric heating power from dust and PAHs (erg/s/cm^3)
+        ! total_col_power --> output total collisional cooling power from dust (erg/s/cm^3)
+        ! H2_formation_rate --> output H2 formation rate on dust grains (cm^3/s)
+        ! Np --> the radiation energy density (#/cm^3) for each radiation group
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
                                 compute_dust_charge_dist, compute_Coulomb_focusing
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
@@ -416,10 +443,10 @@ contains
                                                             Pabs_pah(1,ii),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                            dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                            dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
-                                                            dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                            dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
+                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
@@ -438,10 +465,10 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                        dinfo%csa_pah(:,1+(ii-1)*dinfo%npah),&
-                                                        dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
-                                                        dinfo%csa_pah(:,2+(ii-1)*dinfo%npah),&
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                        dinfo%csa_pah(:,1+2*(ii-1)),&
+                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
+                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,fcharge_pah(:,ii))
@@ -458,4 +485,47 @@ contains
             total_inj_power = total_inj_power + sum(Pinj_pah)
         end if
     end subroutine compute_dust_coolrates
+
+    subroutine compute_dust_update(dinfo,G0_total,Tk,rho_total,&
+                                    ne,nElement,xelem_ions,dt,dx,Np)
+
+        use dust_chemistry_solver, only: dust_fine
+        use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
+
+        implicit none
+
+        ! ---- Inputs ----
+        class(DustChemistryInfo), intent(inout) :: dinfo
+        real(dp), intent(in) :: G0_total, Tk, rho_total, dt, dx
+        real(dp), intent(inout) :: ne, nElement(:), xelem_ions(:,:)
+        real(dp), intent(in), optional :: Np(:)
+
+        ! --- Local variables ----
+        integer :: ii
+        logical :: global_check
+        real(dp), dimension(1:dinfo%ndust) :: gamma_RAT,FIR
+
+        ! 1. Compute the local RAT-D quantities if we run with dust_ratd
+        if (dust_ratd) then
+            gamma_RAT = 0d0
+            FIR = 0d0
+            if (present(Np)) then
+                do ii = 1, dinfo%ndust
+                    gamma_RAT(ii) = total_radiative_torque(dinfo%local_rad_ani,Np,&
+                                                            dinfo%group_eV(:)*eV2erg,dinfo%nGroups,&
+                                                            dinfo%local_c,dinfo%csrat_dust(:,ii))
+                end do
+            end if
+            FIR = IR_damping_factor(G0_total*1.13d0,nElement(1),Tk,dinfo%T_dust)
+            do ii = 1, dinfo%ndust
+                gamma_RAT(ii) = gamma_RAT(ii) + dustbins_props(ii)%RAT_torque_0 * dinfo%G0_background
+            end do
+        end if
+
+        ! 2. Now call the main routine of CALIMA: updating the local dust properties with dust_fine
+        call dust_fine(dt,dx,Tk,dinfo%rho_pah,dinfo%rho_dust,dinfo%T_dust,dinfo%Z_dust,&
+                        dinfo%fcharge_pah,rho_total,G0_total,dinfo%local_sigma,dinfo%local_mu,&
+                        gamma_RAT,FIR,ne,nElement,xelem_ions,global_check)
+
+    end subroutine compute_dust_update
 end module dust_interface

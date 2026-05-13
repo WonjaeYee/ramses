@@ -15,7 +15,7 @@ contains
     subroutine compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                        T_dust,Zmean_dust,gamma_RAT,FIR, &
                                        nElement,xelem_ions,fcharge_pahs, &
-                                       lead_elem,nions_lead,int_ratd_switch, &
+                                       lead_elem,nions_lead,int_dust_ratd, &
                                        boost_acc,boost_coa,rhoZ_lim, &
                                        t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                        do_sputtering,do_accretion,do_coagulation,do_shattering,do_ratd, &
@@ -28,7 +28,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -47,7 +47,7 @@ contains
         if (present(do_coagulation)) run_coagulation = do_coagulation
         run_shattering = dust_shattering
         if (present(do_shattering)) run_shattering = do_shattering
-        run_ratd = ratd_switch
+        run_ratd = dust_ratd
         if (present(do_ratd)) run_ratd = do_ratd
 
         run_pah_sputtering = pah_sputtering
@@ -1027,7 +1027,7 @@ contains
                     t_comb = 0d0
                     t_temp = 0d0
                     if (w_RAT(dust_parent) .ge. dustbins_props(dust_parent)%w_disr) then
-                        int_ratd_switch(k) = .true.
+                        int_dust_ratd(k) = .true.
                         t_temp = dustbins_props(dust_parent)%grain_inertia * dustbins_props(dust_parent)%w_disr / gamma_RAT(dust_parent)
 
                         ! Contribution to gas-phase destruction
@@ -1069,7 +1069,7 @@ contains
     subroutine compute_t_sputtering_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                           T_dust,Zmean_dust,gamma_RAT,FIR, &
                                           nElement,xelem_ions,fcharge_pahs, &
-                                          lead_elem,nions_lead,int_ratd_switch, &
+                                          lead_elem,nions_lead,int_dust_ratd, &
                                           boost_acc,boost_coa,rhoZ_lim, &
                                           t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         implicit none
@@ -1079,7 +1079,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -1087,7 +1087,7 @@ contains
         call compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                      T_dust,Zmean_dust,gamma_RAT,FIR, &
                                      nElement,xelem_ions,fcharge_pahs, &
-                                     lead_elem,nions_lead,int_ratd_switch, &
+                                     lead_elem,nions_lead,int_dust_ratd, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_sputtering=.true.)
@@ -1096,7 +1096,7 @@ contains
     subroutine compute_t_accretion_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                          T_dust,Zmean_dust,gamma_RAT,FIR, &
                                          nElement,xelem_ions,fcharge_pahs, &
-                                         lead_elem,nions_lead,int_ratd_switch, &
+                                         lead_elem,nions_lead,int_dust_ratd, &
                                          boost_acc,boost_coa,rhoZ_lim, &
                                          t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         implicit none
@@ -1106,7 +1106,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -1114,7 +1114,7 @@ contains
         call compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                      T_dust,Zmean_dust,gamma_RAT,FIR, &
                                      nElement,xelem_ions,fcharge_pahs, &
-                                     lead_elem,nions_lead,int_ratd_switch, &
+                                     lead_elem,nions_lead,int_dust_ratd, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_accretion=.true.)
@@ -1123,7 +1123,7 @@ contains
     subroutine compute_t_coagulation_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                            T_dust,Zmean_dust,gamma_RAT,FIR, &
                                            nElement,xelem_ions,fcharge_pahs, &
-                                           lead_elem,nions_lead,int_ratd_switch, &
+                                           lead_elem,nions_lead,int_dust_ratd, &
                                            boost_acc,boost_coa,rhoZ_lim, &
                                            t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         implicit none
@@ -1133,7 +1133,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -1141,7 +1141,7 @@ contains
         call compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                      T_dust,Zmean_dust,gamma_RAT,FIR, &
                                      nElement,xelem_ions,fcharge_pahs, &
-                                     lead_elem,nions_lead,int_ratd_switch, &
+                                     lead_elem,nions_lead,int_dust_ratd, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_coagulation=.true.)
@@ -1150,7 +1150,7 @@ contains
     subroutine compute_t_shattering_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                           T_dust,Zmean_dust,gamma_RAT,FIR, &
                                           nElement,xelem_ions,fcharge_pahs, &
-                                          lead_elem,nions_lead,int_ratd_switch, &
+                                          lead_elem,nions_lead,int_dust_ratd, &
                                           boost_acc,boost_coa,rhoZ_lim, &
                                           t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         implicit none
@@ -1160,7 +1160,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -1168,7 +1168,7 @@ contains
         call compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                      T_dust,Zmean_dust,gamma_RAT,FIR, &
                                      nElement,xelem_ions,fcharge_pahs, &
-                                     lead_elem,nions_lead,int_ratd_switch, &
+                                     lead_elem,nions_lead,int_dust_ratd, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_shattering=.true.)
@@ -1177,7 +1177,7 @@ contains
     subroutine compute_t_ratd_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                     T_dust,Zmean_dust,gamma_RAT,FIR, &
                                     nElement,xelem_ions,fcharge_pahs, &
-                                    lead_elem,nions_lead,int_ratd_switch, &
+                                    lead_elem,nions_lead,int_dust_ratd, &
                                     boost_acc,boost_coa,rhoZ_lim, &
                                     t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         implicit none
@@ -1187,7 +1187,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -1195,7 +1195,7 @@ contains
         call compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                      T_dust,Zmean_dust,gamma_RAT,FIR, &
                                      nElement,xelem_ions,fcharge_pahs, &
-                                     lead_elem,nions_lead,int_ratd_switch, &
+                                     lead_elem,nions_lead,int_dust_ratd, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_ratd=.true.)
@@ -1204,7 +1204,7 @@ contains
     subroutine compute_t_pah_rates(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                    T_dust,Zmean_dust,gamma_RAT,FIR, &
                                    nElement,xelem_ions,fcharge_pahs, &
-                                   lead_elem,nions_lead,int_ratd_switch, &
+                                   lead_elem,nions_lead,int_dust_ratd, &
                                    boost_acc,boost_coa,rhoZ_lim, &
                                    t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest)
         implicit none
@@ -1214,7 +1214,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: fcharge_pahs(:,:)
         integer, intent(in) :: lead_elem(:), nions_lead(:)
-        logical, intent(inout) :: int_ratd_switch(:)
+        logical, intent(inout) :: int_dust_ratd(:)
         real(dp), intent(in) :: boost_acc(:), boost_coa(:), rhoZ_lim(:,:)
         real(dp), intent(inout) :: t_acc(:,:), t_coa(:,:), t_sha(:,:,:), t_sha_pah(:,:,:)
         real(dp), intent(inout) :: t_spu(:), t_spu_pah(:), t_subl(:), t_coal(:), t_fre(:,:), t_evap(:), t_ratd(:), t_ratd_dest(:)
@@ -1222,7 +1222,7 @@ contains
         call compute_dust_timescales(Tk,nH,rho,dx_loc,sigma,local_mu,lambda_jeans,G0_total,ne, &
                                      T_dust,Zmean_dust,gamma_RAT,FIR, &
                                      nElement,xelem_ions,fcharge_pahs, &
-                                     lead_elem,nions_lead,int_ratd_switch, &
+                                     lead_elem,nions_lead,int_dust_ratd, &
                                      boost_acc,boost_coa,rhoZ_lim, &
                                      t_acc,t_coa,t_sha,t_sha_pah,t_spu,t_spu_pah,t_subl,t_coal,t_fre,t_evap,t_ratd,t_ratd_dest, &
                                      do_pah_sputtering=.true.,do_pah_sublimation=.true.,do_pah_coalescence=.true., &

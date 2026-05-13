@@ -27,6 +27,8 @@ module dustbin_types
         real(dp) :: H2_formation_rate = 0d0 ! H2 formation rate on dust
         real(dp) :: G0_background = 0d0 ! Background radiation field in units of Habing field
         real(dp) :: local_c = 0d0 ! Local reduced speed of light (cm/s)
+        real(dp) :: local_mu = 0d0 ! Local mean molecular weight (in units of H mass)
+        real(dp) :: local_sigma = 0d0 ! Local gas velocity dispersion (cm/s)
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV
@@ -50,12 +52,15 @@ module dustbin_types
         real(dp),dimension(:,:),allocatable :: csa_dust ! Dust absorption cross section
         real(dp),dimension(:,:),allocatable :: css_dust ! Dust scattering cross section
         real(dp),dimension(:,:),allocatable :: csr_dust ! Dust radiation pressure cross section
+        real(dp),dimension(:,:),allocatable :: csrat_dust ! Dust RAT-D cross section
         real(dp),dimension(:,:),allocatable :: csa_pah ! PAH absorption cross section
         real(dp),dimension(:,:),allocatable :: css_pah ! PAH scattering cross section
         real(dp),dimension(:,:),allocatable :: csr_pah ! PAH radiation pressure cross section
         real(dp),dimension(:),allocatable :: dustAbs ! Dust absorption rate [1/s]
         real(dp),dimension(:),allocatable :: pahAbs ! PAH absorption rate [1/s]
         real(dp),dimension(:,:),allocatable :: Coulomb_factor ! Coulomb enhancement factor
+        real(dp),dimension(:),allocatable :: rat_torque ! Radiative torque on dust grains
+        real(dp),dimension(:),allocatable :: IR_damp_factor ! Infrared damping factor for grain rotation
     contains
         procedure :: init => init_dust_chemistry_info
         procedure :: reset => reset_dust_chemistry_info
@@ -94,6 +99,7 @@ module dustbin_types
         real(dp) :: w_disr                  ! Rotation rate at which grain disruption occurs (rad/s)
         real(dp) :: grain_inertia           ! Grain moment of inertia (g cm2)
         real(dp) :: tau_gas_0               ! Reference gas damping time (s)
+        real(dp) :: RAT_torque_0            ! Reference radiative torque (erg) for a radiation field of 1 Habing
         real(dp) :: SNsha_eff               ! SN shattering efficiency for grain size
         real(dp) :: t0_coa                  ! Reference time for coagulation (s)
         real(dp) :: t0_sha                  ! Reference time for shattering (s)
@@ -197,6 +203,8 @@ contains
         this%H2_formation_rate = 0d0
         this%G0_background = 0d0
         this%local_c = 0d0
+        this%local_mu = 0d0
+        this%local_sigma = 0d0
 
         if (allocated(this%rho_dust)) deallocate(this%rho_dust)
         allocate(this%rho_dust(1:this%ndust))
@@ -275,6 +283,10 @@ contains
         allocate(this%csr_dust(1:this%nGroups,1:this%ndust))
         this%csr_dust = 0d0
 
+        if (allocated(this%csrat_dust)) deallocate(this%csrat_dust)
+        allocate(this%csrat_dust(1:this%nGroups,1:this%ndust))
+        this%csrat_dust = 0d0
+
         if (allocated(this%csa_pah)) deallocate(this%csa_pah)
         allocate(this%csa_pah(1:this%nGroups,1:2*this%npah))
         this%csa_pah = 0d0
@@ -314,6 +326,14 @@ contains
         if (allocated(this%group_eV)) deallocate(this%group_eV)
         allocate(this%group_eV(1:this%nGroups))
         this%group_eV = 0d0
+
+        if (allocated(this%rat_torque)) deallocate(this%rat_torque)
+        allocate(this%rat_torque(1:this%ndust))
+        this%rat_torque = 0d0
+
+        if (allocated(this%IR_damp_factor)) deallocate(this%IR_damp_factor)
+        allocate(this%IR_damp_factor(1:this%ndust))
+        this%IR_damp_factor = 0d0
     
         this%initialised = .true.
     end subroutine init_dust_chemistry_info
@@ -344,6 +364,7 @@ contains
         if (allocated(this%csa_dust)) this%csa_dust = 0d0
         if (allocated(this%css_dust)) this%css_dust = 0d0
         if (allocated(this%csr_dust)) this%csr_dust = 0d0
+        if (allocated(this%csrat_dust)) this%csrat_dust = 0d0
         if (allocated(this%csa_pah)) this%csa_pah = 0d0
         if (allocated(this%css_pah)) this%css_pah = 0d0
         if (allocated(this%csr_pah)) this%csr_pah = 0d0
@@ -353,6 +374,8 @@ contains
         if (allocated(this%local_rad_ani)) this%local_rad_ani = 0d0
         if (allocated(this%local_solid_angle)) this%local_solid_angle = 0d0
         if (allocated(this%group_eV)) this%group_eV = 0d0
+        if (allocated(this%rat_torque)) this%rat_torque = 0d0
+        if (allocated(this%IR_damp_factor)) this%IR_damp_factor = 0d0
         this%H2_formation_rate = 0d0
     end subroutine reset_dust_chemistry_info
 end module dustbin_types
