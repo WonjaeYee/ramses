@@ -136,6 +136,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 
    integer::err_idx
+   real(dp)::temp_sum
 
   ! Mesh spacing in that level
   dx=0.5D0**ilevel
@@ -625,6 +626,31 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
         ! Solve cooling
         err_idx = 0
+!         ! check normalization of xion
+!         do i = 1, nleaf
+!            do ii = 1, n_elements
+!               if (elements(ii)%atomic_number.gt.0) then
+!                  jj = elements(ii)%n_ions
+!                  if (any(xion(ii, 1:jj, i) < 0.0).or.any(xion(ii, 1:jj, i) > 1.0)) then
+!                     write(*,*) 'ind_leaf(i):', ind_leaf(i)
+!                     write(*,*) 'ii:', ii
+!                     write(*,*) 'xion(ii, 1:jj, i):', xion(ii, 1:jj, i)
+!                     write(*,*) 'uold(ind_leaf(i),1):', uold(ind_leaf(i),1)
+!                  end if
+!               end if
+!            end do
+!         ! jj = elements(6)%n_ions
+!         !    temp_sum = sum(xion(6, 1:jj, i))
+!         !    if (temp_sum<0.9) then
+!         !       write(*,*) 'sum:', temp_sum
+!         !       write(*,*) 'ind_leaf(i):', ind_leaf(i)
+!         !       write(*,*) 'uold(ind_leaf(i),1):', uold(ind_leaf(i),1)
+!         !       write(*,*) 'uold(ind_leaf(i),iIons+5:iIons+11):', uold(ind_leaf(i),iIons+5:iIons+11)
+!         !    end if
+!         end do
+!
+        ! for static test, temporarily disable RTZ solver
+#ifndef SKIP_RTZ_COOLING
         call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
                               ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
                               ,dx_SS_H2, err_idx &

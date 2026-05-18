@@ -645,6 +645,7 @@ subroutine grow_sink(ilevel,on_creation)
   integer,dimension(1:nvector)::ind_grid,ind_part,ind_grid_part
 #ifdef INDIVIDUAL_SINK_STARS
   real(dp),dimension(1:23)::mist_prop
+  real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max, dx, scale, dx_min
   real(sp)::t_pre,t_now
   integer::nx_loc
@@ -823,10 +824,13 @@ subroutine grow_sink(ilevel,on_creation)
            else
               ! Get the main-sequence lifetime 
               star_met_fe = LOG10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1) * 55.854d0)) - LOG10(3.16E-05)
+              ! get [alpha/Fe]
+              ! hard-coded! should be modified to handle general cases
+              star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
               ! ms_lifetime = interpolate_popII_age(msink_actual(isink) * scale_m/M_sun)
               l_abs=(lsink(isink,1)**2+lsink(isink,2)**2+lsink(isink,3)**2)**0.5d0
               l_max=msink(isink)*sqrt(factG*msink(isink)*(dble(ir_cloud)*dx_min))
-              ms_lifetime = get_stellar_lifetime(real(star_met_fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp))
+              ms_lifetime = get_stellar_lifetime(real(star_met_fe, sp), real(star_alpha_over_fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp))
 
               ! Check if the stellar age is older than the main-sequence lifetime
               ! write(*,*)'Pop II case - star_age_Myr and ms_lifetime', star_age_Myr, ms_lifetime
@@ -856,11 +860,14 @@ subroutine grow_sink(ilevel,on_creation)
               ! <<WJ>> In case of main-sequence, get properties from MIST
               else
                  ! is star_met [Fe/H]? check and change below
-                 star_met = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                 star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                 ! get [alpha/Fe]
+                 ! hard-coded! should be modified to handle general cases
+                 star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
                  ! msink_actual in code unit (not 100% sure...) ... is it the initial mass??
-                 t_pre = real((t-dtnew(ilevel)-main_sequence_time(isink))*scale_t/(365.24*24*60*60), sp)
-                 t_now = real((t-main_sequence_time(isink))*scale_t/(365.24*24*60*60), sp)
-                 mist_prop = get_stellar_properties(real(star_met, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp), t_now, t_pre)
+                 t_pre = real((t-dtnew(ilevel)-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
+                 t_now = real((t-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
+                 mist_prop = get_stellar_properties(real(star_met_fe, sp), real(star_alpha_over_Fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp), t_now, t_pre)
                  ! counter = 0
                  ! hard-coded: in the MIST sample, Ca is included but it is not handled in RTZ
                  ! loc_metal_yield(1:9) = -mist_prop(5:13) ! these do not need to be divided?
@@ -870,6 +877,10 @@ subroutine grow_sink(ilevel,on_creation)
                  ! change the mass to the current mass from MIST
                  ! write(*,*)'mass from mist:', mist_prop(1)
                  msink(isink) = mist_prop(1) / (scale_m/M_sun)
+
+                 ! temp: print [Fe/H] and [alpha/Fe] to check
+                 ! write(*,*) '[Fe/H]=', star_met_fe
+                 ! write(*,*) '[a/Fe]=', star_alpha_over_fe
               end if ! end of check: age > life time
            end if ! end of check: Pop III/Pop II
         end if ! end of part: main-sequence
@@ -944,8 +955,12 @@ subroutine grow_sink(ilevel,on_creation)
         end do
 
         ! Accrete to sink variables in the frame of the initial sink position
+#ifndef STATIC_SINK
         xsink(isink,1:ndim)=xsink(isink,1:ndim)+xsink_all(isink,1:ndim)/(msink(isink)+msmbh(isink))
+        ! temporal: no position update
         vsink(isink,1:ndim)=vsink(isink,1:ndim)+vsink_all(isink,1:ndim)/(msink(isink)+msmbh(isink))
+        ! temporal: no velocity update
+#endif
         lsink(isink,1:ndim)=lsink(isink,1:ndim)+lsink_all(isink,1:ndim)-cross(xsink_all(isink,1:ndim),vsink_all(isink,1:ndim))/(msink(isink)+msmbh(isink))
 
         ! Store jump in new sink coordinates
@@ -1033,20 +1048,24 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 
 #ifdef INDIVIDUAL_SINK_STARS
   real(dp),dimension(1:23)::mist_prop
+  real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max
   real(sp)::t_pre,t_now
-  real(dp),dimension(1:ndim)::vwind,next_p
+  real(dp),dimension(1:ndim)::pwind,next_p
   real(dp)::prev_E_kin, next_E_kin
   real(dp),dimension(1:NMETALS)::loc_metal_yield
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
   real(dp)::ekinetic, ijm, sn_e_code_units, pre_sn_density
   logical::is_hn, is_sn, is_central_cloud_particle
   integer::counter, iElement, pre_accretion_evolution_flag
-#endif
-   
+  real(dp)::star_met_fe
+
   ! strict initialization 
   injected_mass = 0d0
   loc_metal_yield = 0d0
+  pwind = 0d0
+#endif
+
   ! Conversion factor from user units to cgs units
   call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
   scale_m=scale_d*scale_l**ndim
@@ -1317,6 +1336,9 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                           end if
                        end do
                     end if
+#ifdef USE_ONLY_MIST
+                    loc_metal_yield = 0.0
+#endif
 
                  ! Pop II case
                  else
@@ -1326,8 +1348,11 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                      ! -> copying from the print part
                      l_abs=(lsink(isink,1)**2+lsink(isink,2)**2+lsink(isink,3)**2)**0.5d0
                      l_max=msink(isink)*sqrt(factG*msink(isink)*(dble(ir_cloud)*dx_min))
-                     ms_lifetime = get_stellar_lifetime(real(star_met, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp))
-
+                     star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                     ! get [alpha/Fe]
+                     ! hard-coded! should be modified to handle general cases
+                     star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
+                     ms_lifetime = get_stellar_lifetime(real(star_met_fe, sp), real(star_alpha_over_fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp))                     
                      ! Check if the stellar age is older than the main-sequence lifetime
                      if (star_age_Myr.gt.ms_lifetime) then
                         ! Convert metallicity to format needed by portinari
@@ -1349,19 +1374,33 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                            end if
                         end do
                         end if
+#ifdef USE_ONLY_MIST
+                        loc_metal_yield = 0.0
+#endif
                        ! <<WJ>> In case of main-sequence, get properties from MIST
                      else
                         ! is star_met [Fe/H]? check and change below
-                        star_met = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                        star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                        ! get [alpha/Fe]
+                        ! hard-coded! should be modified to handle general cases
+                        star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
                         ! msink_actual in code unit (not 100% sure...) ... is it the initial mass??
-                        t_pre = real((t-dtnew(ilevel)-main_sequence_time(isink))*scale_t/(365.24*24*60*60), sp)
-                        t_now = real((t-main_sequence_time(isink))*scale_t/(365.24*24*60*60), sp)
-                        mist_prop = get_stellar_properties(real(star_met, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp), t_now, t_pre)
+                        t_pre = real((t-dtnew(ilevel)-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
+                        t_now = real((t-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
+                        mist_prop = get_stellar_properties(real(star_met_fe, sp), real(star_alpha_over_Fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp), t_now, t_pre)
                         ! counter = 0
                         ! hard-coded: in the MIST sample, Ca is included but it is not handled in RTZ
-                        loc_metal_yield(1:9) = -mist_prop(5:13)
-                        loc_metal_yield(10) = -mist_prop(15)
+                        ! loc_metal_yield(1:9) = -mist_prop(5:13)
+                        ! loc_metal_yield(10) = -mist_prop(15)
+                        ! 2026.04.17
+                        ! While updating the MIST sample file, Ca was excluded
+                        ! 2026.04.20
+                        ! switched the sign from negative to positive
+                        loc_metal_yield(1:10) = mist_prop(3:12)
                         ! write(*,*)'loc_metal_yield:',loc_metal_yield
+
+                        ! temp: for one octant test, reduce by a factor of 8
+                        ! loc_metal_yield = loc_metal_yield / 8.0
 
                         ! change the mass to the current mass from MIST
                         ! msink(isink) = mist_prop(1) / (scale_m/M_sun)
@@ -1375,7 +1414,9 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                         sn_e = 0d0
 
                         ! get wind speed in code unit
-                        vwind = (mist_prop(4)*1.d5/scale_v) * (r_rel / max(r_len, tiny(0.0_dp)))
+                        ! 2026.04.18
+                        ! updated version stores radial momentum
+                        pwind = (mist_prop(2)*1.d5/scale_v*M_sun/scale_m) * (r_rel / max(r_len, tiny(0.0_dp)))
                         ! if(r_len.eq.0.0d0) write(*,*) 'zero distance here!'
                         ! write(*,*) 'metallicity:', star_met
                         ! write(*,*) 'vwind [km/s]:', mist_prop(4)
@@ -1410,6 +1451,9 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        end if
                     end do
                  end if
+#ifdef USE_ONLY_MIST
+                 loc_metal_yield = 0.0
+#endif
               end if
 
               ! Now, inject for all cases?
@@ -1432,27 +1476,30 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  prev_E_kin = 0.5d0 * d*vol_loc * sum(vv(1:ndim)**2)
                  prev_E_kin = max(prev_E_kin, 0.0d0)
 
-                 next_p = (d*vv(1:ndim) + ijm*(vsink(isink,1:ndim)+vwind(1:ndim)))*vol_loc
+                 next_p = (d*vv(1:ndim) + ijm*vsink(isink,1:ndim) + pwind(1:ndim))*vol_loc
                  next_E_kin = 0.5d0 * sum(next_p**2) / (d+ijm+tiny(0.0d0))/vol_loc
                  next_E_kin = max(next_E_kin, 0.0d0)
                  ! ekinetic = (-prev_E_kin + next_E_kin)/ijm
 
+#ifdef NO_FEEDBACK_KIN
                  ! temporarily set no feedback
-                 ! ijm = 0.0d0
-                 ! sn_e_code_units = 0.0d0
-                 ! loc_metal_yield = 0.0d0
-                 ! next_E_kin = 0.0d0
-                 ! prev_E_kin = 0.0d0
+                 ijm = 0.0d0
+                 pwind = 0.0d0
+                 sn_e_code_units = 0.0d0
+                 loc_metal_yield = 0.0d0
+                 next_E_kin = 0.0d0
+                 prev_E_kin = 0.0d0
                  ! if(ijm.gt.0.0d0) then
                  !  write(*,*) 'ijm>0 here'
                  ! end if
+#endif
 
                  ! Update density, momentum, and internal energy
                  pre_sn_density = max(unew(indp(j,ind),1), smallr)
                  unew(indp(j,ind),1) = unew(indp(j,ind),1) + ijm
-                 unew(indp(j,ind),2) = unew(indp(j,ind),2) + (ijm * (vsink(isink,1) + vwind(1)))
-                 unew(indp(j,ind),3) = unew(indp(j,ind),3) + (ijm * (vsink(isink,2) + vwind(2)))
-                 unew(indp(j,ind),4) = unew(indp(j,ind),4) + (ijm * (vsink(isink,3) + vwind(3)))
+                 unew(indp(j,ind),2) = unew(indp(j,ind),2) + (ijm*vsink(isink,1) + pwind(1))
+                 unew(indp(j,ind),3) = unew(indp(j,ind),3) + (ijm*vsink(isink,2) + pwind(2))
+                 unew(indp(j,ind),4) = unew(indp(j,ind),4) + (ijm*vsink(isink,3) + pwind(3))
                  ! unew(indp(j,ind),neul) = unew(indp(j,ind),neul) + (ijm * ekinetic) + &
                  !        & (sn_e_code_units * (weight/volume) / vol_loc)
                  unew(indp(j,ind),neul) = unew(indp(j,ind),neul) + (next_E_kin-prev_E_kin)/vol_loc + (sn_e_code_units * (weight/volume) / vol_loc)
@@ -1478,8 +1525,18 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  ! if(myid==3) write(*,*) ' after dumping, unew:', unew(indp(j,ind), imetal:imetal+9)
 
                  ! Make sure that the passive scalars maintain the same fractions
-                 do ivar = iIons,nvar
-                    unew(indp(j,ind),ivar) = unew(indp(j,ind),ivar) * (unew(indp(j,ind),1) / pre_sn_density)
+                 ! do ivar = iIons,nvar
+                 !    unew(indp(j,ind),ivar) = unew(indp(j,ind),ivar) * (unew(indp(j,ind),1) / pre_sn_density)
+                 ! end do
+                 counter = 0
+                 do iElement= 1, n_elements
+                  if (elements(iElement)%atomic_number .gt. 0) then
+                     ! only neutrals are dumped
+                     ! it will not work for other passive scalars!
+                     ! might cause problem if putting ionized materials is important
+                     unew(indp(j,ind),iIons+counter) = unew(indp(j,ind),iIons+counter) + ijm
+                     counter = counter + elements(iElement)%n_ions
+                  end if
                  end do
               ! end if
 
@@ -2586,15 +2643,19 @@ subroutine update_sink(ilevel)
         end if
 
         ! This is the kick-kick (half old half new timestep)
+#ifndef STATIC_SINK
         vsink(isink,1:ndim)=0.5D0*(dtnew(ilevel)+dteff)*fsink(isink,1:ndim)+vsink(isink,1:ndim)
         ! temporal: no velocity update for sink
+#endif
 
         ! Save the velocity
         vsnew(isink,1:ndim,ilevel)=vsink(isink,1:ndim)
 
         ! and this is the drift (only for the global sink variable)
+#ifndef STATIC_SINK
         xsink(isink,1:ndim)=xsink(isink,1:ndim)+vsink(isink,1:ndim)*dtnew(ilevel)
         ! temporal: no position update for sink
+#endif
 
         ! Gradient descent - Barzilai&Borwein-like
         if (sink_descent) then
@@ -2615,7 +2676,9 @@ subroutine update_sink(ilevel)
                     xsink_graddescent(isink,1:ndim) = fsink(isink,1:ndim) * gamma_grad_descent
                  endif
                  ! Uopdate the sink position
+#ifndef STATIC_SINK
                  xsink(isink,1:ndim)=xsink(isink,1:ndim)+ xsink_graddescent(isink,1:ndim)
+#endif
                  ! Store the descent velocity for the time-stepping
                  graddescent_over_dt(isink) = NORM2(xsink_graddescent(isink,1:ndim))/dtnew(ilevel)
               endif
@@ -3158,7 +3221,10 @@ subroutine read_sink_params()
        AGN_fbk_frac_ener,AGN_fbk_frac_mom,T2_max,v_max,boost_threshold_density,&
        epsilon_kin,AGN_fbk_mode_switch_threshold,kin_mass_loading,bondi_use_vrel,smbh,agn,max_mass_nsc,&
        agn_acc_method,agn_inj_method,sink_descent,gamma_grad_descent,fudge_graddescent, &
-       sink_constant_phys_radius,p3_mchar,z_crit_pop3,uniform_rand_seed, &
+       sink_constant_phys_radius,&
+#ifdef INDIVIDUAL_SINK_STARS
+       p3_mchar,z_crit_pop3,uniform_rand_seed, &
+#endif
        use_bondi_correction
   real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v
 

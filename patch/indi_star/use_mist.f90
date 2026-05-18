@@ -19,18 +19,20 @@ module use_mist
     character(len=256)::mist_sample = 'sample.unf'
     !! Path to and file name of data file sampled from MIST
     
-    integer,dimension(1:5)::sample_shape
-    !! Shape of the sample data, in order of (properties, age, mass, vvc, feh).
+    integer,dimension(1:6)::sample_shape
+    !! Shape of the sample data, in order of (properties, age, mass, vvc, afe, feh).
     real(rp),allocatable,dimension(:)::axis_z
     !! Parameter axis of the sample: [Fe/H]
+    real(rp),allocatable,dimension(:)::axis_a
+    !! Parameter axis of the sample: [a/Fe]
     real(rp),allocatable,dimension(:)::axis_v
     !! Parameter axis of the sample: v/v_crit
     real(rp),allocatable,dimension(:)::axis_m
     !! Parameter axis of the sample: mass
-    real(rp),allocatable,dimension(:,:,:,:)::axes_t
+    real(rp),allocatable,dimension(:,:,:,:,:)::axes_t
     !! Lower and upper bound of the age axis, for each combination of feh, vvc, and mass.
     !! If the scale is linear, linear values / if log, values are log(age).
-    !! Shape is in order of (1:2, mass, vvc, feh), and 1 for lower, 2 for upper.
+    !! Shape is in order of (1:2, mass, vvc, afe, feh), and 1 for lower, 2 for upper.
     integer::axes_t_scale
     !! Scale of sampling in age axis. 0 if logarithmic, 1 if linear.
     integer,allocatable,dimension(:)::prop_nums
@@ -41,9 +43,9 @@ module use_mist
     integer::prop_rad_scale
     !! Order of scale by which photon counts are reduced.
     !! E.g., if it is 36, photon counts are in unit of 10^36 sec^-1.
-    real(rp),allocatable,dimension(:,:,:,:,:)::sample
+    real(rp),allocatable,dimension(:,:,:,:,:,:)::sample
     !! Main array of sample data from MIST.
-    !! Order of axes: (properties, age, mass, vvc, feh)
+    !! Order of axes: (properties, age, mass, vvc, afe, feh)
 
     integer,allocatable,dimension(:,:)::idx_table
     !! Table to store parameter indices
@@ -96,19 +98,23 @@ subroutine load_sample
         read(unit_open) sample_shape
 
         ! Axis 1: feh
-        allocate(axis_z(1:sample_shape(5)))
+        allocate(axis_z(1:sample_shape(6)))
         read(unit_open) axis_z
         
-        ! Axis 2: vvc
+        ! Axis 2: afe
+        allocate(axis_a(1:sample_shape(5)))
+        read(unit_open) axis_a
+
+        ! Axis 3: vvc
         allocate(axis_v(1:sample_shape(4)))
         read(unit_open) axis_v
         
-        ! Axis 3: mass
+        ! Axis 4: mass
         allocate(axis_m(1:sample_shape(3)))
         read(unit_open) axis_m
         
-        ! Axis 4: age (bounds)
-        allocate(axes_t(1:2,1:sample_shape(3),1:sample_shape(4),1:sample_shape(5)))
+        ! Axis 5: age (bounds)
+        allocate(axes_t(1:2,1:sample_shape(3),1:sample_shape(4),1:sample_shape(5),1:sample_shape(6)))
         read(unit_open) axes_t
         ! scale of the age axis: 0 if log, 1 if linear
         read(unit_open) axes_t_scale
@@ -125,7 +131,7 @@ subroutine load_sample
         
         ! Main array
         ! we cannot do a fancy way, like sample(sample_shape), since sample_shape is an allocatable array :/
-        allocate(sample(1:sample_shape(1),1:sample_shape(2),1:sample_shape(3),1:sample_shape(4),1:sample_shape(5)))
+        allocate(sample(1:sample_shape(1),1:sample_shape(2),1:sample_shape(3),1:sample_shape(4),1:sample_shape(5),1:sample_shape(6)))
         read(unit_open) sample
 
         close(unit_open)
@@ -135,20 +141,21 @@ subroutine load_sample
             write(*,*) 'MIST sample is loaded'
             write(*,*) '           given shape info:', sample_shape
             write(*,*) '   (which should be same to:', shape(sample), ')'
-            write(*,*) 'axis for dimension 5  (feh):', axis_z
+            write(*,*) 'axis for dimension 6  (feh):', axis_z
+            write(*,*) 'axis for dimension 5  (afe):', axis_a
             write(*,*) 'axis for dimension 4  (vvc):', axis_v
             write(*,*) 'axis for dimension 3 (mass):', axis_m
-            write(*,*) 'axes for dimension 2  (age):', axes_t(:,1,1,1), ', ..., ', axes_t(:,sample_shape(3),sample_shape(4),sample_shape(5))
+            write(*,*) 'axes for dimension 2  (age):', axes_t(:,1,1,1,1), ', ..., ', axes_t(:,sample_shape(3),sample_shape(4),sample_shape(5),sample_shape(6))
             write(*,*) '          scale of age axis:', axes_t_scale
             write(*,*) '                            (0 if logarithmic, 1 if linear)'
             write(*,*) '       number of properties:', prop_nums
             write(*,*) '                            (instantaneous, cumulative chemical ejecta, cumulative number of photons radiated)'
-            write(*,*) '    radiation bin edges [A]:', prop_rad_bins
+            write(*,*) '   radiation bin edges [eV]:', prop_rad_bins
             write(*,*) '    photon counts scaled by: 10^', prop_rad_scale
 
-            write(*,*) 'here is photon counts:'
-            write(*,*) sample(16, :, 1, 1, 1)
-            write(*,*) sample(23, :, 71, 2, 15)
+            write(*,*) 'here are example photon counts:'
+            write(*,*) sample(prop_nums(1)+prop_nums(2)+1, :, 1, 1, 1, 1)
+            write(*,*) sample(prop_nums(1)+prop_nums(2)+prop_nums(3), :, sample_shape(3),sample_shape(4),sample_shape(5),sample_shape(6))
         end if
     else
         if ((myid==1)) then
@@ -244,13 +251,15 @@ end function get_age_index
 
 ! In this time, find indices everytime
 ! If the indices are found and stored somewhere, such repeats can be prevented.
-function get_stellar_properties(z, v, m, t_now, t_pre) result(prop)
+function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
 !! Take stellar properties from MIST sample data, for given parameters.
 
     implicit none
 
     real(rp)::z
     !! [Fe/H]
+    real(rp)::a
+    !! [a/Fe]
     real(rp)::v
     !! v/v_crit
     real(rp)::m
@@ -264,17 +273,17 @@ function get_stellar_properties(z, v, m, t_now, t_pre) result(prop)
     !! Stellar properties to be returned
     !! (instantaneous, ejected chemicals, emitted photons).
 
-    integer::num4
+    integer::num_t
     ! Number of points on the age axis.
     integer::num_i,num_c
     ! Number of instantaneous properties and chemical ejecta.
-    integer::idx1,idx2,idx3,idx4_now,idx4_pre
+    integer::idx_z,idx_a,idx_v,idx_m,idx_t_now,idx_t_pre
     ! Indices of sample point nearest to the given parameters.
     real(rp)::use_t_now,use_t_pre
     ! If the scale of age axis is linear, same to given `t_now` and `t_pre`.
     ! If the scale is log, log values of `t_now` and `t_pre`.
     real(rp),dimension(1:2)::t12
-    ! Lower- and upper-bound of age axis, for a given combination of (feh, vvc, mass)
+    ! Lower- and upper-bound of age axis, for a given combination of (feh, afe, vvc, mass)
     real(rp),dimension(1:2)::x12
     ! For interpolation: age values of left- and right-sides.
     real(rp),dimension(1:sample_shape(1),1:2)::y12
@@ -288,14 +297,15 @@ function get_stellar_properties(z, v, m, t_now, t_pre) result(prop)
     ! write(*,*)'This is `get_stellar_properties`'
     ! write(*,*)'  inputs are:', z, v, m, t_now, t_pre
 
-    num4 = sample_shape(2)
+    num_t = sample_shape(2)
     num_i = prop_nums(1) ! instantaneous properties
     num_c = prop_nums(2) ! chemical ejecta
 
     ! Find nearest point on the sample grid (feh, vvc, mass)
-    idx1 = get_nearest_index(val=z, arr=axis_z)
-    idx2 = get_nearest_index(val=v, arr=axis_v)
-    idx3 = get_nearest_index(val=m, arr=axis_m)
+    idx_z = get_nearest_index(val=z, arr=axis_z)
+    idx_a = get_nearest_index(val=a, arr=axis_a)
+    idx_v = get_nearest_index(val=v, arr=axis_v)
+    idx_m = get_nearest_index(val=m, arr=axis_m)
 
     ! Match to age scale in sample data
     if (axes_t_scale == 0) then
@@ -310,9 +320,9 @@ function get_stellar_properties(z, v, m, t_now, t_pre) result(prop)
         use_t_pre = t_pre
     end if
 
-    t12 = axes_t(:, idx3, idx2, idx1)
-    idx4_now = get_age_index(t=use_t_now, t1=t12(1), t2=t12(2), num=num4)
-    idx4_pre = get_age_index(t=use_t_pre, t1=t12(1), t2=t12(2), num=num4)
+    t12 = axes_t(:, idx_m, idx_v, idx_a, idx_z)
+    idx_t_now = get_age_index(t=use_t_now, t1=t12(1), t2=t12(2), num=num_t)
+    idx_t_pre = get_age_index(t=use_t_pre, t1=t12(1), t2=t12(2), num=num_t)
 
     ! if (myid==1) then
     !     write(*,*) 'this is get_stellar_properties'
@@ -323,31 +333,31 @@ function get_stellar_properties(z, v, m, t_now, t_pre) result(prop)
     !     write(*,*) 'idx4_now:', idx4_now
     ! end if
 
-    if ((0 < idx4_now).and.(idx4_now < num4)) then
+    if ((0 < idx_t_now).and.(idx_t_now < num_t)) then
         ! interpolation
         ! recover age values of left- and right-sides from indices
-        x12 = linear_interpolation(x=real([idx4_now, idx4_now+1], rp), x1=1.0_rp, x2=real(num4, rp), y1=t12(1), y2=t12(2))
-        y12 = sample(:, idx4_now:idx4_now+1, idx3, idx2, idx1)
+        x12 = linear_interpolation(x=real([idx_t_now, idx_t_now+1], rp), x1=1.0_rp, x2=real(num_t, rp), y1=t12(1), y2=t12(2))
+        y12 = sample(:, idx_t_now:idx_t_now+1, idx_m, idx_v, idx_a, idx_z)
         arr_now = linear_interpolation(x=use_t_now, x1=x12(1), x2=x12(2), y1=y12(:,1), y2=y12(:,2))
-    else if (idx4_now == 0) then
+    else if (idx_t_now == 0) then
         ! take first row
-        arr_now = sample(:, 1, idx3, idx2, idx1)
+        arr_now = sample(:, 1, idx_m, idx_v, idx_a, idx_z)
         ! set ejecta zero
         arr_now(num_i+1:) = 0.0_rp
-    else if (idx4_now == num4) then
+    else if (idx_t_now == num_t) then
         ! take last row
-        arr_now = sample(:, num4, idx3, idx2, idx1)
+        arr_now = sample(:, num_t, idx_m, idx_v, idx_a, idx_z)
     end if
     
-    if ((0 < idx4_pre).and.(idx4_pre < num4)) then
-        x12 = linear_interpolation(x=real([idx4_pre, idx4_pre+1], rp), x1=1.0_rp, x2=real(num4, rp), y1=t12(1), y2=t12(2))
-        y12 = sample(:, idx4_pre:idx4_pre+1, idx3, idx2, idx1)
+    if ((0 < idx_t_pre).and.(idx_t_pre < num_t)) then
+        x12 = linear_interpolation(x=real([idx_t_pre, idx_t_pre+1], rp), x1=1.0_rp, x2=real(num_t, rp), y1=t12(1), y2=t12(2))
+        y12 = sample(:, idx_t_pre:idx_t_pre+1, idx_m, idx_v, idx_a, idx_z)
         arr_pre = linear_interpolation(x=use_t_pre, x1=x12(1), x2=x12(2), y1=y12(:,1), y2=y12(:,2))
-    else if (idx4_pre == 0) then
-        arr_pre = sample(:, 1, idx3, idx2, idx1)
+    else if (idx_t_pre == 0) then
+        arr_pre = sample(:, 1, idx_m, idx_v, idx_a, idx_z)
         arr_pre(num_i+1:) = 0.0_rp
-    else if (idx4_pre == num4) then
-        arr_pre = sample(:, num4, idx3, idx2, idx1)
+    else if (idx_t_pre == num_t) then
+        arr_pre = sample(:, num_t, idx_m, idx_v, idx_a, idx_z)
     end if
     
     ! For instantaneous properties, take from current one
@@ -359,18 +369,13 @@ function get_stellar_properties(z, v, m, t_now, t_pre) result(prop)
     ! we need to rescale mass properties with respect to the given mass-sample mass ratio
 
     ! current stellar mass
-    arr0(1) = arr0(1) * (m / axis_m(idx3))
+    arr0(1) = arr0(1) * (m / axis_m(idx_m))
 
-    ! effective temperature ... assume what?
-
-    ! radius ... mass-radius relation?
-
-    ! wind speed, don't touch it?
-
-    ! chemical ejecta
-    arr0(num_i+1:num_i+num_c) = arr0(num_i+1:num_i+num_c) * (m / axis_m(idx3))
+    ! wind momentum and chemical ejecta
+    arr0(num_i:num_i+num_c) = arr0(num_i:num_i+num_c) * (m / axis_m(idx_m))
 
     ! photon counts ... only mass-luminosity relation? or also effective temperature??
+    ! -> no modification for now...
 
     ! Return in double precision
     prop = real(arr0, kind=dp)
@@ -379,13 +384,15 @@ end function get_stellar_properties
 
 
 ! Replace stellar age from Portinari to MIST's one
-function get_stellar_lifetime(z, v, m) result(t)
+function get_stellar_lifetime(z, a, v, m) result(t)
 !! For given parameters, returns a lifetime.
 
     implicit none
 
     real(rp)::z
     !! [Fe/H]
+    real(rp)::a
+    !! [a/Fe]
     real(rp)::v
     !! v/v_crit
     real(rp)::m
@@ -394,14 +401,15 @@ function get_stellar_lifetime(z, v, m) result(t)
     real(dp)::t
     !! Lifetime of the star with the given z, v, and m, in unit of Myr
 
-    integer::idx1,idx2,idx3
+    integer::idx_m,idx_v,idx_a,idx_z
 
     ! Find nearest point on the sample grid (feh, vvc, mass)
-    idx1 = get_nearest_index(val=z, arr=axis_z)
-    idx2 = get_nearest_index(val=v, arr=axis_v)
-    idx3 = get_nearest_index(val=m, arr=axis_m)
+    idx_z = get_nearest_index(val=z, arr=axis_z)
+    idx_a = get_nearest_index(val=a, arr=axis_a)
+    idx_v = get_nearest_index(val=v, arr=axis_v)
+    idx_m = get_nearest_index(val=m, arr=axis_m)
 
-    t = real(axes_t(2, idx3, idx2, idx1), kind=dp)
+    t = real(axes_t(2, idx_m, idx_v, idx_a, idx_z), kind=dp)
 
     ! If the scale of the age is logarithmic, change to actual value
     if (axes_t_scale == 0) then
