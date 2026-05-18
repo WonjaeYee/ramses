@@ -21,6 +21,13 @@ module rtz_cooling_module
   real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
   real(dp),parameter::Fp_frac=0.5
+  
+  ! temporal brutal force trial
+  ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
+  ! real(dp),parameter::T_min=0.1, T_frac=10.0
+  ! real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=10.0
+  ! real(dp),parameter::Np_min=1d-13, Np_frac=2.0
+  ! real(dp),parameter::Fp_frac=5.0
 
 CONTAINS
 
@@ -1011,9 +1018,9 @@ contains
          nCII_new = n_CII - delta_CO
          nOI_new  = n_OI  - delta_CO
          
-         if (sum(dXion(6,1:7)) < 0.99d0) then
-            write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-         end if
+         ! if (sum(dXion(6,1:7)) < 1.0d0) then
+         !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+         ! end if
 
          if (loopcnt==100000) then
             write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
@@ -1021,7 +1028,8 @@ contains
          end if
 
          ! Now update the ion fractions for C and O
-         tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
+         ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
+         tot_C = nElement_dep(6) - n_CII
          tot_C = tot_C + nCII_new
          do iIon = 1, elements(6)%n_ions
             if (iIon.ne.2) then 
@@ -1031,7 +1039,8 @@ contains
             end if
          end do
 
-         tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
+         ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
+         tot_O = nElement_dep(8) - n_OI
          tot_O = tot_O + nOI_new
          do iIon = 1, elements(8)%n_ions
             if (iIon.ne.1) then 

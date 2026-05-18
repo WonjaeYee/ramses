@@ -157,8 +157,10 @@ SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
   use rt_parameters
   use sink_feedback_parameters
   ! use SED_module, only: interpolate_popII_table, interpolate_popIII_table, get_popIII_temp_from_mass
+#ifdef INDIVIDUAL_SINK_STARS
   use SED_module, only: interpolate_popIII_table, get_popIII_temp_from_mass
   use use_mist, only:get_stellar_properties
+#endif
   use constants, only: M_sun, twopi
   implicit none
 
@@ -171,14 +173,18 @@ SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
   real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v, scale_msun
 #ifdef INDIVIDUAL_SINK_STARS
   real(dp),dimension(1:23)::mist_prop
+  real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max, dx, scale, dx_min, factG
   real(sp)::t_pre,t_now
   integer::nx_loc, ilevel
+#else
+   integer::ilevel
 #endif
 
   call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
   scale_msun = scale_d * (scale_l**3) / M_sun
 
+#ifdef INDIVIDUAL_SINK_STARS
   ! Gravitational constant
   factG=1d0
   if(cosmo)factG=3d0/4d0/twopi*omega_m*aexp
@@ -196,6 +202,7 @@ SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
   end if
 
   sink_ioni_flux = 0d0
+#endif
 
 #ifdef INDIVIDUAL_SINK_STARS
   do isink=1,nsink
@@ -215,23 +222,31 @@ SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
            ! get_stellar_properties from use_mist returns photon counts for all bins in once
            ! so this part does not need loop over ig
            star_met_fe = LOG10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1) * 55.854d0)) - LOG10(3.16E-05)
+           ! get [alpha/Fe]
+           ! hard-coded! should be modified to handle general cases
+           star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
            ! sink_ioni_flux(isink,ig) = interpolate_popII_table(star_met_fe,msink_actual(isink) * scale_msun,ig)
            l_abs=(lsink(isink,1)**2+lsink(isink,2)**2+lsink(isink,3)**2)**0.5d0
            l_max=msink(isink)*sqrt(factG*msink(isink)*(dble(ir_cloud)*dx_min))
            ! Wonjae's MIST module should be come here?
-           t_pre = real((t-dt-main_sequence_time(isink))*scale_t/(365.24*24*60*60), sp)
-           t_now = real((t-main_sequence_time(isink))*scale_t/(365.24*24*60*60), sp)
-           mist_prop = get_stellar_properties(real(star_met_fe, sp), 0.0, real(msink_actual(isink)*scale_msun, sp), t_now, t_pre)
+           t_pre = real((t-dt-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
+           t_now = real((t-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
+           mist_prop = get_stellar_properties(real(star_met_fe, sp), real(star_alpha_over_Fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_msun, sp), t_now, t_pre)
            ! mist_prop is purely counts -> divide with dt to get flux
-           sink_ioni_flux(isink,1:ngroups) = mist_prop(23:16:-1) / dt * 1d36
+           ! sink_ioni_flux(isink,1:ngroups) = mist_prop(23:16:-1) / dt * 1d36
            ! TODO: mist module ... short to long wavelength, high to low energy
+           sink_ioni_flux(isink,1:ngroups) = mist_prop(13:20) / dt * 1d36
            ! write(*,*) isink, sink_ioni_flux(isink,:) / scale_t
 
+#ifdef ONE_EIGHTH_TEST
            ! temporarily divide by 8 for reflective test
-           ! sink_ioni_flux(isink,:) = sink_ioni_flux(isink,:) / 8.d0
+           sink_ioni_flux(isink,:) = sink_ioni_flux(isink,:) / 8.0
+#endif
 
+#ifdef NO_FEEDBACK_RAD
            ! temporarily set no feedback
-           ! sink_ioni_flux(isink,:) = 0d0
+           sink_ioni_flux(isink,:) = 0d0
+#endif
 
            ! write(*,*) sink_ioni_flux(isink,:)
         end if
