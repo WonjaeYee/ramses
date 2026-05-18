@@ -34,7 +34,7 @@ CALIMA = 1
 USE_TURB = 0
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
-MPI = 1
+MPI = 0
 MPIF90 = mpif90
 # Root name of executable
 EXEC = ramses
