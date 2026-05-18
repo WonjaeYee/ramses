@@ -34,7 +34,7 @@ CALIMA = 0
 USE_TURB = 0
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
-MPI = 1
+MPI = 0
 MPIF90 = mpif90
 # Root name of executable
 EXEC = ramses
@@ -67,6 +67,19 @@ N_SULFUR_IONS = 6
 N_IRON_IONS = 6
 CO = 1
 
+# N_HYDROGEN_IONS = 2
+# N_H2 = 1
+# N_HELIUM_IONS = 3
+# N_CARBON_IONS = 0
+# N_NITROGEN_IONS = 0
+# N_OXYGEN_IONS = 0
+# N_NEON_IONS = 0
+# N_MAGNESIUM_IONS = 0
+# N_SILICON_IONS = 0
+# N_SULFUR_IONS = 0
+# N_IRON_IONS = 0
+# CO = 0
+# 
 # Individual stars
 INDI_STAR = 1
 
