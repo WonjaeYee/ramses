@@ -242,11 +242,22 @@ MODULE SED_module
 !_________________________________________________________________________
   use amr_parameters,only:dp
   use rt_parameters,only:nGroups
+#ifdef CALIMA
+  use dust_commons,only:group_csa_dust,group_css_dust,group_csr_dust,group_csrat_dust, &
+                      group_csa_pah, group_css_pah, group_csr_pah, att_len_dust
+  use dust_optics,only:flaLambda_dust,fRATLambda_dust,fAbsLambda_dust, &
+                      fScLambda_dust,fRpLambda_dust,fAbsLambda_pah, &
+                      fScLambda_pah,fRpLambda_pah
+#endif
   implicit none
 
   PUBLIC nSEDgroups                                                      &
       , init_SED_table, inp_SED_table, update_SED_group_props            &
       , update_star_RT_feedback, star_RT_feedback
+#ifdef CALIMA
+   PUBLIC getSEDla_dust, getSEDcsa_dust, getSEDcss_dust, getSEDcsr_dust  &
+   , getSEDcsrat_dust, getSEDcsa_pah, getSEDcss_pah, getSEDcsr_pah
+#endif
 #ifdef RTZ
   PUBLIC initialize_cross_sections_from_blackbody &
         ,initialize_group_energies_from_blackbody
@@ -337,6 +348,9 @@ SUBROUTINE init_SED_table()
 #ifdef RTZ
   use rtz_module
 #endif
+#ifdef CALIMA
+  use dust_commons
+#endif
   use constants,only:c_cgs, eV2erg, hplanck
   use mpi_mod
 #ifndef WITHOUTMPI
@@ -368,6 +382,16 @@ SUBROUTINE init_SED_table()
         nv = nv + 2
      end if
   end do
+#endif
+#ifdef CALIMA
+   if (ndust > 0) then
+      nv = nv + 3 * ndust
+      if (dust_ratd) nv = nv + ndust
+      if (dust_pe_heating) nv = nv + ndust
+   end if
+   if (npah > 0) then
+      nv = nv + 6 * npah
+   endif
 #endif
 !-------------------------------------------------------------------------
   if(myid==1) &
@@ -491,12 +515,48 @@ SUBROUTINE init_SED_table()
            counter = counter + 1
         end if
 #else
+        counter = 1
         do ii = 1,nIonsUsed                                ! Loop species
            tbl(ia,iz,2+ii*2) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
            tbl(ia,iz,3+ii*2) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
         end do ! End species loop
+        counter = 1 + 2*nIonsUsed
 #endif
-
+#ifdef CALIMA
+         counter = counter + 3
+         if (ndust > 0) then
+            do ii = 1, ndust
+               tbl(ia,iz,counter+3*(ii-1)) = getSEDcsa_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
+               tbl(ia,iz,counter+3*(ii-1)+1) = getSEDcss_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
+               tbl(ia,iz,counter+3*(ii-1)+2) = getSEDcsr_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
+            end do
+            counter = counter + 3*ndust
+         end if
+         if (dust_ratd .and. ndust > 0) then
+            do ii = 1, ndust
+               tbl(ia,iz,counter+ii-1) = getSEDcsrat_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
+            end do
+            counter = counter + ndust
+         end if
+         if (dust_pe_heating .and. ndust > 0) then
+            do ii = 1, ndust
+               tbl(ia,iz,counter+ii-1) = getSEDla_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
+            end do
+            counter = counter + ndust
+         end if
+         if (npah > 0) then
+            ! Store both charge states for each PAH size: neutral (odd) and ionized (even).
+            do ii = 1, npah
+               tbl(ia,iz,counter+6*(ii-1)) = getSEDcsa_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
+               tbl(ia,iz,counter+6*(ii-1)+1) = getSEDcss_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
+               tbl(ia,iz,counter+6*(ii-1)+2) = getSEDcsr_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
+               tbl(ia,iz,counter+6*(ii-1)+3) = getSEDcsa_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
+               tbl(ia,iz,counter+6*(ii-1)+4) = getSEDcss_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
+               tbl(ia,iz,counter+6*(ii-1)+5) = getSEDcsr_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
+            end do
+            counter = counter + 6*npah
+         end if
+#endif
      end do ! End age loop
      end do ! End Z loop
 
@@ -563,10 +623,13 @@ SUBROUTINE update_SED_group_props()
 #ifdef RTZ
   use rtz_module, only: elements, n_elements
 #endif
+#ifdef CALIMA
+  use dust_commons, only: ndust, npah, dust_ratd, dust_pe_heating
+#endif
 #ifndef WITHOUTMPI
   integer::info
 #endif
-  integer :: i, ip, ii
+  integer :: i, ip, ii, jj, counter
   real(dp),save,allocatable,dimension(:)::  L_star
 #ifdef RTZ
   real(dp),save,allocatable,dimension(:,:,:) :: csn_star, cse_star
@@ -582,7 +645,18 @@ SUBROUTINE update_SED_group_props()
   real(dp),save,allocatable,dimension(:)::sum_egy_cpu,sum_egy_all
   real(dp):: mass, age, Z, t_sne_Gyr
 #ifdef RTZ
-  integer::counter, jj
+#endif
+#ifdef CALIMA
+  real(dp),save,allocatable,dimension(:,:) :: dust_csa_star, dust_css_star, dust_csr_star
+  real(dp),save,allocatable,dimension(:,:) :: sum_dust_csa_cpu, sum_dust_csa_all
+  real(dp),save,allocatable,dimension(:,:) :: sum_dust_css_cpu, sum_dust_css_all
+  real(dp),save,allocatable,dimension(:,:) :: sum_dust_csr_cpu, sum_dust_csr_all
+  real(dp),save,allocatable,dimension(:,:) :: dust_csrat_star, sum_dust_csrat_cpu, sum_dust_csrat_all
+  real(dp),save,allocatable,dimension(:,:) :: dust_la_star, sum_dust_la_cpu, sum_dust_la_all
+  real(dp),save,allocatable,dimension(:,:) :: pah_csa_star, pah_css_star, pah_csr_star
+  real(dp),save,allocatable,dimension(:,:) :: sum_pah_csa_cpu, sum_pah_csa_all
+  real(dp),save,allocatable,dimension(:,:) :: sum_pah_css_cpu, sum_pah_css_all
+  real(dp),save,allocatable,dimension(:,:) :: sum_pah_csr_cpu, sum_pah_csr_all
 #endif
 !-------------------------------------------------------------------------
   if(.not. allocated(L_star)) then
@@ -610,11 +684,59 @@ SUBROUTINE update_SED_group_props()
      allocate(sum_cse_cpu(nSEDgroups,nIons))
      allocate(sum_cse_all(nSEDgroups,nIons))
 #endif
+#ifdef CALIMA
+     if (ndust > 0) then
+        allocate(dust_csa_star(nSEDgroups,ndust))
+        allocate(dust_css_star(nSEDgroups,ndust))
+        allocate(dust_csr_star(nSEDgroups,ndust))
+        allocate(sum_dust_csa_cpu(nSEDgroups,ndust))
+        allocate(sum_dust_csa_all(nSEDgroups,ndust))
+        allocate(sum_dust_css_cpu(nSEDgroups,ndust))
+        allocate(sum_dust_css_all(nSEDgroups,ndust))
+        allocate(sum_dust_csr_cpu(nSEDgroups,ndust))
+        allocate(sum_dust_csr_all(nSEDgroups,ndust))
+        if (dust_ratd) then
+           allocate(dust_csrat_star(nSEDgroups,ndust))
+           allocate(sum_dust_csrat_cpu(nSEDgroups,ndust))
+           allocate(sum_dust_csrat_all(nSEDgroups,ndust))
+        endif
+        if (dust_pe_heating) then
+           allocate(dust_la_star(nSEDgroups,ndust))
+           allocate(sum_dust_la_cpu(nSEDgroups,ndust))
+           allocate(sum_dust_la_all(nSEDgroups,ndust))
+        endif
+     endif
+     if (npah > 0) then
+        allocate(pah_csa_star(nSEDgroups,2*npah))
+        allocate(pah_css_star(nSEDgroups,2*npah))
+        allocate(pah_csr_star(nSEDgroups,2*npah))
+        allocate(sum_pah_csa_cpu(nSEDgroups,2*npah))
+        allocate(sum_pah_csa_all(nSEDgroups,2*npah))
+        allocate(sum_pah_css_cpu(nSEDgroups,2*npah))
+        allocate(sum_pah_css_all(nSEDgroups,2*npah))
+        allocate(sum_pah_csr_cpu(nSEDgroups,2*npah))
+        allocate(sum_pah_csr_all(nSEDgroups,2*npah))
+     endif
+#endif
   endif
   sum_L_cpu   = 0d0 ! Accumulated luminosity, avg cross sections and
   sum_egy_cpu = 0d0 ! photon energies for all stars belonging to
   sum_csn_cpu = 0d0 ! 'this' cpu
   sum_cse_cpu = 0d0
+#ifdef CALIMA
+  if (ndust > 0) then
+     sum_dust_csa_cpu = 0d0
+     sum_dust_css_cpu = 0d0
+     sum_dust_csr_cpu = 0d0
+     if (dust_ratd) sum_dust_csrat_cpu = 0d0
+     if (dust_pe_heating) sum_dust_la_cpu = 0d0
+  endif
+  if (npah > 0) then
+     sum_pah_csa_cpu = 0d0
+     sum_pah_css_cpu = 0d0
+     sum_pah_csr_cpu = 0d0
+  endif
+#endif
   t_sne_Gyr = t_sne / 1d3
   do i=1,npartmax
      if(levelp(i).le.0 .or. .NOT.is_star(typep(i)))                       &
@@ -657,10 +779,44 @@ SUBROUTINE update_SED_group_props()
         counter = counter + 1
      end if
 #else
+     counter = 1 + 2*nIons + 3
      do ii=1,nIons
         call inp_SED_table(age, Z, 2+2*ii, .true., csn_star(:,ii))! [cm^2]
         call inp_SED_table(age, Z, 3+2*ii, .true., cse_star(:,ii))! [cm^2]
      end do
+#endif
+
+#ifdef CALIMA
+     if (ndust > 0) then
+        do ii=1,ndust
+           call inp_SED_table(age, Z, counter+3*(ii-1)+1, .true., dust_csa_star(:,ii))
+           call inp_SED_table(age, Z, counter+3*(ii-1)+2, .true., dust_css_star(:,ii))
+           call inp_SED_table(age, Z, counter+3*(ii-1)+3, .true., dust_csr_star(:,ii))
+        end do
+        counter = counter + 3*ndust
+        if (dust_ratd) then
+           do ii=1,ndust
+              call inp_SED_table(age, Z, counter+ii, .true., dust_csrat_star(:,ii))
+           end do
+           counter = counter + ndust
+        endif
+        if (dust_pe_heating) then
+           do ii=1,ndust
+              call inp_SED_table(age, Z, counter+ii, .true., dust_la_star(:,ii))
+           end do
+           counter = counter + ndust
+        endif
+     endif
+     if (npah > 0) then
+        do ii=1,npah
+           call inp_SED_table(age, Z, counter+6*(ii-1)+1, .true., pah_csa_star(:,ii))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+2, .true., pah_csa_star(:,npah+ii))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+3, .true., pah_css_star(:,ii))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+4, .true., pah_css_star(:,npah+ii))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+5, .true., pah_csr_star(:,ii))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+6, .true., pah_csr_star(:,npah+ii))
+        end do
+     endif
 #endif
 
      do ip=1,nSEDgroups
@@ -674,6 +830,20 @@ SUBROUTINE update_SED_group_props()
         sum_csn_cpu(ip,:)= sum_csn_cpu(ip,:) + L_star(ip) * csn_star(ip,:)
         sum_cse_cpu(ip,:)= sum_cse_cpu(ip,:) + L_star(ip) * cse_star(ip,:)
 #endif
+#ifdef CALIMA
+        if (ndust > 0) then
+           sum_dust_csa_cpu(ip,:) = sum_dust_csa_cpu(ip,:) + L_star(ip) * dust_csa_star(ip,:)
+           sum_dust_css_cpu(ip,:) = sum_dust_css_cpu(ip,:) + L_star(ip) * dust_css_star(ip,:)
+           sum_dust_csr_cpu(ip,:) = sum_dust_csr_cpu(ip,:) + L_star(ip) * dust_csr_star(ip,:)
+           if (dust_ratd) sum_dust_csrat_cpu(ip,:) = sum_dust_csrat_cpu(ip,:) + L_star(ip) * dust_csrat_star(ip,:)
+           if (dust_pe_heating) sum_dust_la_cpu(ip,:) = sum_dust_la_cpu(ip,:) + L_star(ip) * dust_la_star(ip,:)
+        endif
+        if (npah > 0) then
+           sum_pah_csa_cpu(ip,:) = sum_pah_csa_cpu(ip,:) + L_star(ip) * pah_csa_star(ip,:)
+           sum_pah_css_cpu(ip,:) = sum_pah_css_cpu(ip,:) + L_star(ip) * pah_css_star(ip,:)
+           sum_pah_csr_cpu(ip,:) = sum_pah_csr_cpu(ip,:) + L_star(ip) * pah_csr_star(ip,:)
+        endif
+#endif
      end do
 
   end do
@@ -684,6 +854,20 @@ SUBROUTINE update_SED_group_props()
   sum_egy_all = sum_egy_cpu
   sum_csn_all = sum_csn_cpu
   sum_cse_all = sum_cse_cpu
+#ifdef CALIMA
+  if (ndust > 0) then
+     sum_dust_csa_all = sum_dust_csa_cpu
+     sum_dust_css_all = sum_dust_css_cpu
+     sum_dust_csr_all = sum_dust_csr_cpu
+     if (dust_ratd) sum_dust_csrat_all = sum_dust_csrat_cpu
+     if (dust_pe_heating) sum_dust_la_all = sum_dust_la_cpu
+  endif
+  if (npah > 0) then
+     sum_pah_csa_all = sum_pah_csa_cpu
+     sum_pah_css_all = sum_pah_css_cpu
+     sum_pah_csr_all = sum_pah_csr_cpu
+  endif
+#endif
 #else
   call MPI_ALLREDUCE(sum_L_cpu,   sum_L_all,   nSEDgroups,               &
                      MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
@@ -700,6 +884,32 @@ SUBROUTINE update_SED_group_props()
   call MPI_ALLREDUCE(sum_cse_cpu, sum_cse_all, nSEDgroups*nIons,         &
                      MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
 #endif
+#ifdef CALIMA
+  if (ndust > 0) then
+     call MPI_ALLREDUCE(sum_dust_csa_cpu, sum_dust_csa_all, nSEDgroups*ndust, &
+                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     call MPI_ALLREDUCE(sum_dust_css_cpu, sum_dust_css_all, nSEDgroups*ndust, &
+                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     call MPI_ALLREDUCE(sum_dust_csr_cpu, sum_dust_csr_all, nSEDgroups*ndust, &
+                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     if (dust_ratd) then
+        call MPI_ALLREDUCE(sum_dust_csrat_cpu, sum_dust_csrat_all, nSEDgroups*ndust, &
+                           MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     endif
+     if (dust_pe_heating) then
+        call MPI_ALLREDUCE(sum_dust_la_cpu, sum_dust_la_all, nSEDgroups*ndust, &
+                           MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     endif
+  endif
+  if (npah > 0) then
+     call MPI_ALLREDUCE(sum_pah_csa_cpu, sum_pah_csa_all, nSEDgroups*npah*2, &
+                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     call MPI_ALLREDUCE(sum_pah_css_cpu, sum_pah_css_all, nSEDgroups*npah*2, &
+                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+     call MPI_ALLREDUCE(sum_pah_csr_cpu, sum_pah_csr_all, nSEDgroups*npah*2, &
+                        MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+  endif
+#endif
 #endif
 
   ! ...and take averages weighted by luminosities
@@ -712,9 +922,37 @@ SUBROUTINE update_SED_group_props()
 #ifdef RTZ
         group_csn(ip,1:27,1:27) = sum_csn_all(ip,1:27,1:27) / sum_L_all(ip)
         group_cse(ip,1:27,1:27) = sum_cse_all(ip,1:27,1:27) / sum_L_all(ip)
+#ifdef CALIMA
+        if (ndust > 0) then
+           group_csa_dust(ip,:) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
+           group_css_dust(ip,:) = sum_dust_css_all(ip,:) / sum_L_all(ip)
+           group_csr_dust(ip,:) = sum_dust_csr_all(ip,:) / sum_L_all(ip)
+           if (dust_ratd) group_csrat_dust(ip,:) = sum_dust_csrat_all(ip,:) / sum_L_all(ip)
+           if (dust_pe_heating) att_len_dust(ip,:) = sum_dust_la_all(ip,:) / sum_L_all(ip)
+        endif
+        if (npah > 0) then
+           group_csa_pah(ip,:) = sum_pah_csa_all(ip,:) / sum_L_all(ip)
+           group_css_pah(ip,:) = sum_pah_css_all(ip,:) / sum_L_all(ip)
+           group_csr_pah(ip,:) = sum_pah_csr_all(ip,:) / sum_L_all(ip)
+        endif
+#endif
 #else
         group_csn(ip,:) = sum_csn_all(ip,:) / sum_L_all(ip)
         group_cse(ip,:) = sum_cse_all(ip,:) / sum_L_all(ip)
+#ifdef CALIMA
+        if (ndust > 0) then
+           group_csa_dust(ip,:) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
+           group_css_dust(ip,:) = sum_dust_css_all(ip,:) / sum_L_all(ip)
+           group_csr_dust(ip,:) = sum_dust_csr_all(ip,:) / sum_L_all(ip)
+           if (dust_ratd) group_csrat_dust(ip,:) = sum_dust_csrat_all(ip,:) / sum_L_all(ip)
+           if (dust_pe_heating) att_len_dust(ip,:) = sum_dust_la_all(ip,:) / sum_L_all(ip)
+        endif
+        if (npah > 0) then
+           group_csa_pah(ip,:) = sum_pah_csa_all(ip,:) / sum_L_all(ip)
+           group_css_pah(ip,:) = sum_pah_css_all(ip,:) / sum_L_all(ip)
+           group_csr_pah(ip,:) = sum_pah_csr_all(ip,:) / sum_L_all(ip)
+        endif
+#endif
 #endif
      else ! no stars -> assign zero-age zero-metallicity props
         group_egy(ip)       = SED_table(1,1,ip,3)
@@ -739,11 +977,78 @@ SUBROUTINE update_SED_group_props()
         group_cse(ip,1,3) = SED_table(1,1,ip,3+counter)
         counter = counter + 1
      end if
+
+#ifdef CALIMA
+     if (ndust > 0) then
+        do ii=1,ndust
+           group_csa_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+1)
+           group_css_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+2)
+           group_csr_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+3)
+        end do
+        counter = counter + 3*ndust
+        if (dust_ratd) then
+           do ii=1,ndust
+              group_csrat_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+           end do
+           counter = counter + ndust
+        endif
+        if (dust_pe_heating) then
+           do ii=1,ndust
+              att_len_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+           end do
+           counter = counter + ndust
+        endif
+     endif
+     if (npah > 0) then
+        do ii=1,npah
+           group_csa_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+           group_csa_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+           group_css_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+           group_css_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+           group_csr_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+           group_csr_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+6)
+        end do
+     endif
+#endif
 #else
      do ii=1,nIonsUsed
         group_csn(ip,ii) = SED_table(1,1,ip,2+2*ii)
         group_cse(ip,ii) = SED_table(1,1,ip,3+2*ii)
      enddo
+     counter = 1 + 2*nIons + 3
+
+#ifdef CALIMA
+     if (ndust > 0) then
+        do ii=1,ndust
+           group_csa_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+1)
+           group_css_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+2)
+           group_csr_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+3)
+        end do
+        counter = counter + 3*ndust
+        if (dust_ratd) then
+           do ii=1,ndust
+              group_csrat_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+           end do
+           counter = counter + ndust
+        endif
+        if (dust_pe_heating) then
+           do ii=1,ndust
+              att_len_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+           end do
+           counter = counter + ndust
+        endif
+     endif
+     if (npah > 0) then
+        do ii=1,npah
+           group_csa_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+           group_csa_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+           group_css_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+           group_css_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+           group_csr_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+           group_csr_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+6)
+        end do
+     endif
+#endif
 #endif
      endif
   end do
@@ -994,6 +1299,137 @@ FUNCTION getSEDcse(X, Y, N, e0, e1, species, ion)
   getSEDcse = integrateSpectrum(X, Y, N, e0, e1, species, ion, fSig) / norm
 END FUNCTION getSEDcse
 
+#ifdef CALIMA
+!************************************************************************
+FUNCTION getSEDla_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged photon attenuation length for dust grains
+! in [cm], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDla_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDla_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, flaLambda_dust) / norm
+END FUNCTION getSEDla_dust
+!************************************************************************
+FUNCTION getSEDcsa_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged absorption cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDcsa_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDcsa_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fAbsLambda_dust) / norm
+END FUNCTION getSEDcsa_dust
+!************************************************************************
+FUNCTION getSEDcss_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged scattering cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDcss_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDcss_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fScLambda_dust) / norm
+END FUNCTION getSEDcss_dust
+!************************************************************************
+FUNCTION getSEDcsr_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged rad-pressure cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #
+! Species is just the idust bin for which we're computing the attenuation
+! length.
+!-------------------------------------------------------------------------
+  use spectrum_integrator_module
+  use rt_parameters,only:ionEVs
+  real(dp):: getSEDcsr_dust, X(N), Y(N), e0, e1, norm
+  integer :: N, species, ion
+!-------------------------------------------------------------------------
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  getSEDcsr_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRpLambda_dust) / norm
+END FUNCTION getSEDcsr_dust
+
+!************************************************************************
+FUNCTION getSEDcsrat_dust(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged RAT cross-section for dust grains
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species is just the dust bin index.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   real(dp):: getSEDcsrat_dust, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm         = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcsrat_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRATLambda_dust) / norm
+END FUNCTION getSEDcsrat_dust
+
+!************************************************************************
+FUNCTION getSEDcsa_pah(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged absorption cross-section for PAHs
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species follows the PAH charge-state indexing used in fAbsLambda_pah.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(dp):: getSEDcsa_pah, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcsa_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fAbsLambda_pah) / norm
+END FUNCTION getSEDcsa_pah
+
+!************************************************************************
+FUNCTION getSEDcss_pah(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged scattering cross-section for PAHs
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species follows the PAH charge-state indexing used in fScLambda_pah.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(dp):: getSEDcss_pah, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcss_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fScLambda_pah) / norm
+END FUNCTION getSEDcss_pah
+
+!************************************************************************
+FUNCTION getSEDcsr_pah(X, Y, N, e0, e1, species, ion)
+! Compute the SED-averaged rad-pressure cross-section for PAHs
+! in [cm^2], for a given energy interval (e0,e1) [eV] in SED Y(X). Assumes X
+! is in Angstroms and that Y is energy weight per angstrom (not photon #).
+! Species follows the PAH charge-state indexing used in fRpLambda_pah.
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(dp):: getSEDcsr_pah, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   getSEDcsr_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRpLambda_pah) / norm
+END FUNCTION getSEDcsr_pah
+
+#endif
+
 !*************************************************************************
 SUBROUTINE rebin_log(xint_log, yint_log,                                 &
                data,       nx,       ny,     x,     y,     nz,           &
@@ -1116,8 +1552,12 @@ SUBROUTINE write_SEDtable()
 #ifdef RTZ
   use rtz_module, only: n_elements, elements
 #endif
+#ifdef CALIMA
+  use hydro_parameters, only: ndust, npah
+  use dust_commons, only: dust_ratd, dust_pe_heating
+#endif
   character(len=128)::filename
-  integer::ip, i, j, k, nv
+  integer::ip, i, j, k, nv, counter
 !-------------------------------------------------------------------------
 
 #ifdef RTZ
@@ -1131,9 +1571,18 @@ SUBROUTINE write_SEDtable()
 #endif
   end do
 #endif
-
+#ifdef CALIMA
+  if (ndust > 0) then
+      nv = nv + 3*ndust
+      if (dust_ratd) nv = nv + ndust
+      if (dust_pe_heating) nv = nv + ndust
+  end if
+  if (npah > 0) then
+     nv = nv + 6*npah
+   end if
+#endif
   do ip=1,nSEDgroups
-     write(filename,'(A, I1, A)') 'SEDtable', ip, '.list'
+     write(filename,'(A, I1, A)') './SEDtables/SEDtable', ip, '.list'
      open(10, file=filename, status='unknown')
      write(10,*) SED_nA, SED_nZ
 
@@ -1149,6 +1598,7 @@ SUBROUTINE write_SEDtable()
               write(10,901,advance='no') SED_table(i,j,ip,2+2*k), SED_table(i,j,ip,3+2*k)
            end do
            write(10,901) SED_table(i,j,ip,2+2*(nv/2)), SED_table(i,j,ip,3+2*(nv/2))
+           counter = 3 + 2*nv/2  ! Position after all element entries
 #else
            if(nIons .gt. 1) then
              do k = 1,nIons-1
@@ -1158,6 +1608,38 @@ SUBROUTINE write_SEDtable()
            endif
            write(10,901)                                                 &
                  SED_table(i,j,ip,2+2*nIons), SED_table(i,j,ip,3+2*nIons)
+           counter = 1 + 2*nIons + 3  ! Position after gas entries
+#endif
+#ifdef CALIMA
+           ! Export dust and PAH properties using counter calculated above
+           if (ndust > 0) then
+             do k=1,ndust
+                 write(10,901,advance='no')                              &
+                       SED_table(i,j,ip,counter+3*(k-1)+1), &
+                       SED_table(i,j,ip,counter+3*(k-1)+2), &
+                       SED_table(i,j,ip,counter+3*(k-1)+3)
+             end do
+             counter = counter + 3*ndust
+             if (dust_ratd) then
+                 write(10,901) SED_table(i,j,ip,counter+1)
+                 counter = counter + ndust
+             end if
+             if (dust_pe_heating) then
+                 write(10,901) SED_table(i,j,ip,counter+1)
+                 counter = counter + ndust
+             end if
+           end if
+           if (npah > 0) then
+             do k=1,npah
+                 write(10,901,advance='no')                              &
+                       SED_table(i,j,ip,counter+6*(k-1)+1), &
+                       SED_table(i,j,ip,counter+6*(k-1)+2), &
+                       SED_table(i,j,ip,counter+6*(k-1)+3), &
+                       SED_table(i,j,ip,counter+6*(k-1)+4), &
+                       SED_table(i,j,ip,counter+6*(k-1)+5), &
+                       SED_table(i,j,ip,counter+6*(k-1)+6)
+             end do
+           end if
 #endif
         end do
      end do
@@ -1382,12 +1864,13 @@ END SUBROUTINE initialize_group_energies_from_blackbody
 #ifdef INDIVIDUAL_SINK_STARS
 SUBROUTINE init_popII_stellar_properties()
   use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
   implicit none
 
   if (myid.eq.1) write(*,*) "Loading in Pop. II stellar data"
 
   ! Harley formatted this in python so we should be able to simply read it in as a 3D array
-  open(unit=10, file='./data/popII_data/mist_stellar_props.bin', access='stream', form='unformatted', status='old', action='read')
+  open(unit=10, file=trim(data_dir)//'/popII_data/mist_stellar_props.bin', access='stream', form='unformatted', status='old', action='read')
   read(10) mist_stellar_props
   close(10)
 

@@ -389,6 +389,7 @@ module amr_parameters
   character(LEN=256)::os13_cooling_dir='../data/'
   character(LEN=256)::fs_cooling_dir='../data/'
   character(LEN=256)::htmc_cooling_dir='../data/'
+  character(LEN=256)::data_dir='../data/'
 
   ! cpu time limit
   real(dp)::cpu_time_limit = 72

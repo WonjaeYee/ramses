@@ -2692,31 +2692,183 @@ SUBROUTINE write_SEDtable_neon()
 
  END SUBROUTINE write_SEDtable_neon
 !*************************************************************************
- SUBROUTINE write_SEDtable_dust()
-
-   ! Write the SED properties to a file (this is just in debugging, to check
-   ! if the SEDs are being read correctly).
+SUBROUTINE write_SEDtable_dust()
+#ifdef CALIMA
+   use dust_commons,only:dust_ratd,dust_pe_heating
+   use hydro_parameters, only:ndust,npah
+#endif
+   ! Write the SED-averaged dust optical properties to a file (this is just
+   !  in debugging, to check if the SEDs are being read correctly).
    !-------------------------------------------------------------------------
      character(len=128)::filename
-     integer::ip, i, j
+     integer::ip, i, j,k
    !-------------------------------------------------------------------------
-     do ip=1,nSEDgroups
-        write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust', ip, '.list'
-        open(10, file=filename, status='unknown')
-        write(10,*) SED_nA, SED_nZ
+#ifdef CALIMA
+   if (ndust>0) then
+      do ip=1,nSEDgroups
+         write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust_Ab', ip, '.list'
+         open(10, file=filename, status='unknown')
+         write(10,*) SED_nA, SED_nZ
+         
+         do j = 1,SED_nz
+            do i = 1,SED_nA
+               do k=1,ndust
+                  write(10,600)                                                 &
+                        SED_ages(i)        ,    SED_zeds(j)        ,             &
+                        SED_table_dust_Ab(i,j,ip,k)
+               end do
+            end do
+         end do
+         close(10)
+      end do
+      600 format (ES15.4, ES15.4, ES15.4)
 
-        do j = 1,SED_nz
-           do i = 1,SED_nA
-              write(10,900)                                                 &
-                   SED_ages(i)        ,    SED_zeds(j)        ,             &
-                   SED_table_dust(i,j,ip,1)
-           end do
-        end do
-        close(10)
-     end do
+      do ip=1,nSEDgroups
+         write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust_Sc', ip, '.list'
+         open(10, file=filename, status='unknown')
+         write(10,*) SED_nA, SED_nZ
+         
+         do j = 1,SED_nz
+            do i = 1,SED_nA
+               do k=1,ndust+npah*2
+                  write(10,700)                                                 &
+                        SED_ages(i)        ,    SED_zeds(j)        ,             &
+                        SED_table_dust_Sc(i,j,ip,k)
+               end do
+            end do
+         end do
+         close(10)
+      end do
+      700 format (ES15.4, ES15.4, ES15.4)
+
+      do ip=1,nSEDgroups
+         write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust_Rp', ip, '.list'
+         open(10, file=filename, status='unknown')
+         write(10,*) SED_nA, SED_nZ
+         
+         do j = 1,SED_nz
+            do i = 1,SED_nA
+               do k=1,ndust+npah*2
+                  write(10,800)                                                 &
+                        SED_ages(i)        ,    SED_zeds(j)        ,             &
+                        SED_table_dust_Rp(i,j,ip,k)
+               end do
+            end do
+         end do
+         close(10)
+      end do
+      800 format (ES15.4, ES15.4, ES15.4)
+      if (dust_ratd) then
+         do ip=1,nSEDgroups
+            write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust_RAT', ip, '.list'
+            open(10, file=filename, status='unknown')
+            write(10,*) SED_nA, SED_nZ
+            
+            do j = 1,SED_nz
+               do i = 1,SED_nA
+                  do k=1,ndust
+                     write(10,750)                                                 &
+                           SED_ages(i)        ,    SED_zeds(j)        ,             &
+                           SED_table_dust_RAT(i,j,ip,k)
+                  end do
+               end do
+            end do
+            close(10)
+         end do
+         750 format (ES15.4, ES15.4, ES15.4)
+      end if
+      if (dust_pe_heating) then
+         do ip=1,nSEDgroups
+            write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust_la', ip, '.list'
+            open(10, file=filename, status='unknown')
+            write(10,*) SED_nA, SED_nZ
+            
+            do j = 1,SED_nz
+               do i = 1,SED_nA
+                  do k=1,ndust
+                     write(10,850)                                                 &
+                           SED_ages(i)        ,    SED_zeds(j)        ,             &
+                           SED_table_dust_la(i,j,ip,k)
+                  end do
+               end do
+            end do
+            close(10)
+         end do
+         850 format (ES15.4, ES15.4, ES15.4)
+      end if
+   end if
+   if (npah>0) then
+      do ip=1,nSEDgroups
+         write(filename,'(A, I1, A)') './SEDtables/SEDtable_PAH_Ab', ip, '.list'
+         open(10, file=filename, status='unknown')
+         write(10,*) SED_nA, SED_nZ
+         
+         do j = 1,SED_nz
+            do i = 1,SED_nA
+               do k=1,npah*2
+                  write(10,650)                                                 &
+                        SED_ages(i)        ,    SED_zeds(j)        ,             &
+                        SED_table_PAH_abs(i,j,ip,k)
+               end do
+            end do
+         end do
+         close(10)
+      end do
+      650 format (ES15.4, ES15.4, ES15.4)
+
+      do ip=1,nSEDgroups
+         write(filename,'(A, I1, A)') './SEDtables/SEDtable_PAH_Sc', ip, '.list'
+         open(10, file=filename, status='unknown')
+         write(10,*) SED_nA, SED_nZ
+         
+         do j = 1,SED_nz
+            do i = 1,SED_nA
+               do k=1,npah*2
+                  write(10,650)                                                 &
+                        SED_ages(i)        ,    SED_zeds(j)        ,             &
+                        SED_table_PAH_sc(i,j,ip,k)
+               end do
+            end do
+         end do
+         close(10)
+      end do
+
+      do ip=1,nSEDgroups
+         write(filename,'(A, I1, A)') './SEDtables/SEDtable_PAH_Rp', ip, '.list'
+         open(10, file=filename, status='unknown')
+         write(10,*) SED_nA, SED_nZ
+         
+         do j = 1,SED_nz
+            do i = 1,SED_nA
+               do k=1,npah*2
+                  write(10,650)                                                 &
+                        SED_ages(i)        ,    SED_zeds(j)        ,             &
+                        SED_table_PAH_Rp(i,j,ip,k)
+               end do
+            end do
+         end do
+         close(10)
+      end do
+   end if
+#else
+   do ip=1,nSEDgroups
+      write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust', ip, '.list'
+      open(10, file=filename, status='unknown')
+      write(10,*) SED_nA, SED_nZ
+      
+      do j = 1,SED_nz
+         do i = 1,SED_nA
+            write(10,900)                                                 &
+                  SED_ages(i)        ,    SED_zeds(j)        ,             &
+                  SED_table_dust(i,j,ip,1)
+         end do
+      end do
+      close(10)
+   end do
    900 format (ES15.4, ES15.4, ES15.4)
-
-   END SUBROUTINE write_SEDtable_dust
+#endif
+   
+END SUBROUTINE write_SEDtable_dust
 
 !*************************************************************************
 SUBROUTINE inp_SED_table(age, Z, nProp, same, ret)

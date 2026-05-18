@@ -312,6 +312,9 @@ SUBROUTINE read_rt_groups()
   use cross_sections_module
   use collisional_ionization_module
 #endif
+#ifdef CALIMA
+  use dust_optics
+#endif
   use SED_module
   implicit none
   integer::i,igroup_HI=0, igroup_HII=0, igroup_HeII=0, igroup_HeIII=0
@@ -452,6 +455,15 @@ SUBROUTINE read_rt_groups()
 
   ! Initialize group energies for the same black body
   call initialize_group_energies_from_blackbody(1.d5, groupL0, groupL1, group_egy)
+
+#ifdef CALIMA
+  ! Initialise the CALIMA dust and PAH optical properties
+   call init_dust_efficiency_tables(nGroups)
+   ! Initialize per-group dust/PAH cross-sections after dust tables exist.
+   call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
+   call init_dust_mean_cross_sections(sed_dir)
+  if (dust_pe_heating) call init_dust_dielectric_tables
+#endif
 
 #ifdef INDIVIDUAL_SINK_STARS
 ! <<WJ>> temporarily disable popII routines

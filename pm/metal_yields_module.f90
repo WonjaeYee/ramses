@@ -31,6 +31,7 @@ CONTAINS
 
 SUBROUTINE initialize_SN_yields()
   use amr_commons, only: myid
+  use hydro_commons, only: data_dir
   implicit none
 
   integer:: i, j, k, unit_num, ios
@@ -42,7 +43,7 @@ SUBROUTINE initialize_SN_yields()
   !!!
 
   ! Load Portinari yields file
-  open(newunit=unit_num, file='./data/yields/Portinari_yields.tsv', status='old', action='read', iostat=ios)
+  open(newunit=unit_num, file=trim(data_dir)//'/yields/Portinari_yields.tsv', status='old', action='read', iostat=ios)
   if (ios /= 0) then
       write(*,*) 'Error: Could not open Portinari yields file'
       return
@@ -67,7 +68,7 @@ SUBROUTINE initialize_SN_yields()
   !!!
 
   ! Load Pop III SNII Yields
-  open(newunit=unit_num, file='./data/yields/Nomoto2013_PopIII_SNII.dat', status='old', action='read', iostat=ios)
+  open(newunit=unit_num, file=trim(data_dir)//'/yields/Nomoto2013_PopIII_SNII.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
       write(*,*) 'Error: Could not open Pop III SNII yields file'
       return
@@ -78,7 +79,7 @@ SUBROUTINE initialize_SN_yields()
   end do ! end loop over metals
 
   ! Load Pop III HN Yields
-  open(newunit=unit_num, file='./data/yields/Nomoto2013_PopIII_HN.dat', status='old', action='read', iostat=ios)
+  open(newunit=unit_num, file=trim(data_dir)//'/yields/Nomoto2013_PopIII_HN.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
       write(*,*) 'Error: Could not open Pop III SN yields file'
       return
@@ -89,7 +90,7 @@ SUBROUTINE initialize_SN_yields()
   end do ! end loop over metals
 
   ! Load Pop III PISN Yields
-  open(newunit=unit_num, file='./data/yields/Nomoto2013_PopIII_PISN.dat', status='old', action='read', iostat=ios)
+  open(newunit=unit_num, file=trim(data_dir)//'/yields/Nomoto2013_PopIII_PISN.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
       write(*,*) 'Error: Could not open Pop III PISN yields file'
       return

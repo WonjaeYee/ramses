@@ -4,6 +4,11 @@ subroutine read_hydro_params(nml_ok)
 #ifdef RTZ
   use rtz_module
 #endif
+#ifdef CALIMA
+  use dust_commons
+  use dust_init, only: check_params_dust, init_CALIMA_dust
+  use rt_parameters,only: nGroups
+#endif
   use mpi_mod
   implicit none
   logical::nml_ok
@@ -19,6 +24,9 @@ subroutine read_hydro_params(nml_ok)
 #endif
 #ifdef RTZ
   integer :: counter
+#endif
+#ifdef CALIMA
+  logical :: check_dust
 #endif
 
   !--------------------------------------------------
@@ -46,7 +54,7 @@ subroutine read_hydro_params(nml_ok)
 
   ! Hydro parameters
   namelist/hydro_params/gamma,courant_factor,smallr,smallc &
-       & ,niter_riemann,slope_type,difmag &
+       & ,niter_riemann,slope_type,difmag,data_dir &
 #if NENER>0
        & ,gamma_rad &
 #endif
@@ -109,6 +117,39 @@ subroutine read_hydro_params(nml_ok)
   ! Dummy namelist for physics
   namelist/physics_params/ dummy
 
+    ! CALIMA dust parameters
+#ifdef CALIMA
+   namelist/calima_params/&
+      ! Dust physics flags
+      dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+      dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
+      dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
+      dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
+      ! PAH physics flags
+      pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_uv_destruction,pah_sn_destruction,pah_cluster_evaporation,&
+      pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
+      ! Dust modelling options
+      sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
+      ! PAH modelling options
+      sublimation_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,&
+      ! Timescale and efficiency parameters
+      t_sputter_ref,t_growth_ref,t_sha_ref,t_coa_ref,Sconstant,&
+      nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
+      dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
+      Coulomb_enhance,tensile_strength,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
+      separate_refractive_index,slope_frag_func,errmax,countmax,GDinit,DTMinit,fpah_ini,smallr_dust,&
+      ! Dust grain and PAHs bin properties
+      dust_composition,dustbins_per_chemtype,&
+      asize,sgrain,amin,amax,fmass_ej,&
+      pah_nc,pah_nc_min,pah_nc_max,spah,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
+      ! ISM depletion factors
+      fDust_depletions,fCDust_inPAH,GD_solar,DTM_solar,fdustmass_ini,fpahmass_ini,&
+      ! Radiation parameters
+      fixed_rad_ani,fixed_lambda_mean,&
+      ! External dust files
+      dust_tables_dir
+#endif
+
 #ifdef grackle
    namelist/grackle_params/use_grackle,grackle_with_radiative_cooling,grackle_primordial_chemistry,grackle_metal_cooling &
        & ,grackle_UVbackground,grackle_cmb_temperature_floor,grackle_h2_on_dust,grackle_photoelectric_heating &
@@ -161,6 +202,11 @@ subroutine read_hydro_params(nml_ok)
   rewind(1)
   read(1,NML=units_params,END=108)
 108 continue
+#ifdef CALIMA
+  rewind(1)
+  read(1,NML=calima_params,END=109)
+109 continue
+#endif
 #ifdef grackle
   rewind(1)
   read(1,NML=grackle_params)
@@ -301,6 +347,13 @@ subroutine read_hydro_params(nml_ok)
      if(myid==1)write(*,*)'Check ind_rsink'
      nml_ok=.false.
   end if
+
+  !--------------------------------------------------
+  ! Check for CALIMA dust parameters
+#ifdef CALIMA
+  check_dust = check_params_dust(myid)
+  if(.not.check_dust) nml_ok = .false.
+#endif
 
   !-------------------------------------------------
   ! This section deals with hydro boundary conditions
@@ -497,6 +550,11 @@ subroutine read_hydro_params(nml_ok)
   iCO = idelay
 #ifdef CO
   idelay = idelay + 1
+#endif
+#ifdef CALIMA
+      ipah  = idelay
+      idust = idelay + npah
+      idelay = idelay + npah + ndust
 #endif
   ivirial1=idelay
   ivirial2=idelay

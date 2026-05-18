@@ -75,6 +75,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
   use constants, only: a_r, Myr2sec
 #endif
+#ifdef CALIMA
+  use dust_commons, only: dust,comp_sigma_turb
+  use dust_utils, only: cmp_sigma_turb
+#endif
   use mpi_mod
   implicit none
 #if defined(grackle) && !defined(WITHOUTMPI)
@@ -123,6 +127,12 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp), dimension(1:nvector):: nCO
   real(dp):: dx_SS_H2
   integer:: counter, e_counter, jj
+#endif
+#ifdef CALIMA
+  real(dp) :: sigma2
+  real(dp),dimension(1:nvector) :: sigma
+  real(dp),dimension(1:nvector,1:ndust) :: rho_dust
+  real(dp),dimension(1:nvector,1:npah) :: rho_pah
 #endif
 
    integer::err_idx
@@ -401,7 +411,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                     xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
                     if (jj.eq.1) then
                        ! This gives us a number density [Atoms/cm^3]
-                       nElement(ii,i) = uold(ind_leaf(i),imetal+e_counter) * scale_nH / elements(ii)%atomic_mass
+                       elements(ii)%scale_n = scale_d / elements(ii)%atomic_mass_g
+                       nElement(ii,i) = uold(ind_leaf(i),imetal+e_counter) * elements(ii)%scale_n
                     end if
                  end do ! end loop over leaf cells
                  counter = counter + 1 ! increment ionization counter
@@ -421,7 +432,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef CO
         if (isCO_rtz) then
            do i=1,nleaf !loop over leaf cells
-              nCO(i) = uold(ind_leaf(i),iCO) * scale_nH / (elements(6)%atomic_mass+elements(8)%atomic_mass)
+              nCO(i) = uold(ind_leaf(i),iCO) * scale_d / mCO
            end do
         endif
 #endif
@@ -480,6 +491,36 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            Fp(:,:,i) = Fp(:,:,i) + Fp_boost(:,:,i)
         end do
      endif
+#endif
+
+#ifdef CALIMA
+      ! Get the quantities necessary for CALIMA dust modelling
+      ! Compute the local velocity dispersion sigma in cm/s
+      sigma(1:nvector) = 0.0d0
+      if (comp_sigma_turb) then
+         do i=1,nleaf
+            call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
+            sigma(i) = sqrt(sigma2)
+         end do
+      endif
+      ! Dust densities in g/cm^3
+      do i=1,nleaf
+         rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+      end do
+      if (any(rho_dust(i,:).lt.0d0)) then
+         write(*,*) 'Negative dust density in cell ', ind_leaf(i)
+         write(*,*) 'Dust density: ', rho_dust(i,:)
+         call clean_stop
+      end if
+      ! PAH densities in g/cm^3
+      do i=1,nleaf
+         rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+      end do
+      if (any(rho_pah(i,:).lt.0d0)) then
+         write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
+         write(*,*) 'PAH density: ', rho_pah(i,:)
+         call clean_stop
+      end if
 #endif
 
      ! grackle tabular cooling
@@ -612,8 +653,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifndef SKIP_RTZ_COOLING
         call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
                               ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
-                              ,dx_SS_H2, err_idx)
+                              ,dx_SS_H2, err_idx &
+#ifdef CALIMA
+                              ,sigma=sigma &
+#if NDUST>0
+                              ,rho_dust=rho_dust &
 #endif
+#if NPAH>0
+                              ,rho_pah=rho_pah &
+#endif
+#endif
+                              )
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'
            write(*,*) '            myid:', myid
@@ -631,6 +681,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
            !write(*,*) 'uold:', uold(ind_leaf(err_idx)+1, neul)
            write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:iIons+53)
+#ifdef CALIMA
+#if NDUST>0
+           write(*,*) 'rho_dust:', rho_dust(err_idx,:)
+#endif
+#if NPAH>0
+           write(*,*) 'rho_pah:', rho_pah(err_idx,:)
+#endif
+#endif
            stop
         end if
 #else
@@ -736,6 +794,15 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         end do
      endif
 
+#ifdef CALIMA
+      ! Update dust and PAH densities for CALIMA
+      do i=1,nleaf
+         uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
+      end do
+      do i=1,nleaf
+         uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
+      end do
+#endif
 #ifdef RT
      if(neq_chem) then
         ! Update ionization fraction
@@ -762,7 +829,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef CO
         ! In the case of CO, we have to update mass densities
         do i=1,nleaf !loop over leaf cells
-           uold(ind_leaf(i),iCO) = nCO(i) * (elements(6)%atomic_mass+elements(8)%atomic_mass) / scale_nH
+           uold(ind_leaf(i),iCO) = nCO(i) * mCO / scale_d
         end do
 
         e_counter = 0
@@ -773,7 +840,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                  do i=1,nleaf !loop over leaf cells
                     if (jj.eq.1) then
                        ! This gives us a number density [Atoms/cm^3]
-                       uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) * elements(ii)%atomic_mass / scale_nH
+                       uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
                     end if
                  end do ! end loop over leaf cells
               end if
