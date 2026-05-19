@@ -29,12 +29,12 @@ RT = 0
 # Use RTZ? 1=Yes, 0=No (note, do not set both RT and RTZ to 1!)
 RTZ = 1
 # Use CALIMA dust and PAH chemistry modelling? 1=Yes, 0=No
-CALIMA = 0
+CALIMA = 1
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
 USE_TURB = 0
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
-MPI = 0
+MPI = 1
 MPIF90 = mpif90
 # Root name of executable
 EXEC = ramses
@@ -110,9 +110,9 @@ NIONS = 0
 endif
 
 # Scalar quantitites for CALIMA
-NDUST = 0
-NPAH = 0
-NDCHEMTYPE = 0
+NDUST = 4
+NPAH = 2
+NDCHEMTYPE = 2
 
 # Compute NVAR
 NHYDRO = 2+$(NDIM)
