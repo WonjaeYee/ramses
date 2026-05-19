@@ -443,11 +443,11 @@ module dust_chemistry_solver
         end if
 
         global_check = check_update_dust(t0,ddt,rho,rho_dust,rho_pah,nElement,tracked_elements)
-        print*,'check_update_dust ',global_check,' t0 ',t0,' ddt ',ddt,' rho ',rho,' rho_dust ',rho_dust,' rho_pah ',rho_pah, ' tracked_elements ',tracked_elements,' nElement ',nElement
-        call clean_stop
+        ! print*,'check_update_dust ',global_check,' t0 ',t0,' ddt ',ddt,' rho ',rho,' rho_dust ',rho_dust,' rho_pah ',rho_pah, ' tracked_elements ',tracked_elements,' nElement ',nElement
+        ! call clean_stop
         if (.not.global_check) return
-        print*,'t_acc ',t_acc
-        call clean_stop
+        ! print*,'t_acc ',t_acc
+        ! call clean_stop
 
         ! Now, loop over dust species and update their densities
         rkloop: do jj=1,ndchemtype

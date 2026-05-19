@@ -29,17 +29,17 @@ RT = 0
 # Use RTZ? 1=Yes, 0=No (note, do not set both RT and RTZ to 1!)
 RTZ = 1
 # Use CALIMA dust and PAH chemistry modelling? 1=Yes, 0=No
-CALIMA = 0
+CALIMA = 1
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
 USE_TURB = 0
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
-MPI = 0
+MPI = 1
 MPIF90 = mpif90
 # Root name of executable
 # EXEC = /work/projects/leo/bin/ramses_260518-test-new-mist_
-EXEC = /work/projects/rum2026/bin/ramses_260518-test-new-mist_no-mpi_
-# EXEC = /work/projects/imf/bin/ramses_260414-for-comparison-with-turb_
+# EXEC = /work/projects/rum2026/bin/ramses_260518-test-new-mist_no-mpi_
+EXEC = /work/projects/imf/bin/ramses_260518-test-calima_
 # Number of additional energies
 NENER = 1
 # Use Grackle cooling? 1=Yes, 0=No
@@ -51,7 +51,6 @@ ATON = 0
 # Number of photon groups for RT
 NGROUPS = 8
 # Number of passive scalars
-NPSCAL = 0
 NPSCAL = 0
 # Light MPI communicator structure (for > 10k MPI processes)
 LIGHT_MPI_COMM = 0
@@ -88,7 +87,7 @@ INDI_STAR = 1
 
 # test purpose
 # - static sink
-STATIC_SINK = 1
+STATIC_SINK = 0
 # - no radiative feedback
 NO_FEEDBACK_RAD = 0
 # - no kinematic feedback (wind ejecta)
@@ -96,9 +95,9 @@ NO_FEEDBACK_KIN = 0
 # - divide photon rate with 8 for reflective boundary conditions
 ONE_EIGHTH_TEST = 0
 # - to keep photons, skip the RTZ cooling step
-SKIP_RTZ_COOLING = 1
+SKIP_RTZ_COOLING = 0
 # - stellar ejecta only from MIST module (no portinari, no pop III, no SNIa)
-USE_ONLY_MIST = 1
+USE_ONLY_MIST = 0
 
 # Number of ions for RT
 ifeq ($(RTZ),1)
@@ -113,9 +112,9 @@ NIONS = 0
 endif
 
 # Scalar quantitites for CALIMA
-NDUST = 0
-NPAH = 0
-NDCHEMTYPE = 0
+NDUST = 4
+NPAH = 2
+NDCHEMTYPE = 2
 
 # Compute NVAR
 NHYDRO = 2+$(NDIM)

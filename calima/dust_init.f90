@@ -863,7 +863,7 @@ module dust_init
         ! 1. Check first that all files are in the expected place
         ok_all = .true.
         do ii = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -891,7 +891,7 @@ module dust_init
 
         ! 2. Read the files for each dust bin and element
         do ii = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -1068,7 +1068,7 @@ module dust_init
         ! 1. Check first that all files are in the expected place
         ok_all = .true.
         do ii = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -1096,7 +1096,7 @@ module dust_init
 
         ! 2. Read the files for each dust bin and element
         do ii = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             do i = 1, n_elements
 #ifdef RTZ
                 if (elements(i)%atomic_number <= 0) cycle
@@ -1190,7 +1190,7 @@ module dust_init
         ! 1. Check first that all files are in the expected place
         ok_all = .true.
         do ii=1,ndust
-            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             write(charge_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_Z_vs_T_', trim(dustlabel)
             inquire(file=charge_filename,exist=ok)
             ok_all = ok_all .and. ok
@@ -1212,7 +1212,7 @@ module dust_init
 
         ! 2. Read per-grain charging tables into dustbins_props DustTables
         do ii=1,ndust
-            write(dustlabel, '(A,I2.2)') 'dustbin_', ii
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             write(charge_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_Z_vs_T_', trim(dustlabel)
             write(sigma_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_sigma_vs_T_', trim(dustlabel)
 
@@ -1642,7 +1642,7 @@ module dust_init
         do ipahbin = 1, npah
             ! Check first that the file is there
             write(i_str, '(I2.2)') ipahbin
-            write(f_diss_filename, '(a,a,a,a)') trim(dust_tables_dir), 'dissociation_PAHbin_', trim(i_str), '.dat'
+            write(f_diss_filename, '(a,a,a,a)') trim(dust_tables_dir), 'dissociation_PAHBin_', trim(i_str), '.dat'
             inquire(file=f_diss_filename,exist=ok_pah)
 
             if (.not. ok_pah) then
