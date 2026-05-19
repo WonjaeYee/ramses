@@ -163,8 +163,8 @@ ifeq ($(INDI_STAR),1)
 endif
 #############################################################################
 # Fortran compiler options and directives
-
-FFLAGS = -cpp -O0 -free -fallow-argument-mismatch $(DEFINES)  -g -fbacktrace #-cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+FFLAGS = -cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+#FFLAGS = -cpp -O0 -free -fallow-argument-mismatch $(DEFINES)  -g -fbacktrace #-cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 F90 = $(MPIF90)
 FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 

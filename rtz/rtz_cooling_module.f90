@@ -83,7 +83,7 @@ module rtz_cooling_module
    END SUBROUTINE rtz_set_model
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-   SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
+SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef RT
       & Np, Fp, p_gas, dNpdt, dFpdt, ilevel, &
 #endif
@@ -114,6 +114,7 @@ module rtz_cooling_module
    !
    ! We use a slightly modified method of Anninos et al. (1997).
    !-------------------------------------------------------------------------
+   use dust_commons, only: icell_call, first_time_call
    implicit none
    real(dp):: aexp
    real(dp),dimension(1:nvector):: T2
@@ -631,7 +632,7 @@ module rtz_cooling_module
       ! use auger_ionization_module
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
-      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating
+      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,h2_prime_before
       use dust_interface
 #endif
       implicit none
@@ -664,7 +665,7 @@ module rtz_cooling_module
       integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
       integer:: i_current_Ion
       real(dp):: Zsolar, total_G0
-      real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, f_shd, f_shd_CO
+      real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -682,6 +683,7 @@ module rtz_cooling_module
       integer::ii
       real(dp)::rho_dust_tot
       real(dp),dimension(1:nGroups)::pahAbs,pahSc,pahRp
+      real(dp) :: h2_first_cooling_rate, h2_second_cooling_rate, h2_rate_prime
 #endif
       !-----------------------------------------------------------------------
 
@@ -987,9 +989,20 @@ module rtz_cooling_module
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
+         h2_first_cooling_rate = saved_cooling_rates(8)
          call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
+         h2_second_cooling_rate = saved_cooling_rates(8)
+         h2_rate_prime = (h2_first_cooling_rate - h2_second_cooling_rate) / (2.d-5*TK)
+         ! if (h2_prime_before.eq.0d0) then
+         !    h2_prime_before = h2_rate_prime
+         ! elseif (abs(h2_rate_prime -h2_prime_before)/h2_prime_before.gt.0.1d0 .and. h2_prime_before.gt.1d-24) then
+         !    write(*,*) 'Warning: large change in H2 cooling rate derivative:', &
+         !               ' old:', h2_prime_before, ' new:', h2_rate_prime
+         ! else
+         !    h2_prime_before = h2_rate_prime
+         ! end if
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
@@ -1066,8 +1079,14 @@ module rtz_cooling_module
       !/////////////////////////////////////////
       !//          UPDATE DUST & PAHs         //
       !/////////////////////////////////////////
-      call compute_dust_update(dust_helper,total_G0,Tk,rho,ne,nElement_dep(:),dXion(:,:), &
-                              ddt(icell),dx_SS_H2&
+      dust_helper%local_Tk = TK
+      dust_helper%local_nH = nH(icell)
+      dust_helper%local_rho = rho
+      dust_helper%local_dx = dx_SS_H2
+      dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
+      dust_helper%local_G0 = total_G0
+      dust_helper%local_ne = ne
+      call compute_dust_update(dust_helper,nElement_dep(:),dXion(:,:),ddt(icell)&
 #ifdef RT
                               ,dNp(:)&
 #endif
@@ -1141,7 +1160,9 @@ module rtz_cooling_module
 #endif
 
          ! Update xH2 and store in dXion
-         xH2_loc = (cr_H2*ddt(icell) + xH2_loc)/(1.d0+de_H2*ddt(icell))
+         ! xH2_loc = (cr_H2*ddt(icell) + xH2_loc)/(1.d0+de_H2*ddt(icell))
+         xH2_loc_eq = (cr_H2 / (de_H2 + 1d-100))
+         xH2_loc = xH2_loc_eq + (xH2_loc - xH2_loc_eq) * exp(-de_H2*ddt(icell))
          dXion(1,3) = 2.d0 * min(max(xH2_loc,x_MIN),0.5d0)
 
          ! Check for convergence

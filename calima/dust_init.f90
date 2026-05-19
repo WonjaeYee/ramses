@@ -39,15 +39,13 @@ module dust_init
                 write(*,'(A,I2,A,E10.2,A,E10.2)') '   dust bin ',jj,' : a =',dustbins_props(jj)%asize,',  s =',dustbins_props(jj)%sgrain
             end do
         end do        
-        write(*,*)'           t_acc_ref t_des_ref t_sha_ref t_coa_ref'
-        write(*,'(A,4e10.3,A)')'           ', t_growth_ref/1d6,t_sputter_ref/1d6,t_sha_ref/1d6,t_coa_ref/1d6,' Myr'
 #if NPAH>0
         if(dust_pahs) then
             write(*,*) '>>> PAHs PARAMETERS ======================================'
             write(*,*) '   ipah      = ',ipah,',   npah    = ',npah
             write(*,*) 'pah_coalescence      = ',pah_coalescence,   ',pah_sputtering      = ',pah_sputtering
             write(*,*) 'pah_freezing         = ',pah_freezing,      ',pah_evaporation     = ',pah_cluster_evaporation
-            write(*,*) 'pah_uv_destruction   = ',pah_uv_destruction,',pah_sn_destruction  = ',pah_sn_destruction
+            write(*,*) 'pah_photolysis   = ',pah_photolysis,',pah_sn_destruction  = ',pah_sn_destruction
             write(*,*) 'H2onpah              = ',H2onpah,           ',pah_pe_heating      = ',pah_pe_heating
             write(*,*) 'pah_accretion        = ',pah_accretion
             do ii = 1, npah
@@ -191,7 +189,7 @@ module dust_init
                                         myq(imetal + dustbins_props(jj1)%el_index(ii) - 1)
                         end do
                         call cmp_lim_elem(jj1,dustbins_props(jj1)%nelements,M_el,ilim)
-                        dustMass = GDfactor * M_el(ilim)
+                        dustMass = GDfactor * M_el(ilim) / dustbins_props(jj1)%el_mfractions(ilim)
                         do kk = jj1, jj1 + dustbins_per_chemtype(jj) - 1
                             myq(idust + kk - 1) = fdustmass_ini(kk) * dustMass
                         end do
@@ -262,7 +260,7 @@ module dust_init
                                         myq(imetal + dustbins_props(jj1)%el_index(ii) - 1)
                         end do
                         call cmp_lim_elem(jj1,dustbins_props(jj1)%nelements,M_el,ilim)
-                        dustMass = DTMfactor * M_el(ilim)
+                        dustMass = DTMfactor * M_el(ilim) / dustbins_props(jj1)%el_mfractions(ilim)
                         do kk = jj1, jj1 + dustbins_per_chemtype(jj) - 1
                             myq(idust + kk - 1) = fdustmass_ini(kk) * dustMass
                         end do
@@ -342,7 +340,7 @@ module dust_init
                                 * nElement(kk) * dustbins_props(ii1)%el_atomic_masses_g(jj)
                 end do
                 call cmp_lim_elem(ii1,dustbins_props(ii1)%nelements,M_el,ilim)
-                dustMass = DTM_factor * M_el(ilim)
+                dustMass = DTM_factor * M_el(ilim) / dustbins_props(ii1)%el_mfractions(ilim)
                 ii2 = ii1 + dustbins_per_chemtype(ii) - 1
                 do jj = ii1, ii2
                     rho_dust(jj) = fdustmass_ini(jj) * dustMass
@@ -427,6 +425,122 @@ module dust_init
         GD_RR14 = 10**y
     end function GD_RR14
 
+    subroutine init_dust_processes
+        use dust_rates
+        implicit none
+
+        ! 1. We begin by counting how many dust processes will be included based on
+        ! on the namelist parameters, and allocate the array of dust_processes_list
+        ndust_processes = 0
+        if (ndust > 0) then
+            if (dust_accretion) then
+                ndust_processes = ndust_processes + 1
+            end if
+            if (dust_sputtering) then
+                ndust_processes = ndust_processes + 1
+            end if
+            if (dust_coagulation) then
+                ndust_processes = ndust_processes + 1
+            end if
+            if (dust_shattering) then
+                ndust_processes = ndust_processes + 1
+            end if
+            if (dust_ratd) then
+                ndust_processes = ndust_processes + 1
+            end if
+            if (ndust_processes > 0) then
+                allocate(dust_processes_list(1:ndust_processes))
+                ndust_processes = 0
+                if (dust_accretion) then
+                    ndust_processes = ndust_processes + 1
+                    dust_processes_list(ndust_processes)%name = 'accretion'
+                    dust_processes_list(ndust_processes)%source = .true.
+                    dust_processes_list(ndust_processes)%sink = .false.
+                    if (accretion_model.eq.'LeBourlot2012') then
+                        dust_processes_list(ndust_processes)%comp_rate => LeBourlot2012_accretion_rate
+                    else
+                        dust_processes_list(ndust_processes)%comp_rate => LeBourlot2012_accretion_rate
+                    end if
+                end if
+                if (dust_sputtering) then
+                    ndust_processes = ndust_processes + 1
+                    dust_processes_list(ndust_processes)%name = 'sputtering'
+                end if
+                if (dust_coagulation) then
+                    ndust_processes = ndust_processes + 1
+                    dust_processes_list(ndust_processes)%name = 'coagulation'
+                    if (coagulation_model.eq.'Aoyama2017') then
+                        dust_processes_list(ndust_processes)%comp_rate => Aoyama2017_coagulation_rate
+                    else if (coagulation_model.eq.'Hirashita2015') then
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_coagulation_rate
+                    else if (coagulation_model.eq.'Smoluchowski1916') then
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_all_coagulation_rate
+                    else
+                        dust_processes_list(ndust_processes)%comp_rate => Aoyama2017_coagulation_rate
+                    end if
+                end if
+                if (dust_shattering) then
+                    ndust_processes = ndust_processes + 1
+                    dust_processes_list(ndust_processes)%name = 'shattering'
+                end if
+                if (dust_ratd) then
+                    ndust_processes = ndust_processes + 1
+                    dust_processes_list(ndust_processes)%name = 'ratd'
+                end if
+            end if
+        end if
+
+        ! 2. Do the same for the PAH processes
+        if (npah > 0) then
+            if (pah_accretion) then
+                npah_processes = npah_processes + 1
+            end if
+            if (pah_sputtering) then
+                npah_processes = npah_processes + 1
+            end if
+            if (pah_freezing) then
+                npah_processes = npah_processes + 1
+            end if
+            if (pah_desorption) then
+                npah_processes = npah_processes + 1
+            end if
+            if (pah_cluster_evaporation) then
+                npah_processes = npah_processes + 1
+            end if
+            if (pah_photolysis) then
+                npah_processes = npah_processes + 1
+            end if
+            if (npah_processes > 0) then
+                allocate(pah_processes_list(1:npah_processes))
+                npah_processes = 0
+                if (pah_accretion) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'accretion'
+                end if
+                if (pah_sputtering) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'sputtering'
+                end if
+                if (pah_freezing) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'freezing'
+                end if
+                if (pah_desorption) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'desorption'
+                end if
+                if (pah_cluster_evaporation) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'cluster_evaporation'
+                end if
+                if (pah_photolysis) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'photolysis'
+                end if
+            end if
+        end if
+    end subroutine init_dust_processes
+
     subroutine init_CALIMA_dust(nGroups)
         ! This function initialises dust constants that will be used
         ! for the dust routines, such that they only need to be computed at startup
@@ -438,7 +552,8 @@ module dust_init
         implicit none
         integer, intent(in) :: nGroups
         logical :: check_for_pahs
-        integer :: ii,jj,kk,n_el,nd_ctype,id_start,id_end,ichemtype
+        integer :: ii,jj,kk,kk_loc,n_el,nd_ctype,id_start,id_end,ichemtype
+        integer :: jbin,kbin,idest
         integer :: idust_pah_interact
         real(dp) :: mf_max,mf_min,prefactor,chi_total,frac_tot,mcoag
         real(dp) :: R
@@ -462,6 +577,8 @@ module dust_init
         do ii = 2, ndchemtype
             istart_chemtype(ii) = istart_chemtype(ii-1) + dustbins_per_chemtype(ii-1)
         end do
+
+        call init_dust_processes
 
         ! 1. Loop over dust bins and set up their properties based on the namelist parameters
         idust_pah_interact = 0
@@ -576,11 +693,10 @@ module dust_init
                 dustbins_props(ii)%phi_prefact(jj) = - dble(jj) * e2instatC / (dustbins_props(ii)%asize_cm * eV2erg)
             end do
 
-            ! 1.6 Initialise the dust timescales and parameters
-            dustbins_props(ii)%t0_spu = t_sputter_ref * yr2sec * asize(ii) / 0.1d0
-            dustbins_props(ii)%t0_acc = t_growth_ref * yr2sec * asize(ii) / 0.005d0 * (sgrain(ii)/3d0)
-            dustbins_props(ii)%t0_sha = t_sha_ref * yr2sec * (asize(ii)/0.1d0) * (sgrain(ii)/3d0)   !!for v=10km/s and density_grain=3g.cm-3
-            dustbins_props(ii)%t0_coa = t_coa_ref * yr2sec * (asize(ii)/0.005d0) * (sgrain(ii)/3d0) !! (velocity dispersion/0.1 km/s)
+            ! 1.6 Initialise the dust rates and parameters
+            ! This is the common factor for accretion, which is in units of [cm3/s * sqrt(1/(g * K))]
+            dustbins_props(ii)%k0_acc = dustbins_props(ii)%asize_cm**2 / dustbins_props(ii)%mgrain * sqrt(8d0 * kB * pi)
+
             dustbins_props(ii)%nh_coa = nh_coa(ichemtype)
             dustbins_props(ii)%nhmax_coa = nhmax_coa(ichemtype)
             dustbins_props(ii)%nhmax_acc = nhmax_acc(ichemtype)
@@ -736,47 +852,70 @@ module dust_init
         do ii = 1, ndust
             ichemtype = dustbins_props(ii)%interact_group
             nd_ctype = dustbins_per_chemtype(ichemtype)
-            ! 5.1 Allocate the array
-            if (allocated(dustbins_props(ii)%idend_coag)) deallocate(dustbins_props(ii)%idend_coag)
-            if (allocated(dustbins_props(ii)%vthresh_coag)) deallocate(dustbins_props(ii)%vthresh_coag)
-            allocate(dustbins_props(ii)%idend_coag(1:nd_ctype))
-            allocate(dustbins_props(ii)%vthresh_coag(1:nd_ctype))
             id_start = ii - istart_chemtype(ichemtype) + 1
-            dustbins_props(ii)%idend_coag(:) = id_start
             id_end = istart_chemtype(ichemtype) + nd_ctype - 1
-            if (id_start .lt. id_end) then
-                if (trim(coagulation_model).eq.'Hirashita2015') then
-                    ! 5.2 This is the classic approximation of Hirashita et al. (2015)
+            if (ii .lt. id_end) then
+                if (trim(coagulation_model).eq.'Aoyama2017') then
+                    if (allocated(dustbins_props(ii)%k0_coa)) deallocate(dustbins_props(ii)%k0_coa)
+                    allocate(dustbins_props(ii)%k0_coa(1))
+                    ! For the Aoyama2017 coagulation kernel, the coagulation rate coefficient is just a constant (see their Eq. 14), so we can precompute it here.
+                    dustbins_props(ii)%k0_coa(1) = 0.5d0 * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0 * 1d4 * 1d3&
+                                                & / dustbins_props(ii)%mgrain ! [cm3/s/g]
+                else if (trim(coagulation_model).eq.'Hirashita2015') then
+                    ! 5.1 This is the classic approximation of Hirashita et al. (2015)
                     ! which assumes that small grains always moves mass to the next larger grain bin
-                    do jj = 1, nd_ctype
-                        dustbins_props(ii)%idend_coag(jj) = id_start + 1
-                        ! Compute the threshold velocity for coagulation (Choski et al. 1993)
-                        R = (dustbins_props(ii)%asize * dustbins_props(istart_chemtype(ichemtype)+jj-1)%asize * 1d-4) &
-                            & / (dustbins_props(ii)%asize + dustbins_props(istart_chemtype(ichemtype)+jj-1)%asize)
-                        dustbins_props(ii)%vthresh_coag(jj) = &
-                            & 21.4d0 * sqrt(dustbins_props(ii)%mgrain**3d0+dustbins_props(istart_chemtype(ichemtype)+jj-1)%mgrain**3d0) &
-                            & * dustbins_props(ii)%surf_energy**(5d0/3d0) &
-                            & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
-                    end do
+                    if (allocated(dustbins_props(ii)%idend_coag)) deallocate(dustbins_props(ii)%idend_coag)
+                    if (allocated(dustbins_props(ii)%vthresh_coag)) deallocate(dustbins_props(ii)%vthresh_coag)
+                    if (allocated(dustbins_props(ii)%k0_coa)) deallocate(dustbins_props(ii)%k0_coa)
+                    allocate(dustbins_props(ii)%idend_coag(1))
+                    allocate(dustbins_props(ii)%vthresh_coag(1))
+                    allocate(dustbins_props(ii)%k0_coa(1))
+                    dustbins_props(ii)%idend_coag(1) = ii + 1
+                    ! Compute the threshold velocity for coagulation (Choski et al. 1993)
+                    R = 0.5d0 * dustbins_props(ii)%asize_cm
+                    dustbins_props(ii)%vthresh_coag(1) = &
+                        & 21.4d0 * sqrt(2d0*dustbins_props(ii)%mgrain**3d0) &
+                        & * dustbins_props(ii)%surf_energy**(5d0/3d0) &
+                        & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
+                        & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
+                    dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
+                                                & / dustbins_props(ii)%mgrain ! [cm3/s/g]
                 else if (trim(coagulation_model).eq.'Smoluchowski1916') then
-                    ! 5.3 This is the correct treatment of individual grain coagulation
+                    ! 5.2 This is the correct treatment of individual grain coagulation
                     ! from Smoluchowski (1916) which requires the computation of the final
                     ! coagulated grain mass and to determine in which dust bin it ends up
-                    do jj = 1, nd_ctype
-                        mcoag = dustbins_props(ii)%mgrain + dustbins_props(jj)%mgrain
-                        ! Quick search to which bin size should go this mass
+                    if (allocated(dustbins_props(ii)%idend_coag)) deallocate(dustbins_props(ii)%idend_coag)
+                    if (allocated(dustbins_props(ii)%vthresh_coag)) deallocate(dustbins_props(ii)%vthresh_coag)
+                    if (allocated(dustbins_props(ii)%k0_coa)) deallocate(dustbins_props(ii)%k0_coa)
+                    allocate(dustbins_props(ii)%idend_coag(1:nd_ctype))
+                    allocate(dustbins_props(ii)%vthresh_coag(1:nd_ctype))
+                    allocate(dustbins_props(ii)%k0_coa(1:nd_ctype))
+                    ! Default to no bin change; overwritten below when a larger-bin destination exists.
+                    dustbins_props(ii)%idend_coag(1:nd_ctype) = ii
+                    dustbins_props(ii)%vthresh_coag(1:nd_ctype) = 0d0
+                    do kk_loc = 1, nd_ctype
+                        jbin = istart_chemtype(ichemtype) + kk_loc - 1
+                        mcoag = dustbins_props(ii)%mgrain + dustbins_props(jbin)%mgrain
+                        ! Identify the destination bin for the newly coagulated grain mass.
+                        idest = id_end
                         do kk = 1, nd_ctype
-                            if (mcoag .lt. dustbins_props(istart_chemtype(ichemtype)+kk-1)%mgrain_max &
-                                &.and. mcoag .gt. dustbins_props(istart_chemtype(ichemtype)+kk-1)%mgrain_min) exit
+                            kbin = istart_chemtype(ichemtype) + kk - 1
+                            if (mcoag .ge. dustbins_props(kbin)%mgrain_min .and. &
+                                & mcoag .lt. dustbins_props(kbin)%mgrain_max) then
+                                idest = kbin
+                                exit
+                            end if
                         end do
-                        dustbins_props(ii)%idend_coag(jj) = kk
+                        dustbins_props(ii)%idend_coag(kk_loc) = idest
                         ! Compute the threshold velocity for coagulation (Choski et al. 1993)
-                        R = (dustbins_props(ii)%asize * dustbins_props(istart_chemtype(ichemtype)+jj-1)%asize * 1d-4) &
-                            & / (dustbins_props(ii)%asize + dustbins_props(istart_chemtype(ichemtype)+jj-1)%asize)
-                        dustbins_props(ii)%vthresh_coag(jj) = &
-                            & 21.4d0 * sqrt(dustbins_props(ii)%mgrain**3d0+dustbins_props(istart_chemtype(ichemtype)+jj-1)%mgrain**3d0) &
+                        R = (dustbins_props(ii)%asize_cm * dustbins_props(jbin)%asize_cm) &
+                            & / (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)
+                        dustbins_props(ii)%vthresh_coag(kk_loc) = &
+                            & 21.4d0 * sqrt(dustbins_props(ii)%mgrain**3d0+dustbins_props(jbin)%mgrain**3d0) &
                             & * dustbins_props(ii)%surf_energy**(5d0/3d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
+                        dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
+                                                    & / (dustbins_props(ii)%mgrain * dustbins_props(jbin)%mgrain / (dustbins_props(ii)%mgrain + dustbins_props(jbin)%mgrain)) ! [cm3/s/g]
                     end do
                 end if
             end if

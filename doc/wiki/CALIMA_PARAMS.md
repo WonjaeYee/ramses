@@ -50,7 +50,7 @@ For detailed descriptions of the concepts and models described here, see:
 | `pah_coalescence=.false.`     |  `logical`    | Activate coalescence of PAHs into small carbonaceous grains. |
 | `pah_freezing=.false.`        |  `logical`    | Activate freezing of PAHs onto carbonaceous grain surfaces. |
 | `pah_desorption=.false.`      |  `logical`    | Activate desorption of frozen PAHs from carbonaceous grain surfaces. |
-| `pah_uv_destruction=.false.`  |  `logical`    | Activate UV sublimation/destruction of PAH molecules. |
+| `pah_photolysis=.false.`  |  `logical`    | Activate UV sublimation/destruction of PAH molecules. |
 | `pah_sn_destruction=.false.`  |  `logical`    | Inertial and non-thermal destruction of PAHs in SN shocks. |
 | `pah_cluster_evaporation=.false.` |  `logical`    | Evaporation of PAH clusters to form small PAHs via UV photon absorption. |
 | `pah_AGBwinds=.false.`        |  `logical`    | Inject PAHs during AGB wind episodes. |
@@ -86,10 +86,6 @@ For detailed descriptions of the concepts and models described here, see:
 
 | Variable name, syntax, default value | Fortran type  | Description       |
 |:---------------------------- |:------------- |:------------------------- |
-| `t_sputter_ref=1d5`           |  `real`       | Sputtering reference timescale (in seconds). |
-| `t_growth_ref=4d5`            |  `real`       | Accretion reference timescale (in seconds). |
-| `t_sha_ref=7.573d5`           |  `real`       | Shattering reference timescale for large grains (0.1 μm, v=10 km/s, ρ=3 g/cm³) in seconds. |
-| `t_coa_ref=2.71d5`            |  `real`       | Coagulation reference timescale for small grains (0.005 μm, v=0.1 km/s, ρ=3 g/cm³) in seconds. |
 | `Sconstant=1.0`              |  `real`       | Sticking coefficient for grain collisions. |
 | `nh_coa=0.1`                 |  `real array` | Gas density threshold above which dust coagulation is allowed (in H/cm³), per dust chemistry type. |
 | `nhmax_acc=1d4`              |  `real array` | Maximum gas density for accretion subgrid model (in H/cm³), per dust chemistry type. |

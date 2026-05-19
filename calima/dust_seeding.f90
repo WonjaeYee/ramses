@@ -52,7 +52,8 @@ module dust_yields
 
         ! 3. Figure out what is the limiting element
         call cmp_lim_elem(dust_index,dustbins_props(dust_index)%nelements,M_el,ilim)
-        condensed_AGB_dustmass = dustbins_props(dust_index)%AGB_cond_eff * M_el(ilim)
+        condensed_AGB_dustmass = dustbins_props(dust_index)%AGB_cond_eff * M_el(ilim) / &
+            dustbins_props(dust_index)%el_mfractions(ilim)
 
         ! 4. Deplete the elements if requested
         if (dep_metals) then
@@ -84,7 +85,8 @@ module dust_yields
 
         ! 3. Figure out what is the limiting element
         call cmp_lim_elem(dust_index,dustbins_props(dust_index)%nelements,M_el,ilim)
-        condensed_SNII_dustmass = dustbins_props(dust_index)%SNII_cond_eff * M_el(ilim)
+        condensed_SNII_dustmass = dustbins_props(dust_index)%SNII_cond_eff * M_el(ilim) / &
+            dustbins_props(dust_index)%el_mfractions(ilim)
 
         ! 4. Deplete the elements if requested
         if (dep_metals) then
