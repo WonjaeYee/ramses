@@ -666,6 +666,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 #endif
                               )
+#endif
+! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'
            write(*,*) '            myid:', myid
