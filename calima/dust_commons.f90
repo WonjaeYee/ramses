@@ -49,7 +49,7 @@ module dust_commons
     logical ::pah_coalescence=.false.            ! Activate coalescence of PAHs into small carbonaceous grains
     logical ::pah_freezing=.false.               ! Activate the freezing of PAHs onto carbonaceous grains
     logical ::pah_desorption=.false.             ! Activate the desorption of freezed-out PAHs from carbonaceous grains
-    logical ::pah_uv_destruction=.false.         ! Activate UV sublimation of PAH molecules
+    logical ::pah_photolysis=.false.             ! Activate photolysis of PAHs by high energy photons
     logical ::pah_sn_destruction=.false.         ! Inertial and non-thermal destruction of PAHs by SN shocks
     logical ::pah_cluster_evaporation=.false.    ! Activate the evaporation of PAH clusters to form small PAHs due to UV photon absorption
     logical ::pah_AGBwinds=.false.               ! Inject PAHs during AGB winds
@@ -75,11 +75,7 @@ module dust_commons
     character(LEN=30)::pah_h2_model='RM2026'           ! Model for the formation of H2 by PAHs
     character(LEN=30)::pah_growth_model='subgrid' ! Model for PAH growth by accretion of gas phase C atoms
 
-    ! ==== Timescale and efficiency parameters (read from nml)====
-    real(dp)::t_sputter_ref=1d5 ! Sputtering reference
-    real(dp)::t_growth_ref=4d5  ! Accretion refernce
-    real(dp)::t_sha_ref=7.5730229d5  ! Shattering reference (large grains size=0.1µ, v=10km/s, density grain=3g.cm-3)
-    real(dp)::t_coa_ref=2.71d5  ! Coagulation reference (small grains size=0.005µ,  v=0.1km/s, density grain=3g.cm-3)
+    ! ==== Rates and efficiency parameters (read from nml)====
     real(dp)::Sconstant=1.0d0   ! Sticking coefficient constant
     real(dp),dimension(1:ndchemtype)::nh_coa=0.1d0            ! Gas density above which dust coagulation is allowed (H/cm3)
     real(dp),dimension(1:ndchemtype)::nhmax_acc=1d4           ! Max gas density for accretion subgrid model
@@ -156,6 +152,7 @@ module dust_commons
                                                                 39.948d0, 39.0983d0, 40.078d0, 44.955910d0, &
                                                                 47.867d0, 50.9415d0, 51.9961d0, 54.938044d0, &
                                                                 55.845d0, 58.933195d0/)
+    real(dp),dimension(1:n_elements) :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
     character(LEN=2),dimension(1:n_elements) :: el_names = (/'H','He','Li','Be','B', &
                                                                 'C','N','O','F','Ne', &
                                                                 'Na','Mg','Al','Si', &
@@ -240,9 +237,13 @@ module dust_commons
 
     ! ==== Internal flags and variables ====
     integer::ncharge_pah_max=0                      ! Maximum number of PAH charge states across all PAH bins (for charging calculations)
-    type(DustChemistryInfo) :: dust_helper  ! Reusable per-rank dust chemistry workspace
+    type(DustChemistryInfo)::dust_helper  ! Reusable per-rank dust chemistry workspace
+    type(DustProcess),dimension(:),allocatable::dust_processes_list ! List of the DustProcess types to use in the dust chemistry solver
+    type(DustProcess),dimension(:),allocatable::pah_processes_list ! List of the DustProcess types to use in the PAH chemistry solver
+    integer::ndust_processes=0                     ! Number of dust processes activated (length of dust_processes_list)
+    integer::npah_processes=0                      ! Number of PAH processes activated (length of pah_processes_list)
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
-    logical ::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
+    logical::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
 
 
     ! ==== Some internal constants ====
@@ -251,11 +252,17 @@ module dust_commons
     ! using the parametrisation of the ISRF from Mathis et al.
     ! (1983) as described in Eq. 31 of Weingartner & Draine (2001)
     ! and integrated from 0.1-13.6 eV
-    real(dp),parameter ::u_Mathis1983=8.635471d-13 ! [erg/cm3]
+    real(dp),parameter::u_Mathis1983=8.635471d-13 ! [erg/cm3]
 
     ! ==== External dust files ====
     character(LEN=256)::dust_tables_dir='../lib/dust_tables'    ! Name of folder holding optical properties files
     
+    logical :: first_time_call=.true.
+    integer :: icell_call=0
+    real(dp) :: debug_nH=0d0,debug_T=0d0
+    real(dp),dimension(1:ndust) :: debug_rho_dust=0d0
+    real(dp),dimension(1:ndust) :: debug_acc_rate=0d0
+    real(dp) :: h2_prime_before=0d0,h2_prime_after=0d0
     contains
 
     subroutine add_total_masses
@@ -465,7 +472,7 @@ module dust_commons
             if (dust_inSNIa) write(*,format_str) 'dM Prod (Ia)  =', dM_prod_SNIa*(scale_d*scale_l**3)/(dt*scale_t)
             if (dust_inSW) write(*,format_str) 'dM Prod (SW)  =', dM_prod_SW*(scale_d*scale_l**3)/(dt*scale_t)
             write(*,format_str) 'dM Ast        =', dM_ast*(scale_d*scale_l**3)/(dt*scale_t)
-            if (pah_uv_destruction) write(*,format_str) 'dM Subl       =', dM_subl/(dt*scale_t)
+            if (pah_photolysis) write(*,format_str) 'dM Subl       =', dM_subl/(dt*scale_t)
             if (pah_cluster_evaporation) write(*,format_str) 'dM Evap       =', dM_evap/(dt*scale_t)
             if (dust_ratd) write(*,format_str) 'dM RATD       =', dM_ratd/(dt*scale_t)
             if (dust_ratd) write(*,format_str) 'dM RATD Dest  =', dM_ratd_dest/(dt*scale_t)

@@ -486,46 +486,117 @@ contains
         end if
     end subroutine compute_dust_coolrates
 
-    subroutine compute_dust_update(dinfo,G0_total,Tk,rho_total,&
-                                    ne,nElement,xelem_ions,dt,dx,Np)
+    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np)
 
-        use dust_chemistry_solver, only: dust_fine
+        use ode_driver_mod, only: integrate_dust_ode
+        use rk4_mod, only: rk4_step
+        use dust_rhs_mod, only: dust_rhs
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
+#ifdef RTZ
+        use rtz_module, only:elements
+#endif
 
         implicit none
 
         ! ---- Inputs ----
         class(DustChemistryInfo), intent(inout) :: dinfo
-        real(dp), intent(in) :: G0_total, Tk, rho_total, dt, dx
-        real(dp), intent(inout) :: ne, nElement(:), xelem_ions(:,:)
+        real(dp), intent(in) :: dt
+        real(dp), intent(inout) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in), optional :: Np(:)
 
         ! --- Local variables ----
         integer :: ii
-        logical :: global_check
-        real(dp), dimension(1:dinfo%ndust) :: gamma_RAT,FIR
+        real(dp) :: sum_check
+        real(dp), dimension(:,:), allocatable :: y_gas, y_gas_out
+        real(dp), dimension(:), allocatable :: y_dust, y_dust_out
 
         ! 1. Compute the local RAT-D quantities if we run with dust_ratd
         if (dust_ratd) then
-            gamma_RAT = 0d0
-            FIR = 0d0
             if (present(Np)) then
                 do ii = 1, dinfo%ndust
-                    gamma_RAT(ii) = total_radiative_torque(dinfo%local_rad_ani,Np,&
+                    dinfo%rat_torque(ii) = total_radiative_torque(dinfo%local_rad_ani,Np,&
                                                             dinfo%group_eV(:)*eV2erg,dinfo%nGroups,&
                                                             dinfo%local_c,dinfo%csrat_dust(:,ii))
                 end do
             end if
-            FIR = IR_damping_factor(G0_total*1.13d0,nElement(1),Tk,dinfo%T_dust)
+            dinfo%IR_damp_factor = IR_damping_factor(dinfo%local_G0*1.13d0,nElement(1),dinfo%local_Tk,dinfo%T_dust)
             do ii = 1, dinfo%ndust
-                gamma_RAT(ii) = gamma_RAT(ii) + dustbins_props(ii)%RAT_torque_0 * dinfo%G0_background
+                dinfo%rat_torque(ii) = dinfo%rat_torque(ii) + dustbins_props(ii)%RAT_torque_0 * dinfo%G0_background
             end do
         end if
 
-        ! 2. Now call the main routine of CALIMA: updating the local dust properties with dust_fine
-        call dust_fine(dt,dx,Tk,dinfo%rho_pah,dinfo%rho_dust,dinfo%T_dust,dinfo%Z_dust,&
-                        dinfo%fcharge_pah,rho_total,G0_total,dinfo%local_sigma,dinfo%local_mu,&
-                        gamma_RAT,FIR,ne,nElement,xelem_ions,global_check)
+        ! 2. Now setup the arrays for gas and dust quantities to send to the ODE solver
+        if (dust_accretion .and. dust_acc_coulomb) then
+            allocate(y_gas(1:n_elements,1:n_elements))
+            allocate(y_gas_out(1:n_elements,1:n_elements))
+            do ii = 1, n_elements
+#ifdef RTZ
+                y_gas(ii,:) = nElement(ii) * xelem_ions(ii,:) * elements(ii)%atomic_mass_g
+#else
+                y_gas(ii,:) = nElement(ii) * xelem_ions(ii,:) * el_atomic_masses_g(ii)
+#endif
+            end do
+        else
+            allocate(y_gas(1:n_elements,1))
+            allocate(y_gas_out(1:n_elements,1))
+            do ii = 1, n_elements
+#ifdef RTZ
+                y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
+#else
+                y_gas(ii,1) = nElement(ii) * el_atomic_masses_g(ii)
+#endif
+            end do
+        end if
+        if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
+            allocate(y_dust(1:dinfo%npah + dinfo%ndust))
+            allocate(y_dust_out(1:dinfo%npah + dinfo%ndust))
+            y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
+            y_dust(dinfo%npah+1:dinfo%npah+dinfo%ndust) = dinfo%rho_dust(1:dinfo%ndust)
+        else if (dinfo%ndust > 0) then
+            allocate(y_dust(1:dinfo%ndust))
+            allocate(y_dust_out(1:dinfo%ndust))
+            y_dust(1:dinfo%ndust) = dinfo%rho_dust(1:dinfo%ndust)
+        else if (dinfo%npah > 0) then
+            allocate(y_dust(1:dinfo%npah))
+            allocate(y_dust_out(1:dinfo%npah))
+            y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
+        end if
+
+        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
+        call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,rk4_step,&
+                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log)
+
+        ! 4. Update the dinfo with the new values after the ODE step
+        if (dust_accretion .and. dust_acc_coulomb) then
+            do ii = 1, n_elements
+#ifdef RTZ
+                nElement(ii) = sum(y_gas_out(ii,:)) / elements(ii)%atomic_mass_g
+                xelem_ions(ii,:) = y_gas_out(ii,:) / nElement(ii) / elements(ii)%atomic_mass_g
+#else
+                nElement(ii) = sum(y_gas_out(ii,:)) / el_atomic_masses_g(ii)
+                xelem_ions(ii,:) = y_gas_out(ii,:) / nElement(ii) / el_atomic_masses_g(ii)
+#endif
+                ! Make sure that xelem_ions add up to 1 for each element
+                sum_check = sum(xelem_ions(ii,:))
+                xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
+            end do
+        else
+            do ii = 1, n_elements
+#ifdef RTZ
+                nElement(ii) = y_gas_out(ii,1) / elements(ii)%atomic_mass_g
+#else
+                nElement(ii) = y_gas_out(ii,1) / el_atomic_masses_g(ii)
+#endif
+            end do
+        end if
+        if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
+            dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
+            dinfo%rho_dust(1:dinfo%ndust) = y_dust_out(dinfo%npah+1:dinfo%npah+dinfo%ndust)
+        else if (dinfo%ndust > 0) then
+            dinfo%rho_dust(1:dinfo%ndust) = y_dust_out(1:dinfo%ndust)
+        else if (dinfo%npah > 0) then
+            dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
+        end if
 
     end subroutine compute_dust_update
 end module dust_interface

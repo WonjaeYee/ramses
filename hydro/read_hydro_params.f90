@@ -126,15 +126,14 @@ subroutine read_hydro_params(nml_ok)
       dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
       dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
       ! PAH physics flags
-      pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_uv_destruction,pah_sn_destruction,pah_cluster_evaporation,&
+      pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
       pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
       ! Dust modelling options
       sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
       ! PAH modelling options
       sublimation_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,&
-      ! Timescale and efficiency parameters
-      t_sputter_ref,t_growth_ref,t_sha_ref,t_coa_ref,Sconstant,&
-      nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
+      ! Efficiency parameters
+      Sconstant,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
       dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
       Coulomb_enhance,tensile_strength,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
       separate_refractive_index,slope_frag_func,errmax,countmax,GDinit,DTMinit,fpah_ini,smallr_dust,&

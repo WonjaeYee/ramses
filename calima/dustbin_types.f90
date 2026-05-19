@@ -29,6 +29,13 @@ module dustbin_types
         real(dp) :: local_c = 0d0 ! Local reduced speed of light (cm/s)
         real(dp) :: local_mu = 0d0 ! Local mean molecular weight (in units of H mass)
         real(dp) :: local_sigma = 0d0 ! Local gas velocity dispersion (cm/s)
+        real(dp) :: local_Tk = 0d0 ! Local gas temperature (K)
+        real(dp) :: local_nH = 0d0 ! Local hydrogen density (in H/cm3)
+        real(dp) :: local_rho = 0d0 ! Local total cell mass density (in g/cm3)
+        real(dp) :: local_Jeans = 0d0 ! Local Jeans length (in cm)
+        real(dp) :: local_dx = 0d0 ! Local cell size (in cm)
+        real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
+        real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV
@@ -66,6 +73,28 @@ module dustbin_types
         procedure :: reset => reset_dust_chemistry_info
     end type DustChemistryInfo
 
+    ! ==== Dust Process type ====
+    abstract interface
+        subroutine comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+            import :: DustChemistryInfo, dp
+            implicit none
+
+            ! ---- Input DustChemistryInfo with local variables----
+            class(DustChemistryInfo),intent(in) :: dust_info
+            real(dp),intent(in) :: y_gas(:,:), y_dust(:)
+            real(dp),intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+            real(dp),intent(inout),optional :: kmax
+
+            ! Do something to compute the rate
+        end subroutine comp_rate
+    end interface
+    type DustProcess
+        character(len=30) :: name='accretion' ! Name of the dust process (e.g. "sputtering", "coagulation", etc)
+        integer :: processID=1 ! Integer ID for the dust process (e.g. 1 for sputtering, 2 for coagulation, etc)
+        logical :: source=.false., sink=.false. ! Whether the process is a source or a sink for dust mass
+        procedure(comp_rate), pointer, nopass :: comp_rate => null() ! Pointer to the subroutine that computes the rate of the process
+    end type DustProcess
+
     ! ==== Dust bin derived type ====
     type DustBin
         integer  :: dust_index              ! Index of the dust bin
@@ -101,10 +130,8 @@ module dustbin_types
         real(dp) :: tau_gas_0               ! Reference gas damping time (s)
         real(dp) :: RAT_torque_0            ! Reference radiative torque (erg) for a radiation field of 1 Habing
         real(dp) :: SNsha_eff               ! SN shattering efficiency for grain size
-        real(dp) :: t0_coa                  ! Reference time for coagulation (s)
-        real(dp) :: t0_sha                  ! Reference time for shattering (s)
-        real(dp) :: t0_spu                  ! Reference time for sputtering (s)
-        real(dp) :: t0_acc                  ! Reference time for accretion (s)
+        real(dp) :: k0_spu                  ! Reference rate for sputtering (s-1)
+        real(dp) :: k0_acc                  ! Reference rate for accretion (s-1)
         real(dp) :: nh_coa                  ! Gas density above which dust coagulation is allowed
         real(dp) :: nhmax_coa               ! Max gas density for coagulation subgrid model
         real(dp) :: nhmax_acc               ! Max gas density for accretion subgrid model
@@ -114,6 +141,8 @@ module dustbin_types
         real(dp) :: Pabs_isrf               ! Mathis ISRF-averaged absorption rate (in erg/s)
         real(dp) :: Psc_isrf                ! Mathis ISRF-averaged scattering rate (in erg/s)
         real(dp) :: Prp_isrf                ! Mathis ISRF-averaged radiation pressure rate (in erg/s)
+        real(dp),dimension(:),allocatable :: k0_coa                ! Reference rate for coagulation (s-1)
+        real(dp),dimension(:),allocatable :: k0_sha                ! Reference rate for shattering (s-1)
         integer ,dimension(:),allocatable :: el_index              ! Index of the elements used in the full element list
         integer ,dimension(:),allocatable :: el_atomic_number      ! Atomic number of the elements used in the full element list
         real(dp),dimension(:),allocatable :: stoichiometry         ! Stoichiometry of the dust bin
@@ -205,6 +234,12 @@ contains
         this%local_c = 0d0
         this%local_mu = 0d0
         this%local_sigma = 0d0
+        this%local_Tk = 0d0
+        this%local_nH = 0d0
+        this%local_rho = 0d0
+        this%local_Jeans = 0d0
+        this%local_dx = 0d0
+        this%local_ne = 0d0
 
         if (allocated(this%rho_dust)) deallocate(this%rho_dust)
         allocate(this%rho_dust(1:this%ndust))
