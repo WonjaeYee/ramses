@@ -244,6 +244,7 @@ module dust_commons
     integer::npah_processes=0                      ! Number of PAH processes activated (length of pah_processes_list)
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
+    logical::carry_gas_ions=.false.       ! Whether to carry the individual ion densities for gas species
 
 
     ! ==== Some internal constants ====
@@ -263,7 +264,49 @@ module dust_commons
     real(dp),dimension(1:ndust) :: debug_rho_dust=0d0
     real(dp),dimension(1:ndust) :: debug_acc_rate=0d0
     real(dp) :: h2_prime_before=0d0,h2_prime_after=0d0
+    integer*8 :: tdust_solver_calls=0
+    integer*8 :: tdust_solver_iter_sum=0
+    integer*8 :: tdust_solver_iter_min=huge(0_8)
+    integer*8 :: tdust_solver_iter_max=0
+    integer*8 :: tdust_solver_brent_calls=0
     contains
+
+    subroutine dust_log_tdust_solver_update(n_iter, used_brent)
+        implicit none
+        integer, intent(in) :: n_iter
+        logical, intent(in) :: used_brent
+        integer*8 :: n_iter_i8
+
+        n_iter_i8 = int(max(n_iter,0), kind=8)
+
+        tdust_solver_calls = tdust_solver_calls + 1_8
+        tdust_solver_iter_sum = tdust_solver_iter_sum + n_iter_i8
+        tdust_solver_iter_min = min(tdust_solver_iter_min, n_iter_i8)
+        tdust_solver_iter_max = max(tdust_solver_iter_max, n_iter_i8)
+        if (used_brent) tdust_solver_brent_calls = tdust_solver_brent_calls + 1_8
+    end subroutine dust_log_tdust_solver_update
+
+    subroutine dust_log_tdust_solver_print_reset
+        implicit none
+        real(dp) :: avg_iter
+
+        if (.not. dust_log) return
+
+        if (tdust_solver_calls > 0_8) then
+            avg_iter = real(tdust_solver_iter_sum, dp) / real(tdust_solver_calls, dp)
+            write(*,'(A,I0,A,I0,A,F10.3,A,I0)') 'Tdust solver stats: min_iter=', &
+                int(tdust_solver_iter_min), ', max_iter=', int(tdust_solver_iter_max), &
+                ', avg_iter=', avg_iter, ', brent_calls=', int(tdust_solver_brent_calls)
+        else
+            write(*,'(A)') 'Tdust solver stats: no calls in this equilibrium iteration.'
+        end if
+
+        tdust_solver_calls = 0_8
+        tdust_solver_iter_sum = 0_8
+        tdust_solver_iter_min = huge(0_8)
+        tdust_solver_iter_max = 0_8
+        tdust_solver_brent_calls = 0_8
+    end subroutine dust_log_tdust_solver_print_reset
 
     subroutine add_total_masses
         use amr_commons

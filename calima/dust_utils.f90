@@ -1,6 +1,7 @@
 module dust_utils
     use amr_parameters, only:dp
     use constants
+    use safe_math, only: safe_exp, safe_erf
     contains
 
     subroutine cmp_sigma_turb(icell,sigma2,ilevel)
@@ -345,6 +346,45 @@ module dust_utils
         normx = x / x0
         sigmoid_function = 1d0 / (1d0 + exp(-k*(normx-1d0)))
     end function sigmoid_function
+
+    pure elemental function sticking_probability_from_velocity(v_rel, v_thresh, width_frac) result(p_stick)
+        ! Smooth sticking probability using a Maxwellian relative-speed distribution.
+        ! The sticking probability is P(v < v_thresh), i.e. the Maxwell CDF.
+        ! v_rel      => deterministic relative speed [cm s-1]
+        ! v_thresh   => coagulation threshold speed [cm s-1]
+        ! width_frac => fractional transition width around v_thresh (optional)
+        implicit none
+        real(dp), intent(in) :: v_rel, v_thresh
+        real(dp), intent(in), optional :: width_frac
+        real(dp) :: p_stick
+        real(dp) :: sigma_v, frac_loc
+        real(dp) :: ratio, ratio2, arg
+        real(dp), parameter :: frac_default = 1d-1
+        real(dp), parameter :: frac_min = 1d-4
+        real(dp), parameter :: frac_max = 5d-1
+        real(dp), parameter :: arg_hi = 12d0
+        real(dp), parameter :: tiny_v = 1d-40
+        real(dp), parameter :: inv_sqrt2 = 7.071067811865475d-1
+        real(dp), parameter :: sqrt_2_over_pi = 7.978845608028654d-1
+
+        frac_loc = frac_default
+        if (present(width_frac)) frac_loc = width_frac
+        frac_loc = min(max(frac_loc, frac_min), frac_max)
+
+        sigma_v = max(v_rel, v_thresh, tiny_v) * frac_loc
+        ratio = v_thresh / sigma_v
+        arg = ratio * inv_sqrt2
+        ratio2 = ratio * ratio
+
+        if (arg <= 0d0) then
+            p_stick = 0d0
+        else if (arg >= arg_hi) then
+            p_stick = 1d0
+        else
+            p_stick = safe_erf(arg) - sqrt_2_over_pi * ratio * safe_exp(-5d-1 * ratio2)
+            p_stick = min(max(p_stick, 0d0), 1d0)
+        end if
+    end function sticking_probability_from_velocity
 
     function planck_function(wavelength, T) result(emittance)
         use constants, only: hplanck, c_cgs, kB

@@ -36,6 +36,7 @@ module dustbin_types
         real(dp) :: local_dx = 0d0 ! Local cell size (in cm)
         real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
         real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
+        real(dp),dimension(1:n_elements)  :: el_atomic_mass_g ! Element atomic mass [g]
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV

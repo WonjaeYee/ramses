@@ -169,6 +169,8 @@ contains
                                                         Zel,dinfo%Coulomb_factor(ii,j))
                     end do
                 end do
+            else
+                dinfo%Coulomb_factor(:,:) = 1d0
             end if
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
@@ -376,6 +378,8 @@ contains
                                                         Coulomb_factor(ii,j))
                     end do
                 end do
+            else
+                Coulomb_factor(:,:) = 1d0
             end if
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
@@ -526,7 +530,7 @@ contains
         end if
 
         ! 2. Now setup the arrays for gas and dust quantities to send to the ODE solver
-        if (dust_accretion .and. dust_acc_coulomb) then
+        if (carry_gas_ions) then
             allocate(y_gas(1:n_elements,1:n_elements))
             allocate(y_gas_out(1:n_elements,1:n_elements))
             do ii = 1, n_elements
@@ -567,7 +571,7 @@ contains
                                 y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log)
 
         ! 4. Update the dinfo with the new values after the ODE step
-        if (dust_accretion .and. dust_acc_coulomb) then
+        if (carry_gas_ions) then
             do ii = 1, n_elements
 #ifdef RTZ
                 nElement(ii) = sum(y_gas_out(ii,:)) / elements(ii)%atomic_mass_g

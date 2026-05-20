@@ -114,7 +114,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !
    ! We use a slightly modified method of Anninos et al. (1997).
    !-------------------------------------------------------------------------
-   use dust_commons, only: icell_call, first_time_call
+   use dust_commons, only: icell_call, first_time_call, dust_log, dust_log_tdust_solver_print_reset
    implicit none
    real(dp):: aexp
    real(dp),dimension(1:nvector):: T2
@@ -161,6 +161,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer::iElement, ion_fracs
    real(dp)::current_mass_frac
    integer:: i_interp, convergence_counter
+   integer :: eqm_minutes
+   real(dp) :: eqm_tstart, eqm_tend, eqm_elapsed, eqm_seconds
    integer :: base_unit = 100
    integer :: element_unit, j, iIon
    character(len=50) :: element_filename
@@ -203,6 +205,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    ! Check if we are running in equilibrium mode
    if (rtz_equilibrium_test.gt.0) then
+      call cpu_time(eqm_tstart)
 
       ! Open files for all elements
       do iElement= 1, n_elements
@@ -348,11 +351,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test.eq.2) then
             if (isH2_rtz) then 
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
+               if (dust_log) call dust_log_tdust_solver_print_reset()
             else
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1)
+               if (dust_log) call dust_log_tdust_solver_print_reset()
             end if
 #ifdef CALIMA
-            if (ndust > 0) write(dust_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_dust(i,1:ndust)
+            if (ndust > 0) write(dust_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_dust(i,1:ndust), dust_helper%T_dust(1:ndust)
             if (npah > 0) write(pah_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_pah(i,1:npah)
 #endif
          end if
@@ -363,6 +368,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !       write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, nCO(i)/nH(i), (nCO(i)+nElement(6,i))/nH(i), (nCO(i)+nElement(8,i))/nH(i)
             !    else
                   write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
+                  if (dust_log) call dust_log_tdust_solver_print_reset()
             !    end if
             ! else
                ! write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1)
@@ -372,7 +378,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if (i_interp.eq.1) write(base_unit+100,'(*(A20, ", "))') 'rho', 'T', 'Tmu', 'mu', saved_cooling_rates_names
             write(base_unit+100,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), saved_cooling_rates
 #ifdef CALIMA
-            if (ndust > 0) write(dust_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_dust(i,1:ndust)
+            if (ndust > 0) write(dust_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_dust(i,1:ndust), dust_helper%T_dust(1:ndust)
             if (npah > 0) write(pah_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_pah(i,1:npah)
 #endif
          end if
@@ -407,6 +413,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
 
       write(*,*) '!************************************************!'
+      call cpu_time(eqm_tend)
+      eqm_elapsed = max(0d0, eqm_tend - eqm_tstart)
+      eqm_minutes = int(eqm_elapsed / 60d0)
+      eqm_seconds = eqm_elapsed - 60d0 * real(eqm_minutes, dp)
+      write(*,'(A,I0,A,F8.3,A)') 'rtz_equilibrium_test runtime: ', eqm_minutes, ' min ', eqm_seconds, ' s'
       stop "Program terminated due to equilibrium test"
 
    ! Otherwise perform the normal loop

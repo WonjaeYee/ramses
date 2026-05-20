@@ -1570,6 +1570,7 @@ module dust_radiation
         ! Tmin           --> minimum allowed dust temperature (e.g. CMB temp) [K]
         !-------------------------------------------------------------------------
         use dust_cooling, only: compute_dust_coll_heating
+        use dust_commons, only: dust_log_tdust_solver_update
         implicit none
 
         integer,intent(in) :: i_dust
@@ -1583,27 +1584,30 @@ module dust_radiation
 
         integer :: iter
         integer :: max_iter=100
+        integer :: iter_used
         real(dp) :: H0, H1, dH_dT
         real(dp) :: dP_dT
         real(dp) :: f, fprime
-        real(dp) :: T0, eps, T_new
+        real(dp) :: T0, eps, T_new, dT
 
         T0 = T
         eps = 1d-2
+        iter_used = 0
 
         ! =========================================================
         ! 1. Compute Hcoll and derivative once (if collisional cooling is enabled)
         ! =========================================================
         if (dust_coll_cooling) then
+            dT = max(T0*eps,1e-6)
             call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0,&
-                                        dust_charge,H0)
-
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0*(1d0+eps),&
+                                        Coulomb_factor,nH2,nCO,Tgas,T0+dT,&
                                         dust_charge,H1)
 
-            dH_dT = (H1 - H0) / (T0*eps)
+            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
+                                        Coulomb_factor,nH2,nCO,Tgas,max(T0-dT,Tmin),&
+                                        dust_charge,H0)
+
+            dH_dT = (H1 - H0) / (2d0*dT)
         else
             H0 = 0d0
             dH_dT = 0d0
@@ -1613,23 +1617,27 @@ module dust_radiation
         ! 2. Newton iterations (with linearised approximation)
         ! =========================================================
         do iter = 1, max_iter
+            iter_used = iter
             call dust_emission_with_deriv(i_dust,T,P_rad,dP_dT)
-
             f = P_abs + H0 + dH_dT*(T - T0) + recomb_heat - P_rad - pe_heat
             fprime = dH_dT - dP_dT
-
-            if (abs(f) < 1d-6) return
-            if (abs(fprime) < 1d-20) exit
+            if (f .eq. 0d0) then
+                call dust_log_tdust_solver_update(iter_used, .false.)
+                return
+            end if
+            ! if (abs(fprime) < 1d-20) exit
 
             T_new = T - f/fprime
 
             if (T_new < Tmin) then
                 T = Tmin
+                call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
 
             if (abs(T_new - T)/T < 1d-3) then
                 T = T_new
+                call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
             T = T_new
@@ -1637,6 +1645,7 @@ module dust_radiation
 
         ! fallback (rare)
         call solve_Tdust_brent_fast(i_dust,P_abs,H0,dH_dT,T0,recomb_heat,pe_heat,P_rad,Tmin,1d3,T)
+        call dust_log_tdust_solver_update(iter_used, .true.)
 
         ! Save the final collisional heating rate
         if (dust_coll_cooling) then
@@ -1812,6 +1821,7 @@ module dust_radiation
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
         use dust_utils, only: interpolate1D
+        use dust_cooling, only: compute_dust_coll_heating
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -1825,7 +1835,7 @@ module dust_radiation
         real(dp),intent(in),optional :: Ep(:),cs_abs(:,:)
 
         integer :: i,j
-        real(dp) :: P_abs, Tmin, T0
+        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
@@ -1844,6 +1854,24 @@ module dust_radiation
 
             ! --- Initial guess: radiative equilibrium ---
             call get_Tdust_radiative_eq(j, P_abs, Tmin, T0)
+
+            ! --- Check collisional heating at Tgas ---
+            ! If collisional heating dominates radiation, start closer to Tgas
+            if (dust_coll_cooling) then
+                call compute_dust_coll_heating(j,ne,nElement,xelem_ions,&
+                                            Coulomb_factor(j,:),nH2,nCO,Tgas,T0,&
+                                            dust_charge(j),H_coll_at_Tgas)
+                if (H_coll_at_Tgas > P_abs) then
+                    ! Collisional heating dominates the initial guess
+                    call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
+                    ! print*, 'Rank ', myid, ': Collisional heating dominates for dust bin ', j, &
+                    !         ': H_coll at Tgas = ', H_coll_at_Tgas, ' erg/s > P_abs = ', P_abs, ' erg/s. Starting Newton iterations at Tdust = ', T0, ' K'
+                else if (H_coll_at_Tgas < 1d-4 * P_abs) then
+                    ! Radiative heating is much larger than collisional, so we can just assume that
+                    T_dust(j) = max(T0, Tmin)
+                    cycle
+                end if
+            end if
 
             call solve_Tdust_fast(j,P_abs,ne,nElement,xelem_ions,Coulomb_factor(j,:),&
                                 nH2,nCO,Tgas,dust_charge(j),coll_heat(j),&

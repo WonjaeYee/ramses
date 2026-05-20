@@ -465,10 +465,24 @@ module dust_init
                 if (dust_sputtering) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'sputtering'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
+                    if (sputtering_model.eq.'RM2026') then
+                        if (dust_sputtering_charge) then
+                            carry_gas_ions = .true.
+                            dust_processes_list(ndust_processes)%comp_rate => charged_sputtering_rate
+                        else
+                            dust_processes_list(ndust_processes)%comp_rate => sputtering_rate
+                        end if
+                    else
+                        dust_processes_list(ndust_processes)%comp_rate => sputtering_rate
+                    end if
                 end if
                 if (dust_coagulation) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'coagulation'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .false.
                     if (coagulation_model.eq.'Aoyama2017') then
                         dust_processes_list(ndust_processes)%comp_rate => Aoyama2017_coagulation_rate
                     else if (coagulation_model.eq.'Hirashita2015') then
@@ -482,10 +496,21 @@ module dust_init
                 if (dust_shattering) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'shattering'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
+                    if (shattering_model.eq.'Hirashita2015') then
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_shattering_rate
+                    else if (shattering_model.eq.'Smoluchowski1916') then
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_all_shattering_rate
+                    else
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_shattering_rate
+                    end if
                 end if
                 if (dust_ratd) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'ratd'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
                 end if
             end if
         end if
@@ -759,6 +784,13 @@ module dust_init
 
         ! Allocate the reusable dust chemistry workspace once per rank.
         call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)
+        do jj = 1, n_elements
+#ifdef RTZ
+            dust_helper%el_atomic_mass_g(jj) = elements(jj)%atomic_mass * amu2g
+#else
+            dust_helper%el_atomic_mass_g(jj) = el_atomic_masses_amu(jj) * amu2g
+#endif
+        end do
 
         ! 3. Add the RAT-D parameters
         if (dust_ratd) then
@@ -874,8 +906,7 @@ module dust_init
                     ! Compute the threshold velocity for coagulation (Choski et al. 1993)
                     R = 0.5d0 * dustbins_props(ii)%asize_cm
                     dustbins_props(ii)%vthresh_coag(1) = &
-                        & 21.4d0 * sqrt(2d0*dustbins_props(ii)%mgrain**3d0) &
-                        & * dustbins_props(ii)%surf_energy**(5d0/3d0) &
+                        & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/3d0) &
                         & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
                         & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
                     dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
@@ -911,7 +942,8 @@ module dust_init
                         R = (dustbins_props(ii)%asize_cm * dustbins_props(jbin)%asize_cm) &
                             & / (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)
                         dustbins_props(ii)%vthresh_coag(kk_loc) = &
-                            & 21.4d0 * sqrt(dustbins_props(ii)%mgrain**3d0+dustbins_props(jbin)%mgrain**3d0) &
+                            & 21.4d0 * sqrt((dustbins_props(ii)%asize_cm**3d0+dustbins_props(jbin)%asize_cm**3d0)/&
+                            & (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**3d0) &
                             & * dustbins_props(ii)%surf_energy**(5d0/3d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
                         dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
@@ -1301,6 +1333,7 @@ module dust_init
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 close(25)
+                dustbins_props(ii)%sputtering_tab(i)%initialised = .true.
 
                 deallocate(phi_grid, T_grid)
             end do

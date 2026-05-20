@@ -128,7 +128,7 @@ contains
         integer :: jj, ii, ii1, ii2, index
         real(dp) :: rate1, rate2
         real(dp) :: temp_sigma, temp_L
-        real(dp) :: v_rel, R, v_coag, enhan_factor
+        real(dp) :: v_rel, R, v_coag, enhan_factor, p_stick
 
         if (dust_eq_test) then
             temp_sigma = 5.67d5 * (dust_info%local_nH/1d2)**(-0.25d0)
@@ -164,15 +164,17 @@ contains
                                     sigmoid_function(4d0,log10(dustbins_props(jj)%nhmax_acc),log10(dust_info%local_nH)) * 4d0
                     v_coag = enhan_factor * v_coag
                 end if
-                if (v_rel .gt. v_coag) then
-                    cycle
-                end if
+
+                ! Apply a smooth sticking probability around the threshold
+                ! to model unresolved velocity dispersion.
+                p_stick = sticking_probability_from_velocity(v_rel, v_coag)
+                if (p_stick <= 1d-20) cycle
 
                 ! 4. Collision rate calculation
                 ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
                 ! Marchand et al. (2021) and considers that grain velocities along the x-,
                 ! y-, and z-axes are Gaussian distributed
-                rate1 = dustbins_props(ii)%k0_coa(1) * v_rel * y_dust(index)
+                rate1 = dustbins_props(ii)%k0_coa(1) * v_rel * y_dust(index) * p_stick
                 if (present(kmax)) then
                     kmax = max(kmax, rate1)
                 end if
@@ -199,7 +201,7 @@ contains
         integer :: jj, ii, ii1, ii2, index, kk, kk1, kk2, kk_loc, idest
         real(dp) :: rate1, rate2
         real(dp) :: temp_sigma, temp_L
-        real(dp) :: v_rel, v_coag, enhan_factor
+        real(dp) :: v_rel, v_coag, enhan_factor, p_stick
         real(dp) :: mi, mk, msum, loss_ii, loss_kk
 
         if (dust_eq_test) then
@@ -239,15 +241,17 @@ contains
                                         sigmoid_function(4d0,log10(dustbins_props(jj)%nhmax_acc),log10(dust_info%local_nH)) * 4d0
                         v_coag = enhan_factor * v_coag
                     end if
-                    if (v_rel .gt. v_coag) then
-                        cycle
-                    end if
+
+                    ! Apply a smooth sticking probability around the threshold
+                    ! to model unresolved velocity dispersion.
+                    p_stick = sticking_probability_from_velocity(v_rel, v_coag)
+                    if (p_stick <= 1d-20) cycle
 
                     ! 4. Collision rate calculation
                     ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
                     ! Marchand et al. (2021) and considers that grain velocities along the x-,
                     ! y-, and z-axes are Gaussian distributed
-                    rate1 = dustbins_props(ii)%k0_coa(kk_loc) * v_rel * y_dust(index)
+                    rate1 = dustbins_props(ii)%k0_coa(kk_loc) * v_rel * y_dust(index) * p_stick
 
                     if (present(kmax)) then
                         kmax = max(kmax, rate1)
@@ -274,5 +278,542 @@ contains
         end do speciesloop
 
     end subroutine turbulent_all_coagulation_rate
+
+    subroutine sputtering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: ii, index, iel, nT_loc, iphi0
+        real(dp) :: rate1, rate2, lT, rate_total, irate
+
+        lT = log10(dust_info%local_Tk)
+
+        ! 1. Loop over the dust bins
+        binloop: do ii = 1, dust_info%ndust
+            rate_total = 0d0
+            index = ii + dust_info%npah
+
+            ! 2. Loop over elements in the gas phase
+            do iel = 1, n_elements
+                if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
+                if (y_gas(iel,1) < 1d-40) cycle
+                nT_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(1)
+                iphi0 = dustbins_props(ii)%sputtering_tab(iel)%ipos_zero(2)
+                call interpolate1D(dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
+                                dustbins_props(ii)%sputtering_tab(iel)%tab2d(1:nT_loc,iphi0,1), &
+                                dustbins_props(ii)%sputtering_tab(iel)%npts(1), lT, irate)
+                rate_total = rate_total + irate * y_gas(iel,1) / dust_info%el_atomic_mass_g(iel) ! [micron / yr]
+            end do
+
+            ! 3. Convert to the real erosion rate in [s-1]
+            rate1 = 3d0 * rate_total / dustbins_props(ii)%asize / yr2sec ! [s-1]
+            if (present(kmax)) then
+                kmax = max(kmax, rate1)
+            end if
+
+            ! 4. Now compute the mass rates [g cm-3 s-1]
+            dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+            do iel = 1, dustbins_props(ii)%nelements
+                dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
+                    rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+            end do
+        end do binloop
+
+    end subroutine sputtering_rate
+
+    subroutine charged_sputtering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: ii, index, iel, nT_loc, nphi_loc, iion, izion
+        real(dp) :: rate1, rate2, lT, rate_total, irate, rate_element, phi_charge
+
+        lT = log10(dust_info%local_Tk)
+
+        ! 1. Loop over the dust bins
+        binloop: do ii = 1, dust_info%ndust
+            rate_total = 0d0
+            index = ii + dust_info%npah
+
+            ! 2. Loop over elements in the gas phase
+            do iel = 1, n_elements
+                rate_element = 0d0
+                if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
+                nT_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(1)
+                nphi_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(2)
+                ! 3. Loop over the ions of the element
+                do iion = 1, n_elements
+                    if (y_gas(iel,iion) < 1d-40) cycle
+                    izion = iion - 1
+                    phi_charge = dust_info%Z_dust(ii) * dustbins_props(ii)%phi_prefact(izion)
+                    call interpolate2D(dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
+                        dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nphi_loc,2), &
+                        dustbins_props(ii)%sputtering_tab(iel)%tab2d(1:nT_loc,1:nphi_loc,1), &
+                        dustbins_props(ii)%sputtering_tab(iel)%npts(1), dustbins_props(ii)%sputtering_tab(iel)%npts(2), lT, phi_charge, irate)
+                    rate_element = rate_element + irate * y_gas(iel,iion) ! [micron / yr]
+                end do
+                rate_total = rate_total + rate_element / dust_info%el_atomic_mass_g(iel) ! [micron / yr]
+            end do
+
+            ! 3. Convert to the real erosion rate in [s-1]
+            rate1 = 3d0 * rate_total / dustbins_props(ii)%asize / yr2sec ! [s-1]
+            if (present(kmax)) then
+                kmax = max(kmax, rate1)
+            end if
+
+            ! 4. Now compute the mass rates [g cm-3 s-1]
+            dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+            do iel = 1, dustbins_props(ii)%nelements
+                dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
+                    rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+            end do
+        end do binloop
+        
+    end subroutine charged_sputtering_rate
+
+    subroutine turbulent_shattering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        use dust_dynamics, only: grain_relative_velocity
+        
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: jj, ii, ii1, ii2, index, pp, ll, iel
+        real(dp) :: rate1, rate_dest
+        real(dp) :: temp_sigma, temp_L
+        real(dp) :: sigma_mol, sigma_diff
+        real(dp) :: coll_factor, v_rel
+        real(dp) :: chi_frag_dest
+        real(dp), dimension(:), allocatable :: chi_frag
+        real(dp), dimension(:), allocatable :: chi_frag_pah
+        logical :: interact_pah_flag
+
+        if (dust_eq_test) then
+            temp_sigma = 5.67d5 * (dust_info%local_nH/1d2)**(-0.25d0)
+            temp_L = 10d0 * pc2cm * (dust_info%local_nH/1d2)**(-1d0/3d0)
+        else
+            temp_sigma = dust_info%local_sigma
+            temp_L = dust_info%local_dx
+        end if
+
+        speciesloop: do ii = 1, ndchemtype
+            ! 1. Loop over the dust chemical species.
+            ii1 = istart_chemtype(ii)
+            ii2 = ii1 + dustbins_per_chemtype(ii) - 1
+
+            allocate(chi_frag(ii1:ii2))
+            allocate(chi_frag_pah(1:dust_info%npah))
+            
+            ! Cache PAH interaction flag outside grain loop for efficiency
+            interact_pah_flag = dustbins_props(ii1)%interact_pah .and. dust_info%npah > 0
+
+            do jj = ii2, ii1, -1
+                index = jj + dust_info%npah
+
+                ! 2. Compute shattered fragments and relative velocity from self-collisions (jj with jj)
+                call compute_shattered_fragments(dust_info,jj,jj,temp_sigma,temp_L,v_rel,chi_frag_dest,chi_frag,chi_frag_pah,interact_pah_flag)
+
+                ! 3. Compute the collision rate factor
+                ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
+                ! Marchand et al. (2021) and considers that grain velocities along the x-,
+                ! y-, and z-axes are Gaussian distributed.
+                coll_factor = sqrt(8d0/(3d0*pi)) * 4d0 * pi * (dustbins_props(jj)%asize_cm)**2d0 * v_rel
+
+                ! 4. Compute the mass loss rate from shattering collisions [g cm-3 s-1]
+                rate1 = coll_factor * y_dust(index) / dustbins_props(jj)%mgrain
+                                
+                if (present(kmax)) then
+                    kmax = max(kmax, rate1)
+                end if
+
+                ! 5. Update the dust derivatives for all fragments
+                dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+
+                ! 5a. Combined update for fragment dust bins and PAH bins
+                ! Loop over all destination bins in a single pass for better cache efficiency
+                do ll = ii1, ii2
+                    dydt_dust(ll + dust_info%npah) = dydt_dust(ll + dust_info%npah) + rate1 * chi_frag(ll) * y_dust(index)
+                end do
+
+                if (interact_pah_flag) then
+                    do pp = 1, dust_info%npah
+                        dydt_dust(pp) = dydt_dust(pp) + rate1 * chi_frag_pah(pp) * y_dust(index)
+                    end do
+                end if
+
+                ! 5c. Return destroyed material to the gas phase
+                ! Return destroyed material to the gas phase based on the elemental composition of the dust grain
+                if (chi_frag_dest > 1d-10) then
+                    rate_dest = rate1 * chi_frag_dest * y_dust(index)
+                    do iel = 1, dustbins_props(jj)%nelements
+                        dydt_gas(dustbins_props(jj)%el_index(iel),1) = dydt_gas(dustbins_props(jj)%el_index(iel),1) + &
+                            rate_dest * dustbins_props(jj)%el_mfractions(iel) ! [g cm-3 s-1]
+                    end do
+                end if
+            end do
+
+            deallocate(chi_frag)
+            deallocate(chi_frag_pah)
+        end do speciesloop
+
+    end subroutine turbulent_shattering_rate
+
+    subroutine turbulent_all_shattering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        use dust_dynamics, only: grain_relative_velocity
+        
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: ichem, ii, jj, ii1, ii2, index_i, index_j, pp, ll, iel
+        integer :: nbin, expected_pairs, pair_count
+        real(dp) :: rate_dest, mass_rate
+        real(dp) :: temp_sigma, temp_L
+        real(dp) :: coll_factor, v_rel
+        real(dp) :: chi_frag_dest
+        real(dp) :: mass_src_dust, mass_src_pah, mass_src_gas, mass_residual, mass_scale
+        real(dp), parameter :: mass_check_tol = 1d-10
+        real(dp), dimension(:), allocatable :: chi_frag
+        real(dp), dimension(:), allocatable :: chi_frag_pah
+        logical :: interact_pah_flag
+
+        if (dust_eq_test) then
+            temp_sigma = 5.67d5 * (dust_info%local_nH/1d2)**(-0.25d0)
+            temp_L = 10d0 * pc2cm * (dust_info%local_nH/1d2)**(-1d0/3d0)
+        else
+            temp_sigma = dust_info%local_sigma
+            temp_L = dust_info%local_dx
+        end if
+
+        speciesloop: do ichem = 1, ndchemtype
+            ! 1. Loop over the dust chemical species.
+            ii1 = istart_chemtype(ichem)
+            ii2 = ii1 + dustbins_per_chemtype(ichem) - 1
+            nbin = ii2 - ii1 + 1
+            expected_pairs = nbin * (nbin + 1) / 2
+            pair_count = 0
+
+            allocate(chi_frag(ii1:ii2))
+            allocate(chi_frag_pah(1:dust_info%npah))
+            
+            ! Cache PAH interaction flag outside grain loop for efficiency
+            interact_pah_flag = dustbins_props(ii1)%interact_pah .and. dust_info%npah > 0
+
+            do ii = ii1, ii2
+                index_i = ii + dust_info%npah
+                if (y_dust(index_i) < 1d-40) cycle
+
+                ! Use jj >= ii so each pair is processed once (no ii-jj / jj-ii double counting).
+                do jj = ii, ii2
+                    pair_count = pair_count + 1
+                    index_j = jj + dust_info%npah
+                    if (y_dust(index_j) < 1d-40) cycle
+
+                    ! 2. Compute shattered fragments for target ii impacted by jj.
+                    call compute_shattered_fragments(dust_info,ii,jj,temp_sigma,temp_L,v_rel,chi_frag_dest,chi_frag,chi_frag_pah,interact_pah_flag)
+
+                    ! 3. Compute the collision rate factor for pair (ii,jj).
+                    ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
+                    ! Marchand et al. (2021) and considers that grain velocities along the x-,
+                    ! y-, and z-axes are Gaussian distributed.
+                    coll_factor = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jj)%asize_cm)**2d0 * v_rel
+
+                    ! 4. Collision event rate (events cm^-3 s^-1) × target mass:
+                    !    mass_rate_ii = R * m_ii  = coll_factor * n_jj * rho_ii
+                    !                             = coll_factor * (rho_jj/m_jj) * rho_ii
+                    !    For ii==jj apply 0.5 to count each identical-grain collision once,
+                    !    matching the convention in turbulent_all_coagulation_rate.
+                    if (ii == jj) then
+                        mass_rate = 0.5d0 * coll_factor * y_dust(index_j) / dustbins_props(jj)%mgrain * y_dust(index_i)
+                    else
+                        mass_rate = coll_factor * y_dust(index_j) / dustbins_props(jj)%mgrain * y_dust(index_i)
+                    end if
+
+                    if (present(kmax)) then
+                        kmax = max(kmax, mass_rate / max(y_dust(index_i), 1d-99))
+                    end if
+
+                    ! 5a. Apply destruction and fragmentation for target ii.
+                    dydt_dust(index_i) = dydt_dust(index_i) - mass_rate ! [g cm-3 s-1]
+
+                    do ll = ii1, ii2
+                        dydt_dust(ll + dust_info%npah) = dydt_dust(ll + dust_info%npah) + mass_rate * chi_frag(ll)
+                    end do
+
+                    if (interact_pah_flag) then
+                        do pp = 1, dust_info%npah
+                            dydt_dust(pp) = dydt_dust(pp) + mass_rate * chi_frag_pah(pp)
+                        end do
+                    end if
+
+                    if (chi_frag_dest > 1d-10) then
+                        rate_dest = mass_rate * chi_frag_dest
+                        do iel = 1, dustbins_props(ii)%nelements
+                            dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
+                                rate_dest * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+                        end do
+                    end if
+
+                    ! Diagnostic: mass conservation for target ii update.
+                    mass_src_dust = mass_rate * sum(chi_frag(ii1:ii2))
+                    mass_src_pah  = mass_rate * sum(chi_frag_pah(1:dust_info%npah))
+                    mass_src_gas  = mass_rate * chi_frag_dest
+                    mass_residual = -mass_rate + mass_src_dust + mass_src_pah + mass_src_gas
+                    mass_scale    = max(mass_rate, 1d-99)
+                    if (abs(mass_residual) > mass_check_tol * mass_scale) then
+                        print*, 'WARNING(turbulent_all_shattering_rate): mass non-conservation for target', ii, 'projectile', jj
+                        print*, 'Residual, sink, src_dust, src_pah, src_gas =', mass_residual, mass_rate, mass_src_dust, mass_src_pah, mass_src_gas
+                    end if
+
+                    ! 5b. Apply destruction and fragmentation for target jj (same collision event).
+                    !    mass_rate_jj = R * m_jj = coll_factor * (rho_ii/m_ii) * rho_jj
+                    !    For ii/=jj: chi_frag is recomputed for target jj hit by ii.
+                    !    For ii==jj: chi_frag is identical by symmetry; reuse directly.
+                    if (ii /= jj) then
+                        call compute_shattered_fragments(dust_info,jj,ii,temp_sigma,temp_L,v_rel,chi_frag_dest,chi_frag,chi_frag_pah,interact_pah_flag)
+                        mass_rate = coll_factor * y_dust(index_i) / dustbins_props(ii)%mgrain * y_dust(index_j)
+                    else
+                        ! ii==jj: chi_frag unchanged; m_ii==m_jj so formula is symmetric.
+                        mass_rate = 0.5d0 * coll_factor * y_dust(index_i) / dustbins_props(ii)%mgrain * y_dust(index_j)
+                    end if
+
+                    dydt_dust(index_j) = dydt_dust(index_j) - mass_rate ! [g cm-3 s-1]
+
+                    do ll = ii1, ii2
+                        dydt_dust(ll + dust_info%npah) = dydt_dust(ll + dust_info%npah) + mass_rate * chi_frag(ll)
+                    end do
+
+                    if (interact_pah_flag) then
+                        do pp = 1, dust_info%npah
+                            dydt_dust(pp) = dydt_dust(pp) + mass_rate * chi_frag_pah(pp)
+                        end do
+                    end if
+
+                    if (chi_frag_dest > 1d-10) then
+                        rate_dest = mass_rate * chi_frag_dest
+                        do iel = 1, dustbins_props(jj)%nelements
+                            dydt_gas(dustbins_props(jj)%el_index(iel),1) = dydt_gas(dustbins_props(jj)%el_index(iel),1) + &
+                                rate_dest * dustbins_props(jj)%el_mfractions(iel) ! [g cm-3 s-1]
+                        end do
+                    end if
+
+                    ! Diagnostic: mass conservation for target jj update.
+                    mass_src_dust = mass_rate * sum(chi_frag(ii1:ii2))
+                    mass_src_pah  = mass_rate * sum(chi_frag_pah(1:dust_info%npah))
+                    mass_src_gas  = mass_rate * chi_frag_dest
+                    mass_residual = -mass_rate + mass_src_dust + mass_src_pah + mass_src_gas
+                    mass_scale    = max(mass_rate, 1d-99)
+                    if (abs(mass_residual) > mass_check_tol * mass_scale) then
+                        print*, 'WARNING(turbulent_all_shattering_rate): mass non-conservation for target', jj, 'projectile', ii
+                        print*, 'Residual, sink, src_dust, src_pah, src_gas =', mass_residual, mass_rate, mass_src_dust, mass_src_pah, mass_src_gas
+                    end if
+                end do
+            end do
+
+            if (pair_count /= expected_pairs) then
+                print*, 'WARNING(turbulent_all_shattering_rate): unexpected pair count for chem type', ichem
+                print*, 'Found/Expected =', pair_count, expected_pairs
+            end if
+
+            deallocate(chi_frag)
+            deallocate(chi_frag_pah)
+        end do speciesloop
+
+    end subroutine turbulent_all_shattering_rate
+
+    subroutine compute_shattered_fragments(dust_info,id1,id2,local_sigma,local_L,v_rel_out,chi_frag_dest_out,chi_frag_out,chi_frag_pah_out,interact_pah)
+        use dust_dynamics, only: grain_relative_velocity
+        implicit none
+
+        class(DustChemistryInfo), intent(in) :: dust_info
+        integer, intent(in) :: id1, id2
+        real(dp), intent(in) :: local_sigma, local_L
+        logical, intent(in) :: interact_pah
+        real(dp), intent(out) :: v_rel_out, chi_frag_dest_out
+        real(dp), dimension(:), intent(out) :: chi_frag_out
+        real(dp), dimension(:), intent(out) :: chi_frag_pah_out
+
+        integer :: pp_local, ll_local, ii1, ii2, nearest_idx
+        real(dp) :: E_imp, phi, m_ej, m_remnant, m_max, m_min
+        real(dp) :: prefactor, m_tot, denom, logdist, min_logdist
+        logical :: remnant_assigned
+        real(dp) :: m_max_pow, m_min_pow  ! OPTIMIZATION: Precomputed powers
+
+        ! Infer ii1 and ii2 from the bounds of the output arrays
+        ii1 = lbound(chi_frag_out, 1)
+        ii2 = ubound(chi_frag_out, 1)
+
+        ! 1. Compute the relative velocity of two grains
+        v_rel_out = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
+                                        dust_info%local_nH,local_sigma,dust_info%local_mu,local_L,&
+                                        dustbins_props(id1)%asize_cm,dustbins_props(id2)%asize_cm,&
+                                        dustbins_props(id1)%sgrain,dustbins_props(id2)%sgrain,&
+                                        dustbins_props(id1)%mgrain,dustbins_props(id2)%mgrain)
+
+        ! 2. Disrupted mass computation (Eqs. 20-22 of Hirashita & Aoyama 2019)
+        E_imp = 5d-1 * (dustbins_props(id1)%mgrain*dustbins_props(id2)%mgrain) / &
+                (dustbins_props(id1)%mgrain+dustbins_props(id2)%mgrain) * v_rel_out**2d0
+        phi = E_imp / (dustbins_props(id1)%mgrain*dustbins_props(id1)%catastrophic_spec_energy)
+        m_ej = phi / (1d0 + phi) * dustbins_props(id1)%mgrain
+
+        ! 3. Compute the maximum and minimum masses of the fragment distribution
+        m_remnant = dustbins_props(id1)%mgrain - m_ej
+        m_max = 2d-2*m_ej
+        m_min = 1d-6*m_max
+        ! print*, 'Shattering collision between bins ', id1, ' and ', id2
+        ! print*, 'Relative velocity (km/s): ', v_rel_out/1d5
+        ! print*, 'Impacted mass (g): ', dustbins_props(id1)%mgrain
+        ! print*, 'Catastrophic specific energy (erg/g): ', dustbins_props(id1)%catastrophic_spec_energy
+        ! print*, 'Impact energy (erg): ', E_imp
+        ! print*, 'Original mass (g): ', dustbins_props(id1)%mgrain
+        ! print*, 'Ejected mass (g): ', m_ej
+        ! print*, 'Remnant mass (g): ', m_remnant
+        ! print*, 'Fragment mass range (g): ', m_min, ' - ', m_max
+        ! print*, 'Original bin mass range (g): ', dustbins_props(id1)%mgrain_min, ' - ', dustbins_props(id1)%mgrain_max
+        ! call clean_stop
+
+        ! 4. Compute the distribution prefactor for ejecta fragments only
+        if (m_ej > tiny(m_ej)) then
+            ! OPTIMIZATION: Precompute powers of slope_frag_func to avoid repeated expensive pow() calls
+            m_max_pow = m_max**slope_frag_func
+            m_min_pow = m_min**slope_frag_func
+            denom = m_max_pow - m_min_pow
+            if (abs(denom) > tiny(denom)) then
+                prefactor = m_ej / denom
+            else
+                prefactor = 0d0
+            end if
+        else
+            m_max_pow = 0d0
+            m_min_pow = 0d0
+            prefactor = 0d0
+        end if
+
+        ! 5. Ejecta contribution below the minimum tracked size goes to gas
+        chi_frag_dest_out = 0d0
+        chi_frag_out(:) = 0d0
+        chi_frag_pah_out(:) = 0d0
+        if (prefactor > 0d0) then
+            if (interact_pah) then
+                if (m_min < pahbins_props(1)%mpah_min) then
+                    chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
+                end if
+            else
+                if (m_min < dustbins_props(ii1)%mgrain_min) then
+                    chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                end if
+            end if
+        end if
+
+        ! 6. Ejecta contribution in PAH bins
+        if (interact_pah .and. prefactor > 0d0) then
+            do pp_local = 1, dust_info%npah
+                if ((m_min.ge.pahbins_props(pp_local)%mpah_max).or.(m_max<pahbins_props(pp_local)%mpah_min)) then
+                    chi_frag_pah_out(pp_local) = 0d0
+                else
+                    chi_frag_pah_out(pp_local) = prefactor * (min(pahbins_props(pp_local)%mpah_max,m_max)**slope_frag_func - &
+                                                    max(pahbins_props(pp_local)%mpah_min,m_min)**slope_frag_func)
+                end if
+            end do
+        end if
+
+        ! 7. Ejecta contribution in dust bins of the chemical type (can include id1/id2 bins)
+        if (prefactor > 0d0) then
+            do ll_local = ii1, ii2
+                if ((m_min.ge.dustbins_props(ll_local)%mgrain_max).or.(m_max<dustbins_props(ll_local)%mgrain_min)) then
+                    chi_frag_out(ll_local) = 0d0
+                else
+                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_local)%mgrain_max,m_max)**slope_frag_func - &
+                                                max(dustbins_props(ll_local)%mgrain_min,m_min)**slope_frag_func)
+                end if
+            end do
+        end if
+
+        ! 8. Add remnant as a point-mass contribution to whichever tracked bin contains it.
+        !    This makes source-bin deposition explicit (e.g. remnant in id1/id2 bin).
+        remnant_assigned = .false.
+        if (m_remnant > 0d0) then
+            if (interact_pah) then
+                do pp_local = 1, dust_info%npah
+                    if ((pahbins_props(pp_local)%mpah_min.le.m_remnant).and.(m_remnant<pahbins_props(pp_local)%mpah_max)) then
+                        chi_frag_pah_out(pp_local) = chi_frag_pah_out(pp_local) + m_remnant
+                        remnant_assigned = .true.
+                        exit
+                    end if
+                end do
+            end if
+
+            if (.not. remnant_assigned) then
+                ! First try the impact bin explicitly to avoid systematic down-binning.
+                if ((ii1 <= id1) .and. (id1 <= ii2)) then
+                    if ((dustbins_props(id1)%mgrain_min <= m_remnant) .and. (m_remnant <= dustbins_props(id1)%mgrain_max)) then
+                        chi_frag_out(id1) = chi_frag_out(id1) + m_remnant
+                        remnant_assigned = .true.
+                    end if
+                end if
+            end if
+
+            if (.not. remnant_assigned) then
+                do ll_local = ii1, ii2
+                    if ((dustbins_props(ll_local)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_local)%mgrain_max)) then
+                        chi_frag_out(ll_local) = chi_frag_out(ll_local) + m_remnant
+                        remnant_assigned = .true.
+                        exit
+                    end if
+                end do
+            end if
+
+            if (.not. remnant_assigned) then
+                ! If remnant is outside formal bin bounds, put it in the nearest dust bin by mass.
+                nearest_idx = ii1
+                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ii1)%mgrain))
+                do ll_local = ii1 + 1, ii2
+                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_local)%mgrain))
+                    if (logdist < min_logdist) then
+                        min_logdist = logdist
+                        nearest_idx = ll_local
+                    end if
+                end do
+                chi_frag_out(nearest_idx) = chi_frag_out(nearest_idx) + m_remnant
+                remnant_assigned = .true.
+            end if
+
+            if (.not. remnant_assigned) then
+                chi_frag_dest_out = chi_frag_dest_out + m_remnant
+            end if
+        end if
+
+        ! 9. Normalise the fragmentation mass fractions
+        m_tot = chi_frag_dest_out + sum(chi_frag_out(:)) + sum(chi_frag_pah_out(:))
+        if (m_tot > tiny(m_tot)) then
+            chi_frag_dest_out = chi_frag_dest_out / m_tot
+            chi_frag_out(:) = chi_frag_out(:) / m_tot
+            chi_frag_pah_out(:) = chi_frag_pah_out(:) / m_tot
+        end if
+    end subroutine compute_shattered_fragments
 
 end module dust_rates
