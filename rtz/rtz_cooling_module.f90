@@ -354,8 +354,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test.eq.2) then
             if (isH2_rtz) then 
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
+               if (dust_log) call dust_log_tdust_solver_print_reset()
             else
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1)
+               if (dust_log) call dust_log_tdust_solver_print_reset()
             end if
 #ifdef CALIMA
             if (dust_log) call dust_log_tdust_solver_print_reset()
@@ -370,6 +372,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !       write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, nCO(i)/nH(i), (nCO(i)+nElement(6,i))/nH(i), (nCO(i)+nElement(8,i))/nH(i)
             !    else
                   write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
+                  if (dust_log) call dust_log_tdust_solver_print_reset()
             !    end if
             ! else
                ! write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1)
