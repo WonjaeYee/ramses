@@ -1097,6 +1097,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
       dust_helper%local_G0 = total_G0
       dust_helper%local_ne = ne
+      dust_helper%local_nCO = nCO(icell)
       call compute_dust_update(dust_helper,nElement_dep(:),dXion(:,:),ddt(icell)&
 #ifdef RT
                               ,dNp(:)&

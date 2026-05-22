@@ -131,7 +131,8 @@ subroutine read_hydro_params(nml_ok)
       ! Dust modelling options
       sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
       ! PAH modelling options
-      sublimation_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,&
+      photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
+      cluster_evaporation_model,&
       ! Efficiency parameters
       Sconstant,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
       dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
@@ -141,6 +142,7 @@ subroutine read_hydro_params(nml_ok)
       dust_composition,dustbins_per_chemtype,&
       asize,sgrain,amin,amax,fmass_ej,&
       pah_nc,pah_nc_min,pah_nc_max,spah,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
+      pah_is_cluster, &
       ! ISM depletion factors
       fDust_depletions,fCDust_inPAH,GD_solar,DTM_solar,fdustmass_ini,fpahmass_ini,&
       ! Radiation parameters

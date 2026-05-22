@@ -28,11 +28,13 @@ contains
         integer :: jj, ii, ii1, ii2, kk, e_index
         integer :: n_el
         real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
+        real(dp) :: tacc_max, sfunc, tacc_log
         real(dp),dimension(1:ndust) :: correction_factors
         real(dp) :: diff_rate, diff_rho, diff_nH, diff_T
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
+        tacc_max = 5d0
 
         speciesloop: do jj = 1, ndchemtype
             ! 1. Loop over the dust chemical species.
@@ -61,6 +63,16 @@ contains
                 ! 4. Apply the same limiting rate to every dust bin in the chemical type.
                 do ii = ii1, ii2
                     rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor ! [s-1]
+                    ! TODO: Code a nCO based icing to figure this out
+                    ! Apply the same nhmax_acc smoothing used in compute_t_accretion,
+                    ! but in rate form via the equivalent smoothed timescale.
+                    if (rate > 0d0) then
+                        tacc_log = log10(1d0 / max(rate, 1d-99) / Myr2sec)
+                        sfunc = sigmoid_function(tacc_max,dustbins_props(ii)%nhmax_acc,dust_info%local_nH)
+                        tacc_log = (1d0 - sfunc) * tacc_log + sfunc * tacc_max
+                        rate = 1d0 / (10d0**tacc_log * Myr2sec)
+                    end if
+
                     ! 5. Get the maximum rate computed here, if requested.
                     if (present(kmax)) then
                         kmax = max(kmax, abs(rate))
@@ -309,13 +321,13 @@ contains
                 call interpolate1D(dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
                                 dustbins_props(ii)%sputtering_tab(iel)%tab2d(1:nT_loc,iphi0,1), &
                                 dustbins_props(ii)%sputtering_tab(iel)%npts(1), lT, irate)
-                rate_total = rate_total + irate * y_gas(iel,1) / dust_info%el_atomic_mass_g(iel) ! [micron / yr]
+                rate_total = rate_total + (10d0**irate) * y_gas(iel,1) / dust_info%el_atomic_mass_g(iel) ! [micron / yr]
             end do
 
             ! 3. Convert to the real erosion rate in [s-1]
             rate1 = 3d0 * rate_total / dustbins_props(ii)%asize / yr2sec ! [s-1]
             if (present(kmax)) then
-                kmax = max(kmax, rate1)
+                kmax = max(kmax, abs(rate1))
             end if
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
@@ -325,7 +337,6 @@ contains
                     rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
             end do
         end do binloop
-
     end subroutine sputtering_rate
 
     subroutine charged_sputtering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
@@ -372,7 +383,7 @@ contains
             ! 3. Convert to the real erosion rate in [s-1]
             rate1 = 3d0 * rate_total / dustbins_props(ii)%asize / yr2sec ! [s-1]
             if (present(kmax)) then
-                kmax = max(kmax, rate1)
+                kmax = max(kmax, abs(rate1))
             end if
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
@@ -442,7 +453,7 @@ contains
                 rate1 = coll_factor * y_dust(index) / dustbins_props(jj)%mgrain
                                 
                 if (present(kmax)) then
-                    kmax = max(kmax, rate1)
+                    kmax = max(kmax, abs(rate1))
                 end if
 
                 ! 5. Update the dust derivatives for all fragments
@@ -490,13 +501,10 @@ contains
 
         ! ---- Local variables ----
         integer :: ichem, ii, jj, ii1, ii2, index_i, index_j, pp, ll, iel
-        integer :: nbin, expected_pairs, pair_count
         real(dp) :: rate_dest, mass_rate
         real(dp) :: temp_sigma, temp_L
         real(dp) :: coll_factor, v_rel
         real(dp) :: chi_frag_dest
-        real(dp) :: mass_src_dust, mass_src_pah, mass_src_gas, mass_residual, mass_scale
-        real(dp), parameter :: mass_check_tol = 1d-10
         real(dp), dimension(:), allocatable :: chi_frag
         real(dp), dimension(:), allocatable :: chi_frag_pah
         logical :: interact_pah_flag
@@ -513,9 +521,6 @@ contains
             ! 1. Loop over the dust chemical species.
             ii1 = istart_chemtype(ichem)
             ii2 = ii1 + dustbins_per_chemtype(ichem) - 1
-            nbin = ii2 - ii1 + 1
-            expected_pairs = nbin * (nbin + 1) / 2
-            pair_count = 0
 
             allocate(chi_frag(ii1:ii2))
             allocate(chi_frag_pah(1:dust_info%npah))
@@ -529,7 +534,6 @@ contains
 
                 ! Use jj >= ii so each pair is processed once (no ii-jj / jj-ii double counting).
                 do jj = ii, ii2
-                    pair_count = pair_count + 1
                     index_j = jj + dust_info%npah
                     if (y_dust(index_j) < 1d-40) cycle
 
@@ -554,7 +558,7 @@ contains
                     end if
 
                     if (present(kmax)) then
-                        kmax = max(kmax, mass_rate / max(y_dust(index_i), 1d-99))
+                        kmax = max(kmax, abs(mass_rate / max(y_dust(index_i), 1d-99)))
                     end if
 
                     ! 5a. Apply destruction and fragmentation for target ii.
@@ -576,17 +580,6 @@ contains
                             dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
                                 rate_dest * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
                         end do
-                    end if
-
-                    ! Diagnostic: mass conservation for target ii update.
-                    mass_src_dust = mass_rate * sum(chi_frag(ii1:ii2))
-                    mass_src_pah  = mass_rate * sum(chi_frag_pah(1:dust_info%npah))
-                    mass_src_gas  = mass_rate * chi_frag_dest
-                    mass_residual = -mass_rate + mass_src_dust + mass_src_pah + mass_src_gas
-                    mass_scale    = max(mass_rate, 1d-99)
-                    if (abs(mass_residual) > mass_check_tol * mass_scale) then
-                        print*, 'WARNING(turbulent_all_shattering_rate): mass non-conservation for target', ii, 'projectile', jj
-                        print*, 'Residual, sink, src_dust, src_pah, src_gas =', mass_residual, mass_rate, mass_src_dust, mass_src_pah, mass_src_gas
                     end if
 
                     ! 5b. Apply destruction and fragmentation for target jj (same collision event).
@@ -620,24 +613,8 @@ contains
                                 rate_dest * dustbins_props(jj)%el_mfractions(iel) ! [g cm-3 s-1]
                         end do
                     end if
-
-                    ! Diagnostic: mass conservation for target jj update.
-                    mass_src_dust = mass_rate * sum(chi_frag(ii1:ii2))
-                    mass_src_pah  = mass_rate * sum(chi_frag_pah(1:dust_info%npah))
-                    mass_src_gas  = mass_rate * chi_frag_dest
-                    mass_residual = -mass_rate + mass_src_dust + mass_src_pah + mass_src_gas
-                    mass_scale    = max(mass_rate, 1d-99)
-                    if (abs(mass_residual) > mass_check_tol * mass_scale) then
-                        print*, 'WARNING(turbulent_all_shattering_rate): mass non-conservation for target', jj, 'projectile', ii
-                        print*, 'Residual, sink, src_dust, src_pah, src_gas =', mass_residual, mass_rate, mass_src_dust, mass_src_pah, mass_src_gas
-                    end if
                 end do
             end do
-
-            if (pair_count /= expected_pairs) then
-                print*, 'WARNING(turbulent_all_shattering_rate): unexpected pair count for chem type', ichem
-                print*, 'Found/Expected =', pair_count, expected_pairs
-            end if
 
             deallocate(chi_frag)
             deallocate(chi_frag_pah)
@@ -816,4 +793,331 @@ contains
         end if
     end subroutine compute_shattered_fragments
 
+    subroutine pah_sputtering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: pp, iel, nT_loc
+        real(dp) :: lT, R_total, rate1, rate2, J_rate
+        real(dp), dimension(:), allocatable :: J_rate_all
+
+        lT = log10(dust_info%local_Tk)
+
+        ! 1. Loop over PAHs
+        pahloop: do pp = 1, dust_info%npah
+            R_total = 0d0
+
+            if (allocated(J_rate_all)) deallocate(J_rate_all)
+            allocate(J_rate_all(0:n_elements))
+
+            ! 2. Interpolate sputtering rates from tables
+            J_rate_all(:) = -100d0
+            do iel = 0, n_elements
+                if (.not. pahbins_props(pp)%sputtering_tab(iel)%initialised) cycle
+                nT_loc = pahbins_props(pp)%sputtering_tab(iel)%npts(1)
+                call interpolate1D(pahbins_props(pp)%sputtering_tab(iel)%tab1d(1:nT_loc, 1), &
+                    pahbins_props(pp)%sputtering_tab(iel)%tab1d(1:nT_loc, 2), &
+                    nT_loc, lT, J_rate_all(iel))
+            end do
+            J_rate_all(:) = 10d0**J_rate_all(:)
+
+            ! 3. Electron contribution to sputtering rate
+            if (pahbins_props(pp)%sputtering_tab(0)%initialised) then
+                R_total = R_total + dust_info%local_ne * J_rate_all(0)
+            end if
+
+            ! 4. Ion contributions to sputtering rate
+            do iel = 1, n_elements
+                if (.not. pahbins_props(pp)%sputtering_tab(iel)%initialised) cycle
+                if (y_gas(iel, 1) < 1d-40) cycle
+                R_total = R_total + y_gas(iel, 1) / dust_info%el_atomic_mass_g(iel) * J_rate_all(iel)
+            end do
+
+            ! 5. Convert rate to mass loss [atoms/s-1] and compute mass loss rate [g cm-3 s-1]
+            if (R_total > 0d0) then
+                rate1 = R_total ! [s-1]
+                if (present(kmax)) then
+                    kmax = max(kmax, abs(rate1))
+                end if
+                rate2 = rate1 * y_dust(pp) / pahbins_props(pp)%mpah * dust_info%el_atomic_mass_g(pahbins_props(pp)%C_index) ! [g cm-3 s-1]
+                dydt_dust(pp) = dydt_dust(pp) - rate2 ! [g cm-3 s-1]
+
+                ! 6. Return sputtered material (carbon) to the gas phase
+                dydt_gas(pahbins_props(pp)%C_index, 1) = dydt_gas(pahbins_props(pp)%C_index, 1) + rate2 ! [g cm-3 s-1]
+            end if
+
+            if (allocated(J_rate_all)) deallocate(J_rate_all)
+        end do pahloop
+
+    end subroutine pah_sputtering_rate
+
+    subroutine pah_photolysis_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: pp
+        real(dp):: log_nH, log_G0
+        real(dp):: rate1, rate2
+
+        log_nH = log10(dust_info%local_nH)
+        log_G0 = log10(dust_info%local_G0)
+
+        ! 1. Loop over PAH sizes
+        pahloop: do pp = 1, dust_info%npah
+            if (pahbins_props(pp)%is_cluster) cycle ! TODO: Photolysis only implemented for non-cluster PAHs for now
+            if (.not. pahbins_props(pp)%dissociation_tab%initialised) cycle
+
+            call interpolate2D(pahbins_props(pp)%dissociation_tab%tab1d(:,1), &
+                pahbins_props(pp)%dissociation_tab%tab1d(:,2), &
+                pahbins_props(pp)%dissociation_tab%tab2d(:,:,1), &
+                pahbins_props(pp)%dissociation_tab%npts(1), pahbins_props(pp)%dissociation_tab%npts(2), &
+                log_G0, log_nH, rate1)
+
+            rate1 = 10d0**rate1 ! [s-1]
+
+            if (rate1 > 0d0) then
+                if (present(kmax)) then
+                    kmax = max(kmax, abs(rate1))
+                end if
+                rate2 = rate1 * y_dust(pp) / pahbins_props(pp)%mpah * (2d0*dust_info%el_atomic_mass_g(pahbins_props(pp)%C_index)) ! [g cm-3 s-1]
+                dydt_dust(pp) = dydt_dust(pp) - rate2 ! [g cm-3 s-1]
+
+                ! 2. Return photolysed material (carbon) to the gas phase
+                dydt_gas(pahbins_props(pp)%C_index, 1) = dydt_gas(pahbins_props(pp)%C_index, 1) + rate2 ! [g cm-3 s-1]
+            end if
+        end do pahloop
+
+    end subroutine pah_photolysis_rate
+
+    subroutine pah_cluster_evaporation_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: pp
+        real(dp):: log_T, log_nH
+        real(dp):: rate1, rate2
+        real(dp):: k_single, k_multi
+
+        log_T = log10(dust_info%local_Tk)
+        log_nH = log10(dust_info%local_nH)
+
+        ! 1. Loop over PAH sizes
+        pahloop: do pp = 1, dust_info%npah
+            if (.not. pahbins_props(pp)%is_cluster) cycle ! Cluster evaporation is only for PAH clusters
+            k_single = dust_info%local_G0 / 0.19306d0
+            k_multi = 1d0 / (10d0**(-3.1692061d0 * log10(dust_info%local_G0) + 13.5642486d0))
+            rate1 = min(k_single, k_multi) / yr2sec ! [s-1]
+
+            if (rate1 > 0d0) then
+                if (present(kmax)) then
+                    kmax = max(kmax, abs(rate1))
+                end if
+                rate2 = rate1 * y_dust(pp) / pahbins_props(pp)%mpah * pahbins_props(pp-1)%mpah ! [g cm-3 s-1]
+                dydt_dust(pp) = dydt_dust(pp) - rate2 ! [g cm-3 s-1]
+
+                ! 2. Return evaporated molecule to the PAH bin below (pp-1)
+                dydt_dust(pp-1) = dydt_dust(pp-1) + rate2 ! [g cm-3 s-1]
+            end if
+        end do pahloop
+    end subroutine pah_cluster_evaporation_rate
+
+    subroutine Totton2012_pah_coalescence_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: pp
+        real(dp) :: reduced_mass, dV_thermal, C_eff, coll_section
+        real(dp) :: rate1, rate2
+
+        ! Following compute_t_pah_coalescence (Totton2012):
+        ! t_coal = mpah / (4*pi*a^2 * dV_thermal * C_eff * rho)
+        ! so k_coal = 1/t_coal.
+        pahloop: do pp = 1, dust_info%npah - 1
+            if (pahbins_props(pp)%is_cluster) cycle
+
+            reduced_mass = 5d-1 * pahbins_props(pp)%mpah
+            C_eff = 1d0 / (1d0 + 9.92807181d-7 * (log10(dust_info%local_Tk))**1.37933821d1)
+            dV_thermal = sqrt(8d0 * kB * dust_info%local_Tk / reduced_mass)
+            coll_section = 4d0 * pi * (pahbins_props(pp)%apah_cm)**2d0
+            rate1 = coll_section * dV_thermal * C_eff * y_dust(pp) / pahbins_props(pp)%mpah
+
+            if (rate1 > 0d0) then
+                if (present(kmax)) then
+                    kmax = max(kmax, abs(rate1))
+                end if
+                rate2 = rate1 * y_dust(pp)
+                dydt_dust(pp) = dydt_dust(pp) - rate2
+                dydt_dust(pp+1) = dydt_dust(pp+1) + rate2
+            end if
+        end do pahloop
+    end subroutine Totton2012_pah_coalescence_rate
+
+    subroutine Tielens2021_pah_coalescence_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: pp, nstates, cation_start
+        real(dp) :: reduced_mass, pah_ion_fraction
+        real(dp) :: R1, R2
+        real(dp) :: rate1, rate2
+
+        if (dust_info%local_Tk <= 0d0) return
+        if (dust_info%local_rho <= 0d0) return
+        if (.not. allocated(dust_info%fcharge_pah)) return
+
+        ! Following compute_t_pah_coalescence (Tielens2021):
+        ! k_coal = ((R1*(1-fion) + R2*fion) * rho) / mpah.
+        pahloop: do pp = 1, dust_info%npah - 1
+            if (pahbins_props(pp)%is_cluster) cycle
+
+            nstates = pahbins_props(pp)%ncharge_states
+            cation_start = pahbins_props(pp)%cation_start_idx
+            pah_ion_fraction = 0d0
+            if (cation_start <= nstates) then
+                pah_ion_fraction = sum(dust_info%fcharge_pah(cation_start:nstates, pp))
+            end if
+            pah_ion_fraction = max(0d0, min(1d0, pah_ion_fraction))
+
+            R1 = 4d-11 * sqrt(dust_info%local_Tk / 10d0) * sqrt(pahbins_props(pp)%nc / 50d0)
+            reduced_mass = 5d-1 * pahbins_props(pp)%mpah
+            R2 = 6d-9 * sqrt(pahbins_props(pp)%nc / 50d0) * sqrt((12d0 * amu2g) / reduced_mass)
+            rate1 = (R1 * (1d0 - pah_ion_fraction) + R2 * pah_ion_fraction) * y_dust(pp) / pahbins_props(pp)%mpah
+
+            if (rate1 > 0d0) then
+                if (present(kmax)) then
+                    kmax = max(kmax, abs(rate1))
+                end if
+                rate2 = rate1 * y_dust(pp)
+                dydt_dust(pp) = dydt_dust(pp) - rate2
+                dydt_dust(pp+1) = dydt_dust(pp+1) + rate2
+            end if
+        end do pahloop
+    end subroutine Tielens2021_pah_coalescence_rate
+
+    subroutine pah_freezing_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        use dust_dynamics, only: grain_relative_velocity
+
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: pp, kk, ii, izion
+        integer :: dust_start, dust_end, index_dust
+        real(dp) :: v_rel, D_av, Z_single
+        real(dp) :: coll_factor, rate1, rate2, weight, p_stick
+        real(dp) :: temp_sigma, temp_L, reduced_mass, v_stick_thresh
+
+        if (dust_eq_test) then
+            temp_sigma = 5.67d5 * (dust_info%local_nH/1d2)**(-0.25d0)
+            temp_L = 10d0 * pc2cm * (dust_info%local_nH/1d2)**(-1d0/3d0)
+        else
+            temp_sigma = dust_info%local_sigma
+            temp_L = dust_info%local_dx
+        end if
+
+        pahloop: do pp = 1, dust_info%npah
+            dust_start = pahbins_props(pp)%dust_index_interact
+            if (dust_start <= 0) cycle
+            dust_end = min(dust_info%ndust, dust_start + pahbins_props(pp)%nd_bins - 1)
+
+            do kk = dust_start, dust_end
+                if (.not. dustbins_props(kk)%interact_pah) cycle
+                index_dust = kk + dust_info%npah
+                if (y_dust(index_dust) < 1d-40) cycle
+
+                ! 1. Relative velocity between PAH pp and dust bin kk.
+                v_rel = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
+                                               dust_info%local_nH,temp_sigma,dust_info%local_mu,temp_L,&
+                                               dustbins_props(kk)%asize_cm,pahbins_props(pp)%apah_cm,&
+                                               dustbins_props(kk)%sgrain,pahbins_props(pp)%spah,&
+                                               dustbins_props(kk)%mgrain,pahbins_props(pp)%mpah)
+
+                ! 2. Coulomb focusing averaged over PAH charge distribution,
+                !    using precomputed dust_info%Coulomb_factor for this grain.
+                D_av = 0d0
+                do ii = 1, pahbins_props(pp)%ncharge_states
+                    Z_single = pahbins_props(pp)%charge_states(ii)
+                    izion = nint(Z_single)
+                    izion = max(lbound(dust_info%Coulomb_factor,2), min(ubound(dust_info%Coulomb_factor,2), izion))
+
+                    weight = 0d0
+                    if (allocated(dust_info%fcharge_pah)) then
+                        if (size(dust_info%fcharge_pah,1) >= ii .and. size(dust_info%fcharge_pah,2) >= pp) then
+                            weight = dust_info%fcharge_pah(ii,pp)
+                        end if
+                    else if (ii == 1) then
+                        weight = 1d0
+                    end if
+                    D_av = D_av + weight * dust_info%Coulomb_factor(kk,izion)
+                end do
+                D_av = max(D_av,1d-10)
+
+                ! 3. Pair collision factor.
+                coll_factor = pi * (pahbins_props(pp)%apah_cm + dustbins_props(kk)%asize_cm)**2d0 * v_rel * D_av
+
+                ! 4. Collision rate from PAH-dust encounters, analogous to all-bin coagulation.
+                rate1 = coll_factor * y_dust(index_dust) / dustbins_props(kk)%mgrain
+                if (rate1 <= 0d0) cycle
+
+                ! 5. Maxwellian sticking probability using a threshold equivalent to E_col = 1 eV.
+                reduced_mass = 5d-1 * (pahbins_props(pp)%mpah * dustbins_props(kk)%mgrain) / &
+                           (pahbins_props(pp)%mpah + dustbins_props(kk)%mgrain)
+                v_stick_thresh = sqrt(2d0 * eV2erg / max(reduced_mass, 1d-99))
+                p_stick = sticking_probability_from_velocity(v_rel, v_stick_thresh)
+                rate1 = rate1 * p_stick
+                if (rate1 <= 0d0) cycle
+
+                if (present(kmax)) then
+                    kmax = max(kmax, abs(rate1))
+                end if
+
+                ! 6. Transfer PAH mass to the interacting carbonaceous dust bin.
+                rate2 = rate1 * y_dust(pp)
+                dydt_dust(pp) = dydt_dust(pp) - rate2
+                dydt_dust(index_dust) = dydt_dust(index_dust) + rate2
+            end do
+        end do pahloop
+
+    end subroutine pah_freezing_rate
+    
 end module dust_rates

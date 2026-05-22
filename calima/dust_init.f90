@@ -523,6 +523,9 @@ module dust_init
             if (pah_sputtering) then
                 npah_processes = npah_processes + 1
             end if
+            if (pah_coalescence) then
+                npah_processes = npah_processes + 1
+            end if
             if (pah_freezing) then
                 npah_processes = npah_processes + 1
             end if
@@ -545,10 +548,33 @@ module dust_init
                 if (pah_sputtering) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'sputtering'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .true.
+                    if (pah_sputtering_model.eq.'RM2026') then
+                        pah_processes_list(npah_processes)%comp_rate => pah_sputtering_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => pah_sputtering_rate
+                    end if
+                end if
+                if (pah_coalescence) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'coalescence'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .false.
+                    if (coalescence_model.eq.'Totton2012') then
+                        pah_processes_list(npah_processes)%comp_rate => Totton2012_pah_coalescence_rate
+                    else if (coalescence_model.eq.'Tielens2021') then
+                        pah_processes_list(npah_processes)%comp_rate => Tielens2021_pah_coalescence_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => Totton2012_pah_coalescence_rate
+                    end if
                 end if
                 if (pah_freezing) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'freezing'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .false.
+                    pah_processes_list(npah_processes)%comp_rate => pah_freezing_rate
                 end if
                 if (pah_desorption) then
                     npah_processes = npah_processes + 1
@@ -557,10 +583,24 @@ module dust_init
                 if (pah_cluster_evaporation) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'cluster_evaporation'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .false.
+                    if (cluster_evaporation_model.eq.'RM2026') then
+                        pah_processes_list(npah_processes)%comp_rate => pah_cluster_evaporation_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => pah_cluster_evaporation_rate
+                    end if
                 end if
                 if (pah_photolysis) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'photolysis'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .true.
+                    if (photolysis_model.eq.'RM2026') then
+                        pah_processes_list(npah_processes)%comp_rate => pah_photolysis_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => pah_photolysis_rate
+                    end if
                 end if
             end if
         end if
@@ -756,6 +796,7 @@ module dust_init
                 pahbins_props(ii)%mpah = Nc_to_mass(pahbins_props(ii)%nc)
                 pahbins_props(ii)%mpah_min = Nc_to_mass(pahbins_props(ii)%nc_min)
                 pahbins_props(ii)%mpah_max = Nc_to_mass(pahbins_props(ii)%nc_max)
+                pahbins_props(ii)%is_cluster = pah_is_cluster(ii)
 
                 ! 2.3 Set the PAH injection and destruction parameters
                 pahbins_props(ii)%AGB_cond_eff = fpah_inwind(ii)
@@ -1691,10 +1732,9 @@ module dust_init
                     pahbins_props(ipahbin)%sputtering_tab(0)%npts(1) = nT
 
                     if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d)
-                    allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 1:1))
+                    allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 1:2))
                     pahbins_props(ipahbin)%sputtering_tab(0)%tab1d = 0d0
                     if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d)
-                    allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d(1:nT, 1:1, 1:1))
 
                     if (allocated(T_grid)) deallocate(T_grid)
                     if (allocated(rate_grid)) deallocate(rate_grid)
@@ -1709,7 +1749,7 @@ module dust_init
                     do i = 1, nT
                         read(10, *) rate_grid(i)
                     end do
-                    pahbins_props(ipahbin)%sputtering_tab(0)%tab2d(1:nT, 1, 1) = rate_grid(1:nT)
+                    pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 2) = rate_grid(1:nT)
 
                     pahbins_props(ipahbin)%sputtering_tab(0)%initialised = .true.
                     close(10)
@@ -1754,12 +1794,11 @@ module dust_init
                 if (allocated(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d)) then
                     deallocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d)
                 end if
-                allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 1:1))
+                allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 1:2))
                 pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d = 0d0
                 if (allocated(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d)) then
                     deallocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d)
                 end if
-                allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d(1:nT, 1:1, 1:1))
 
                 ! Allocate temporary arrays for temperature and rate grids
                 if (allocated(T_grid)) deallocate(T_grid)
@@ -1777,7 +1816,7 @@ module dust_init
                 do i = 1, nT
                     read(10, *) rate_grid(i)
                 end do
-                pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d(1:nT, 1, 1) = rate_grid(1:nT)
+                pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 2) = rate_grid(1:nT)
                 pahbins_props(ipahbin)%sputtering_tab(iel)%initialised = .true.
 
                 close(10)
@@ -1866,9 +1905,6 @@ module dust_init
                 end do
             end do
             pahbins_props(ipahbin)%dissociation_tab%initialised = .true.
-
-
-
             close(111)
         end do
     end subroutine init_pah_dissociation_tables

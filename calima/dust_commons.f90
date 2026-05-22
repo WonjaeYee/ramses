@@ -69,11 +69,13 @@ module dust_commons
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
 
     ! ==== PAH modelling options (read from nml) ====
-    character(LEN=30)::sublimation_model='Galliano'         ! Model for UV sublimation of PAHs
+    character(LEN=30)::photolysis_model='RM2026'         ! Model for UV sublimation of PAHs
     character(LEN=30)::peh_attach_model='Berne'             ! Photo-electric model assumptions
     character(LEN=30)::coalescence_model='Totton2012'  ! PAH coalescence model
     character(LEN=30)::pah_h2_model='RM2026'           ! Model for the formation of H2 by PAHs
     character(LEN=30)::pah_growth_model='subgrid' ! Model for PAH growth by accretion of gas phase C atoms
+    character(LEN=30)::pah_sputtering_model='RM2026' ! Model for the sputtering of PAHs by ions and electrons
+    character(LEN=30)::cluster_evaporation_model='Montillaud2014' ! Model for the evaporation of PAH clusters into small PAHs
 
     ! ==== Rates and efficiency parameters (read from nml)====
     real(dp)::Sconstant=1.0d0   ! Sticking coefficient constant
@@ -121,6 +123,7 @@ module dust_commons
     real(dp),dimension(1:npah)::pah_SNdest_eff=0.1d0   ! PAH SN destruction efficiency
     real(dp),dimension(1:npah)::fpah_inwind=0.5d0 ! Fraction of AGB wind PAH mass in each PAH size bin
     integer,dimension(1:npah)::pah_ncharge_states=4 ! Number of charge states for PAHs in charging calculations
+    logical,dimension(1:npah)::pah_is_cluster=.false. ! Whether the PAH bin corresponds to a cluster of PAHs (Def: false, i.e. all bins correspond to single PAH molecules)
     
     ! ==== ISM depletion factors on dust (read from nml) ====
     ! These values are used for starting isolated sims and tests
