@@ -121,7 +121,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !
    ! We use a slightly modified method of Anninos et al. (1997).
    !-------------------------------------------------------------------------
+#ifdef CALIMA
    use dust_commons, only: icell_call, first_time_call
+#endif
    implicit none
    real(dp):: aexp
    real(dp),dimension(1:nvector):: T2
@@ -996,12 +998,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
+! [WJ] I'm not sure whether we can simply branch like this:
+#ifdef CALIMA
          h2_first_cooling_rate = saved_cooling_rates(8)
+#endif
          call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
+#ifdef CALIMA
          h2_second_cooling_rate = saved_cooling_rates(8)
          h2_rate_prime = (h2_first_cooling_rate - h2_second_cooling_rate) / (2.d-5*TK)
+#endif
          ! if (h2_prime_before.eq.0d0) then
          !    h2_prime_before = h2_rate_prime
          ! elseif (abs(h2_rate_prime -h2_prime_before)/h2_prime_before.gt.0.1d0 .and. h2_prime_before.gt.1d-24) then

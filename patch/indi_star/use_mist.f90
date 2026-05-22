@@ -47,7 +47,7 @@ module use_mist
     !! Main array of sample data from MIST.
     !! Order of axes: (properties, age, mass, vvc, afe, feh)
 
-    integer,allocatable,dimension(:,:)::idx_table
+    ! integer,allocatable,dimension(:,:)::idx_table
     !! Table to store parameter indices
     ! ... probably become problem if list of sink is dynamic
     ! in this new code, not yet used.
@@ -326,11 +326,12 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
 
     ! if (myid==1) then
     !     write(*,*) 'this is get_stellar_properties'
-    !     write(*,*) '    idx1:', idx1
-    !     write(*,*) '    idx2:', idx2
-    !     write(*,*) '    idx3:', idx3
-    !     write(*,*) 'idx4_pre:', idx4_pre
-    !     write(*,*) 'idx4_now:', idx4_now
+    !     write(*,*) ' z, idx_z:', z, idx_z
+    !     write(*,*) ' a, idx_a:', a, idx_a
+    !     write(*,*) ' v, idx_v:', v, idx_v
+    !     write(*,*) ' m, idx_m:', m, idx_m
+    !     write(*,*) 'idx_t_pre:', idx_t_pre
+    !     write(*,*) 'idx_t_now:', idx_t_now
     ! end if
 
     if ((0 < idx_t_now).and.(idx_t_now < num_t)) then
