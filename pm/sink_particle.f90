@@ -998,6 +998,9 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   use rtz_module
   use metal_yields_module
 #endif
+#ifdef CALIMA
+  use dust_commons, only: dustbins_props
+#endif
 #ifdef INDIVIDUAL_SINK_STARS
   use imf_module
   use use_mist, only: get_stellar_properties, get_stellar_lifetime
@@ -1059,6 +1062,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   logical::is_hn, is_sn, is_central_cloud_particle
   integer::counter, iElement, pre_accretion_evolution_flag
   real(dp)::star_met_fe
+  integer::ielem,jelem
+  real(dp)::fchem
 
   ! strict initialization 
   injected_mass = 0d0
@@ -1252,7 +1257,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
               delta_mass_new(isink)=delta_mass_new(isink)+m_acc
            end if
 
-           ! TODO: if MS star, m_acc=0.0
+           ! if MS star, m_acc=0.0
+           ! `dMsink_overdt` is set to be zero below
 
            m_acc=m_acc+m_acc_smbh
            if(unew(indp(j,ind),1).le.m_acc/vol_loc) then
@@ -1281,7 +1287,42 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
               if (ivar.lt.imetal+NMETALS) then
                  sink_metallicity_new(isink,ivar-imetal+1) = sink_metallicity_new(isink,ivar-imetal+1) + m_acc*uold(indp(j,ind),ivar)/d
               end if
-              !TODO(code) deal with CO here
+#endif
+#ifdef CO      
+              ! CO -> break down -> accreted to sink as metallicity (C and O)
+              if (ivar.eq.iCO) then
+                 ! C
+                 ielem = elements(6)%u_hydro_idx-imetal+1
+                 fchem = elements(6)%atomic_mass / (elements(6)%atomic_mass+elements(8)%atomic_mass)
+                 sink_metallicity_new(isink,ielem) = sink_metallicity_new(isink,ielem) + m_acc*uold(indp(j,ind),ivar)/d * fchem
+                 ! O
+                 ielem = elements(8)%u_hydro_idx-imetal+1
+                 fchem = elements(8)%atomic_mass / (elements(6)%atomic_mass+elements(8)%atomic_mass)
+                 sink_metallicity_new(isink,ielem) = sink_metallicity_new(isink,ielem) + m_acc*uold(indp(j,ind),ivar)/d * fchem
+              end if
+#endif
+#ifdef CALIMA
+              ! Dusts -> break down -> accreted to sink as metallicity
+              ! number of elements is arbitrary, so loop over using `dustbin_props`
+              if (ivar.ge.idust .and. ivar.lt.idust+ndust) then
+                 ! if my understanding is correct,
+                 ! `ivar` should be same to `dustbins_props(ivar-idust+1)%u_hydro_idx`
+                 do jelem=1,dustbins_props(ivar-idust+1)%nelements
+                    ielem = dustbins_props(ivar-idust+1)%el_index(jelem)
+                    ielem = elements(ielem)%u_hydro_idx-imetal+1
+                    fchem = dustbins_props(ivar-idust+1)%el_mfractions(jelem)
+                    sink_metallicity_new(isink,ielem) = sink_metallicity_new(isink,ielem) + m_acc*uold(indp(j,ind), ivar)/d * fchem
+                 end do
+              end if
+              
+              ! PAHs -> break down -> accreted to sink as metallicity (only C)
+              ! PAHs are consisted of H and C, but to keep it simple (and since the mass is dominated by C)
+              ! dump only as C
+              if (ivar.ge.ipah .and. ivar.lt.ipah+npah) then
+                 ! C
+                 ielem = elements(6)%u_hydro_idx-imetal+1
+                 sink_metallicity_new(isink,ielem) = sink_metallicity_new(isink,ielem) + m_acc*uold(indp(j,ind), ivar)/d
+              end if
 #endif
 #endif
               unew(indp(j,ind),ivar)=unew(indp(j,ind),ivar)-m_acc*uold(indp(j,ind),ivar)/d/vol_loc
@@ -1523,6 +1564,10 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                           & ((loc_metal_yield(iElement) / (scale_m/M_sun)) * (weight/volume) / vol_loc)
                  end do
                  ! if(myid==3) write(*,*) ' after dumping, unew:', unew(indp(j,ind), imetal:imetal+9)
+                 
+                 ! TODO: Dust seed
+                 ! at this moment, star contributes nothing on dusts
+                 ! so no need to update `unew` for dust
 
                  ! Make sure that the passive scalars maintain the same fractions
                  ! do ivar = iIons,nvar
