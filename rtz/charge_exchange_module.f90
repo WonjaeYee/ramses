@@ -25,7 +25,7 @@ SUBROUTINE load_ct_rates()
   ! Load charge exchange file
   open(newunit=unit_num, file=trim(data_dir)//'/charge_transfer/ct_ionization.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
-      write(*,*) 'Error: Could not open CT Ionization file'
+      if(myid==1) write(*,*) 'Error: Could not open CT Ionization file'
       return
   end if
 
@@ -49,7 +49,7 @@ SUBROUTINE load_ct_rates()
   ! Load Recombination
   open(newunit=unit_num, file=trim(data_dir)//'/charge_transfer/ct_recombination.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
-      write(*,*) 'Error: Could not open CT Recombination file'
+      if(myid==1) write(*,*) 'Error: Could not open CT Recombination file'
       return
   end if
 

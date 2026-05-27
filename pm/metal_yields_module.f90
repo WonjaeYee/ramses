@@ -45,7 +45,7 @@ SUBROUTINE initialize_SN_yields()
   ! Load Portinari yields file
   open(newunit=unit_num, file=trim(data_dir)//'/yields/Portinari_yields.tsv', status='old', action='read', iostat=ios)
   if (ios /= 0) then
-      write(*,*) 'Error: Could not open Portinari yields file'
+      if(myid==1) write(*,*) 'Error: Could not open Portinari yields file'
       return
   end if
 
@@ -70,7 +70,7 @@ SUBROUTINE initialize_SN_yields()
   ! Load Pop III SNII Yields
   open(newunit=unit_num, file=trim(data_dir)//'/yields/Nomoto2013_PopIII_SNII.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
-      write(*,*) 'Error: Could not open Pop III SNII yields file'
+      if(myid==1) write(*,*) 'Error: Could not open Pop III SNII yields file'
       return
   end if
 
@@ -81,7 +81,7 @@ SUBROUTINE initialize_SN_yields()
   ! Load Pop III HN Yields
   open(newunit=unit_num, file=trim(data_dir)//'/yields/Nomoto2013_PopIII_HN.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
-      write(*,*) 'Error: Could not open Pop III SN yields file'
+      if(myid==1) write(*,*) 'Error: Could not open Pop III SN yields file'
       return
   end if
 
@@ -92,7 +92,7 @@ SUBROUTINE initialize_SN_yields()
   ! Load Pop III PISN Yields
   open(newunit=unit_num, file=trim(data_dir)//'/yields/Nomoto2013_PopIII_PISN.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
-      write(*,*) 'Error: Could not open Pop III PISN yields file'
+      if(myid==1) write(*,*) 'Error: Could not open Pop III PISN yields file'
       return
   end if
 

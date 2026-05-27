@@ -39,7 +39,7 @@ subroutine load_UVB_data()
     ! Load redshifts
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/redshifts.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Redshifts UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Redshifts UVB file'
         return
     end if
     
@@ -52,7 +52,7 @@ subroutine load_UVB_data()
     ! Hydrogen photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/hydrogen_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Hydrogen UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Hydrogen UVB file'
         return
     end if
     
@@ -65,7 +65,7 @@ subroutine load_UVB_data()
     ! Hydrogen photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/hydrogen_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Hydrogen UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Hydrogen UVB heat file'
         return
     end if
     
@@ -78,7 +78,7 @@ subroutine load_UVB_data()
     ! Helium photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/helium_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Helium UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Helium UVB file'
         return
     end if
     
@@ -91,7 +91,7 @@ subroutine load_UVB_data()
     ! Helium photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/helium_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Helium UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Helium UVB heat file'
         return
     end if
     
@@ -104,7 +104,7 @@ subroutine load_UVB_data()
     ! Carbon photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/carbon_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Carbon UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Carbon UVB file'
         return
     end if
     
@@ -117,7 +117,7 @@ subroutine load_UVB_data()
     ! Carbon photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/carbon_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Carbon UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Carbon UVB heat file'
         return
     end if
     
@@ -130,7 +130,7 @@ subroutine load_UVB_data()
     ! Nitrogen photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/nitrogen_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Nitrogen UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Nitrogen UVB file'
         return
     end if
     
@@ -143,7 +143,7 @@ subroutine load_UVB_data()
     ! Nitrogen photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/nitrogen_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Nitrogen UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Nitrogen UVB heat file'
         return
     end if
     
@@ -156,7 +156,7 @@ subroutine load_UVB_data()
     ! Oxygen photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/oxygen_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Oxygen UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Oxygen UVB file'
         return
     end if
     
@@ -169,7 +169,7 @@ subroutine load_UVB_data()
     ! Oxygen photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/oxygen_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Oxygen UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Oxygen UVB heat file'
         return
     end if
     
@@ -182,7 +182,7 @@ subroutine load_UVB_data()
     ! Neon photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/neon_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Neon UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Neon UVB file'
         return
     end if
     
@@ -195,7 +195,7 @@ subroutine load_UVB_data()
     ! Neon photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/neon_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Neon UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Neon UVB heat file'
         return
     end if
     
@@ -208,7 +208,7 @@ subroutine load_UVB_data()
     ! Magnesium photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/magnesium_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Magnesium UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Magnesium UVB file'
         return
     end if
     
@@ -221,7 +221,7 @@ subroutine load_UVB_data()
     ! Magnesium photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/magnesium_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Magnesium UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Magnesium UVB heat file'
         return
     end if
     
@@ -234,7 +234,7 @@ subroutine load_UVB_data()
     ! Silicon photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/silicon_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Silicon UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Silicon UVB file'
         return
     end if
     
@@ -247,7 +247,7 @@ subroutine load_UVB_data()
     ! Silicon photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/silicon_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Silicon UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Silicon UVB heat file'
         return
     end if
     
@@ -260,7 +260,7 @@ subroutine load_UVB_data()
     ! Sulfur photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/sulfur_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Sulfur UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Sulfur UVB file'
         return
     end if
     
@@ -273,7 +273,7 @@ subroutine load_UVB_data()
     ! Sulfur photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/sulfur_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Sulfur UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Sulfur UVB heat file'
         return
     end if
     
@@ -286,7 +286,7 @@ subroutine load_UVB_data()
     ! Iron photoionization
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/iron_pi.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Iron UVB file'
+        if(myid==1) write(*,*) 'Error: Could not open Iron UVB file'
         return
     end if
     
@@ -299,7 +299,7 @@ subroutine load_UVB_data()
     ! Iron photoheating
     open(newunit=unit_num, file=trim(data_dir)//'/HM12/iron_ph.dat', status='old', action='read', iostat=ios)
     if (ios /= 0) then
-        write(*,*) 'Error: Could not open Iron UVB heat file'
+        if(myid==1) write(*,*) 'Error: Could not open Iron UVB heat file'
         return
     end if
     
