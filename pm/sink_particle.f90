@@ -1232,48 +1232,48 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
               end if
            end if
 
-           m_acc     =max(m_acc,0.0_dp)
-           m_acc_smbh=max(m_acc_smbh,0.0_dp)
+            m_acc     =max(m_acc,0.0_dp)
+            m_acc_smbh=max(m_acc_smbh,0.0_dp)
 
-           ! Accreted relative center of mass
-           x_acc(1:ndim)=(m_acc+m_acc_smbh)*r_rel(1:ndim)
+            if(unew(indp(j,ind),1).le.(m_acc+m_acc_smbh)/vol_loc) then
+             ! write(*,*) 'in `accrete_sink`, too much of accretion:'
+             ! write(*,*) 'myid:', myid
+             ! write(*,*) 'indp(j,ind):', indp(j,ind)
+             ! write(*,*) 'unew:', unew(indp(j,ind),1)
+             ! write(*,*) 'm_acc:', m_acc+m_acc_smbh
+             ! write(*,*) 'vol_loc:', vol_loc
 
-           ! Accreted relative momentum
-           p_acc(1:ndim)=(m_acc+m_acc_smbh)*v_rel(1:ndim)
+             ! temporal trial
+             ! if the sink tries to accrete more than the cell mass, simply make no accretion
+             ! ... this should be sophisticated more
+             m_acc = 0.d0
+             m_acc_smbh = 0.d0
+            end if
 
-           ! Accreted relative angular momentum
-           l_acc(1:ndim)=(m_acc+m_acc_smbh)*cross(r_rel(1:ndim),v_rel(1:ndim))
+            ! Accreted relative center of mass
+            x_acc(1:ndim)=(m_acc+m_acc_smbh)*r_rel(1:ndim)
 
-           ! Add accreted properties to sink variables
-           msink_new(isink)=msink_new(isink)+m_acc
-           msmbh_new(isink)=msmbh_new(isink)+m_acc_smbh
-           dmfsink_new(isink)=dmfsink_new(isink)+m_acc
-           xsink_new(isink,1:ndim)=xsink_new(isink,1:ndim)+x_acc(1:ndim)
-           vsink_new(isink,1:ndim)=vsink_new(isink,1:ndim)+p_acc(1:ndim)
-           lsink_new(isink,1:ndim)=lsink_new(isink,1:ndim)+l_acc(1:ndim)
-           if(mass_smbh_seed>0.0)then
-              delta_mass_new(isink)=delta_mass_new(isink)+m_acc_smbh
-           else
-              delta_mass_new(isink)=delta_mass_new(isink)+m_acc
-           end if
+            ! Accreted relative momentum
+            p_acc(1:ndim)=(m_acc+m_acc_smbh)*v_rel(1:ndim)
 
-           ! if MS star, m_acc=0.0
-           ! `dMsink_overdt` is set to be zero below
+            ! Accreted relative angular momentum
+            l_acc(1:ndim)=(m_acc+m_acc_smbh)*cross(r_rel(1:ndim),v_rel(1:ndim))
 
-           m_acc=m_acc+m_acc_smbh
-           if(unew(indp(j,ind),1).le.m_acc/vol_loc) then
-            ! write(*,*) 'in `accrete_sink`, too much of accretion:'
-            ! write(*,*) 'myid:', myid
-            ! write(*,*) 'indp(j,ind):', indp(j,ind)
-            ! write(*,*) 'unew:', unew(indp(j,ind),1)
-            ! write(*,*) 'm_acc:', m_acc
-            ! write(*,*) 'vol_loc:', vol_loc
+            ! Add accreted properties to sink variables
+            msink_new(isink)=msink_new(isink)+m_acc
+            msmbh_new(isink)=msmbh_new(isink)+m_acc_smbh
+            dmfsink_new(isink)=dmfsink_new(isink)+m_acc
+            xsink_new(isink,1:ndim)=xsink_new(isink,1:ndim)+x_acc(1:ndim)
+            vsink_new(isink,1:ndim)=vsink_new(isink,1:ndim)+p_acc(1:ndim)
+            lsink_new(isink,1:ndim)=lsink_new(isink,1:ndim)+l_acc(1:ndim)
+            if(mass_smbh_seed>0.0)then
+               delta_mass_new(isink)=delta_mass_new(isink)+m_acc_smbh
+            else
+               delta_mass_new(isink)=delta_mass_new(isink)+m_acc
+            end if
 
-            ! temporal trial
-            ! if the sink tries to accrete more than the cell mass, simply make no accretion
-            ! ... this should be sophisticated more
-            m_acc = 0.0d0
-           end if
+            m_acc=m_acc+m_acc_smbh
+
            ! Accrete mass, momentum and gas total energy
            unew(indp(j,ind),1)=unew(indp(j,ind),1)-m_acc/vol_loc
            unew(indp(j,ind),2:ndim+1)=unew(indp(j,ind),2:ndim+1)-m_acc*vv(1:ndim)/vol_loc
@@ -1398,22 +1398,24 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                      if (star_age_Myr.gt.ms_lifetime) then
                         ! Convert metallicity to format needed by portinari
                         star_met = (10.d0**(star_met - 8.69d0)) * 0.02d0
-                        ! Trigger a SN
-                        is_sn = .true.
-
-                        ! Get the energy of the SN -- defaulted to 10^51 ergs for Pop II for now
-                        sn_e = 1.d51
 
                         ! We only explode stars with mass > 8 Msol
                         if (msink_actual(isink).ge.8.d0) then 
-                        ! Now get the yields
-                        counter = 0
-                        do iElement = 1,27
-                           if (elements(iElement)%atomic_number .gt. 0) then
-                              counter = counter + 1
-                              loc_metal_yield(counter) = get_portinari_ejecta_mass(star_met, msink_actual(isink) * scale_m/M_sun, iElement)
-                           end if
-                        end do
+
+                           ! Trigger a SN
+                           is_sn = .true.
+
+                           ! Get the energy of the SN -- defaulted to 10^51 ergs for Pop II for now
+                           sn_e = 1.d51
+
+                           ! Now get the yields
+                           counter = 0
+                           do iElement = 1,27
+                              if (elements(iElement)%atomic_number .gt. 0) then
+                                 counter = counter + 1
+                                 loc_metal_yield(counter) = get_portinari_ejecta_mass(star_met, msink_actual(isink) * scale_m/M_sun, iElement)
+                              end if
+                           end do
                         end if
 #ifdef USE_ONLY_MIST
                         loc_metal_yield = 0.0
