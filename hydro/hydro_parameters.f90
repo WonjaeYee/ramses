@@ -147,7 +147,9 @@ module hydro_parameters
   integer::ivirial1=nhydro+1
   integer::ivirial2=nhydro+1
   integer::inener=nhydro+1
+#ifdef CALIMA
   integer::idust=nhydro+1
   integer::ipah=nhydro+1
+#endif
 
 end module hydro_parameters

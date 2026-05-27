@@ -1021,6 +1021,28 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                                                                ! New T2 value
          dT2   = MAX(T2_min_fix &
                      ,T2(icell)+rate*ddt(icell)/(1.d0-dRate*ddt(icell)))
+! initialization problem seems to happen here
+!          dT2 = T2(icell)+rate*ddt(icell)/(1.d0-dRate*ddt(icell))
+!          if (dT2 <= T2_min_fix .and. loopcnt>=100000) then
+!             write(*,*) '[WJ] Too small `dT2`'
+!             write(*,*) '          dT2:', dT2
+!             write(*,*) '    T2(icell): ', T2(icell)
+!             write(*,*) '   ddt(icell): ', ddt(icell)
+!             write(*,*) '         rate: ', rate
+!             write(*,*) '        dRate: ', dRate
+!             write(*,*) '       X_nHkb: ', X_nHkb
+!             write(*,*) '        Crate: ', Crate
+!             write(*,*) '        dCdT2: ', dCdT2
+!             write(*,*) '          rho: ', rho
+!             write(*,*) '           mH: ', mH
+!             write(*,*) '           kB: ', kB
+!             write(*,*) '  Crate_prime: ', Crate_prime
+!             write(*,*) 'Crate_prime_a: ', Crate_prime_a
+!             write(*,*) 'Crate_prime_b: ', Crate_prime_b
+!             write(*,*) '           TK: ', TK
+!          end if
+!          dT2 = max(T2_min_fix, dT2)
+!       
          dUU   = MAX(dUU, ABS(dT2-T2(icell))) / (T2(icell)+T_MIN) &
                            *one_over_T_FRAC
       

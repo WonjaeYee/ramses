@@ -38,6 +38,33 @@ module hydro_parameters
   ! additional vars to store magnetic field on the right cell face
   integer,parameter::nvar_all=nvar+3
 
+  ! Global parameters that need to be use by RTZ and CALIMA
+  integer, parameter :: n_elements = 27
+#ifdef CALIMA
+#ifndef NDUST
+#error CALIMA requires NDUST to be defined and > 0
+#endif
+#ifndef NPAH
+#error CALIMA requires NPAH to be defined and > 0
+#endif
+#if NDUST <= 0
+#error CALIMA requires NDUST to be defined and > 0
+#endif
+#if NPAH <= 0
+#error CALIMA requires NPAH to be defined and > 0
+#endif
+#ifdef NDCHEMTYPE
+  integer, parameter :: ndchemtype = NDCHEMTYPE
+#else
+  integer, parameter :: ndchemtype = 1
+#endif
+  integer, parameter :: ndust = NDUST
+  integer, parameter :: npah = NPAH
+#endif
+
+  ! Where the tables for RTZ and CALIMA are stored
+  character(LEN=256)::data_dir='../data/'
+
   ! Size of hydro kernel
   integer,parameter::iu1=-1
   integer,parameter::iu2=+4
@@ -91,6 +118,7 @@ module hydro_parameters
 #endif
 #if NVAR>NHYDRO+NENER
   real(dp),dimension(1:NVAR-NHYDRO-NENER)::err_grad_var=-1
+  real(dp),dimension(1:NVAR-NHYDRO-NENER)::err_grad_floor=0
 #endif
   real(dp),dimension(1:MAXLEVEL)::jeans_refine=-1
   real(dp),dimension(1:MAXLEVEL)::strom_refine=-1
@@ -148,5 +176,9 @@ module hydro_parameters
   integer::ivirial1=nhydro+1
   integer::ivirial2=nhydro+1
   integer::inener=nhydro+1
+#ifdef CALIMA
+  integer::idust=nhydro+1
+  integer::ipah=nhydro+1
+#endif
 
 end module hydro_parameters
