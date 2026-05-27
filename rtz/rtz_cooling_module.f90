@@ -1029,7 +1029,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
          X_nHkb = 1.d0/(1.5d0 * (rho/mH) * kB)
          rate  = X_nHkb*Crate
-         dRate = -X_nHkb*dCdT2                         ! dRate/dT2
+         dRate = X_nHkb*dCdT2                         ! dRate/dT2 
                                                       ! 1st order dt constr
          dUU   = ABS(MAX(T2_min_fix, T2(icell)+rate*ddt(icell))-T2(icell))
                                                                ! New T2 value
