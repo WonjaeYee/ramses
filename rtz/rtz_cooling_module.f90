@@ -1059,7 +1059,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 !       
          dUU   = MAX(dUU, ABS(dT2-T2(icell))) / (T2(icell)+T_MIN) &
                            *one_over_T_FRAC
-      
+         
+         ! 2026.05.29
+         dUU = max(dUU, abs(dRate*ddt(icell)/one_over_T_FRAC))
+         
          fracMax=MAX(fracMax,dUU)
          if(dUU .gt. 1.) then                                     ! 10% rule
             !  write(*,*) "Broken Temperature", T2(icell), nH(icell), dT2, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0), Crate, loopcnt, dUU
