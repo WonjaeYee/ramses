@@ -1056,7 +1056,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                            *one_over_T_FRAC
          
          ! 2026.05.29
-         dUU = max(dUU, abs(dRate*ddt(icell)*one_over_T_FRAC))
+         dUU = max(dUU, abs(dRate*ddt(icell)/one_over_T_FRAC))
          
          fracMax=MAX(fracMax,dUU)
          if(dUU .gt. 1.) then                                     ! 10% rule
