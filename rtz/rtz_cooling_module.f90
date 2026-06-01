@@ -1056,7 +1056,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                            *one_over_T_FRAC
          
          ! 2026.05.29
-         dUU = max(dUU, abs(dRate*ddt(icell)/one_over_T_FRAC))
+         dUU = max(dUU, abs(dRate*ddt(icell)*one_over_T_FRAC))
          
          fracMax=MAX(fracMax,dUU)
          if(dUU .gt. 1.) then                                     ! 10% rule
@@ -1247,11 +1247,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             de_CO = beta_CO(total_G0*f_shd_CO, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
-            if (de_CO * ddt(icell) < 1.d-6) then
-               nCO_new = (nCO(icell) + cr_CO * ddt(icell)) / (1.d0 + de_CO * ddt(icell))
-            else
-               nCO_new = (cr_CO / de_CO) + (nCO(icell) - (cr_CO / de_CO)) * exp(-de_CO * ddt(icell))
-            end if
+            nCO_new = (cr_CO / (de_CO + 1d-100)) + (nCO(icell) - (cr_CO / (de_CO + 1d-100))) * exp(-de_CO * ddt(icell))
 
             ! Tentative update
             delta_CO = nCO_new - nCO(icell)
@@ -1586,12 +1582,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                !/////////////////////////
                !//       Update        //
                !/////////////////////////
-               if (de * ddt(icell) < 1.d-6) then
-                  dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
-               else
-                  x_eq = cr / de
-                  dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
-               end if
+               ! dXion(iElement,iIon) = (cr*ddt(icell) + dXion(iElement,iIon))/(1.d0 + de*ddt(icell))
+               x_eq = cr / (de + 1d-100) 
+               dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
                ! Get the new electron fraction
@@ -1681,6 +1674,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       mu = getMu_RTZ(ne, nElement_dep, dXion)
 #endif
       if(rt_isTconst)then
+#ifdef CO
+         mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
+         mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
          dT2 = rt_Tconst/mu
          TK = rt_Tconst
       else
