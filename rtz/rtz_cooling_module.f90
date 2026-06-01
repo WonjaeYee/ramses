@@ -24,11 +24,18 @@ module rtz_cooling_module
    private   ! default
    public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix
 
-   real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
-   real(dp),parameter::T_min=0.1, T_frac=0.1
-   real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
-   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
-   real(dp),parameter::Fp_frac=0.5
+  real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
+  real(dp),parameter::T_min=0.1, T_frac=0.1
+  real(dp),parameter::x_min=1d-20, x_fm=1d-7, x_frac=0.1
+  real(dp),parameter::Np_min=1d-13, Np_frac=0.2
+  real(dp),parameter::Fp_frac=0.5
+  
+  ! temporal brutal force trial
+  ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
+  ! real(dp),parameter::T_min=0.1, T_frac=10.0
+  ! real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=10.0
+  ! real(dp),parameter::Np_min=1d-13, Np_frac=2.0
+  ! real(dp),parameter::Fp_frac=5.0
 
    CONTAINS
 
@@ -1610,7 +1617,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dUU = dUU * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
                   if(dUU .gt. 1.) then
-                     !write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
+                     ! write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
                      code=8 !TODO(code) update this code for each ion
@@ -1623,7 +1630,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
                   if(dUU .gt. 1.) then
-                     !write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
+                     ! write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
                      print_neInit = neInit
