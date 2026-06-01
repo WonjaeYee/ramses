@@ -707,11 +707,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          Zsolar = 1.d-40
          nElement_dep(1:n_elements) = nElement(1:n_elements,icell)
       else
-         Zsolar = 12.d0 + log10((nElement(8, icell)+1.d-20)/(nElement(1, icell)+1.d-20))
+         Zsolar = 12.d0 + log10((nElement(8, icell)+nCO(icell)+1.d-20)/(nElement(1, icell)+1.d-20))
          dust_to_gas_mass_ratio_over_mw = dust_to_gas_scale_RR14(Zsolar)
          Zsolar = Zsolar - 8.69d0
          do iElement=1,n_elements
-            nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw))
+            if (iElement .eq. 6 .or. iElement .eq. 8) then
+               nElement_dep(iElement) = (nElement(iElement,icell) + nCO(icell)) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw)) - nCO(icell)
+            else
+               nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw))
+            end if
          end do
       end if
 #else
@@ -726,7 +730,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       rho_dust_tot = rho_dust_tot + sum(rho_pah(icell,1:npah))
       rho = rho + rho_dust_tot
       dust_to_gas_mass_ratio_over_mw = rho_dust_tot / rho * GD_solar
-      Zsolar = 12.d0 + log10((nElement(8, icell)+1.d-20)/(nElement(1, icell)+1.d-20))
+      Zsolar = 12.d0 + log10((nElement(8, icell)+nCO(icell)+1.d-20)/(nElement(1, icell)+1.d-20))
       Zsolar = Zsolar - 8.69d0
       do iElement=1,n_elements
          nElement_dep(iElement) = nElement(iElement,icell)
@@ -769,10 +773,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       f_shd = 1.d0
       f_shd_CO = 1.d0
       if (isH2_rtz) then
-         f_shd = comp_SH2(nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(nElement_dep(1)*dXion(1,1), nElement_dep(1)*dXion(1,3), dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
       end if
       if (isCO_rtz) then
-         f_shd_CO = comp_SCO(nCO(icell), nElement_dep(1)*dXion(1,3), dx_SS_H2)
+         f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
       end if
 
 #ifdef RT

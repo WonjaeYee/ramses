@@ -1620,7 +1620,7 @@ FUNCTION dust_gas_collisional_cooling(T, G0, xH2, aexp, nH, f_dg) result(rate)
     dust_hc_const = 1.0d-33 + ((3.8d-33 - 1.0d-33) * max(min(xH2,1.d0),0.d0))
 
     T_dust = 16.4d0 * ((1.7d0 * G0)**(1.d0/6.d0))
-    T_dust = max( T_dust, 2.725d0 * ( (1.d0/aexp) - 1.d0 ) ) ! Limit dust temp minimum to CMB temp
+    T_dust = max( T_dust, 2.725d0 / aexp ) ! Limit dust temp minimum to CMB temp
 
     rate = dust_hc_const * sqrt(T) * (T - T_dust) * ( 1.d0 - ( 0.8d0 * safe_exp(-75.d0/T) ) )
     ! rate = 1.5d0 * rate * nH * nH * f_dg
