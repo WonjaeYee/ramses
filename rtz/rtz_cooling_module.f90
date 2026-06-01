@@ -1200,15 +1200,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dXion(1,3) = 2.d0 * min(max(xH2_loc,x_MIN),0.5d0)
 
          ! Check for convergence
-         dUU = ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
-         dUU = dUU * one_over_x_FRAC
-         fracMax=MAX(fracMax,dUU)
-         if(dUU .gt. 1.d0) then
-            !  write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
-            dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-            dt_rec = min(dt_rec,0.5d0*ddt(icell))
-            code=6 !TODO(code) update this code for each ion
-            RETURN
+         if (xion(1,3,icell).gt.1.d-10) then 
+            dUU = ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
+            dUU = dUU * one_over_x_FRAC
+            fracMax=MAX(fracMax,dUU)
+            if(dUU .gt. 1.d0) then
+               ! write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
+               dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+               dt_rec = min(dt_rec,0.5d0*ddt(icell))
+               code=6 !TODO(code) update this code for each ion
+               RETURN
+            end if
          end if
 
          ! Update mu and T
@@ -1304,16 +1306,19 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             end if
 
             ! Check for convergence
-            dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-            dUU = dUU * one_over_x_FRAC
-            fracMax=MAX(fracMax,dUU)
-            if(dUU .gt. 1.d0) then
-               !  write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-               dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-               dt_rec = min(dt_rec,0.5d0*ddt(icell))
-               code=7 !TODO(code) update this code for each ion
-               RETURN
+            if (nCO(icell).gt.1.d-10) then 
+               dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
+               dUU = dUU * one_over_x_FRAC
+               fracMax=MAX(fracMax,dUU)
+               if(dUU .gt. 1.d0) then
+                  ! write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
+                  dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                  dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                  code=7 !TODO(code) update this code for each ion
+                  RETURN
+               end if
             end if
+
 
             ! Update species number densities --> need to fix this in case other species fail
             dCO = nCO_new
@@ -1594,29 +1599,33 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                end if
 
                ! Check for convergence -- Fractional change in ion
-               dUU = ABS((dXion(iElement,iIon)-xion(iElement,iIon,icell))/(xion(iElement,iIon,icell)+x_FM))
-               dUU = dUU * one_over_x_FRAC
-               fracMax=MAX(fracMax,dUU)
-               if(dUU .gt. 1.) then
-                  !  write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
-                  dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-                  dt_rec = min(dt_rec,0.5d0*ddt(icell))
-                  code=8 !TODO(code) update this code for each ion
-                  RETURN
+               if (xion(iElement,iIon,icell).gt.1.d-10) then 
+                  dUU = ABS((dXion(iElement,iIon)-xion(iElement,iIon,icell))/(xion(iElement,iIon,icell)+x_FM))
+                  dUU = dUU * one_over_x_FRAC
+                  fracMax=MAX(fracMax,dUU)
+                  if(dUU .gt. 1.) then
+                     ! write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
+                     dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                     dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                     code=8 !TODO(code) update this code for each ion
+                     RETURN
+                  end if
                end if
 
                ! Check for convergence -- Fractional change in electrons
-               dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
-               fracMax=MAX(fracMax,dUU)
-               if(dUU .gt. 1.) then
-                  !  write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
-                  dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-                  dt_rec = min(dt_rec,0.5d0*ddt(icell))
-                  print_neInit = neInit
-                  print_ne = ne
-                  print_nElement_dep = nElement_dep
-                  code=9
-                  RETURN
+               if (neInit.gt.1.d-10) then 
+                  dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
+                  fracMax=MAX(fracMax,dUU)
+                  if(dUU .gt. 1.) then
+                     ! write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
+                     dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                     dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                     print_neInit = neInit
+                     print_ne = ne
+                     print_nElement_dep = nElement_dep
+                     code=9
+                     RETURN
+                  end if
                end if
 
             end do ! END ION LOOP
