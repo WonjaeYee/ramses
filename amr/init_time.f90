@@ -12,6 +12,7 @@ subroutine init_time
   use cosmic_ray_ionization_module, only: initialize_cr_rates
   use photoionization_UVB_module, only: load_UVB_data, update_UVB
   use charge_exchange_module, only: load_ct_rates
+  use recombination_module, only: load_recombination_data
   use rtz_coolrates_module, only: initialize_high_temperature_metal_cooling, initialize_fine_structure_tables
   use metal_yields_module, only: initialize_SN_yields
   use molecules_module, only: initialize_SCO_table
@@ -341,6 +342,9 @@ subroutine init_time
 
   !Initialize the charge transfer rates
   call load_ct_rates()
+
+  ! Initialize the Cloudy radiative recombination rates
+  call load_recombination_data()
 
   ! Initialize high temperature cooling tables
   call initialize_high_temperature_metal_cooling()
