@@ -26,7 +26,7 @@ module rtz_cooling_module
 
   real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
   real(dp),parameter::T_min=0.1, T_frac=0.1
-  real(dp),parameter::x_min=1d-20, x_fm=1d-7, x_frac=0.1
+  real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
   real(dp),parameter::Fp_frac=0.5
   
@@ -1254,7 +1254,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             de_CO = beta_CO(total_G0*f_shd_CO, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
-            nCO_new = (cr_CO / (de_CO + 1d-100)) + (nCO(icell) - (cr_CO / (de_CO + 1d-100))) * exp(-de_CO * ddt(icell))
+            if (de_CO * ddt(icell) < 1.d-6) then
+               nCO_new = (nCO(icell) + cr_CO * ddt(icell)) / (1.d0 + de_CO * ddt(icell))
+            else
+               nCO_new = (cr_CO / de_CO) + (nCO(icell) - (cr_CO / de_CO)) * exp(-de_CO * ddt(icell))
+            end if
 
             ! Tentative update
             delta_CO = nCO_new - nCO(icell)
@@ -1589,9 +1593,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                !/////////////////////////
                !//       Update        //
                !/////////////////////////
-               ! dXion(iElement,iIon) = (cr*ddt(icell) + dXion(iElement,iIon))/(1.d0 + de*ddt(icell))
-               x_eq = cr / (de + 1d-100) 
-               dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
+               if (de * ddt(icell) < 1.d-6) then
+                  dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
+               else
+                  x_eq = cr / de
+                  dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
+               end if
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
                ! Get the new electron fraction
@@ -1617,7 +1624,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dUU = dUU * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
                   if(dUU .gt. 1.) then
-                     ! write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
+                     !write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
                      code=8 !TODO(code) update this code for each ion
@@ -1630,7 +1637,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
                   if(dUU .gt. 1.) then
-                     ! write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
+                     !write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
                      print_neInit = neInit
@@ -1681,11 +1688,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       mu = getMu_RTZ(ne, nElement_dep, dXion)
 #endif
       if(rt_isTconst)then
-#ifdef CO
-         mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
-#else
-         mu = getMu_RTZ(ne, nElement_dep, dXion)
-#endif
          dT2 = rt_Tconst/mu
          TK = rt_Tconst
       else
