@@ -50,7 +50,8 @@ module rt_parameters
                                                     !                 in SED interpolation
 
   ! RT_PARAMS namelist--------------------------------------------------------------------
-  logical::rt_advect=.false.           ! Advection of photons?                           !
+  logical::rt_advect=.true.           ! Advection of photons?                           !
+  ! temporarily set it .true. so that the time step can be same with/without sink particles
   logical::rt_smooth=.false.           ! Smooth the discrete RT update of op. splitting  !
   real(dp)::rt_Tconst=-1               ! If pos. use this value for all T-depend. rates  !
   logical::rt_isTconst=.false.         ! Const rates activated?                          !
