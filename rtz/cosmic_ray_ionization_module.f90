@@ -90,14 +90,14 @@ SUBROUTINE initialize_cr_rates()
 
   cosmic_ray_ionization_rates_induced_UV_heat(1)  = 0.d0 ! Hydrogen
   cosmic_ray_ionization_rates_induced_UV_heat(2)  = 0.00d0 ! Helium  --> ground state too high
-  cosmic_ray_ionization_rates_induced_UV_heat(6)  = 0.96d0 ! Carbon
-  cosmic_ray_ionization_rates_induced_UV_heat(7)  = 1.17d0 ! Nitrogen
-  cosmic_ray_ionization_rates_induced_UV_heat(8)  = 1.72d0 ! Oxygen
-  cosmic_ray_ionization_rates_induced_UV_heat(10) = 0.00d0 ! Neon  --> ground state too high
-  cosmic_ray_ionization_rates_induced_UV_heat(12) = 2.55d0 ! Magnesium
-  cosmic_ray_ionization_rates_induced_UV_heat(14) = 2.08d0 ! Silicon
-  cosmic_ray_ionization_rates_induced_UV_heat(16) = 1.32d0 ! Sulfur
-  cosmic_ray_ionization_rates_induced_UV_heat(26) = 2.32d0 ! Iron
+  cosmic_ray_ionization_rates_induced_UV_heat(6)  = 0.8697d0 ! Carbon
+  cosmic_ray_ionization_rates_induced_UV_heat(7)  = 0.2851d0 ! Nitrogen
+  cosmic_ray_ionization_rates_induced_UV_heat(8)  = 0.4766d0 ! Oxygen
+  cosmic_ray_ionization_rates_induced_UV_heat(10) = 0.0000d0 ! Neon  --> ground state too high
+  cosmic_ray_ionization_rates_induced_UV_heat(12) = 1.9733d0 ! Magnesium
+  cosmic_ray_ionization_rates_induced_UV_heat(14) = 2.1836d0 ! Silicon
+  cosmic_ray_ionization_rates_induced_UV_heat(16) = 1.1771d0 ! Sulfur
+  cosmic_ray_ionization_rates_induced_UV_heat(26) = 2.1590d0 ! Iron
 
 END SUBROUTINE initialize_cr_rates
 

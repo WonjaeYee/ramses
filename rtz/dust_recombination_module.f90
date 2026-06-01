@@ -44,7 +44,7 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
   integer, intent(in):: ion, nelem
   real(dp), intent(in):: T, G, ne
   real(dp)::rate
-  real(dp)::dr_sf, row_sum, phi
+  real(dp)::dr_sf, row_sum, phi, loc_T
   real(dp)::a1, a2, a3
   integer::i
 
@@ -53,8 +53,7 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
   ! initialize rate to 0.0
   rate = 0.d0
 
-  ! No dust recombination except for the first excited state.
-  ! Maybe this will change later...
+  ! No dust recombination except for the first excited state (ion=2)
   if (ion.ne.2) then
      return
   end if
@@ -67,15 +66,13 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
      dr_sf = safe_exp(-1.d0 * T / 1.d3) / safe_exp(-1.d0)
   end if
 
-  if (T.lt.10.0) then
-     ! No dust recombination at very low temperatures
-     return 
-  end if
+  ! Clamp temperature at 10 K for the fitting formula (limits valid range)
+  loc_T = max(T, 10.d0)
 
   ! First check to make sure that all elements are not zero
   row_sum = 0.0
   do i = 1, 7
-     row_sum = row_sum + abs(dust_rec_coefs(i,nelem)) ! not critical, but might have caused inefficiencies
+     row_sum = row_sum + abs(dust_rec_coefs(i,nelem))
   end do
 
   ! In this case there is nothing to compute
@@ -84,11 +81,11 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
   end if
 
   ! Extra fac on the denominator to avoid divide by zero
-  phi = (G + 1d-8) * sqrt(T) / (ne + 1d-10) ! units K^1/2 cm^3
+  phi = (G + 1d-8) * sqrt(loc_T) / (ne + 1d-10) ! units K^1/2 cm^3
 
   a1 = dust_rec_coefs(2,nelem) * (phi**dust_rec_coefs(3,nelem))
-  a2 = dust_rec_coefs(4,nelem) * (T**dust_rec_coefs(5,nelem))
-  a3 = (-1.d0 * dust_rec_coefs(6,nelem)) - (dust_rec_coefs(7,nelem) * log(T))
+  a2 = dust_rec_coefs(4,nelem) * (loc_T**dust_rec_coefs(5,nelem))
+  a3 = (-1.d0 * dust_rec_coefs(6,nelem)) - (dust_rec_coefs(7,nelem) * log(loc_T))
 
   rate = 1.d-14 * dust_rec_coefs(1,nelem)
   rate = rate / (1.d0 + (a1 * (1.d0 + (a2 * (phi**a3)))))

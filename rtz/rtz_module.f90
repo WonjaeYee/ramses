@@ -145,7 +145,7 @@ SUBROUTINE initialize_elements()
    elements(12)%symbol = "Mg"
 #endif
 
-#if N_SILICON_IONS
+#if N_SILICON_IONS > 0
    ! Element 14: Silicon
    elements(14)%atomic_number = 14
    elements(14)%atomic_mass = mSi_amu

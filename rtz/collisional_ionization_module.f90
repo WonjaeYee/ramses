@@ -9,6 +9,20 @@ module collisional_ionization_module
   public :: dE_neon, dE_magnesium, dE_silicon
   public :: dE_sulfur, dE_iron
 
+  ! Hydrogen
+  real(dp), parameter :: dE_hydrogen(1) = [13.6d0]
+  real(dp), parameter :: A_hydrogen(1)  = [2.91d-08]
+  real(dp), parameter :: X_hydrogen(1)  = [0.2320d0]
+  real(dp), parameter :: K_hydrogen(1)  = [0.39d0]
+  real(dp), parameter :: P_hydrogen(1)  = [0.d0]
+
+  ! Helium
+  real(dp), parameter :: dE_helium(2) = [24.6d0, 54.4d0]
+  real(dp), parameter :: A_helium(2)  = [1.75d-08, 2.05d-09]
+  real(dp), parameter :: X_helium(2)  = [0.1800d0, 0.2650d0]
+  real(dp), parameter :: K_helium(2)  = [0.35d0, 0.25d0]
+  real(dp), parameter :: P_helium(2)  = [0.d0, 1.d0]
+
   ! Carbon
   real(dp), parameter :: dE_carbon(6)  = [11.3d0, 24.4d0, 47.9d0, 64.5d0, 392.1d0, 490.0d0]
   real(dp), parameter :: A_carbon(6)   = [0.685d-7, 0.186d-7, 0.635d-8, 0.150d-8, 0.299d-9, 0.123d-9]
@@ -90,34 +104,27 @@ FUNCTION coll_ion(T, dE, A, X, K, P) result(rate)
 
     ! Eqn 1 of Voronov 1997
     U = dE / (T * 8.61732814974056D-05)
+    if (U > 80.d0) then
+       rate = 0.d0
+       return
+    end if
     rate = A * (1.D0 + P * sqrt(U)) * U**K * safe_exp(-U) / (X + U)
 end FUNCTION coll_ion
 
 FUNCTION collisional_ionization(T, ion, element_idx) result(rate)
-    use safe_math, only: safe_exp
     implicit none
     real(dp), intent(in) :: T
     integer, intent(in) :: ion, element_idx
-    real(dp) :: T5, f
     real(dp) :: rate
 
     rate = 0.D0
 
     select case (element_idx)
       case (1) ! Hydrogen
-        T5 = T / 1D5
-        f = 1.D0 + sqrt(T5)
-        rate = 5.85D-11 * (sqrt(T) / f) * safe_exp(-157809.1D0 / T)
+        rate = coll_ion(T, dE_hydrogen(1), A_hydrogen(1), X_hydrogen(1), K_hydrogen(1), P_hydrogen(1))
 
       case (2) ! Helium
-        T5 = T / 1.D5
-        f = 1.D0 + sqrt(T5)
-          select case (ion)
-            case (1) ! HeI -> HeII
-              rate = 2.38D-11 * (sqrt(T) / f) * safe_exp(-285335.4D0 / T)
-            case (2) ! HeII -> HeIII
-              rate = 5.68D-12 * (sqrt(T) / f) * safe_exp(-631515.0D0 / T)
-          end select
+        rate = coll_ion(T, dE_helium(ion), A_helium(ion), X_helium(ion), K_helium(ion), P_helium(ion))
 
       case (6) ! Carbon
         rate = coll_ion(T, dE_carbon(ion), A_carbon(ion), X_carbon(ion), K_carbon(ion), P_carbon(ion))

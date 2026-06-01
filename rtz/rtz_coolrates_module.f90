@@ -162,7 +162,7 @@ FUNCTION dielectronic_recombination_cooling_HeII(T) result(rate)
     real(dp):: rate
     real(dp)::term_1, term_2, term_3
 
-    term_1 = 1.24d-13 * (T**(-1.5d0))
+    term_1 = 1.24d-13 / (T * sqrt(T))
     term_2 = safe_exp(-470000.d0/T)
     term_3 = 1.d0 + (0.3d0 * safe_exp(-94000.d0/T))
     rate = term_1 * term_2 * term_3
@@ -231,10 +231,13 @@ FUNCTION compton_cooling(T, a) result(rate)
     real(dp), intent(in):: T, a
     real(dp):: rate
     real(dp)::term_1, term_2, term_3
+    real(dp):: a_inv, a_inv2
 
     term_1 = 1.017d-37
-    term_2 = (2.727d0/a)**4.d0
-    term_3 = T - (2.727d0/a)
+    a_inv = 2.727d0/a
+    a_inv2 = a_inv * a_inv
+    term_2 = a_inv2 * a_inv2
+    term_3 = T - a_inv
     rate = term_1 * term_2 * term_3
 
 END FUNCTION compton_cooling
@@ -244,7 +247,7 @@ FUNCTION H2_cooling(nH, nH2, T) result(rate)
     implicit none
     real(dp), intent(in):: nH, nH2, T
     real(dp):: rate
-    real(dp):: T3
+    real(dp):: T3, T3_15
     real(dp):: n1, n2, n3, n4
     real(dp):: x1, x2, x3, x4
     real(dp):: f1, f2, f3, f4
@@ -266,10 +269,11 @@ FUNCTION H2_cooling(nH, nH2, T) result(rate)
     f2 = 2.0d-25 * T3 * safe_exp(-1.d0 / T3)
     f2 = f2 * (((0.35d0 * x2) / (1.d0 + (x2/n2))) + ((0.65d0 * x2)/(1.d0 + (x2/(10.d0*n2)))))
 
-    f3 = 2.4d-24 * (T3**1.50d0) * safe_exp(-2.0d0 / T3)
+    T3_15 = T3 * sqrt(T3)
+    f3 = 2.4d-24 * T3_15 * safe_exp(-2.0d0 / T3)
     f3 = f3 * (x3 / (1.d0 + (x3/n3)))
 
-    f4 = 1.7d-23 * (T3**1.50d0) * safe_exp(-4.0d0 / T3)
+    f4 = 1.7d-23 * T3_15 * safe_exp(-4.0d0 / T3)
     f4 = f4 * (((0.45d0 * x4) / (1.d0 + (x4/n4))) + ((0.55d0 * x4)/(1.d0 + (x4/(10.d0*n4)))))
 
     rate = nH2 * (f1 + f2 + f3 + f4)
@@ -947,6 +951,7 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     real(dp):: n_0, n_1, n_2
     real(dp):: cool_0, cool_1, cool_2
     real(dp):: heat_0, heat_1, heat_2
+    real(dp):: lam_10_scaled, lam_20_scaled, lam_21_scaled
 
     integer:: itemp_low, itemp_high
 
@@ -973,18 +978,21 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     E_20 = (H_PLANCK * C_CGS / (lam_20 * 1d-4)) / KB ! E/K (K)
     E_21 = (H_PLANCK * C_CGS / (lam_21 * 1d-4)) / KB ! E/K (K)
 
-    B_01 = A_10 * ((lam_10 * 1.d-4)**3.d0) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
-    B_02 = A_20 * ((lam_20 * 1.d-4)**3.d0) * (g_2 / g_0) / (2.d0 * H_PLANCK * C_CGS)
-    B_12 = A_21 * ((lam_21 * 1.d-4)**3.d0) * (g_2 / g_1) / (2.d0 * H_PLANCK * C_CGS)
+    lam_10_scaled = lam_10 * 1.d-4
+    lam_20_scaled = lam_20 * 1.d-4
+    lam_21_scaled = lam_21 * 1.d-4
+    B_01 = A_10 * (lam_10_scaled * lam_10_scaled * lam_10_scaled) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
+    B_02 = A_20 * (lam_20_scaled * lam_20_scaled * lam_20_scaled) * (g_2 / g_0) / (2.d0 * H_PLANCK * C_CGS)
+    B_12 = A_21 * (lam_21_scaled * lam_21_scaled * lam_21_scaled) * (g_2 / g_1) / (2.d0 * H_PLANCK * C_CGS)
 
     B_10 = (g_0 / g_1) * B_01
     B_20 = (g_0 / g_2) * B_02
     B_21 = (g_1 / g_2) * B_12
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
-    B_nu_20 = (2.d0 * H_PLANCK * (nu_20**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
-    B_nu_21 = (2.d0 * H_PLANCK * (nu_21**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
+    B_nu_10 = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    B_nu_20 = (2.d0 * H_PLANCK * (nu_20 * nu_20 * nu_20) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
+    B_nu_21 = (2.d0 * H_PLANCK * (nu_21 * nu_21 * nu_21) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
 
     ! Find temperature index
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -1111,6 +1119,7 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     real(dp):: cool_0
     real(dp):: heat_0
     real(dp):: t1, t2
+    real(dp):: lam_10_scaled
 
     integer:: itemp_low, itemp_high
 
@@ -1133,12 +1142,13 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
 
     E_10 = (H_PLANCK * C_CGS / (lam_10 * 1d-4)) / KB ! E/K (K)
 
-    B_01 = A_10 * ((lam_10 * 1.d-4)**3.d0) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
+    lam_10_scaled = lam_10 * 1.d-4
+    B_01 = A_10 * (lam_10_scaled * lam_10_scaled * lam_10_scaled) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
 
     B_10 = (g_0 / g_1) * B_01
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10**3.d0) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    B_nu_10 = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
 
     ! Find temperature index.
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -1610,7 +1620,7 @@ FUNCTION dust_gas_collisional_cooling(T, G0, xH2, aexp, nH, f_dg) result(rate)
     dust_hc_const = 1.0d-33 + ((3.8d-33 - 1.0d-33) * max(min(xH2,1.d0),0.d0))
 
     T_dust = 16.4d0 * ((1.7d0 * G0)**(1.d0/6.d0))
-    T_dust = max( T_dust, 2.725d0 * ( (1.d0/aexp) - 1.d0 ) ) ! Limit dust temp minimum to CMB temp
+    T_dust = max( T_dust, 2.725d0 / aexp ) ! Limit dust temp minimum to CMB temp
 
     rate = dust_hc_const * sqrt(T) * (T - T_dust) * ( 1.d0 - ( 0.8d0 * safe_exp(-75.d0/T) ) )
     ! rate = 1.5d0 * rate * nH * nH * f_dg
@@ -1881,7 +1891,7 @@ FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr, h2
     ! heating from H2 formation --> primordial channel
     E_form1_prim = 0.6d0 * EV_2_ERG
     E_form2_prim = 3.13d0 * EV_2_ERG * ncrit_factor
-    H2_formation_rate_prim = alpha_H2_prim(T, xe, xi_h2_cr, G0, xHI, xHII)
+    H2_formation_rate_prim = alpha_H2_prim(T, xe, xi_h2_cr, G0, xHI, xHII, nH)
 
     Hrate_H2_form = Hrate_H2_form + (H2_formation_rate_prim * (E_form1_prim + E_form2_prim) * nH * nH * xHI) ! erg/s/cm^3
     
@@ -2022,14 +2032,21 @@ FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
     real(dp), intent(in):: n, nH2, nCO, T, nHI
     real(dp):: rate
     real(dp):: rot, vib_H, vib_H2, k_B, T_pivot
+    real(dp):: T_scaled, term_a, kb_T, rot_numerator, rot_denominator
 
     ! CO cooling
 
     T_pivot = 3080.d0
-    rot = n * nCO * 4.d0*((kB*T)**2.d0)*9.7d-8 / (n * 2.76d0 * kB * (1.d0 + (3.3d6 * (T/1.d3)**(3.d0/4.d0)/n) + 1.5d0*((3.3d6 * (T/1.d3)**(3.d0/4.d0)/n)**0.5d0)))
+    T_scaled = T / 1.d3
+    term_a = (3.3d6 * sqrt(T_scaled * sqrt(T_scaled))) / n
 
-    vib_H2 = nH2 * nCO * T_pivot * kB * 4.3d-14 * T * safe_exp(-(3.14d5/T)**0.333d0) * safe_exp(-T_pivot/T)
-    vib_H = nHI * nCO * T_pivot * kB * 3.0d-12 * (T**0.5d0) * safe_exp(-(2000.d0/T)**3.43d0) * safe_exp(-T_pivot/T)
+    kb_T = kB * T
+    rot_numerator = n * nCO * 4.d0 * (kb_T * kb_T) * 9.7d-8
+    rot_denominator = n * 2.76d0 * kB * (1.d0 + term_a + 1.5d0 * sqrt(term_a))
+    rot = rot_numerator / rot_denominator
+
+    vib_H2 = nH2 * nCO * T_pivot * kB * 4.3d-14 * T * safe_exp(-(3.14d5/T)**(1.d0/3.d0)) * safe_exp(-T_pivot/T)
+    vib_H = nHI * nCO * T_pivot * kB * 3.0d-12 * sqrt(T) * safe_exp(-(2000.d0/T)**3.43d0) * safe_exp(-T_pivot/T)
 
     rate = (rot + vib_H2 + vib_H)
 
@@ -2109,9 +2126,9 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     nH = nH_I + nH_II + (2.0 * nH2)
     xHI = element_ion_fractions(1,1)
-    xHII = element_ion_fractions(1,1)
+    xHII = element_ion_fractions(1,2)
     if (isH2_rtz) then 
-       xH2 = element_ion_fractions(1,2) * 0.5d0 
+       xH2 = element_ion_fractions(1,3) * 0.5d0 
     else
        xH2 = 1.d-40
     end if
