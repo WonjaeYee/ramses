@@ -374,7 +374,7 @@ subroutine update_UVB(redshift)
                   HM12_UVB_z(16,j,1)  = (scale_low * HM12_UVB_sulfur(i,j,1))  + (scale_high * HM12_UVB_sulfur(i+1,j,1))
                   HM12_UVB_z(16,j,2)  = (scale_low * HM12_UVB_sulfur(i,j,2))  + (scale_high * HM12_UVB_sulfur(i+1,j,2))
                end if
-               if (j.lt.7) then
+               if (j.lt.27) then
                   HM12_UVB_z(26,j,1)  = (scale_low * HM12_UVB_iron(i,j,1))  + (scale_high * HM12_UVB_iron(i+1,j,1))
                   HM12_UVB_z(26,j,2)  = (scale_low * HM12_UVB_iron(i,j,2))  + (scale_high * HM12_UVB_iron(i+1,j,2))
                end if

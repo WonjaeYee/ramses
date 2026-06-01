@@ -5,7 +5,25 @@ module recombination_module
   implicit none
 
   private  ! everything is private by default
-  public :: recombination
+  public :: recombination, load_recombination_data
+
+  ! Cloudy radiative recombination tables
+  real(dp), dimension(30,30,2) :: rrec = 0.d0
+  real(dp), dimension(30,30,4) :: rnew = 0.d0
+  real(dp), dimension(13,3) :: fe = 0.d0
+
+  ! Helium dielectronic recombination rates
+  real(dp), dimension(9,3) :: DR_rates_c_helium = reshape( &
+  [ 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, &
+    1.4170d-03, 2.2350d-04,-2.1850d-05, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, &
+    0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00 ], &
+    shape=[9,3])
+
+  real(dp), dimension(9,3) :: DR_rates_e_helium = reshape( &
+  [ 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, &
+    4.6330d+05, 5.5320d+05, 8.8870d+05, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, &
+    0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00 ], &
+    shape=[9,3])
 
   ! Carbon radiative and dielectronic recombination rates
   real(dp), dimension(6,7) :: RR_rates_carbon = reshape( &
@@ -511,6 +529,130 @@ module recombination_module
 
 CONTAINS
 
+subroutine load_recombination_data()
+  use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
+  implicit none
+  
+  integer :: unit_num, ios, i, j
+  character(len=200) :: line
+  real(dp) :: help(9)
+  
+  if (myid == 1) write(*,*) 'Initializing Cloudy radiative recombination tables'
+  
+  open(newunit=unit_num, file=trim(data_dir)//'/rad_rec.dat', status='old', action='read', iostat=ios)
+  if (ios /= 0) then
+      if (myid == 1) write(*,*) 'Error: Could not open rad_rec.dat'
+      return
+  end if
+  
+  ! Read the header (a date integer)
+  read(unit_num, *, iostat=ios) i
+  if (ios /= 0) then
+      if (myid == 1) write(*,*) 'Error: Could not read rad_rec.dat header'
+      close(unit_num)
+      return
+  end if
+  
+  ! 1. Read rrec table
+  do while (.true.)
+      read(unit_num, '(A)', iostat=ios) line
+      if (ios /= 0) exit
+      read(line, *, iostat=ios) i, j
+      if (ios /= 0) exit
+      if (i == -1 .and. j == -1) exit
+      read(line, *, iostat=ios) i, j, help(1), help(2)
+      if (ios /= 0) exit
+      
+      ! Check bounds and convert 0-based index to 1-based index
+      if (i >= 0 .and. i < 30 .and. j >= 0 .and. j < 30) then
+          rrec(i+1, j+1, 1) = help(1)
+          rrec(i+1, j+1, 2) = help(2)
+      end if
+  end do
+  
+  if (ios /= 0) then
+      if (myid == 1) write(*,*) 'Error reading Section 1 in rad_rec.dat'
+      close(unit_num)
+      return
+  end if
+  
+  ! 2. Read rnew table
+  do while (.true.)
+      read(unit_num, '(A)', iostat=ios) line
+      if (ios /= 0) exit
+      read(line, *, iostat=ios) i, j
+      if (ios /= 0) exit
+      if (i == -1 .and. j == -1) exit
+      read(line, *, iostat=ios) i, j, help(1:4)
+      if (ios /= 0) exit
+      
+      ! Check bounds and convert 0-based index to 1-based index
+      if (i >= 0 .and. i < 30 .and. j >= 0 .and. j < 30) then
+          rnew(i+1, j+1, 1) = help(1)
+          rnew(i+1, j+1, 2) = help(2)
+          rnew(i+1, j+1, 3) = help(3)
+          rnew(i+1, j+1, 4) = help(4)
+      end if
+  end do
+  
+  if (ios /= 0) then
+      if (myid == 1) write(*,*) 'Error reading Section 2 in rad_rec.dat'
+      close(unit_num)
+      return
+  end if
+  
+  ! 3. Read fe table
+  do while (.true.)
+      read(unit_num, '(A)', iostat=ios) line
+      if (ios /= 0) exit
+      read(line, *, iostat=ios) i
+      if (ios /= 0) exit
+      if (i == -1) exit
+      read(line, *, iostat=ios) i, help(1:3)
+      if (ios /= 0) exit
+      
+      ! Check bounds and convert 0-based index to 1-based index
+      if (i >= 0 .and. i < 13) then
+          fe(i+1, 1) = help(1)
+          fe(i+1, 2) = help(2)
+          fe(i+1, 3) = help(3)
+      end if
+  end do
+  
+  close(unit_num)
+  
+end subroutine load_recombination_data
+
+FUNCTION cloudy_rad_rec(iz, in, t) result(rate)
+  implicit none
+  integer, intent(in) :: iz, in
+  real(dp), intent(in) :: t
+  real(dp) :: rate
+  real(dp) :: tt
+  
+  if (iz < 1 .or. iz > 30) then
+      print*, "rad_rec called with insane atomic number, =", iz
+  end if
+  if (in < 1 .or. in > iz) then
+      print*, "rad_rec called with insane number elec =", in
+  end if
+  
+  if ((((in <= 3 .or. in == 11) .or. (iz > 5 .and. iz < 9)) .or. iz == 10) .or. &
+      (iz == 26 .and. in > 11)) then
+      tt = sqrt(t / rnew(in, iz, 3))
+      rate = rnew(in, iz, 1) / (tt * (tt + 1.0d0)**(1.0d0 - rnew(in, iz, 2)) * &
+             (1.0d0 + sqrt(t / rnew(in, iz, 4)))**(1.0d0 + rnew(in, iz, 2)))
+  else
+      tt = t * 1.0d-04
+      if (iz == 26 .and. in <= 13) then
+          rate = fe(in, 1) / (tt**(fe(in, 2) + fe(in, 3) * log10(tt)))
+      else
+          rate = rrec(in, iz, 1) / (tt**rrec(in, iz, 2))
+      end if
+  end if
+END FUNCTION cloudy_rad_rec
+
 FUNCTION alpha_RR(T, RR_rates) result(rate)
   implicit none
   real(dp), intent(in) :: T
@@ -546,13 +688,15 @@ FUNCTION alpha_DR(T, DR_rates_e, DR_rates_c) result(rate)
   real(dp), intent(in) :: T
   real(dp), intent(in) :: DR_rates_e(9), DR_rates_c(9)
   real(dp) :: rate
+  real(dp) :: T_inv15
   integer :: i
 
   rate = 0.0d0
+  T_inv15 = 1.0d0 / (T * sqrt(T))
 
   do i = 1, 9
     if (DR_rates_e(i) > 0.0d0) then
-      rate = rate + T**(-1.5d0) * DR_rates_c(i) * safe_exp(-DR_rates_e(i) / T)
+      rate = rate + T_inv15 * DR_rates_c(i) * safe_exp(-DR_rates_e(i) / T)
     end if
   end do
 
@@ -563,73 +707,30 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
   real(dp), intent(in) :: T
   integer, intent(in) :: ion, element_idx
   real(dp) :: rate
-  real(dp) :: lam, f, A, B, T0, T1
-  integer :: i
 
-  rate = 0.0d0
+  ! Radiative recombination rate from Cloudy database
+  rate = cloudy_rad_rec(element_idx, element_idx - ion + 2, T)
 
+  ! Add dielectronic recombination rate
   select case (element_idx)
-  case (1)  ! Hydrogen
-    lam = 315614.0d0 / T
-    f = 1.0d0 + (lam / 2.74d0)**0.407d0
-    rate = 2.753d-14 * lam**1.5d0 / f**2.242d0
-
   case (2)  ! Helium
-    select case (ion)
-      case (2)  ! HeII → HeI
-        lam = 570670.0d0 / T
-        rate = 1.26d-14 * lam**0.75d0
-      case (3)  ! HeIII → HeII
-        lam = 1263030.0d0 / T
-        f = 1.0d0 + (lam / 2.74d0)**0.407d0
-        rate = 5.506d-14 * lam**1.5d0 / f**2.242d0
-    end select
-
+    rate = rate + alpha_DR(T, DR_rates_e_helium(:,ion), DR_rates_c_helium(:,ion))
   case (6)  ! Carbon
-    rate = alpha_RR(T, RR_rates_carbon(:,ion)) + alpha_DR(T, DR_rates_e_carbon(:,ion), DR_rates_c_carbon(:,ion))
-    
+    rate = rate + alpha_DR(T, DR_rates_e_carbon(:,ion), DR_rates_c_carbon(:,ion))
   case (7)  ! Nitrogen
-    rate = alpha_RR(T, RR_rates_nitrogen(:,ion)) + alpha_DR(T, DR_rates_e_nitrogen(:,ion), DR_rates_c_nitrogen(:,ion))
-
+    rate = rate + alpha_DR(T, DR_rates_e_nitrogen(:,ion), DR_rates_c_nitrogen(:,ion))
   case (8)  ! Oxygen
-    rate = alpha_RR(T, RR_rates_oxygen(:,ion)) + alpha_DR(T, DR_rates_e_oxygen(:,ion), DR_rates_c_oxygen(:,ion))
-
+    rate = rate + alpha_DR(T, DR_rates_e_oxygen(:,ion), DR_rates_c_oxygen(:,ion))
   case (10) ! Neon
-    rate = alpha_RR(T, RR_rates_neon(:,ion)) + alpha_DR(T, DR_rates_e_neon(:,ion), DR_rates_c_neon(:,ion))
-
+    rate = rate + alpha_DR(T, DR_rates_e_neon(:,ion), DR_rates_c_neon(:,ion))
   case (12) ! Magnesium
-    rate = alpha_RR(T, RR_rates_magnesium(:,ion)) + alpha_DR(T, DR_rates_e_magnesium(:,ion), DR_rates_c_magnesium(:,ion))
-
+    rate = rate + alpha_DR(T, DR_rates_e_magnesium(:,ion), DR_rates_c_magnesium(:,ion))
   case (14) ! Silicon
-    rate = alpha_RR(T, RR_rates_silicon(:,ion)) + alpha_DR(T, DR_rates_e_silicon(:,ion), DR_rates_c_silicon(:,ion))
-
+    rate = rate + alpha_DR(T, DR_rates_e_silicon(:,ion), DR_rates_c_silicon(:,ion))
   case (16) ! Sulfur
-    if (ion .ge. 3) then
-      rate = alpha_RR(T, RR_rates_sulfur(:,ion)) + alpha_DR(T, DR_rates_e_sulfur(:,ion), DR_rates_c_sulfur(:,ion))
-    else
-      A = RR_rates_alt_sulfur(1,ion)
-      B = RR_rates_alt_sulfur(2,ion)
-      rate = A * (T / 1.0d4)**(-B)
-
-      A  = DR_rates_alt_sulfur(1,ion)
-      B  = DR_rates_alt_sulfur(2,ion)
-      T0 = DR_rates_alt_sulfur(3,ion)
-      T1 = DR_rates_alt_sulfur(4,ion)
-      rate = rate + A * T**(-1.5d0) * safe_exp(-T0 / T) * (1.0d0 + B * safe_exp(-T1 / T))
-    end if
-
+    rate = rate + alpha_DR(T, DR_rates_e_sulfur(:,ion), DR_rates_c_sulfur(:,ion))
   case (26) ! Iron
-    if (ion .ge. 13) then
-      rate = alpha_RR(T, RR_rates_iron(:,ion)) + alpha_DR(T, DR_rates_e_iron(:,ion), DR_rates_c_iron(:,ion))
-    else
-      A = RR_rates_alt_iron(1,ion)
-      B = RR_rates_alt_iron(2,ion)
-      rate = A * (T / 1.0d4)**(-B)
-
-      do i = 1, 4
-        rate = rate + T**(-1.5d0) * DR_rates_alt_iron(i+4,ion) * safe_exp(-DR_rates_alt_iron(i,ion) / (8.617333262145d-5 * T))
-      end do
-    end if
+    rate = rate + alpha_DR(T, DR_rates_e_iron(:,ion), DR_rates_c_iron(:,ion))
   end select
 
   rate = MAX(rate,1.d-100)

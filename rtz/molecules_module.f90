@@ -13,27 +13,31 @@ module molecules_module
 
 CONTAINS
 
-FUNCTION alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII) result(rate)
+FUNCTION alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII, nH) result(rate)
   implicit none
 
   real(dp), intent(in) :: T, xe, H2_cosmic_ray_ionization_rate, G0
-  real(dp), intent(in) :: xHI, xHII
+  real(dp), intent(in) :: xHI, xHII, nH
   real(dp) :: rate
-  real(dp) :: logT, lnTe
+  real(dp) :: logT, lnTe, logT2, Te
   real(dp) :: k1, k2, k5, k13, k14, k15, k_hm_cr, k_hm_gamma
+  real(dp) :: cr_photo_destruction, collisional_destruction
 
   ! H- channel for H2 formation
   rate = 0.d0
 
   ! Primordial channel
   logT = log10(T)
-  lnTe = log(T*8.621738d-5) ! K -> eV
+  Te = T*8.621738d-5 ! K -> eV
+  lnTe = log(Te)
 
   ! Creation and destruction channels of H- included with updated rates from Glover et al. 2010
   ! H + e- -> H- + gamma
-  k1 = (10.d0**(-17.845d0 + 0.762d0*logT + 0.1523d0*(logT**2.d0) - 0.03274d0*(logT**3.d0)))
-  if (T .ge. 6000.d0) then
-     k1 = 10.d0**(-16.42d0 + 0.1998d0*(logT**2.d0) - 5.447d-3*(logT**4.d0) + 4.0415d-5*(logT**6.d0))
+  if (T .lt. 6000.d0) then
+     k1 = 10.d0**(-17.845d0 + logT * (0.762d0 + logT * (0.1523d0 - 0.03274d0 * logT)))
+  else
+     logT2 = logT * logT
+     k1 = 10.d0**(-16.42d0 + logT2 * (0.1998d0 + logT2 * (-5.447d-3 + 4.0415d-5 * logT2)))
   end if
 
   ! H- + H -> H2 + e
@@ -49,21 +53,16 @@ FUNCTION alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII) resu
   k_hm_gamma = 5.9d-9 * G0
 
   ! H- + e -> H + e + e
-  k13 = -1.801849334d1 + 2.36085220d0*lnTe - 2.82744300d-1*(lnTe**2.d0) &
-                 +1.62331664d-2*(lnTe**3.d0)-3.36501203d-2*(lnTe**4.d0)+1.17832978d-2*(lnTe**5.) &
-                 -1.65619470d-3*(lnTe**6.d0)+1.06827520d-4*(lnTe**7.d0)-2.63128581d-6*(lnTe**8.)
+  k13 = -1.801849334d1 + lnTe * (2.36085220d0 + lnTe * (-2.82744300d-1 + lnTe * (1.62331664d-2 + lnTe * (-3.36501203d-2 + lnTe * (1.17832978d-2 + lnTe * (-1.65619470d-3 + lnTe * (1.06827520d-4 - 2.63128581d-6 * lnTe)))))))
   k13 = safe_exp(max(k13,-92.d0)) ! Max needed to prevent result from diverging at low temperature
 
   ! H- + H --> H + H + e-
   ! I think this reaction was broken in glover so I took the results from
   ! https://www.aanda.org/articles/aa/pdf/2016/02/aa27262-15.pdf Table A1
   ! Harley added the fudge factor for continuity
-  k14 = 1.357772745525155d0 * 2.5634d-15 * (safe_exp(lnTe)**1.78186d0) ! Note that T must be in eV for this reaction to make sense
+  k14 = 1.357772745525155d0 * 2.5634d-15 * (Te**1.78186d0) ! Note that T must be in eV for this reaction to make sense
   if (T .gt. 1160.d0) then
-     k14 = -3.388464953d1 + 1.13944933d0*lnTe - 1.4210135d-1*(lnTe**2.d0) &
-            + 8.4644554d-3*(lnTe**3.d0) - 1.4328641d-3*(lnTe**4.d0) + 2.0122503d-4*(lnTe**5.d0) &
-            + 8.6639632d-5*(lnTe**6.d0) - 2.5850097d-5*(lnTe**7.d0) + 2.4555012d-6*(lnTe**8.d0) &
-            - 8.0683825d-8*(lnTe**9.d0)
+     k14 = -3.388464953d1 + lnTe * (1.13944933d0 + lnTe * (-1.4210135d-1 + lnTe * (8.4644554d-3 + lnTe * (-1.4328641d-3 + lnTe * (2.0122503d-4 + lnTe * (8.6639632d-5 + lnTe * (-2.5850097d-5 + lnTe * (2.4555012d-6 - 8.0683825d-8 * lnTe))))))))
      k14 = safe_exp(k14)
   end if
 
@@ -73,7 +72,11 @@ FUNCTION alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII) resu
      k15 = 9.6d-7 * (T**(-0.9d0))
   end if
 
-  rate = rate + k1*k2*xe/(k2 + k5*xHII + k_hm_cr + k_hm_gamma + k13*xe + k14*xHI + k15*xHII)
+  ! Correct steady state denominator terms scaled to cm^3 s^-1
+  cr_photo_destruction = (k_hm_cr + k_hm_gamma) / (nH + 1d-40)
+  collisional_destruction = k2 * xHI + k5 * xHII + k13 * xe + k14 * xHI + k15 * xHII
+
+  rate = rate + k1 * k2 * xe * xHI / (collisional_destruction + cr_photo_destruction)
 
   rate = MAX(rate,1.d-100)
 
@@ -113,7 +116,7 @@ FUNCTION alpha_H2(T, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionizatio
   end if
 
   ! Primordial H- channel
-  rate = rate + alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII) * xHI * nH
+  rate = rate + alpha_H2_prim(T, xe, H2_cosmic_ray_ionization_rate, G0, xHI, xHII, nH) * xHI * nH
 
   rate = MAX(rate,1.d-100)
 
@@ -254,7 +257,7 @@ FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, xO) result(rate)
   gammaCHx_cr = 8.88d-15 * (xi_cr_H2 / 1d-16) ! Cosmic rays
   gammaCHx = (1.41d-10 * G0) + gammaCHx_cr
 
-  beta = k1 * xO/(k1*xO + gammaCHx/nH2)
+  beta = k1 * xO/(k1*xO + gammaCHx/(nH2 + 1d-40))
   rate = k0 * nCII * nH2 * beta
 
   rate = MAX(rate,1.d-100)
@@ -395,14 +398,14 @@ FUNCTION comp_SCO(nco_mol, nh2, dx_SS) result(ss_factor)
 
 
   ! Pinned to table at lower boundary, extrapolated above upper boundary
-  effcNH2 = MAX(nh2*dx_SS, sco_table(1,1))
+  effcNH2 = MAX(nh2*dx_SS, sh2_table(1,1))
   if (effcNH2.ge.1.016d+22) then 
       ss_factor = ss_factor * 4.666d-03
   else 
       ! Find the lower closest index
       idxH2 = 1
-      do i=1, 43 ! If above upper boundary then extrapolate using the slope 
-        !between the last two points, so conveniently we set i to not go to 52
+      do i=1, 42 ! If above upper boundary then extrapolate using the slope 
+        !between the last two points, so conveniently we set i to not go to 43
         if (effcNH2 .ge. sh2_table(i,1)) idxH2 = i
       end do
 

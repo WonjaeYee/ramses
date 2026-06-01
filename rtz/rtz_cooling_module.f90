@@ -664,7 +664,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: rho
       !-----------------------------------------------------------------------
       ! Variables specific to RTZ
-      real(dp):: xe
+      real(dp):: xe, x_eq
       real(dp):: dust_effective_number_density, dust_to_gas_mass_ratio_over_mw
       real(dp):: HI_number_density, HII_number_density
       real(dp):: paired_ion_number_density
@@ -780,7 +780,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ne = getNe(dXion, nElement_dep(:))
       neInit = ne
+#ifdef CO
+      mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
       mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
 #ifdef CALIMA
       dust_helper%local_mu = mu
 #endif
@@ -1061,7 +1065,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                            *one_over_T_FRAC
          
          ! 2026.05.29
-         dUU = max(dUU, abs(dRate*ddt(icell)/one_over_T_FRAC))
+         dUU = max(dUU, abs(dRate*ddt(icell)*one_over_T_FRAC))
          
          fracMax=MAX(fracMax,dUU)
          if(dUU .gt. 1.) then                                     ! 10% rule
@@ -1190,9 +1194,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_include_photoionization.and.rt_advect) then
             do igroup=1,nGroups
                if (isLW(igroup).eq.1) then
-                  de_H2 = de_H2 + (SUM(signc(igroup,1,3) * dNp * f_shd))
+                  de_H2 = de_H2 + signc(igroup,1,3) * dNp(igroup) * f_shd
                else
-                  de_H2 = de_H2 + (SUM(signc(igroup,1,3) * dNp))
+                  de_H2 = de_H2 + signc(igroup,1,3) * dNp(igroup)
                end if  
             end do
          end if
@@ -1217,7 +1221,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
 
          ! Update mu and T
+#ifdef CO
+         mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
          mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
          TK = dT2 * mu  
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
       end if
@@ -1241,8 +1249,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !! Destruction !!
             de_CO = beta_CO(total_G0*f_shd_CO, H2_cosmic_ray_ionization_rate)
 
-            ! Compute the initial guess of new nCO
-            nCO_new = (nCO(icell) + cr_CO*ddt(icell)) / (1.d0 + de_CO*ddt(icell))
+            ! Compute the initial guess of new nCO (exact exponential integrator)
+            nCO_new = (cr_CO / (de_CO + 1d-100)) + (nCO(icell) - (cr_CO / (de_CO + 1d-100))) * exp(-de_CO * ddt(icell))
 
             ! Tentative update
             delta_CO = nCO_new - nCO(icell)
@@ -1461,7 +1469,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Account for molecular hydrogen
                if (iElement.eq.1 .and. iIon.eq.1 .and. isH2_rtz) then
-                  de = de + alpha_H2_loc
+                  de = de + 2.0d0 * alpha_H2_loc / (dXion(1,1) + 1d-40)
                end if
 
                ! Collisional ionization 
@@ -1574,7 +1582,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                !/////////////////////////
                !//       Update        //
                !/////////////////////////
-               dXion(iElement,iIon) = (cr*ddt(icell) + dXion(iElement,iIon))/(1.d0 + de*ddt(icell))
+               ! dXion(iElement,iIon) = (cr*ddt(icell) + dXion(iElement,iIon))/(1.d0 + de*ddt(icell))
+               x_eq = cr / (de + 1d-100) 
+               dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
                ! Get the new electron fraction
@@ -1585,7 +1595,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Update mu and T --> only H and He (others don't matter)
                if (iElement.lt.3) then 
+#ifdef CO
+                  mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
                   mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
                   TK = dT2 * mu  
                   if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
                end if
@@ -1651,7 +1665,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! UPDATE CONSTANT T WITH NEW MU **************************************
       if(rt_isTconst)then
+#ifdef CO
+         mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
          mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
          dT2 = rt_Tconst/mu
       endif
 
@@ -1677,13 +1695,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Update the timestep for the next iteration:
       !  dt_rec = 0.5d0 * ddt(icell) / ((0.07d0 + fracMax)**0.5d0)
       dt_rec = 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
-      dt_rec = min(dt_rec,2.*ddt(icell))
+      ! dt_rec = min(dt_rec,2.*ddt(icell))
       dt_rec = min(dt_rec,rtz_max_cool_timestep)
       ! Don't let timestep go above 100 years in very dense gas!!!
       ! if (nH(icell).ge.8.d4) then 
       !    dt_rec = min(dt_rec,100.d0 * yr2sec * 1.d5 / nH(icell))
       ! end if
-      dt_rec = min(dt_rec,10.d0**(-0.57142857 * log10(nH(icell)) + 10.85714286))
+      ! dt_rec = min(dt_rec,10.d0**(-0.57142857 * log10(nH(icell)) + 10.85714286))
       dt_ok = .true.
       code=0
 
@@ -1752,13 +1770,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       alphaL = 3.10d0 ! 3.08 
       xt     = 8.10d0 ! 7.96
       Xsun   = 8.69d0
-      x = Xsun - log10_O_over_H
       x = max(log10_O_over_H,5.d0) ! Mild extrapolation
 
       if (log10_O_over_H>xt)then
-         y = a + alphaH * (Xsun - log10_O_over_H)
+         y = a + alphaH * (Xsun - x)
       else
-         y = b + alphaL * (Xsun - log10_O_over_H)
+         y = b + alphaL * (Xsun - x)
       endif
 
       G2D = 10.d0**y
@@ -1768,11 +1785,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    END FUNCTION dust_to_gas_scale_RR14
 
+#ifdef CO
+   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions, nCO) result(mu)
+#else
    FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions) result(mu)
+#endif
       implicit none
       real(dp), intent(in):: ne
       real(dp), intent(in):: element_number_densities(27)
       real(dp), intent(in):: element_ion_fractions(27,27)
+#ifdef CO
+      real(dp), intent(in):: nCO
+#endif
       real(dp):: mu
       real(dp):: m_bar, n_hat
 
@@ -1798,6 +1822,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          m_bar = m_bar + (element_number_densities(1) * element_ion_fractions(1,3) * elements(1)%atomic_mass)
          n_hat = n_hat + (0.5d0 * element_number_densities(1) * element_ion_fractions(1,3))
       end if
+
+#ifdef CO
+      ! Include contribution from CO
+      m_bar = m_bar + nCO * (elements(6)%atomic_mass + elements(8)%atomic_mass)
+      n_hat = n_hat + nCO
+#endif
 
       mu = m_bar / n_hat
 
