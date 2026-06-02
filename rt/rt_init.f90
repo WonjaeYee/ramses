@@ -451,7 +451,7 @@ SUBROUTINE read_rt_groups()
   call initialize_cross_sections()
 
   ! Initialize cross sections to be a blackbody at 1e5 K
-  call initialize_cross_sections_from_blackbody(1.d5, groupL0, groupL1, group_csn, group_cse, .true.)
+  call initialize_cross_sections_from_blackbody(1.d5, groupL0, groupL1, group_csn, group_cse, group_csn_dust, .true.)
 
   ! Initialize group energies for the same black body
   call initialize_group_energies_from_blackbody(1.d5, groupL0, groupL1, group_egy)

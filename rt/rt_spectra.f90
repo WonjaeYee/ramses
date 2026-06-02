@@ -25,6 +25,9 @@ MODULE spectrum_integrator_module
 
   PUBLIC integrateSpectrum, f1, fLambda, fdivLambda, fSig, fSigLambda,   &
          fSigdivLambda, trapz1
+#ifdef RTZ
+  PUBLIC fLambda_dust, fSigLambda_dust
+#endif
 
   PRIVATE   ! default
 
@@ -154,6 +157,20 @@ FUNCTION fSigdivLambda(lambda, f, species, ion)
   fSigdivLambda = f / lambda * getCrosssection(lambda, species)
 #endif
 END FUNCTION fSigdivLambda
+
+#ifdef RTZ
+FUNCTION fLambda_dust(lambda, f, species, ion)
+  real(kind=8):: fLambda_dust, lambda, f
+  integer :: species, ion
+  fLambda_dust = f * lambda
+END FUNCTION fLambda_dust
+
+FUNCTION fSigLambda_dust(lambda, f, species, ion)
+  real(kind=8):: fSigLambda_dust, lambda, f
+  integer :: species, ion
+  fSigLambda_dust = f * lambda * getCrosssection_BARE_GR_S_DUST(lambda,species)
+END FUNCTION fSigLambda_dust
+#endif
 !_________________________________________________________________________
 
 !*************************************************************************
@@ -231,6 +248,34 @@ FUNCTION getCrosssection(lambda, species)
 END FUNCTION getCrosssection
 #endif
 
+#ifdef RTZ
+FUNCTION getCrosssection_BARE_GR_S_DUST(lambda,species)
+  ! Harley's fit to the effective absorption cross
+  ! section of dust for the BARE-GR-S model
+  ! Mean absolute percentage error of this fit is
+  ! 20%, max error is 133%.
+  !
+  ! The fit is a degree 10 polynomial
+  ! lambda is assumed to be in angstroms
+  ! Returns the absorption cross section in cm^-2 / H
+  implicit none
+  real(kind=8)      :: lambda, getCrosssection_BARE_GR_S_DUST
+  real(kind=8)      :: lambda_microns
+  integer           :: species,i
+  real(kind=8),dimension(1:11) :: fit_vals = (/ -1.59319023e+01, -1.60473171e+00,  6.20612550e-01, &
+                                                 6.42859480e-01, -4.08743189e-01, -1.59224607e-01, &
+                                                 7.37953364e-02,  1.60696953e-02, -5.96977205e-03, &
+                                                -5.57671237e-04,  1.80437634e-04 /)
+
+  lambda_microns = lambda * 1.d-4 ! Convert from angstroms to microns
+  getCrosssection_BARE_GR_S_DUST =0.d0
+  do i=1,11
+     getCrosssection_BARE_GR_S_DUST = getCrosssection_BARE_GR_S_DUST + (fit_vals(i) * (LOG10(lambda_microns)**REAL(i-1, kind=8)))
+  end do
+  getCrosssection_BARE_GR_S_DUST = 10.d0**getCrosssection_BARE_GR_S_DUST
+
+END FUNCTION getCrosssection_BARE_GR_S_DUST
+#endif
 
 END MODULE spectrum_integrator_module
 
@@ -282,6 +327,9 @@ MODULE SED_module
   ! Lum is photons per sec per solar mass (eV per sec per solar mass in
   ! the case of SED_isEgy=true). Lum-acc is accumulated lum.
   real(dp),allocatable,dimension(:,:,:,:)::SED_table
+#ifdef RTZ
+  real(dp),allocatable,dimension(:,:,:,:)::SED_table_dust
+#endif
   ! ----------------------------------------------------------------------
 
 #ifdef INDIVIDUAL_SINK_STARS
@@ -371,6 +419,7 @@ SUBROUTINE init_SED_table()
   integer,parameter::tag=1132
 #ifdef RTZ
   integer::counter, jj
+  real(kind=8),allocatable::tbl_dust(:,:,:), tbl2_dust(:,:,:), reb_tbl_dust(:,:,:)
 #endif
 #ifdef RTZ
   nv=3+2
@@ -486,8 +535,15 @@ SUBROUTINE init_SED_table()
 
   ! Perform SED integration of luminosity, csn and egy per (age,Z) bin----
   allocate(tbl(nAges,nZs,nv))
+#ifdef RTZ
+  ! Dust table
+  allocate(tbl_dust(nAges,nZs,2))
+#endif
   do ip = 1,nSEDgroups                                ! Loop photon groups
      tbl=0.
+#ifdef RTZ
+     tbl_dust=0.
+#endif
      pL0 = groupL0(ip) ; pL1 = groupL1(ip)! eV interval of photon group ip
      do iz = 1, nzs                                     ! Loop metallicity
      do ia = myid,nAges,ncpu                                ! Loop age
@@ -557,6 +613,12 @@ SUBROUTINE init_SED_table()
             counter = counter + 6*npah
          end if
 #endif
+
+#ifdef RTZ
+         ! Now deal with dust
+         tbl_dust(ia,iz,1)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,0,0)
+#endif
+
      end do ! End age loop
      end do ! End Z loop
 
@@ -566,6 +628,15 @@ SUBROUTINE init_SED_table()
           MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
      tbl = tbl2
      deallocate(tbl2)
+
+#ifdef RTZ
+     allocate(tbl2_dust(nAges,nzs,2))
+     call MPI_ALLREDUCE(tbl_dust,tbl2_dust,nAges*nzs*2,&
+          MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
+     tbl_dust = tbl2_dust
+     deallocate(tbl2_dust)
+#endif
+
 #endif
 
      ! Now the SED properties are in tbl...just need to rebin it, to get !
@@ -574,6 +645,13 @@ SUBROUTINE init_SED_table()
      call rebin_log(dlgA, SED_dlgZ                                       &
           , tbl(2:nAges,:,:), nAges-1, nZs, ages(2:nAges), zs, nv        &
           , reb_tbl, SED_nA, SED_nZ, rebAges, SED_Zeds)
+
+#ifdef RTZ
+     call rebin_log(dlgA, SED_dlgZ                                  &
+          , tbl_dust(2:nAges,:,:), nAges-1, nZs, ages(2:nAges), zs, 2   &
+          , reb_tbl_dust, SED_nA, SED_nZ, rebAges, SED_Zeds)
+#endif
+
      SED_nA=SED_nA+1                              ! Make room for zero age
      if(ip .eq. 1) allocate(SED_table(SED_nA, SED_nZ, nSEDgroups, nv))
      SED_table(1, :,ip,:) = reb_tbl(1,:,:)            ! Zero age properties
@@ -585,6 +663,9 @@ SUBROUTINE init_SED_table()
         SED_lgZ0 = log10(SED_Zeds(1))                  ! Interpolation intervals
         SED_lgA0 = log10(rebAges(1))
         allocate(SED_ages(SED_nA))
+#ifdef RTZ
+        allocate(SED_table_dust(SED_nA, SED_nZ, nSEDgroups, 2))
+#endif
         SED_ages(1)=0d0 ; SED_ages(2:)=rebAges ;    ! Must have zero initial age
      end if
 
@@ -595,14 +676,26 @@ SUBROUTINE init_SED_table()
         SED_table(:,iz,ip,2) = SED_table(:,iz,ip,2) * Gyr2sec
      end do
 
+#ifdef RTZ
+     SED_table_dust(1, :,ip,:) = reb_tbl_dust(1,:,:)                   ! Zero age properties
+     SED_table_dust(2:,:,ip,:) = reb_tbl_dust     
+     deallocate(reb_tbl_dust)
+#endif
+
   end do ! End photon group loop
 
   deallocate(SEDs) ; deallocate(tbl)
   deallocate(ages) ; deallocate(rebAges)
   deallocate(zs)
   deallocate(Ls)
+#ifdef RTZ
+  deallocate(tbl_dust)
+#endif
 
   if (myid==1) call write_SEDtable
+#ifdef RTZ
+  if (myid==1) call write_SEDtable_dust
+#endif
 
 END SUBROUTINE init_SED_table
 
@@ -645,6 +738,8 @@ SUBROUTINE update_SED_group_props()
   real(dp),save,allocatable,dimension(:)::sum_egy_cpu,sum_egy_all
   real(dp):: mass, age, Z, t_sne_Gyr
 #ifdef RTZ
+  real(dp),save,allocatable,dimension(:,:)::csn_star_dust
+  real(dp),save,allocatable,dimension(:,:)::sum_csn_cpu_dust,sum_csn_all_dust
 #endif
 #ifdef CALIMA
   real(dp),save,allocatable,dimension(:,:) :: dust_csa_star, dust_css_star, dust_csr_star
@@ -718,6 +813,12 @@ SUBROUTINE update_SED_group_props()
         allocate(sum_pah_csr_all(nSEDgroups,2*npah))
      endif
 #endif
+
+#ifdef RTZ
+     allocate(csn_star_dust(nSEDgroups,2))
+     allocate(sum_csn_cpu_dust(nSEDgroups,2))
+     allocate(sum_csn_all_dust(nSEDgroups,2))
+#endif
   endif
   sum_L_cpu   = 0d0 ! Accumulated luminosity, avg cross sections and
   sum_egy_cpu = 0d0 ! photon energies for all stars belonging to
@@ -736,6 +837,11 @@ SUBROUTINE update_SED_group_props()
      sum_pah_css_cpu = 0d0
      sum_pah_csr_cpu = 0d0
   endif
+#endif
+#ifdef RTZ
+  csn_star_dust = 0.d0
+  sum_csn_all_dust = 0.d0
+  sum_csn_cpu_dust = 0.d0 ! 'this' cpu
 #endif
   t_sne_Gyr = t_sne / 1d3
   do i=1,npartmax
@@ -756,6 +862,10 @@ SUBROUTINE update_SED_group_props()
      endif
      call inp_SED_table(age, Z, 1, .false., L_star)     !  [# s-1 M_sun-1]
      call inp_SED_table(age, Z, 3, .true., egy_star(:)) !             [eV]
+
+#ifdef RTZ
+     call inp_SED_table_dust(age, Z, 1, .false., csn_star_dust(:,1))! [cm^2]
+#endif
 
 #ifdef RTZ
      counter = 1
@@ -844,6 +954,9 @@ SUBROUTINE update_SED_group_props()
            sum_pah_csr_cpu(ip,:) = sum_pah_csr_cpu(ip,:) + L_star(ip) * pah_csr_star(ip,:)
         endif
 #endif
+#ifdef RTZ
+        sum_csn_cpu_dust(ip,:)= sum_csn_cpu_dust(ip,:) + L_star(ip) * csn_star_dust(ip,:)
+#endif
      end do
 
   end do
@@ -854,6 +967,9 @@ SUBROUTINE update_SED_group_props()
   sum_egy_all = sum_egy_cpu
   sum_csn_all = sum_csn_cpu
   sum_cse_all = sum_cse_cpu
+#ifdef RTZ
+  sum_csn_all_dust = sum_csn_cpu_dust
+#endif
 #ifdef CALIMA
   if (ndust > 0) then
      sum_dust_csa_all = sum_dust_csa_cpu
@@ -910,6 +1026,10 @@ SUBROUTINE update_SED_group_props()
                         MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
   endif
 #endif
+#ifdef RTZ
+  call MPI_ALLREDUCE(sum_csn_cpu_dust, sum_csn_all_dust, nSEDgroups*2,   &
+                     MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
+#endif
 #endif
 
   ! ...and take averages weighted by luminosities
@@ -922,6 +1042,7 @@ SUBROUTINE update_SED_group_props()
 #ifdef RTZ
         group_csn(ip,1:27,1:27) = sum_csn_all(ip,1:27,1:27) / sum_L_all(ip)
         group_cse(ip,1:27,1:27) = sum_cse_all(ip,1:27,1:27) / sum_L_all(ip)
+        group_csn_dust(ip,:) = sum_csn_all_dust(ip,:) / sum_L_all(ip)
 #ifdef CALIMA
         if (ndust > 0) then
            group_csa_dust(ip,:) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
@@ -957,58 +1078,59 @@ SUBROUTINE update_SED_group_props()
      else ! no stars -> assign zero-age zero-metallicity props
         group_egy(ip)       = SED_table(1,1,ip,3)
 #ifdef RTZ
-     counter = 1
-     do ii=1, n_elements ! Loop over elements
-     ! Cross sections for atomic species
-        if (elements(ii)%atomic_number.gt.0) then 
-           do jj=1,elements(ii)%n_ions-1 !loop over ionization states
-              group_csn(ip,ii,jj) = SED_table(1,1,ip,3+counter)
-              counter = counter + 1
-              group_cse(ip,ii,jj) = SED_table(1,1,ip,3+counter)
-              counter = counter + 1
-           end do
-        end if
-     end do
+        group_csn_dust(ip,1) = SED_table_dust(1,1,ip,  1)
+        counter = 1
+        do ii=1, n_elements ! Loop over elements
+        ! Cross sections for atomic species
+           if (elements(ii)%atomic_number.gt.0) then 
+              do jj=1,elements(ii)%n_ions-1 !loop over ionization states
+                 group_csn(ip,ii,jj) = SED_table(1,1,ip,3+counter)
+                 counter = counter + 1
+                 group_cse(ip,ii,jj) = SED_table(1,1,ip,3+counter)
+                 counter = counter + 1
+              end do
+           end if
+        end do
 
-     ! Deal with molecules separately
-     if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-        group_csn(ip,1,3) = SED_table(1,1,ip,3+counter)
-        counter = counter + 1
-        group_cse(ip,1,3) = SED_table(1,1,ip,3+counter)
-        counter = counter + 1
-     end if
+        ! Deal with molecules separately
+        if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
+           group_csn(ip,1,3) = SED_table(1,1,ip,3+counter)
+           counter = counter + 1
+           group_cse(ip,1,3) = SED_table(1,1,ip,3+counter)
+           counter = counter + 1
+        end if
 
 #ifdef CALIMA
-     if (ndust > 0) then
-        do ii=1,ndust
-           group_csa_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+1)
-           group_css_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+2)
-           group_csr_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+3)
-        end do
-        counter = counter + 3*ndust
-        if (dust_ratd) then
+        if (ndust > 0) then
            do ii=1,ndust
-              group_csrat_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              group_csa_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+1)
+              group_css_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+2)
+              group_csr_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+3)
            end do
-           counter = counter + ndust
+           counter = counter + 3*ndust
+           if (dust_ratd) then
+              do ii=1,ndust
+                 group_csrat_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              end do
+              counter = counter + ndust
+           endif
+           if (dust_pe_heating) then
+              do ii=1,ndust
+                 att_len_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              end do
+              counter = counter + ndust
+           endif
         endif
-        if (dust_pe_heating) then
-           do ii=1,ndust
-              att_len_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+        if (npah > 0) then
+           do ii=1,npah
+              group_csa_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+              group_csa_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+              group_css_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+              group_css_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+              group_csr_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+              group_csr_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+6)
            end do
-           counter = counter + ndust
         endif
-     endif
-     if (npah > 0) then
-        do ii=1,npah
-           group_csa_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+1)
-           group_csa_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+2)
-           group_css_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+3)
-           group_css_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+4)
-           group_csr_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+5)
-           group_csr_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+6)
-        end do
-     endif
 #endif
 #else
      do ii=1,nIonsUsed
@@ -1430,6 +1552,25 @@ END FUNCTION getSEDcsr_pah
 
 #endif
 
+#ifdef RTZ
+FUNCTION getSEDcsn_dust(X, Y, N, e0, e1, species, ion)
+   ! Compute and return average effective absorption cross section for dust
+   ! in cm^2 H^-1, for a given energy interval (e0,e1) [eV] in
+   ! SED Y(X). Assumes X is in Angstroms and that Y is energy weight per
+   ! angstrom (not photon #).
+   ! Species is a dummy variable here as we only have one cross section at the
+   ! moment
+!-------------------------------------------------------------------------
+   use spectrum_integrator_module
+   use rt_parameters,only:ionEVs
+   real(kind=8):: getSEDcsn_dust, X(N), Y(N), e0, e1, norm
+   integer :: N, species, ion
+!-------------------------------------------------------------------------
+   norm     = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda_dust)
+   getSEDcsn_dust= integrateSpectrum(X, Y, N, e0, e1, species, ion, fSigLambda_dust)/norm
+END FUNCTION getSEDcsn_dust
+#endif
+
 !*************************************************************************
 SUBROUTINE rebin_log(xint_log, yint_log,                                 &
                data,       nx,       ny,     x,     y,     nz,           &
@@ -1649,7 +1790,34 @@ SUBROUTINE write_SEDtable()
 901 format (ES15.4, ES15.4)
 
 END SUBROUTINE write_SEDtable
+!*************************************************************************
+#ifdef RTZ
+SUBROUTINE write_SEDtable_dust()
 
+! Write the SED properties to a file (this is just in debugging, to check
+! if the SEDs are being read correctly).
+!-------------------------------------------------------------------------
+  character(len=128)::filename
+  integer::ip, i, j
+!-------------------------------------------------------------------------
+  do ip=1,nSEDgroups
+     write(filename,'(A, I1, A)') './SEDtables/SEDtable_dust', ip, '.list'
+     open(10, file=filename, status='unknown')
+     write(10,*) SED_nA, SED_nZ
+
+     do j = 1,SED_nz
+        do i = 1,SED_nA
+           write(10,900)                                                 &
+                 SED_ages(i)        ,    SED_zeds(j)        ,             &
+                 SED_table_dust(i,j,ip,1)
+        end do
+     end do
+     close(10)
+  end do
+900 format (ES15.4, ES15.4, ES15.4)
+
+END SUBROUTINE write_SEDtable_dust
+#endif
 !*************************************************************************
 SUBROUTINE inp_SED_table(age, Z, nProp, same, ret)
 
@@ -1715,7 +1883,67 @@ SUBROUTINE inp_SED_table(age, Z, nProp, same, ret)
         da1 * dz1 * SED_table(ia,   iz,   :, nProp)
 
 END SUBROUTINE inp_SED_table
+!*************************************************************************
+#ifdef RTZ
+SUBROUTINE inp_SED_table_dust(age, Z, nProp, same, ret)
 
+! Compute SED property by interpolation from table.
+! input/output:
+! age   => Star population age [Gyrs]
+! Z     => Star population metallicity [m_metals/m_tot]
+! nprop => Number of property to fetch
+!          1=log(photon # intensity [# Msun-1 s-1]),
+!          2=log(cumulative photon # intensity [# Msun-1]),
+!          3=avg_egy, 2+2*iIon=avg_csn, 3+2*iIon=avg_cse
+! same  => If true then assume same age and Z as used in last call.
+!          In this case the interpolation indexes can be recycled.
+! ret   => The interpolated values of the sed property for every photon
+!          group
+!-------------------------------------------------------------------------
+  use amr_commons
+  use rt_parameters
+  real(dp), intent(in):: age, Z
+  real(dp):: lgAge, lgZ
+  integer:: nProp
+  logical:: same
+  real(dp),dimension(:):: ret
+  integer,save:: ia, iz
+  real(dp),save:: da, da0, da1, dz, dz0, dz1
+!-------------------------------------------------------------------------
+  ! ia, iz: lower indexes: 0<ia<sed_nA etc.
+  ! da0, da1, dz0, dz1: proportional distances from edges:
+  ! 0<=da0<=1, 0<=da1<=1 etc.
+  if(.not. same) then
+     if(age.le.0d0) then
+        lgAge=-4d0
+     else
+        lgAge = log10(age)
+     endif
+     lgZ=log10(Z)
+     ia = min(max(floor((lgAge-SED_lgA0)/SED_dlgA ) + 2, 1  ),  SED_nA-1 )
+     da = SED_ages(ia+1)-SED_ages(ia)
+     da0= min( max(   (age-SED_ages(ia)) /da,       0. ), 1.          )
+     da1= min( max(  (SED_ages(ia+1)-age)/da,       0. ), 1.          )
+
+     iz = min(max(floor((lgZ-SED_lgZ0)/SED_dlgZ ) + 1,   1  ),  SED_nZ-1 )
+     dz = sed_Zeds(iz+1)-SED_Zeds(iz)
+     dz0= min( max(   (Z-SED_zeds(iz)) /dz,         0. ),  1.         )
+     dz1= min( max(  (SED_Zeds(iz+1)-Z)/dz,         0. ),  1.         )
+
+     if (abs(da0+da1-1.0d0) > 1.0d-5 .or. abs(dz0+dz1-1.0d0) > 1.0d-5) then
+        write(*,*) 'Screwed up the sed interpolation dust... '
+        write(*,*) da0+da1,dz0+dz1
+        call clean_stop
+     end if
+  endif
+
+  ret = da0 * dz0 * SED_table_dust(ia+1, iz+1, :, nProp) + &
+        da1 * dz0 * SED_table_dust(ia,   iz+1, :, nProp) + &
+        da0 * dz1 * SED_table_dust(ia+1, iz,   :, nProp) + &
+        da1 * dz1 * SED_table_dust(ia,   iz,   :, nProp)
+
+END SUBROUTINE inp_SED_table_dust
+#endif
 !*************************************************************************
 SUBROUTINE getNPhotonsEmitted(age1_Gyr, dt_Gyr, Z, ret)
 
@@ -1765,7 +1993,11 @@ FUNCTION blackbody(T, lambda) result(B_lam)
 
 END FUNCTION blackbody
 
+#ifdef RTZ
+SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group_csn, group_cse, group_csn_dust, isH2_rtz)
+#else
 SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group_csn, group_cse, isH2_rtz)
+#endif
   ! This subroutine initializes the cross sections of 
   ! each species to be consistent with a blackbody of
   ! a given temperature
@@ -1776,6 +2008,9 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
   real(kind=8), intent(in):: T
   logical, intent(in):: isH2_rtz
   real(kind=8), intent(inout):: group_csn(nGroups,1:27,1:27), group_cse(nGroups,1:27,1:27)
+#ifdef RTZ
+  real(kind=8), intent(inout):: group_csn_dust(nGroups,2)
+#endif
   real(kind=8), intent(in):: group_L0(nGroups), group_L1(nGroups)
   real(kind=8):: lambda_min, lambda_max, delta_lambda, tmp
   real(kind=8):: X(1000), Y(1000)
@@ -1817,6 +2052,11 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
         group_csn(ip,1,3) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
         group_cse(ip,1,3) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
      end if
+
+#ifdef RTZ
+     group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 0, 0)
+#endif
+
   end do ! End loop over groups
 
 END SUBROUTINE initialize_cross_sections_from_blackbody

@@ -96,6 +96,7 @@ module rt_parameters
   integer,dimension(nGroups)::iGroups=1                          ! Start indices of groups
 #ifdef RTZ
   real(dp),dimension(nGroups,1:27,1:27)::group_csn=0, group_cse=0! Cross sections (cm2)
+  real(dp),dimension(nGroups,2)::group_csn_dust=0   !    Cross sections (cm2)
 #else
   real(dp),dimension(nGroups,nIons)::group_csn=0, group_cse=0    !    Cross sections (cm2)
 #endif
