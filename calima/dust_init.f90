@@ -1644,7 +1644,7 @@ module dust_init
             Zi = 0
             write(Z_str, '(I0)') Zi
             write(pah_filename, '(A,A,A,A,A,A,A)') trim(dust_tables_dir), &
-                'sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
+                'sputtering_PAHBin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
             inquire(file=trim(pah_filename), exist=file_exists)
 
             if (file_exists) then
@@ -1696,7 +1696,7 @@ module dust_init
 #endif
                 write(Z_str, '(I0)') Zi
                 write(pah_filename, '(A,A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
+                    'sputtering_PAHBin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
 
                 inquire(file=trim(pah_filename), exist=file_exists)
                 if (.not. file_exists) cycle
@@ -1858,7 +1858,7 @@ module dust_init
         do i = 1, npah
             ! Check first that the file is there
             write(i_str, '(I2.2)') i  ! convert i to string without leading spaces
-            write(f_peh_filename, '(a,a,a,a,a,a)')trim(dust_tables_dir),'peh_ISRF_Mathis_Draine_',trim(peh_attach_model),'_PAHbin_',trim(i_str),'.dat'
+            write(f_peh_filename, '(a,a,a,a,a,a)')trim(dust_tables_dir),'peh_ISRF_Mathis_Draine_',trim(peh_attach_model),'_PAHBin_',trim(i_str),'.dat'
             inquire(file=f_peh_filename,exist=ok_pah)
 
             if (.not. ok_pah) then
