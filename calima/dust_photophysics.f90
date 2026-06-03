@@ -178,7 +178,10 @@ module dust_optics
             allocate(group_csa_dust(1:nGroups,1:ndust),&
                      group_css_dust(1:nGroups,1:ndust),&
                      group_csr_dust(1:nGroups,1:ndust),&
-                     group_csrat_dust(1:nGroups,1:ndust))
+                     group_csrat_dust(1:nGroups,1:ndust),&
+                     att_len_dust(1:nGroups,1:ndust))
+                    group_csrat_dust = 0.d0
+                    att_len_dust     = 0.d0
             allocate(sigca_dust(1:nGroups,1:ndust),&
                      sigcs_dust(1:nGroups,1:ndust),&
                      sigcr_dust(1:nGroups,1:ndust),&
@@ -906,8 +909,9 @@ module dust_optics
                 Y(ii) = planck_function(tmp, T)
             end do
 
-            ! Compute normalization factor (integral of Y over the wavelength range)
-            norm = integrate_spectrum_simple(X, Y, 1000)
+            ! Compute normalization factor: photon-number-weighted integral ∫ Y*λ dλ
+            ! consistent with getSEDcsn / initialize_cross_sections_from_blackbody
+            norm = integrate_spectrum_lambda(X, Y, 1000)
 
             ! Process each dust bin
             do isize = 1, ndust
@@ -976,6 +980,21 @@ module dust_optics
             integral = integral + 0.5d0 * (Y(i) + Y(i+1)) * (X(i+1) - X(i))
         end do
     end function integrate_spectrum_simple
+
+    function integrate_spectrum_lambda(X, Y, N) result(integral)
+        ! Photon-number-weighted normalization: ∫ Y*λ dλ
+        ! Matches the fLambda norm used by getSEDcsn in rt_spectra.f90
+        implicit none
+        integer, intent(in) :: N
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral
+        integer :: i
+
+        integral = 0.d0
+        do i = 1, N - 1
+            integral = integral + 0.5d0 * (Y(i)*X(i) + Y(i+1)*X(i+1)) * (X(i+1) - X(i))
+        end do
+    end function integrate_spectrum_lambda
 
     function integrate_dust_absorbtion(X, Y, N, isize) result(integral)
         implicit none
@@ -1058,17 +1077,19 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize, ion
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
         
         integral = 0.d0
         do i = 1, N - 1
             if (ion == 1) then
-                sigma = getAbsCrosssection_pah_n(X(i), isize)
+                sigma_i   = getAbsCrosssection_pah_n(X(i),   isize)
+                sigma_ip1 = getAbsCrosssection_pah_n(X(i+1), isize)
             else
-                sigma = getAbsCrosssection_pah_i(X(i), isize)
+                sigma_i   = getAbsCrosssection_pah_i(X(i),   isize)
+                sigma_ip1 = getAbsCrosssection_pah_i(X(i+1), isize)
             end if
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
         end do
     end function integrate_pah_absorbtion
 
@@ -1076,17 +1097,19 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize, ion
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
         
         integral = 0.d0
         do i = 1, N - 1
             if (ion == 1) then
-                sigma = getScCrosssection_pah_n(X(i), isize)
+                sigma_i   = getScCrosssection_pah_n(X(i),   isize)
+                sigma_ip1 = getScCrosssection_pah_n(X(i+1), isize)
             else
-                sigma = getScCrosssection_pah_i(X(i), isize)
+                sigma_i   = getScCrosssection_pah_i(X(i),   isize)
+                sigma_ip1 = getScCrosssection_pah_i(X(i+1), isize)
             end if
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
         end do
     end function integrate_pah_scattering
 
@@ -1094,17 +1117,19 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize, ion
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
         
         integral = 0.d0
         do i = 1, N - 1
             if (ion == 1) then
-                sigma = getRpCrosssection_pah_n(X(i), isize)
+                sigma_i   = getRpCrosssection_pah_n(X(i),   isize)
+                sigma_ip1 = getRpCrosssection_pah_n(X(i+1), isize)
             else
-                sigma = getRpCrosssection_pah_i(X(i), isize)
+                sigma_i   = getRpCrosssection_pah_i(X(i),   isize)
+                sigma_ip1 = getRpCrosssection_pah_i(X(i+1), isize)
             end if
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
         end do
     end function integrate_pah_radpressure
 

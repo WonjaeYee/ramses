@@ -79,8 +79,6 @@ module dust_rhs_mod
 
     real(dp), allocatable, save :: last_kmax_dust(:)
     real(dp), allocatable, save :: last_kmax_pah(:)
-    integer, allocatable, save :: reduction_count_dust(:)
-    integer, allocatable, save :: reduction_count_pah(:)
 
     contains
 
@@ -105,24 +103,24 @@ module dust_rhs_mod
             allocate(last_kmax_pah(max(0, npah_processes)))
         end if
 
-        if (allocated(reduction_count_dust)) then
-            if (size(reduction_count_dust) /= ndust_processes) then
-                deallocate(reduction_count_dust)
+        if (allocated(ode_reduction_count_dust)) then
+            if (size(ode_reduction_count_dust) /= ndust_processes) then
+                deallocate(ode_reduction_count_dust)
             end if
         end if
-        if (.not. allocated(reduction_count_dust)) then
-            allocate(reduction_count_dust(max(0, ndust_processes)))
-            reduction_count_dust(:) = 0
+        if (.not. allocated(ode_reduction_count_dust)) then
+            allocate(ode_reduction_count_dust(max(0, ndust_processes)))
+            ode_reduction_count_dust(:) = 0_8
         end if
 
-        if (allocated(reduction_count_pah)) then
-            if (size(reduction_count_pah) /= npah_processes) then
-                deallocate(reduction_count_pah)
+        if (allocated(ode_reduction_count_pah)) then
+            if (size(ode_reduction_count_pah) /= npah_processes) then
+                deallocate(ode_reduction_count_pah)
             end if
         end if
-        if (.not. allocated(reduction_count_pah)) then
-            allocate(reduction_count_pah(max(0, npah_processes)))
-            reduction_count_pah(:) = 0
+        if (.not. allocated(ode_reduction_count_pah)) then
+            allocate(ode_reduction_count_pah(max(0, npah_processes)))
+            ode_reduction_count_pah(:) = 0_8
         end if
     end subroutine ensure_kmax_storage
 
@@ -130,8 +128,8 @@ module dust_rhs_mod
         implicit none
 
         call ensure_kmax_storage
-        if (allocated(reduction_count_dust)) reduction_count_dust(:) = 0
-        if (allocated(reduction_count_pah)) reduction_count_pah(:) = 0
+        if (allocated(ode_reduction_count_dust)) ode_reduction_count_dust(:) = 0_8
+        if (allocated(ode_reduction_count_pah)) ode_reduction_count_pah(:) = 0_8
     end subroutine reset_timestep_reduction_counters
 
     subroutine register_timestep_reduction_cause
@@ -168,9 +166,9 @@ module dust_rhs_mod
         if (max_i <= 0 .or. vmax <= 0d0) return
 
         if (is_dust) then
-            reduction_count_dust(max_i) = reduction_count_dust(max_i) + 1
+            ode_reduction_count_dust(max_i) = ode_reduction_count_dust(max_i) + 1_8
         else
-            reduction_count_pah(max_i) = reduction_count_pah(max_i) + 1
+            ode_reduction_count_pah(max_i) = ode_reduction_count_pah(max_i) + 1_8
         end if
     end subroutine register_timestep_reduction_cause
 
@@ -201,20 +199,20 @@ module dust_rhs_mod
     subroutine print_timestep_reduction_counters
         implicit none
         integer :: i
-        integer :: total_reductions
+        integer*8 :: total_reductions
 
         call ensure_kmax_storage
 
-        total_reductions = 0
-        if (allocated(reduction_count_dust)) total_reductions = total_reductions + sum(reduction_count_dust)
-        if (allocated(reduction_count_pah)) total_reductions = total_reductions + sum(reduction_count_pah)
+        total_reductions = 0_8
+        if (allocated(ode_reduction_count_dust)) total_reductions = total_reductions + sum(ode_reduction_count_dust)
+        if (allocated(ode_reduction_count_pah)) total_reductions = total_reductions + sum(ode_reduction_count_pah)
 
         print *, 'ODE diagnostics: timestep-reduction attributions by dominant process'
         print *, '  Total attributed reductions       = ', total_reductions
 
         if (ndust_processes > 0) then
             do i = 1, ndust_processes
-                print *, '  dust process ', i, ' (', trim(dust_processes_list(i)%name), '): ', reduction_count_dust(i)
+                print *, '  dust process ', i, ' (', trim(dust_processes_list(i)%name), '): ', ode_reduction_count_dust(i)
             end do
         else
             print *, '  No dust processes active.'
@@ -222,7 +220,7 @@ module dust_rhs_mod
 
         if (npah_processes > 0) then
             do i = 1, npah_processes
-                print *, '  pah process  ', i, ' (', trim(pah_processes_list(i)%name), '): ', reduction_count_pah(i)
+                print *, '  pah process  ', i, ' (', trim(pah_processes_list(i)%name), '): ', ode_reduction_count_pah(i)
             end do
         else
             print *, '  No PAH processes active.'
@@ -530,14 +528,17 @@ module ode_driver_mod
                 y_gas_temp(:,:) = y_gas_new(:,:)
                 y_dust_temp(:) = y_dust_new(:)
                 naccepted = naccepted + 1
+                ode_naccepted = ode_naccepted + 1_8
             else
                 nrejected = nrejected + 1
+                ode_nrejected = ode_nrejected + 1_8
             end if
 
             ! 5. Update the time step size for the next iteration
             h_candidate = min(max(h_new, h_min), h_max)
             if (h_candidate < h) then
                 nreduced = nreduced + 1
+                ode_nreduced = ode_nreduced + 1_8
                 call register_timestep_reduction_cause
             end if
             h = h_candidate
