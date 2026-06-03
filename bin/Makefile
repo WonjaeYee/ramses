@@ -34,7 +34,7 @@ CALIMA = 1
 USE_TURB = 0
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
-MPI = 0
+MPI = 1
 MPIF90 = mpif90
 # Root name of executable
 EXEC = ramses
@@ -225,54 +225,51 @@ FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 # FC  += -g -fbacktrace -ffpe-trap=invalid,zero,overflow -fcheck=bounds
 
 # GNU compiler (gfortran)
-ifeq ($(COMPILER),GNU)
-   FFLAGS = -cpp $(DEFINES)
-   ifeq ($(MPI),1)
-      F90 = $(MPIF90)
-      FC = gfortran
-   else
-      F90 = gfortran
-      FC = gfortran
-      FFLAGS += -DWITHOUTMPI
-   endif
-   F90 += -ffree-line-length-none -fimplicit-none -fPIE
-   FC += -ffree-line-length-none -fimplicit-none -fPIE
-   ifeq ($(GCOV),1)
-         F90 += -O0 -fprofile-arcs -ftest-coverage
-   else
-      ifeq ($(DEBUG),1)
-         F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
-         # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
-      else
-         F90 += -O3 -mcmodel=medium
-      endif
-   endif
-endif
+# ifeq ($(COMPILER),GNU)
+#    FFLAGS = -cpp $(DEFINES)
+#    ifeq ($(MPI),1)
+#       F90 = $(MPIF90)
+#       FC = gfortran
+#    else
+#       F90 = gfortran
+#       FC = gfortran
+#       FFLAGS += -DWITHOUTMPI
+#    endif
+#    F90 += -ffree-line-length-none -fimplicit-none -fPIE
+#    FC += -ffree-line-length-none -fimplicit-none -fPIE
+#    ifeq ($(GCOV),1)
+#          F90 += -O0 -fprofile-arcs -ftest-coverage
+#    else
+#       ifeq ($(DEBUG),1)
+#          F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
+#          # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
+#       else
+#          F90 += -O3 -mcmodel=medium
+#       endif
+#    endif
+# endif
 
-# Intel compiler
-ifeq ($(COMPILER),INTEL)
-   FFLAGS = -cpp $(DEFINES)
-   ifeq ($(MPI),1)
-      F90 = $(MPIF90)
-      FC = ifort
-      FFLAGS += -DNOSYSTEM
-   else
-      F90 = ifort
-      FC = ifort
-      FFLAGS += -DWITHOUTMPI
-   endif
-   F90 += -fp-model source
-   FC += -fp-model source
-   ifeq ($(DEBUG),1)
-      F90 += -warn all -O0 -g -traceback -check bounds
-      FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
-   else
-      F90 += -O2
-   endif
-endif
-
-# add flags here manually
-FFLAGS += -g -fbacktrace
+# # Intel compiler
+# ifeq ($(COMPILER),INTEL)
+#    FFLAGS = -cpp $(DEFINES)
+#    ifeq ($(MPI),1)
+#       F90 = $(MPIF90)
+#       FC = ifort
+#       FFLAGS += -DNOSYSTEM
+#    else
+#       F90 = ifort
+#       FC = ifort
+#       FFLAGS += -DWITHOUTMPI
+#    endif
+#    F90 += -fp-model source
+#    FC += -fp-model source
+#    ifeq ($(DEBUG),1)
+#       F90 += -warn all -O0 -g -traceback -check bounds
+#       FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
+#    else
+#       F90 += -O2
+#    endif
+# endif
 
 #############################################################################
 MOD = mod
