@@ -691,6 +691,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
            stop
         end if
+#endif
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &
@@ -835,7 +836,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         e_counter = 0
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
-              ! Check if it's carbon or exygen species
+              ! Check if it is carbon or oxygen species
               if (elements(ii)%atomic_number.eq.6.or.elements(ii)%atomic_number.eq.8) then
                  do i=1,nleaf !loop over leaf cells
                     if (jj.eq.1) then

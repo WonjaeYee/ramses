@@ -114,7 +114,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !
    ! We use a slightly modified method of Anninos et al. (1997).
    !-------------------------------------------------------------------------
+#ifdef CALIMA
    use dust_commons, only: icell_call, first_time_call, dust_log, dust_log_tdust_solver_print_reset
+#endif
    implicit none
    real(dp):: aexp
    real(dp),dimension(1:nvector):: T2
@@ -351,12 +353,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test.eq.2) then
             if (isH2_rtz) then 
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
-               if (dust_log) call dust_log_tdust_solver_print_reset()
             else
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1)
-               if (dust_log) call dust_log_tdust_solver_print_reset()
             end if
 #ifdef CALIMA
+            if (dust_log) call dust_log_tdust_solver_print_reset()
             if (ndust > 0) write(dust_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_dust(i,1:ndust), dust_helper%T_dust(1:ndust)
             if (npah > 0) write(pah_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_pah(i,1:npah)
 #endif
@@ -368,7 +369,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !       write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, nCO(i)/nH(i), (nCO(i)+nElement(6,i))/nH(i), (nCO(i)+nElement(8,i))/nH(i)
             !    else
                   write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
-                  if (dust_log) call dust_log_tdust_solver_print_reset()
             !    end if
             ! else
                ! write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1)
@@ -378,6 +378,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if (i_interp.eq.1) write(base_unit+100,'(*(A20, ", "))') 'rho', 'T', 'Tmu', 'mu', saved_cooling_rates_names
             write(base_unit+100,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), saved_cooling_rates
 #ifdef CALIMA
+            if (dust_log) call dust_log_tdust_solver_print_reset()
             if (ndust > 0) write(dust_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_dust(i,1:ndust), dust_helper%T_dust(1:ndust)
             if (npah > 0) write(pah_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_pah(i,1:npah)
 #endif
@@ -694,7 +695,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer::ii
       real(dp)::rho_dust_tot
       real(dp),dimension(1:nGroups)::pahAbs,pahSc,pahRp
-      real(dp) :: h2_first_cooling_rate, h2_second_cooling_rate, h2_rate_prime
 #endif
       !-----------------------------------------------------------------------
 
@@ -1000,20 +1000,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         h2_first_cooling_rate = saved_cooling_rates(8)
          call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
-         h2_second_cooling_rate = saved_cooling_rates(8)
-         h2_rate_prime = (h2_first_cooling_rate - h2_second_cooling_rate) / (2.d-5*TK)
-         ! if (h2_prime_before.eq.0d0) then
-         !    h2_prime_before = h2_rate_prime
-         ! elseif (abs(h2_rate_prime -h2_prime_before)/h2_prime_before.gt.0.1d0 .and. h2_prime_before.gt.1d-24) then
-         !    write(*,*) 'Warning: large change in H2 cooling rate derivative:', &
-         !               ' old:', h2_prime_before, ' new:', h2_rate_prime
-         ! else
-         !    h2_prime_before = h2_rate_prime
-         ! end if
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
