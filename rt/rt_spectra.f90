@@ -31,6 +31,17 @@ MODULE spectrum_integrator_module
 
   PRIVATE   ! default
 
+#ifdef RTZ
+  logical :: bare_gr_s_dust_loaded = .false.
+  integer, parameter :: bare_gr_s_nwav = 400
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_wav
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_cabs
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_csca
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_wav
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_cabs
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_csca
+#endif
+
 CONTAINS
 
 !*************************************************************************
@@ -249,30 +260,137 @@ END FUNCTION getCrosssection
 #endif
 
 #ifdef RTZ
+SUBROUTINE load_bare_gr_s_dust()
+  use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
+  implicit none
+  integer :: i, ierr
+  logical :: file_exists
+  character(len=512) :: filepath
+
+  filepath = trim(data_dir) // '/zubko2004_bare_gr_s_cross_sections.dat'
+  inquire(file=trim(filepath), exist=file_exists)
+  if (.not. file_exists) then
+     filepath = trim(data_dir) // 'zubko2004_bare_gr_s_cross_sections.dat'
+     inquire(file=trim(filepath), exist=file_exists)
+  endif
+  if (.not. file_exists) then
+     filepath = 'zubko2004_bare_gr_s_cross_sections.dat'
+     inquire(file=trim(filepath), exist=file_exists)
+  endif
+  if (.not. file_exists) then
+     filepath = '../zubko2004_bare_gr_s_cross_sections.dat'
+     inquire(file=trim(filepath), exist=file_exists)
+  endif
+  if (.not. file_exists) then
+     if (myid == 1) then
+        write(*,*) "ERROR: zubko2004_bare_gr_s_cross_sections.dat not found!"
+        write(*,*) "Tried:"
+        write(*,*) "  " // trim(data_dir) // "/zubko2004_bare_gr_s_cross_sections.dat"
+        write(*,*) "  ./zubko2004_bare_gr_s_cross_sections.dat"
+        write(*,*) "  ../zubko2004_bare_gr_s_cross_sections.dat"
+     endif
+     call clean_stop
+  endif
+
+  open(unit=10, file=trim(filepath), status='old', form='formatted', iostat=ierr)
+  if (ierr /= 0) then
+     if (myid == 1) write(*,*) "ERROR: Could not open " // trim(filepath)
+     call clean_stop
+  endif
+
+  ! Skip header (45 lines)
+  do i = 1, 45
+     read(10, *, iostat=ierr)
+     if (ierr /= 0) then
+        if (myid == 1) write(*,*) "ERROR: Error reading header of " // trim(filepath)
+        close(10)
+        call clean_stop
+     endif
+  end do
+
+  ! Read data
+  do i = 1, bare_gr_s_nwav
+     read(10, *, iostat=ierr) bare_gr_s_wav(i), bare_gr_s_cabs(i), bare_gr_s_csca(i)
+     if (ierr /= 0) then
+        if (myid == 1) write(*,*) "ERROR: Error reading line", i + 45, " of " // trim(filepath)
+        close(10)
+        call clean_stop
+     endif
+  end do
+
+  close(10)
+
+  ! Precompute logs
+  do i = 1, bare_gr_s_nwav
+     bare_gr_s_log_wav(i) = log10(bare_gr_s_wav(i))
+     if (bare_gr_s_cabs(i) > 0.d0) then
+        bare_gr_s_log_cabs(i) = log10(bare_gr_s_cabs(i))
+     else
+        bare_gr_s_log_cabs(i) = -50.d0
+     endif
+     if (bare_gr_s_csca(i) > 0.d0) then
+        bare_gr_s_log_csca(i) = log10(bare_gr_s_csca(i))
+     else
+        bare_gr_s_log_csca(i) = -50.d0
+     endif
+  end do
+
+  bare_gr_s_dust_loaded = .true.
+END SUBROUTINE load_bare_gr_s_dust
+
 FUNCTION getCrosssection_BARE_GR_S_DUST(lambda,species)
-  ! Harley's fit to the effective absorption cross
-  ! section of dust for the BARE-GR-S model
-  ! Mean absolute percentage error of this fit is
-  ! 20%, max error is 133%.
-  !
-  ! The fit is a degree 10 polynomial
+  ! Reads and interpolates the effective dust cross sections
+  ! for the BARE-GR-S model from zubko2004_bare_gr_s_cross_sections.dat.
+  ! species = 1 or other value => Absorption cross section (C_abs)
+  ! species = 2 => Radiation-pressure scattering cross section ((1-g)*C_sca)
   ! lambda is assumed to be in angstroms
-  ! Returns the absorption cross section in cm^-2 / H
+  ! Returns the cross section in cm^2 / H
   implicit none
   real(kind=8)      :: lambda, getCrosssection_BARE_GR_S_DUST
-  real(kind=8)      :: lambda_microns
-  integer           :: species,i
-  real(kind=8),dimension(1:11) :: fit_vals = (/ -1.59319023e+01, -1.60473171e+00,  6.20612550e-01, &
-                                                 6.42859480e-01, -4.08743189e-01, -1.59224607e-01, &
-                                                 7.37953364e-02,  1.60696953e-02, -5.96977205e-03, &
-                                                -5.57671237e-04,  1.80437634e-04 /)
+  integer           :: species
+  integer           :: low, high, mid, k, opt
+  real(kind=8)      :: t, log_val
 
-  lambda_microns = lambda * 1.d-4 ! Convert from angstroms to microns
-  getCrosssection_BARE_GR_S_DUST =0.d0
-  do i=1,11
-     getCrosssection_BARE_GR_S_DUST = getCrosssection_BARE_GR_S_DUST + (fit_vals(i) * (LOG10(lambda_microns)**REAL(i-1, kind=8)))
-  end do
-  getCrosssection_BARE_GR_S_DUST = 10.d0**getCrosssection_BARE_GR_S_DUST
+  if (.not. bare_gr_s_dust_loaded) then
+     call load_bare_gr_s_dust()
+  endif
+
+  opt = species
+  if (opt /= 2) opt = 1
+
+  if (lambda <= bare_gr_s_wav(1)) then
+     if (opt == 1) then
+        getCrosssection_BARE_GR_S_DUST = bare_gr_s_cabs(1)
+     else
+        getCrosssection_BARE_GR_S_DUST = bare_gr_s_csca(1)
+     endif
+  else if (lambda >= bare_gr_s_wav(bare_gr_s_nwav)) then
+     if (opt == 1) then
+        getCrosssection_BARE_GR_S_DUST = bare_gr_s_cabs(bare_gr_s_nwav)
+     else
+        getCrosssection_BARE_GR_S_DUST = bare_gr_s_csca(bare_gr_s_nwav)
+     endif
+  else
+     low = 1
+     high = bare_gr_s_nwav
+     do while (high - low > 1)
+        mid = (low + high) / 2
+        if (bare_gr_s_wav(mid) <= lambda) then
+           low = mid
+        else
+           high = mid
+        endif
+     end do
+     k = low
+     t = (log10(lambda) - bare_gr_s_log_wav(k)) / (bare_gr_s_log_wav(k+1) - bare_gr_s_log_wav(k))
+     if (opt == 1) then
+        log_val = bare_gr_s_log_cabs(k) + t * (bare_gr_s_log_cabs(k+1) - bare_gr_s_log_cabs(k))
+     else
+        log_val = bare_gr_s_log_csca(k) + t * (bare_gr_s_log_csca(k+1) - bare_gr_s_log_csca(k))
+     endif
+     getCrosssection_BARE_GR_S_DUST = 10.d0**log_val
+  endif
 
 END FUNCTION getCrosssection_BARE_GR_S_DUST
 #endif
@@ -616,7 +734,8 @@ SUBROUTINE init_SED_table()
 
 #ifdef RTZ
          ! Now deal with dust
-         tbl_dust(ia,iz,1)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,0,0)
+         tbl_dust(ia,iz,1)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,0)
+         tbl_dust(ia,iz,2)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2,0)
 #endif
 
      end do ! End age loop
@@ -865,6 +984,7 @@ SUBROUTINE update_SED_group_props()
 
 #ifdef RTZ
      call inp_SED_table_dust(age, Z, 1, .false., csn_star_dust(:,1))! [cm^2]
+     call inp_SED_table_dust(age, Z, 2, .false., csn_star_dust(:,2))! [cm^2]
 #endif
 
 #ifdef RTZ
@@ -1078,7 +1198,7 @@ SUBROUTINE update_SED_group_props()
      else ! no stars -> assign zero-age zero-metallicity props
         group_egy(ip)       = SED_table(1,1,ip,3)
 #ifdef RTZ
-        group_csn_dust(ip,1) = SED_table_dust(1,1,ip,  1)
+        group_csn_dust(ip,:) = SED_table_dust(1,1,ip,  :)
         counter = 1
         do ii=1, n_elements ! Loop over elements
         ! Cross sections for atomic species
@@ -1808,13 +1928,13 @@ SUBROUTINE write_SEDtable_dust()
      do j = 1,SED_nz
         do i = 1,SED_nA
            write(10,900)                                                 &
-                 SED_ages(i)        ,    SED_zeds(j)        ,             &
-                 SED_table_dust(i,j,ip,1)
+                 SED_ages(i)        ,    SED_zeds(j)        ,            &
+                 SED_table_dust(i,j,ip,1), SED_table_dust(i,j,ip,2)
         end do
      end do
      close(10)
   end do
-900 format (ES15.4, ES15.4, ES15.4)
+900 format (ES15.4, ES15.4, ES15.4, ES15.4)
 
 END SUBROUTINE write_SEDtable_dust
 #endif
@@ -2054,7 +2174,8 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
      end if
 
 #ifdef RTZ
-     group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 0, 0)
+     group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 0)
+     group_csn_dust(ip,2) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 2, 0)
 #endif
 
   end do ! End loop over groups

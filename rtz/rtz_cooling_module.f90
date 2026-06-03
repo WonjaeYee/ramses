@@ -861,9 +861,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                            ! Set dust absorption and scattering rates [s-1]:
 
       if (TK.lt.1.d6) then 
-         ! dustAbs(:) =kAbs_loc(:) *rho*Zsolar*f_dust*rt_c_cgs(ilevel)
-         dustSc(iIR)= kSc_loc(iIR)*rho*Zsolar*f_dust*rt_c_cgs(ilevel)
-         dustAbs(:) = signc_dust(:,1)*(rho/mH)*dust_to_gas_mass_ratio_over_mw/(1784268.76d0) ! [cm2/H * H/cm^3 * cm/s]
+         dustSc(:)  = signc_dust(:,2)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
+         dustAbs(:) = signc_dust(:,1)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
          dustRp(:)  = dustAbs(:)+dustSc(:)
       else
          dustSc(iIR)= 0.d0
