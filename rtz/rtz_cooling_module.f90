@@ -29,7 +29,7 @@ module rtz_cooling_module
    real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
    real(dp),parameter::Np_min=1d-13, Np_frac=0.2
    real(dp),parameter::Fp_frac=0.5
-   real(dp),dimension(nGroups, 2)::signc_dust
+   real(dp),dimension(nGroups, 3)::signc_dust
   
   ! temporal brutal force trial
   ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
@@ -861,12 +861,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                            ! Set dust absorption and scattering rates [s-1]:
 
       if (TK.lt.1.d6) then 
-         dustSc(:)  = signc_dust(:,2)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
          dustAbs(:) = signc_dust(:,1)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
-         dustRp(:)  = dustAbs(:)+dustSc(:)
+         dustSc(:)  = signc_dust(:,2)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
+         dustRp(:)  = signc_dust(:,3)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
       else
-         dustSc(iIR)= 0.d0
          dustAbs(:) = 0.d0
+         dustSc(:)  = 0.d0
          dustRp(:)  = 0.d0
       endif
 
@@ -902,14 +902,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifndef CALIMA
          ! IR, optical and UV depletion by dust absorption: ----------------
          ! IR scattering/abs on dust (abs after T update)
-         if(rt_isIR) phSc(iIR)  = phSc(iIR) + dustSc(iIR)
+         if(rt_isIR) then 
+            phSc(iIR)  = phSc(iIR) + dustSc(iIR)
+            dustSc(iIR) = 0.d0
+            dustRp(iIR) = 0.d0
+         end if
          do igroup=1,nGroups      ! Deplete photons, since they go into IR
             if( .not. (rt_isIR .and. igroup.eq.iIR) ) & ! IR done elsewhere
                   phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
          end do
          dustAbs(:) = 0d0 ! Set to zero since we have already included it in the absorption rates
-         dustSc(:) = 0d0  ! Set to zero since we have already included it in the scattering rates
-         dustRp(:) = 0d0  ! Set to zero since we have already included it absorption and scattering rates
 #endif
 
          dmom(1:ndim)=0d0

@@ -37,9 +37,11 @@ MODULE spectrum_integrator_module
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_wav
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_cabs
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_csca
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_csrp
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_wav
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_cabs
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_csca
+  real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_log_csrp
 #endif
 
 CONTAINS
@@ -299,8 +301,8 @@ SUBROUTINE load_bare_gr_s_dust()
      call clean_stop
   endif
 
-  ! Skip header (45 lines)
-  do i = 1, 45
+  ! Skip header (46 lines)
+  do i = 1, 46
      read(10, *, iostat=ierr)
      if (ierr /= 0) then
         if (myid == 1) write(*,*) "ERROR: Error reading header of " // trim(filepath)
@@ -311,9 +313,9 @@ SUBROUTINE load_bare_gr_s_dust()
 
   ! Read data
   do i = 1, bare_gr_s_nwav
-     read(10, *, iostat=ierr) bare_gr_s_wav(i), bare_gr_s_cabs(i), bare_gr_s_csca(i)
+     read(10, *, iostat=ierr) bare_gr_s_wav(i), bare_gr_s_cabs(i), bare_gr_s_csca(i), bare_gr_s_csrp(i)
      if (ierr /= 0) then
-        if (myid == 1) write(*,*) "ERROR: Error reading line", i + 45, " of " // trim(filepath)
+        if (myid == 1) write(*,*) "ERROR: Error reading line", i + 46, " of " // trim(filepath)
         close(10)
         call clean_stop
      endif
@@ -334,6 +336,11 @@ SUBROUTINE load_bare_gr_s_dust()
      else
         bare_gr_s_log_csca(i) = -50.d0
      endif
+     if (bare_gr_s_csrp(i) > 0.d0) then
+        bare_gr_s_log_csrp(i) = log10(bare_gr_s_csrp(i))
+     else
+        bare_gr_s_log_csrp(i) = -50.d0
+     endif
   end do
 
   bare_gr_s_dust_loaded = .true.
@@ -344,6 +351,7 @@ FUNCTION getCrosssection_BARE_GR_S_DUST(lambda,species)
   ! for the BARE-GR-S model from zubko2004_bare_gr_s_cross_sections.dat.
   ! species = 1 or other value => Absorption cross section (C_abs)
   ! species = 2 => Radiation-pressure scattering cross section ((1-g)*C_sca)
+  ! species = 3 => Radiation-pressure total cross section (C_abs + (1-g)*C_sca)
   ! lambda is assumed to be in angstroms
   ! Returns the cross section in cm^2 / H
   implicit none
@@ -357,19 +365,23 @@ FUNCTION getCrosssection_BARE_GR_S_DUST(lambda,species)
   endif
 
   opt = species
-  if (opt /= 2) opt = 1
+  if (opt /= 2 .and. opt /= 3) opt = 1
 
   if (lambda <= bare_gr_s_wav(1)) then
      if (opt == 1) then
         getCrosssection_BARE_GR_S_DUST = bare_gr_s_cabs(1)
-     else
+     else if (opt == 2) then
         getCrosssection_BARE_GR_S_DUST = bare_gr_s_csca(1)
+     else
+        getCrosssection_BARE_GR_S_DUST = bare_gr_s_csrp(1)
      endif
   else if (lambda >= bare_gr_s_wav(bare_gr_s_nwav)) then
      if (opt == 1) then
         getCrosssection_BARE_GR_S_DUST = bare_gr_s_cabs(bare_gr_s_nwav)
-     else
+     else if (opt == 2) then
         getCrosssection_BARE_GR_S_DUST = bare_gr_s_csca(bare_gr_s_nwav)
+     else
+        getCrosssection_BARE_GR_S_DUST = bare_gr_s_csrp(bare_gr_s_nwav)
      endif
   else
      low = 1
@@ -386,8 +398,10 @@ FUNCTION getCrosssection_BARE_GR_S_DUST(lambda,species)
      t = (log10(lambda) - bare_gr_s_log_wav(k)) / (bare_gr_s_log_wav(k+1) - bare_gr_s_log_wav(k))
      if (opt == 1) then
         log_val = bare_gr_s_log_cabs(k) + t * (bare_gr_s_log_cabs(k+1) - bare_gr_s_log_cabs(k))
-     else
+     else if (opt == 2) then
         log_val = bare_gr_s_log_csca(k) + t * (bare_gr_s_log_csca(k+1) - bare_gr_s_log_csca(k))
+     else
+        log_val = bare_gr_s_log_csrp(k) + t * (bare_gr_s_log_csrp(k+1) - bare_gr_s_log_csrp(k))
      endif
      getCrosssection_BARE_GR_S_DUST = 10.d0**log_val
   endif
@@ -655,7 +669,7 @@ SUBROUTINE init_SED_table()
   allocate(tbl(nAges,nZs,nv))
 #ifdef RTZ
   ! Dust table
-  allocate(tbl_dust(nAges,nZs,2))
+  allocate(tbl_dust(nAges,nZs,3))
 #endif
   do ip = 1,nSEDgroups                                ! Loop photon groups
      tbl=0.
@@ -736,6 +750,7 @@ SUBROUTINE init_SED_table()
          ! Now deal with dust
          tbl_dust(ia,iz,1)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,0)
          tbl_dust(ia,iz,2)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2,0)
+         tbl_dust(ia,iz,3)   = getSEDcsn_dust(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,3,0)
 #endif
 
      end do ! End age loop
@@ -749,8 +764,8 @@ SUBROUTINE init_SED_table()
      deallocate(tbl2)
 
 #ifdef RTZ
-     allocate(tbl2_dust(nAges,nzs,2))
-     call MPI_ALLREDUCE(tbl_dust,tbl2_dust,nAges*nzs*2,&
+     allocate(tbl2_dust(nAges,nzs,3))
+     call MPI_ALLREDUCE(tbl_dust,tbl2_dust,nAges*nzs*3,&
           MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,ierr)
      tbl_dust = tbl2_dust
      deallocate(tbl2_dust)
@@ -767,7 +782,7 @@ SUBROUTINE init_SED_table()
 
 #ifdef RTZ
      call rebin_log(dlgA, SED_dlgZ                                  &
-          , tbl_dust(2:nAges,:,:), nAges-1, nZs, ages(2:nAges), zs, 2   &
+          , tbl_dust(2:nAges,:,:), nAges-1, nZs, ages(2:nAges), zs, 3   &
           , reb_tbl_dust, SED_nA, SED_nZ, rebAges, SED_Zeds)
 #endif
 
@@ -783,7 +798,7 @@ SUBROUTINE init_SED_table()
         SED_lgA0 = log10(rebAges(1))
         allocate(SED_ages(SED_nA))
 #ifdef RTZ
-        allocate(SED_table_dust(SED_nA, SED_nZ, nSEDgroups, 2))
+        allocate(SED_table_dust(SED_nA, SED_nZ, nSEDgroups, 3))
 #endif
         SED_ages(1)=0d0 ; SED_ages(2:)=rebAges ;    ! Must have zero initial age
      end if
@@ -934,9 +949,9 @@ SUBROUTINE update_SED_group_props()
 #endif
 
 #ifdef RTZ
-     allocate(csn_star_dust(nSEDgroups,2))
-     allocate(sum_csn_cpu_dust(nSEDgroups,2))
-     allocate(sum_csn_all_dust(nSEDgroups,2))
+     allocate(csn_star_dust(nSEDgroups,3))
+     allocate(sum_csn_cpu_dust(nSEDgroups,3))
+     allocate(sum_csn_all_dust(nSEDgroups,3))
 #endif
   endif
   sum_L_cpu   = 0d0 ! Accumulated luminosity, avg cross sections and
@@ -985,6 +1000,7 @@ SUBROUTINE update_SED_group_props()
 #ifdef RTZ
      call inp_SED_table_dust(age, Z, 1, .false., csn_star_dust(:,1))! [cm^2]
      call inp_SED_table_dust(age, Z, 2, .false., csn_star_dust(:,2))! [cm^2]
+     call inp_SED_table_dust(age, Z, 3, .false., csn_star_dust(:,3))! [cm^2]
 #endif
 
 #ifdef RTZ
@@ -1147,7 +1163,7 @@ SUBROUTINE update_SED_group_props()
   endif
 #endif
 #ifdef RTZ
-  call MPI_ALLREDUCE(sum_csn_cpu_dust, sum_csn_all_dust, nSEDgroups*2,   &
+  call MPI_ALLREDUCE(sum_csn_cpu_dust, sum_csn_all_dust, nSEDgroups*3,   &
                      MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, info)
 #endif
 #endif
@@ -1929,12 +1945,12 @@ SUBROUTINE write_SEDtable_dust()
         do i = 1,SED_nA
            write(10,900)                                                 &
                  SED_ages(i)        ,    SED_zeds(j)        ,            &
-                 SED_table_dust(i,j,ip,1), SED_table_dust(i,j,ip,2)
+                 SED_table_dust(i,j,ip,1), SED_table_dust(i,j,ip,2), SED_table_dust(i,j,ip,3)
         end do
      end do
      close(10)
   end do
-900 format (ES15.4, ES15.4, ES15.4, ES15.4)
+900 format (ES15.4, ES15.4, ES15.4, ES15.4, ES15.4)
 
 END SUBROUTINE write_SEDtable_dust
 #endif
@@ -2129,7 +2145,7 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
   logical, intent(in):: isH2_rtz
   real(kind=8), intent(inout):: group_csn(nGroups,1:27,1:27), group_cse(nGroups,1:27,1:27)
 #ifdef RTZ
-  real(kind=8), intent(inout):: group_csn_dust(nGroups,2)
+  real(kind=8), intent(inout):: group_csn_dust(nGroups,3)
 #endif
   real(kind=8), intent(in):: group_L0(nGroups), group_L1(nGroups)
   real(kind=8):: lambda_min, lambda_max, delta_lambda, tmp
@@ -2176,6 +2192,7 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
 #ifdef RTZ
      group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 0)
      group_csn_dust(ip,2) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 2, 0)
+     group_csn_dust(ip,3) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 3, 0)
 #endif
 
   end do ! End loop over groups
