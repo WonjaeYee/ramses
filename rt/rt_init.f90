@@ -459,10 +459,10 @@ SUBROUTINE read_rt_groups()
 #ifdef CALIMA
   ! Initialise the CALIMA dust and PAH optical properties
    call init_dust_efficiency_tables(nGroups)
+   if (dust_pe_heating) call init_dust_dielectric_tables
    ! Initialize per-group dust/PAH cross-sections after dust tables exist.
    call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
    call init_dust_mean_cross_sections(sed_dir)
-  if (dust_pe_heating) call init_dust_dielectric_tables
 #endif
 
 #ifdef INDIVIDUAL_SINK_STARS
