@@ -1313,7 +1313,7 @@ FUNCTION getSEDla_dust(X, Y, N, e0, e1, species, ion)
   real(dp):: getSEDla_dust, X(N), Y(N), e0, e1, norm
   integer :: N, species, ion
 !-------------------------------------------------------------------------
-  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
   getSEDla_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, flaLambda_dust) / norm
 END FUNCTION getSEDla_dust
 !************************************************************************
@@ -1329,7 +1329,7 @@ FUNCTION getSEDcsa_dust(X, Y, N, e0, e1, species, ion)
   real(dp):: getSEDcsa_dust, X(N), Y(N), e0, e1, norm
   integer :: N, species, ion
 !-------------------------------------------------------------------------
-  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
   getSEDcsa_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fAbsLambda_dust) / norm
 END FUNCTION getSEDcsa_dust
 !************************************************************************
@@ -1345,7 +1345,7 @@ FUNCTION getSEDcss_dust(X, Y, N, e0, e1, species, ion)
   real(dp):: getSEDcss_dust, X(N), Y(N), e0, e1, norm
   integer :: N, species, ion
 !-------------------------------------------------------------------------
-  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
   getSEDcss_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fScLambda_dust) / norm
 END FUNCTION getSEDcss_dust
 !************************************************************************
@@ -1361,7 +1361,7 @@ FUNCTION getSEDcsr_dust(X, Y, N, e0, e1, species, ion)
   real(dp):: getSEDcsr_dust, X(N), Y(N), e0, e1, norm
   integer :: N, species, ion
 !-------------------------------------------------------------------------
-  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+  norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
   getSEDcsr_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRpLambda_dust) / norm
 END FUNCTION getSEDcsr_dust
 
@@ -1376,7 +1376,7 @@ FUNCTION getSEDcsrat_dust(X, Y, N, e0, e1, species, ion)
    real(dp):: getSEDcsrat_dust, X(N), Y(N), e0, e1, norm
    integer :: N, species, ion
 !-------------------------------------------------------------------------
-   norm         = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   norm         = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
    getSEDcsrat_dust = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRATLambda_dust) / norm
 END FUNCTION getSEDcsrat_dust
 
@@ -1392,7 +1392,7 @@ FUNCTION getSEDcsa_pah(X, Y, N, e0, e1, species, ion)
    real(dp):: getSEDcsa_pah, X(N), Y(N), e0, e1, norm
    integer :: N, species, ion
 !-------------------------------------------------------------------------
-   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
    getSEDcsa_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fAbsLambda_pah) / norm
 END FUNCTION getSEDcsa_pah
 
@@ -1408,7 +1408,7 @@ FUNCTION getSEDcss_pah(X, Y, N, e0, e1, species, ion)
    real(dp):: getSEDcss_pah, X(N), Y(N), e0, e1, norm
    integer :: N, species, ion
 !-------------------------------------------------------------------------
-   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
    getSEDcss_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fScLambda_pah) / norm
 END FUNCTION getSEDcss_pah
 
@@ -1424,7 +1424,7 @@ FUNCTION getSEDcsr_pah(X, Y, N, e0, e1, species, ion)
    real(dp):: getSEDcsr_pah, X(N), Y(N), e0, e1, norm
    integer :: N, species, ion
 !-------------------------------------------------------------------------
-   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, f1)
+   norm      = integrateSpectrum(X, Y, N, e0, e1, species, ion, fLambda)
    getSEDcsr_pah = integrateSpectrum(X, Y, N, e0, e1, species, ion, fRpLambda_pah) / norm
 END FUNCTION getSEDcsr_pah
 
