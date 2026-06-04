@@ -666,6 +666,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 #endif
                               )
+#endif
 ! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'
@@ -694,7 +695,6 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
            stop
         end if
-#endif
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &
