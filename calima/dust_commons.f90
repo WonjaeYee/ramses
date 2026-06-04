@@ -69,11 +69,13 @@ module dust_commons
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
 
     ! ==== PAH modelling options (read from nml) ====
-    character(LEN=30)::sublimation_model='Galliano'         ! Model for UV sublimation of PAHs
+    character(LEN=30)::photolysis_model='RM2026'         ! Model for UV sublimation of PAHs
     character(LEN=30)::peh_attach_model='Berne'             ! Photo-electric model assumptions
     character(LEN=30)::coalescence_model='Totton2012'  ! PAH coalescence model
     character(LEN=30)::pah_h2_model='RM2026'           ! Model for the formation of H2 by PAHs
     character(LEN=30)::pah_growth_model='subgrid' ! Model for PAH growth by accretion of gas phase C atoms
+    character(LEN=30)::pah_sputtering_model='RM2026' ! Model for the sputtering of PAHs by ions and electrons
+    character(LEN=30)::cluster_evaporation_model='Montillaud2014' ! Model for the evaporation of PAH clusters into small PAHs
 
     ! ==== Rates and efficiency parameters (read from nml)====
     real(dp)::Sconstant=1.0d0   ! Sticking coefficient constant
@@ -121,6 +123,7 @@ module dust_commons
     real(dp),dimension(1:npah)::pah_SNdest_eff=0.1d0   ! PAH SN destruction efficiency
     real(dp),dimension(1:npah)::fpah_inwind=0.5d0 ! Fraction of AGB wind PAH mass in each PAH size bin
     integer,dimension(1:npah)::pah_ncharge_states=4 ! Number of charge states for PAHs in charging calculations
+    logical,dimension(1:npah)::pah_is_cluster=.false. ! Whether the PAH bin corresponds to a cluster of PAHs (Def: false, i.e. all bins correspond to single PAH molecules)
     
     ! ==== ISM depletion factors on dust (read from nml) ====
     ! These values are used for starting isolated sims and tests
@@ -244,6 +247,7 @@ module dust_commons
     integer::npah_processes=0                      ! Number of PAH processes activated (length of pah_processes_list)
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
+    logical::carry_gas_ions=.false.       ! Whether to carry the individual ion densities for gas species
 
 
     ! ==== Some internal constants ====
@@ -263,7 +267,62 @@ module dust_commons
     real(dp),dimension(1:ndust) :: debug_rho_dust=0d0
     real(dp),dimension(1:ndust) :: debug_acc_rate=0d0
     real(dp) :: h2_prime_before=0d0,h2_prime_after=0d0
+    integer*8 :: tdust_solver_calls=0
+    integer*8 :: tdust_solver_iter_sum=0
+    integer*8 :: tdust_solver_iter_min=huge(0_8)
+    integer*8 :: tdust_solver_iter_max=0
+    integer*8 :: tdust_solver_brent_calls=0
+    integer*8 :: tdust_solver_calls_all=0
+    integer*8 :: tdust_solver_iter_sum_all=0
+    integer*8 :: tdust_solver_iter_min_all=huge(0_8)
+    integer*8 :: tdust_solver_iter_max_all=0
+    integer*8 :: tdust_solver_brent_calls_all=0
+    ! ODE driver acceptance/rejection statistics (summed over all cells per coarse step)
+    integer*8 :: ode_naccepted=0, ode_nrejected=0, ode_nreduced=0
+    integer*8 :: ode_naccepted_all=0, ode_nrejected_all=0, ode_nreduced_all=0
+    ! Per-process ODE timestep reduction attributions (indexed by process in dust/pah lists)
+    integer*8, dimension(:), allocatable :: ode_reduction_count_dust
+    integer*8, dimension(:), allocatable :: ode_reduction_count_pah
+    integer*8, dimension(:), allocatable :: ode_reduction_count_dust_all
+    integer*8, dimension(:), allocatable :: ode_reduction_count_pah_all
     contains
+
+    subroutine dust_log_tdust_solver_update(n_iter, used_brent)
+        implicit none
+        integer, intent(in) :: n_iter
+        logical, intent(in) :: used_brent
+        integer*8 :: n_iter_i8
+
+        n_iter_i8 = int(max(n_iter,0), kind=8)
+
+        tdust_solver_calls = tdust_solver_calls + 1_8
+        tdust_solver_iter_sum = tdust_solver_iter_sum + n_iter_i8
+        tdust_solver_iter_min = min(tdust_solver_iter_min, n_iter_i8)
+        tdust_solver_iter_max = max(tdust_solver_iter_max, n_iter_i8)
+        if (used_brent) tdust_solver_brent_calls = tdust_solver_brent_calls + 1_8
+    end subroutine dust_log_tdust_solver_update
+
+    subroutine dust_log_tdust_solver_print_reset
+        implicit none
+        real(dp) :: avg_iter
+
+        if (.not. dust_log) return
+
+        if (tdust_solver_calls > 0_8) then
+            avg_iter = real(tdust_solver_iter_sum, dp) / real(tdust_solver_calls, dp)
+            write(*,'(A,I0,A,I0,A,F10.3,A,I0)') 'Tdust solver stats: min_iter=', &
+                int(tdust_solver_iter_min), ', max_iter=', int(tdust_solver_iter_max), &
+                ', avg_iter=', avg_iter, ', brent_calls=', int(tdust_solver_brent_calls)
+        else
+            write(*,'(A)') 'Tdust solver stats: no calls in this equilibrium iteration.'
+        end if
+
+        tdust_solver_calls = 0_8
+        tdust_solver_iter_sum = 0_8
+        tdust_solver_iter_min = huge(0_8)
+        tdust_solver_iter_max = 0_8
+        tdust_solver_brent_calls = 0_8
+    end subroutine dust_log_tdust_solver_print_reset
 
     subroutine add_total_masses
         use amr_commons
@@ -395,6 +454,7 @@ module dust_commons
         real(dp) :: scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
         real(dp),dimension(1:ndust+npah,1:14) :: nt0_limiter_real, ncells_skipped_real
         character(len=30) :: format_str
+        real(dp) :: tdust_avg_iter
         integer :: ii
 #ifndef WITHOUTMPI
         integer ::mpi_err
@@ -455,10 +515,99 @@ module dust_commons
         call MPI_ALLREDUCE(total_mdust,total_mdust_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
         total_mdust=total_mdust_all
 #endif
-        ! 4. Construct the format string
+#ifndef WITHOUTMPI
+        ! 4. Reduce Tdust solver and ODE acceptance/rejection stats across all CPUs
+        call MPI_ALLREDUCE(tdust_solver_calls, tdust_solver_calls_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_solver_iter_sum, tdust_solver_iter_sum_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_solver_iter_min, tdust_solver_iter_min_all, 1, MPI_INTEGER8, MPI_MIN, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_solver_iter_max, tdust_solver_iter_max_all, 1, MPI_INTEGER8, MPI_MAX, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_solver_brent_calls, tdust_solver_brent_calls_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        tdust_solver_calls = tdust_solver_calls_all
+        tdust_solver_iter_sum = tdust_solver_iter_sum_all
+        tdust_solver_iter_min = tdust_solver_iter_min_all
+        tdust_solver_iter_max = tdust_solver_iter_max_all
+        tdust_solver_brent_calls = tdust_solver_brent_calls_all
+        call MPI_ALLREDUCE(ode_naccepted, ode_naccepted_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(ode_nrejected, ode_nrejected_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(ode_nreduced, ode_nreduced_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        ode_naccepted = ode_naccepted_all
+        ode_nrejected = ode_nrejected_all
+        ode_nreduced  = ode_nreduced_all
+        if (ndust_processes > 0 .and. allocated(ode_reduction_count_dust)) then
+            if (.not. allocated(ode_reduction_count_dust_all)) &
+                allocate(ode_reduction_count_dust_all(ndust_processes))
+            call MPI_ALLREDUCE(ode_reduction_count_dust, ode_reduction_count_dust_all, &
+                ndust_processes, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+            ode_reduction_count_dust = ode_reduction_count_dust_all
+        end if
+        if (npah_processes > 0 .and. allocated(ode_reduction_count_pah)) then
+            if (.not. allocated(ode_reduction_count_pah_all)) &
+                allocate(ode_reduction_count_pah_all(npah_processes))
+            call MPI_ALLREDUCE(ode_reduction_count_pah, ode_reduction_count_pah_all, &
+                npah_processes, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+            ode_reduction_count_pah = ode_reduction_count_pah_all
+        end if
+#endif
+        ! 5. Construct the format string
         write(format_str, '(A, I0, A)') '(A,', ndust + npah, 'ES14.6)'
         if (myid==1) then
-            ! 4. If it's the CPU 1, we print the log
+            ! 5. Print header line with time information
+            if (cosmo) then
+                write(*,'(A,ES13.6,A,ES13.6)') &
+                    ' === CALIMA dust step === aexp=', scale_factor, &
+                    ', dt[Myr]=', dt*scale_t/Myr2sec
+            else
+                write(*,'(A,ES13.6,A,ES13.6)') &
+                    ' === CALIMA dust step === t[Myr]=', tcurrent*scale_t/Myr2sec, &
+                    ', dt[Myr]=', dt*scale_t/Myr2sec
+            end if
+            ! 6. Print ODE solver acceptance statistics
+            write(*,*) ' --- ODE solver ---'
+            write(*,'(A,I12,A,I12,A,I12,A,I12)') &
+                '  Cells=', ndust_cells, &
+                '  Acc=',   ode_naccepted, &
+                '  Rej=',   ode_nrejected, &
+                '  Red=',   ode_nreduced
+            if (ode_naccepted + ode_nrejected > 0_8) then
+                write(*,'(A,F7.2,A,F8.2)') &
+                    '  Rejection rate=', &
+                    1d2*dble(ode_nrejected)/dble(ode_naccepted+ode_nrejected), &
+                    '%, avg substeps/cell=', &
+                    dble(ode_naccepted+ode_nrejected)/dble(max(1_8,ndust_cells))
+            end if
+            if (ode_nreduced > 0_8) then
+                write(*,*) '  Timestep reductions attributed per process:'
+                if (ndust_processes > 0 .and. allocated(ode_reduction_count_dust)) then
+                    do ii = 1, ndust_processes
+                        write(*,'(A,A,A,I12)') '    dust: ', &
+                            trim(dust_processes_list(ii)%name), ' = ', &
+                            ode_reduction_count_dust(ii)
+                    end do
+                end if
+                if (npah_processes > 0 .and. allocated(ode_reduction_count_pah)) then
+                    do ii = 1, npah_processes
+                        write(*,'(A,A,A,I12)') '    pah:  ', &
+                            trim(pah_processes_list(ii)%name), ' = ', &
+                            ode_reduction_count_pah(ii)
+                    end do
+                end if
+            end if
+            ! 7. Print Tdust solver statistics
+            write(*,*) ' --- Tdust solver ---'
+            if (tdust_solver_calls > 0_8) then
+                tdust_avg_iter = real(tdust_solver_iter_sum, dp) / real(tdust_solver_calls, dp)
+                write(*,'(A,I0,A,F8.3,A,I0,A,I0,A,I0,A,F5.1,A)') &
+                    '  calls=', tdust_solver_calls, &
+                    ', avg_iter=', tdust_avg_iter, &
+                    ', min=', tdust_solver_iter_min, &
+                    ', max=', tdust_solver_iter_max, &
+                    ', brent=', tdust_solver_brent_calls, &
+                    ' (', 1d2*dble(tdust_solver_brent_calls)/dble(tdust_solver_calls), '%)'
+            else
+                write(*,*) '  No Tdust solver calls this step.'
+            end if
+            ! 8. Print dust/PAH mass rates [g/cm3/s per bin]
+            write(*,*) ' --- Dust/PAH mass rates [g/cm3/s per bin] ---'
             write(*,format_str) 'dM Acc        =', dM_acc/(dt*scale_t)
             if (dust_sputtering.or.pah_sputtering) write(*,format_str) 'dM Spu        =', dM_spu/(dt*scale_t)
             if (dust_coagulation) write(*,format_str) 'dM Coa        =', dM_coa/(dt*scale_t)
@@ -476,13 +625,7 @@ module dust_commons
             if (pah_cluster_evaporation) write(*,format_str) 'dM Evap       =', dM_evap/(dt*scale_t)
             if (dust_ratd) write(*,format_str) 'dM RATD       =', dM_ratd/(dt*scale_t)
             if (dust_ratd) write(*,format_str) 'dM RATD Dest  =', dM_ratd_dest/(dt*scale_t)
-            if (cosmo)  then
-                write(*,*) 'aexp       :', scale_factor
-            else
-                write(*,*) 'time [Myr] :', tcurrent*scale_t / Myr2sec
-            end if
-            write(*,*) 'dt   [Myr] :', dt*scale_t / Myr2sec
-            ! 5. Compute the average dust loop count
+            ! 9. Print ODE loop count statistics
             if (any(ntot_dust_loopcnt > 0)) then
                 if (ndchemtype==1) then
                     write(*,124)ntot_dust_loopcnt,dble(ntot_dust_loopcnt) / dble(ndust_cells), nmax_dust_loopcnt, nmin_dust_loopcnt
@@ -555,6 +698,18 @@ module dust_commons
         ncells_skipped    = 0;     ncells_skipped_all    = 0
         mdust_skipped     = 0.0d0; mdust_skipped_all     = 0.0d0
         total_mdust       = 0.0d0; total_mdust_all       = 0.0d0
+        tdust_solver_calls = 0_8;       tdust_solver_calls_all = 0_8
+        tdust_solver_iter_sum = 0_8;    tdust_solver_iter_sum_all = 0_8
+        tdust_solver_iter_min = huge(0_8); tdust_solver_iter_min_all = huge(0_8)
+        tdust_solver_iter_max = 0_8;    tdust_solver_iter_max_all = 0_8
+        tdust_solver_brent_calls = 0_8; tdust_solver_brent_calls_all = 0_8
+        ode_naccepted = 0_8; ode_naccepted_all = 0_8
+        ode_nrejected = 0_8; ode_nrejected_all = 0_8
+        ode_nreduced  = 0_8; ode_nreduced_all  = 0_8
+        if (allocated(ode_reduction_count_dust))     ode_reduction_count_dust     = 0_8
+        if (allocated(ode_reduction_count_dust_all)) ode_reduction_count_dust_all = 0_8
+        if (allocated(ode_reduction_count_pah))      ode_reduction_count_pah      = 0_8
+        if (allocated(ode_reduction_count_pah_all))  ode_reduction_count_pah_all  = 0_8
         if (ndchemtype==1) then
 124 format(' Duststats: Tot # loops = ',I20,', Avg. # loops = ', ES14.6, ', max. # loops = ', I20, ', min. # loops = ', I10)
         elseif (ndchemtype==2) then

@@ -465,10 +465,24 @@ module dust_init
                 if (dust_sputtering) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'sputtering'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
+                    if (sputtering_model.eq.'RM2026') then
+                        if (dust_sputtering_charge) then
+                            carry_gas_ions = .true.
+                            dust_processes_list(ndust_processes)%comp_rate => charged_sputtering_rate
+                        else
+                            dust_processes_list(ndust_processes)%comp_rate => sputtering_rate
+                        end if
+                    else
+                        dust_processes_list(ndust_processes)%comp_rate => sputtering_rate
+                    end if
                 end if
                 if (dust_coagulation) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'coagulation'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .false.
                     if (coagulation_model.eq.'Aoyama2017') then
                         dust_processes_list(ndust_processes)%comp_rate => Aoyama2017_coagulation_rate
                     else if (coagulation_model.eq.'Hirashita2015') then
@@ -482,10 +496,21 @@ module dust_init
                 if (dust_shattering) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'shattering'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
+                    if (shattering_model.eq.'Hirashita2015') then
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_shattering_rate
+                    else if (shattering_model.eq.'Smoluchowski1916') then
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_all_shattering_rate
+                    else
+                        dust_processes_list(ndust_processes)%comp_rate => turbulent_shattering_rate
+                    end if
                 end if
                 if (dust_ratd) then
                     ndust_processes = ndust_processes + 1
                     dust_processes_list(ndust_processes)%name = 'ratd'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
                 end if
             end if
         end if
@@ -496,6 +521,9 @@ module dust_init
                 npah_processes = npah_processes + 1
             end if
             if (pah_sputtering) then
+                npah_processes = npah_processes + 1
+            end if
+            if (pah_coalescence) then
                 npah_processes = npah_processes + 1
             end if
             if (pah_freezing) then
@@ -520,10 +548,33 @@ module dust_init
                 if (pah_sputtering) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'sputtering'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .true.
+                    if (pah_sputtering_model.eq.'RM2026') then
+                        pah_processes_list(npah_processes)%comp_rate => pah_sputtering_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => pah_sputtering_rate
+                    end if
+                end if
+                if (pah_coalescence) then
+                    npah_processes = npah_processes + 1
+                    pah_processes_list(npah_processes)%name = 'coalescence'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .false.
+                    if (coalescence_model.eq.'Totton2012') then
+                        pah_processes_list(npah_processes)%comp_rate => Totton2012_pah_coalescence_rate
+                    else if (coalescence_model.eq.'Tielens2021') then
+                        pah_processes_list(npah_processes)%comp_rate => Tielens2021_pah_coalescence_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => Totton2012_pah_coalescence_rate
+                    end if
                 end if
                 if (pah_freezing) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'freezing'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .false.
+                    pah_processes_list(npah_processes)%comp_rate => pah_freezing_rate
                 end if
                 if (pah_desorption) then
                     npah_processes = npah_processes + 1
@@ -532,10 +583,24 @@ module dust_init
                 if (pah_cluster_evaporation) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'cluster_evaporation'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .false.
+                    if (cluster_evaporation_model.eq.'RM2026') then
+                        pah_processes_list(npah_processes)%comp_rate => pah_cluster_evaporation_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => pah_cluster_evaporation_rate
+                    end if
                 end if
                 if (pah_photolysis) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'photolysis'
+                    pah_processes_list(npah_processes)%source = .false.
+                    pah_processes_list(npah_processes)%sink = .true.
+                    if (photolysis_model.eq.'RM2026') then
+                        pah_processes_list(npah_processes)%comp_rate => pah_photolysis_rate
+                    else
+                        pah_processes_list(npah_processes)%comp_rate => pah_photolysis_rate
+                    end if
                 end if
             end if
         end if
@@ -731,6 +796,7 @@ module dust_init
                 pahbins_props(ii)%mpah = Nc_to_mass(pahbins_props(ii)%nc)
                 pahbins_props(ii)%mpah_min = Nc_to_mass(pahbins_props(ii)%nc_min)
                 pahbins_props(ii)%mpah_max = Nc_to_mass(pahbins_props(ii)%nc_max)
+                pahbins_props(ii)%is_cluster = pah_is_cluster(ii)
 
                 ! 2.3 Set the PAH injection and destruction parameters
                 pahbins_props(ii)%AGB_cond_eff = fpah_inwind(ii)
@@ -759,6 +825,13 @@ module dust_init
 
         ! Allocate the reusable dust chemistry workspace once per rank.
         call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)
+        do jj = 1, n_elements
+#ifdef RTZ
+            dust_helper%el_atomic_mass_g(jj) = elements(jj)%atomic_mass * amu2g
+#else
+            dust_helper%el_atomic_mass_g(jj) = el_atomic_masses_amu(jj) * amu2g
+#endif
+        end do
 
         ! 3. Add the RAT-D parameters
         if (dust_ratd) then
@@ -874,8 +947,7 @@ module dust_init
                     ! Compute the threshold velocity for coagulation (Choski et al. 1993)
                     R = 0.5d0 * dustbins_props(ii)%asize_cm
                     dustbins_props(ii)%vthresh_coag(1) = &
-                        & 21.4d0 * sqrt(2d0*dustbins_props(ii)%mgrain**3d0) &
-                        & * dustbins_props(ii)%surf_energy**(5d0/3d0) &
+                        & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/3d0) &
                         & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
                         & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
                     dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
@@ -911,7 +983,8 @@ module dust_init
                         R = (dustbins_props(ii)%asize_cm * dustbins_props(jbin)%asize_cm) &
                             & / (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)
                         dustbins_props(ii)%vthresh_coag(kk_loc) = &
-                            & 21.4d0 * sqrt(dustbins_props(ii)%mgrain**3d0+dustbins_props(jbin)%mgrain**3d0) &
+                            & 21.4d0 * sqrt((dustbins_props(ii)%asize_cm**3d0+dustbins_props(jbin)%asize_cm**3d0)/&
+                            & (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**3d0) &
                             & * dustbins_props(ii)%surf_energy**(5d0/3d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
                         dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
@@ -1301,6 +1374,7 @@ module dust_init
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 close(25)
+                dustbins_props(ii)%sputtering_tab(i)%initialised = .true.
 
                 deallocate(phi_grid, T_grid)
             end do
@@ -1644,7 +1718,7 @@ module dust_init
             Zi = 0
             write(Z_str, '(I0)') Zi
             write(pah_filename, '(A,A,A,A,A,A,A)') trim(dust_tables_dir), &
-                'sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
+                'sputtering_PAHBin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
             inquire(file=trim(pah_filename), exist=file_exists)
 
             if (file_exists) then
@@ -1658,10 +1732,9 @@ module dust_init
                     pahbins_props(ipahbin)%sputtering_tab(0)%npts(1) = nT
 
                     if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d)
-                    allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 1:1))
+                    allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 1:2))
                     pahbins_props(ipahbin)%sputtering_tab(0)%tab1d = 0d0
                     if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d)
-                    allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d(1:nT, 1:1, 1:1))
 
                     if (allocated(T_grid)) deallocate(T_grid)
                     if (allocated(rate_grid)) deallocate(rate_grid)
@@ -1676,7 +1749,7 @@ module dust_init
                     do i = 1, nT
                         read(10, *) rate_grid(i)
                     end do
-                    pahbins_props(ipahbin)%sputtering_tab(0)%tab2d(1:nT, 1, 1) = rate_grid(1:nT)
+                    pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 2) = rate_grid(1:nT)
 
                     pahbins_props(ipahbin)%sputtering_tab(0)%initialised = .true.
                     close(10)
@@ -1696,7 +1769,7 @@ module dust_init
 #endif
                 write(Z_str, '(I0)') Zi
                 write(pah_filename, '(A,A,A,A,A,A,A)') trim(dust_tables_dir), &
-                    'sputtering_PAHbin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
+                    'sputtering_PAHBin_', trim(adjustl(ipah_str)), '_Z_', trim(adjustl(Z_str))
 
                 inquire(file=trim(pah_filename), exist=file_exists)
                 if (.not. file_exists) cycle
@@ -1721,12 +1794,11 @@ module dust_init
                 if (allocated(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d)) then
                     deallocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d)
                 end if
-                allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 1:1))
+                allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 1:2))
                 pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d = 0d0
                 if (allocated(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d)) then
                     deallocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d)
                 end if
-                allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d(1:nT, 1:1, 1:1))
 
                 ! Allocate temporary arrays for temperature and rate grids
                 if (allocated(T_grid)) deallocate(T_grid)
@@ -1744,7 +1816,7 @@ module dust_init
                 do i = 1, nT
                     read(10, *) rate_grid(i)
                 end do
-                pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d(1:nT, 1, 1) = rate_grid(1:nT)
+                pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 2) = rate_grid(1:nT)
                 pahbins_props(ipahbin)%sputtering_tab(iel)%initialised = .true.
 
                 close(10)
@@ -1833,9 +1905,6 @@ module dust_init
                 end do
             end do
             pahbins_props(ipahbin)%dissociation_tab%initialised = .true.
-
-
-
             close(111)
         end do
     end subroutine init_pah_dissociation_tables
@@ -1858,7 +1927,7 @@ module dust_init
         do i = 1, npah
             ! Check first that the file is there
             write(i_str, '(I2.2)') i  ! convert i to string without leading spaces
-            write(f_peh_filename, '(a,a,a,a,a,a)')trim(dust_tables_dir),'peh_ISRF_Mathis_Draine_',trim(peh_attach_model),'_PAHbin_',trim(i_str),'.dat'
+            write(f_peh_filename, '(a,a,a,a,a,a)')trim(dust_tables_dir),'peh_ISRF_Mathis_Draine_',trim(peh_attach_model),'_PAHBin_',trim(i_str),'.dat'
             inquire(file=f_peh_filename,exist=ok_pah)
 
             if (.not. ok_pah) then
