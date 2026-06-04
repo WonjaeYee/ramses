@@ -67,35 +67,8 @@ N_SULFUR_IONS = 6
 N_IRON_IONS = 6
 CO = 1
 
-# N_HYDROGEN_IONS = 2
-# N_H2 = 1
-# N_HELIUM_IONS = 3
-# N_CARBON_IONS = 0
-# N_NITROGEN_IONS = 0
-# N_OXYGEN_IONS = 0
-# N_NEON_IONS = 0
-# N_MAGNESIUM_IONS = 0
-# N_SILICON_IONS = 0
-# N_SULFUR_IONS = 0
-# N_IRON_IONS = 0
-# CO = 0
-# 
 # Individual stars
 INDI_STAR = 1
-
-# test purpose
-# - static sink
-STATIC_SINK = 0
-# - no radiative feedback
-NO_FEEDBACK_RAD = 0
-# - no kinematic feedback (wind ejecta)
-NO_FEEDBACK_KIN = 0
-# - divide photon rate with 8 for reflective boundary conditions
-ONE_EIGHTH_TEST = 0
-# - to keep photons, skip the RTZ cooling step
-SKIP_RTZ_COOLING = 0
-# - stellar ejecta only from MIST module (no portinari, no pop III, no SNIa)
-USE_ONLY_MIST = 0
 
 # Number of ions for RT
 ifeq ($(RTZ),1)
@@ -185,30 +158,9 @@ ifeq ($(CALIMA),1)
 endif
 
 # For individual stars
-ifeq ($(INDI_STAR), 1)
+ifeq ($(INDI_STAR),1)
    DEFINES += -DINDIVIDUAL_SINK_STARS
 endif
-
-# test purposes
-ifeq ($(STATIC_SINK), 1)
-   DEFINES += -DSTATIC_SINK
-endif
-ifeq ($(NO_FEEDBACK_RAD), 1)
-   DEFINES += -DNO_FEEDBACK_RAD
-endif
-ifeq ($(NO_FEEDBACK_KIN), 1)
-   DEFINES += -DNO_FEEDBACK_KIN
-endif
-ifeq ($(ONE_EIGHTH_TEST), 1)
-   DEFINES += -DONE_EIGHTH_TEST
-endif
-ifeq ($(SKIP_RTZ_COOLING), 1)
-   DEFINES += -DSKIP_RTZ_COOLING
-endif
-ifeq ($(USE_ONLY_MIST), 1)
-   DEFINES += -DUSE_ONLY_MIST
-endif
-
 #############################################################################
 # Fortran compiler options and directives
 FFLAGS = -cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
