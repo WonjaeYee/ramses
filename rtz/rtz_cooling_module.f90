@@ -22,14 +22,14 @@ module rtz_cooling_module
    implicit none
 
    private   ! default
-   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix
+   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust
 
-  ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
-  real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
-  real(dp),parameter::T_min=0.1, T_frac=0.1
-  real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
-  real(dp),parameter::Np_min=1d-13, Np_frac=0.2
-  real(dp),parameter::Fp_frac=0.5
+   real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
+   real(dp),parameter::T_min=0.1, T_frac=0.1
+   real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
+   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
+   real(dp),parameter::Fp_frac=0.5
+   real(dp),dimension(nGroups, 3)::signc_dust
   
   ! temporal brutal force trial
   ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
@@ -861,11 +861,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       endif ! if(is_kIR_T)
                            ! Set dust absorption and scattering rates [s-1]:
 
-      ! TODO(code): update this to harley's dust model
-      f_dust = 0.0
-      dustAbs(:) =kAbs_loc(:) *rho*Zsolar*f_dust*rt_c_cgs(ilevel)
-      dustSc(iIR)=kSc_loc(iIR)*rho*Zsolar*f_dust*rt_c_cgs(ilevel)
-      dustRp(:)  =dustAbs(:)+dustSc(:)
+      if (TK.lt.1.d6) then 
+         dustAbs(:) = signc_dust(:,1)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
+         dustSc(:)  = signc_dust(:,2)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
+         dustRp(:)  = signc_dust(:,3)*nElement(1,icell)*dust_to_gas_mass_ratio_over_mw ! [cm2/H * H/cm^3 * cm/s]
+      else
+         dustAbs(:) = 0.d0
+         dustSc(:)  = 0.d0
+         dustRp(:)  = 0.d0
+      endif
+
 #endif
 
       ! UPDATE PHOTON DENSITY AND FLUX *************************************
@@ -898,14 +903,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifndef CALIMA
          ! IR, optical and UV depletion by dust absorption: ----------------
          ! IR scattering/abs on dust (abs after T update)
-         if(rt_isIR) phSc(iIR)  = phSc(iIR) + dustSc(iIR)
+         if(rt_isIR) then 
+            phSc(iIR)  = phSc(iIR) + dustSc(iIR)
+            dustSc(iIR) = 0.d0
+            dustRp(iIR) = 0.d0
+         end if
          do igroup=1,nGroups      ! Deplete photons, since they go into IR
             if( .not. (rt_isIR .and. igroup.eq.iIR) ) & ! IR done elsewhere
                   phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
          end do
          dustAbs(:) = 0d0 ! Set to zero since we have already included it in the absorption rates
-         dustSc(:) = 0d0  ! Set to zero since we have already included it in the scattering rates
-         dustRp(:) = 0d0  ! Set to zero since we have already included it absorption and scattering rates
 #endif
 
          dmom(1:ndim)=0d0
@@ -1924,6 +1931,7 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
    ! in rt_c_cgs and in the cross-sections and energies in the groups.
    !------------------------------------------------------------------------
    use rt_parameters
+   use rtz_cooling_module, only: signc_dust
 #ifdef CALIMA
    use dust_commons, only: sigca_dust,sigcs_dust,sigcr_dust,sigcrat_dust,&
                            sigca_pah,sigcs_pah,sigcr_pah,&
@@ -1937,8 +1945,9 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
    integer, intent(in)::ilevel
    integer::iP, iE, iI
    !------------------------------------------------------------------------
-   signc(:,:,:) = group_csn*rt_c_cgs(ilevel)        ! [cm3 s-1]
-   sigec(:,:,:) = group_cse*rt_c_cgs(ilevel)        ! [cm3 s-1]
+   signc(:,:,:) = group_csn*rt_c_cgs(ilevel)         ! [cm3 s-1]
+   sigec(:,:,:) = group_cse*rt_c_cgs(ilevel)         ! [cm3 s-1]
+   signc_dust(:,:) = group_csn_dust*rt_c_cgs(ilevel) ! [cm3 s-1]
 
    !Photoheating rates for photons on ions
    !HK note -- photoheating ignored for molecules (accounted for elsewhere)
