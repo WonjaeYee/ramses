@@ -339,6 +339,56 @@ contains
         end do binloop
     end subroutine sputtering_rate
 
+    subroutine sublimation_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        ! Compute the thermal sublimation erosion of dust grains using the
+        ! pre-computed sublimation rate tables (epsilon = |da/dt|/a in [s-1]),
+        ! interpolated at the local dust temperature stored in dust_info%T_dust.
+        ! The eroded dust mass is returned to the gas phase following the dust
+        ! bin elemental mass fractions, analogous to thermal sputtering.
+
+        implicit none
+
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: ii, index, iel, nT_loc
+        real(dp) :: rate1, lTd, irate, Td_loc
+
+        ! 1. Loop over the dust bins
+        binloop: do ii = 1, dust_info%ndust
+            index = ii + dust_info%npah
+            if (.not. dustbins_props(ii)%sublimation_tab%initialised) cycle
+
+            ! 2. Interpolate the fractional erosion rate (in log10) at the local dust temperature.
+            !    The table axis is stored as log10(T_d), so we interpolate against log10(T_d).
+            Td_loc = dust_info%T_dust(ii)
+            if (Td_loc <= 0d0) cycle
+            lTd = log10(Td_loc)
+            nT_loc = dustbins_props(ii)%sublimation_tab%npts(1)
+            call interpolate1D(dustbins_props(ii)%sublimation_tab%tab1d(1:nT_loc,1), &
+                            dustbins_props(ii)%sublimation_tab%tab1d(1:nT_loc,2), &
+                            nT_loc, lTd, irate, non_eqw=.true.)
+
+            ! 3. Convert the size erosion rate (|da/dt|/a) into the mass loss rate.
+            !    Since m ~ a^3, the fractional mass loss rate is 3 * (|da/dt|/a) [s-1].
+            rate1 = 3d0 * (10d0**irate) ! [s-1]
+            if (present(kmax)) then
+                kmax = max(kmax, abs(rate1))
+            end if
+
+            ! 4. Now compute the mass rates [g cm-3 s-1]
+            dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+            do iel = 1, dustbins_props(ii)%nelements
+                dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
+                    rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+            end do
+        end do binloop
+    end subroutine sublimation_rate
+
     subroutine charged_sputtering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
 
         implicit none

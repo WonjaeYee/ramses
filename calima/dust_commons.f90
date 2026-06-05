@@ -32,6 +32,7 @@ module dust_commons
     logical ::dust_accretion=.false.             ! Activate grain growth by accretion
     logical ::dust_sputtering=.false.            ! Activate grain destruction by thermal sputtering
     logical ::dust_sputtering_charge=.false.     ! Activate the dependence of thermal sputtering on grain and ion charge
+    logical ::dust_sublimation=.false.           ! Activate grain destruction by thermal sublimation
     logical ::dust_acc_coulomb=.false.           ! Compute on-the-fly Coulomb enhancement of refractory material accretion
     logical ::dust_ratd=.false.                  ! Activate destruction of dust grains by RATD
     logical ::dust_coll_cooling=.false.          ! Activate dust collisional cooling
@@ -184,52 +185,18 @@ module dust_commons
 
 
     ! ==== Global counters ====
-    ! This counters hold the global contribution of each dust process
-    ! to the evolution of dust mass
-    real(dp),dimension(1:ndust+npah):: dM_acc = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_acc_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_spu = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_spu_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_coa = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_coa_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_sha = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_sha_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_sha_dest = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_sha_dest_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_prod_SNII = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_prod_SNII_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_prod_SNIa = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_prod_SNIa_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_prod_SW = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_prod_SW_all = 0.0d0
+    ! SN destruction/seeding mass changes (accumulated in dust_dynamics.f90)
     real(dp),dimension(1:ndust+npah):: dM_SNIId = 0.0d0
     real(dp),dimension(1:ndust+npah):: dM_SNIId_all = 0.0d0
     real(dp),dimension(1:ndust+npah):: dM_SNIad = 0.0d0
     real(dp),dimension(1:ndust+npah):: dM_SNIad_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_ast = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_ast_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_subl = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_subl_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_ratd = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_ratd_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_ratd_dest = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_ratd_dest_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_coal = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_coal_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_fre = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_fre_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_deso = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_deso_all = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_evap = 0.0d0
-    real(dp),dimension(1:ndust+npah):: dM_evap_all = 0.0d0
-    ! We also track the statistics of the dust chemistry solver
+    ! Per-process ODE mass change [g cm-3] per bin, accumulated over all cells per coarse step.
+    ! Indexed as dM_ode_dust(ispecies, iprocess) and dM_ode_pah(ispecies, jpahprocess).
+    ! Allocated after init_dust_processes is called (see dust_init.f90).
+    real(dp), dimension(:,:), allocatable :: dM_ode_dust, dM_ode_dust_all
+    real(dp), dimension(:,:), allocatable :: dM_ode_pah,  dM_ode_pah_all
+    ! We also track the cell count for the dust chemistry solver
     integer*8::ndust_cells=0,ndust_cells_all=0
-    integer*8,dimension(1:ndchemtype)::ntot_dust_loopcnt=0,nmax_dust_loopcnt=0,nmin_dust_loopcnt=0
-    integer*8,dimension(1:ndchemtype)::ntot_dust_loopcnt_all=0,nmax_dust_loopcnt_all=0,nmin_dust_loopcnt_all=0
-    integer*8,dimension(1:ndust+npah,1:14)::nt0_limiter=0,nt0_limiter_all=0
-    integer*8,dimension(1:ndust+npah,1:14)::ncells_skipped=0,ncells_skipped_all=0
-    real(dp),dimension(1:ndust+npah,1:14)::mdust_skipped=0d0,mdust_skipped_all=0d0
-    real(dp),dimension(1:ndust+npah)::total_mdust=0d0,total_mdust_all=0d0
     ! Track the total masses
     real(dp)::total_gas_mass=0d0,total_gas_mass_all=0d0
     real(dp)::total_dust_mass=0d0,total_dust_mass_all=0d0
@@ -260,13 +227,7 @@ module dust_commons
 
     ! ==== External dust files ====
     character(LEN=256)::dust_tables_dir='../lib/dust_tables'    ! Name of folder holding optical properties files
-    
-    logical :: first_time_call=.true.
-    integer :: icell_call=0
-    real(dp) :: debug_nH=0d0,debug_T=0d0
-    real(dp),dimension(1:ndust) :: debug_rho_dust=0d0
-    real(dp),dimension(1:ndust) :: debug_acc_rate=0d0
-    real(dp) :: h2_prime_before=0d0,h2_prime_after=0d0
+
     integer*8 :: tdust_solver_calls=0
     integer*8 :: tdust_solver_iter_sum=0
     integer*8 :: tdust_solver_iter_min=huge(0_8)
@@ -280,6 +241,9 @@ module dust_commons
     ! ODE driver acceptance/rejection statistics (summed over all cells per coarse step)
     integer*8 :: ode_naccepted=0, ode_nrejected=0, ode_nreduced=0
     integer*8 :: ode_naccepted_all=0, ode_nrejected_all=0, ode_nreduced_all=0
+    ! ODE per-cell substep counts: min/max/sum of naccepted substeps per cell integration
+    integer*8 :: ode_substeps_sum=0, ode_substeps_min=huge(0_8), ode_substeps_max=0
+    integer*8 :: ode_substeps_sum_all=0, ode_substeps_min_all=huge(0_8), ode_substeps_max_all=0
     ! Per-process ODE timestep reduction attributions (indexed by process in dust/pah lists)
     integer*8, dimension(:), allocatable :: ode_reduction_count_dust
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah
@@ -292,6 +256,8 @@ module dust_commons
         integer, intent(in) :: n_iter
         logical, intent(in) :: used_brent
         integer*8 :: n_iter_i8
+
+        if (.not. dust_log) return
 
         n_iter_i8 = int(max(n_iter,0), kind=8)
 
@@ -452,7 +418,6 @@ module dust_commons
         integer,intent(in) :: myid
         real(dp),intent(in) :: dt,tcurrent,scale_factor
         real(dp) :: scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
-        real(dp),dimension(1:ndust+npah,1:14) :: nt0_limiter_real, ncells_skipped_real
         character(len=30) :: format_str
         real(dp) :: tdust_avg_iter
         integer :: ii
@@ -461,59 +426,31 @@ module dust_commons
 #endif
         ! 1. Get the code units
         call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
-        
-        ! 2. If MPI, get the counts from all CPUs
+
+        ! 2. If MPI, get the cell count from all CPUs
 #ifndef WITHOUTMPI
         call MPI_ALLREDUCE(ndust_cells, ndust_cells_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
-        call MPI_ALLREDUCE(ntot_dust_loopcnt, ntot_dust_loopcnt_all, ndchemtype, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
-        call MPI_ALLREDUCE(nmax_dust_loopcnt, nmax_dust_loopcnt_all, ndchemtype, MPI_INTEGER8, MPI_MAX, MPI_COMM_WORLD, mpi_err)
-        call MPI_ALLREDUCE(nmin_dust_loopcnt, nmin_dust_loopcnt_all, ndchemtype, MPI_INTEGER8, MPI_MIN, MPI_COMM_WORLD, mpi_err)
-        call MPI_ALLREDUCE(nt0_limiter, nt0_limiter_all, (ndust+npah)*14, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
-        call MPI_ALLREDUCE(ncells_skipped, ncells_skipped_all, (ndust+npah)*14, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
-        ndust_cells = ndust_cells_all ; ntot_dust_loopcnt = ntot_dust_loopcnt_all
-        nmax_dust_loopcnt = nmax_dust_loopcnt_all ; nmin_dust_loopcnt = nmin_dust_loopcnt_all
-        nt0_limiter = nt0_limiter_all ; ncells_skipped = ncells_skipped_all
 #endif
 #ifndef WITHOUTMPI
-        ! 3. If MPI, get the mass from all CPUs
-        call MPI_ALLREDUCE(dM_acc,dM_acc_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_acc=dM_acc_all
-        call MPI_ALLREDUCE(dM_spu,dM_spu_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_spu=dM_spu_all
-        call MPI_ALLREDUCE(dM_coa,dM_coa_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_coa=dM_coa_all
-        call MPI_ALLREDUCE(dM_sha,dM_sha_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_sha=dM_sha_all
+        ! 3. If MPI, reduce SN mass changes and ODE per-process mass changes
         call MPI_ALLREDUCE(dM_SNIId,dM_SNIId_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
         dM_SNIId=dM_SNIId_all
         call MPI_ALLREDUCE(dM_SNIad,dM_SNIad_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
         dM_SNIad=dM_SNIad_all
-        call MPI_ALLREDUCE(dM_prod_SNII,dM_prod_SNII_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_prod_SNII=dM_prod_SNII_all
-        call MPI_ALLREDUCE(dM_prod_SNIa,dM_prod_SNIa_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_prod_SNIa=dM_prod_SNIa_all
-        call MPI_ALLREDUCE(dM_prod_SW,dM_prod_SW_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_prod_SW=dM_prod_SW_all
-        call MPI_ALLREDUCE(dM_ast,dM_ast_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_ast=dM_ast_all
-        call MPI_ALLREDUCE(dM_subl,dM_subl_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_subl=dM_subl_all
-        call MPI_ALLREDUCE(dM_ratd,dM_ratd_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_ratd=dM_ratd_all
-        call MPI_ALLREDUCE(dM_ratd_dest,dM_ratd_dest_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_ratd_dest=dM_ratd_dest_all
-        call MPI_ALLREDUCE(dM_sha_dest,dM_sha_dest_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_sha_dest=dM_sha_dest_all
-        call MPI_ALLREDUCE(dM_fre,dM_fre_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_fre=dM_fre_all
-        call MPI_ALLREDUCE(dM_coal,dM_coal_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_coal=dM_coal_all
-        call MPI_ALLREDUCE(dM_evap,dM_evap_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        dM_evap=dM_evap_all
-        call MPI_ALLREDUCE(mdust_skipped,mdust_skipped_all,(NDUST+NPAH)*14,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        mdust_skipped=mdust_skipped_all
-        call MPI_ALLREDUCE(total_mdust,total_mdust_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
-        total_mdust=total_mdust_all
+        if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
+            if (.not. allocated(dM_ode_dust_all)) &
+                allocate(dM_ode_dust_all(ndust+npah, ndust_processes))
+            call MPI_ALLREDUCE(dM_ode_dust, dM_ode_dust_all, (ndust+npah)*ndust_processes, &
+                MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+            dM_ode_dust = dM_ode_dust_all
+        end if
+        if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
+            if (.not. allocated(dM_ode_pah_all)) &
+                allocate(dM_ode_pah_all(ndust+npah, npah_processes))
+            call MPI_ALLREDUCE(dM_ode_pah, dM_ode_pah_all, (ndust+npah)*npah_processes, &
+                MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+            dM_ode_pah = dM_ode_pah_all
+        end if
 #endif
 #ifndef WITHOUTMPI
         ! 4. Reduce Tdust solver and ODE acceptance/rejection stats across all CPUs
@@ -533,6 +470,12 @@ module dust_commons
         ode_naccepted = ode_naccepted_all
         ode_nrejected = ode_nrejected_all
         ode_nreduced  = ode_nreduced_all
+        call MPI_ALLREDUCE(ode_substeps_sum, ode_substeps_sum_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(ode_substeps_min, ode_substeps_min_all, 1, MPI_INTEGER8, MPI_MIN, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(ode_substeps_max, ode_substeps_max_all, 1, MPI_INTEGER8, MPI_MAX, MPI_COMM_WORLD, mpi_err)
+        ode_substeps_sum = ode_substeps_sum_all
+        ode_substeps_min = ode_substeps_min_all
+        ode_substeps_max = ode_substeps_max_all
         if (ndust_processes > 0 .and. allocated(ode_reduction_count_dust)) then
             if (.not. allocated(ode_reduction_count_dust_all)) &
                 allocate(ode_reduction_count_dust_all(ndust_processes))
@@ -561,7 +504,7 @@ module dust_commons
                     ' === CALIMA dust step === t[Myr]=', tcurrent*scale_t/Myr2sec, &
                     ', dt[Myr]=', dt*scale_t/Myr2sec
             end if
-            ! 6. Print ODE solver acceptance statistics
+            ! 6. Print ODE solver statistics
             write(*,*) ' --- ODE solver ---'
             write(*,'(A,I12,A,I12,A,I12,A,I12)') &
                 '  Cells=', ndust_cells, &
@@ -573,22 +516,30 @@ module dust_commons
                     '  Rejection rate=', &
                     1d2*dble(ode_nrejected)/dble(ode_naccepted+ode_nrejected), &
                     '%, avg substeps/cell=', &
-                    dble(ode_naccepted+ode_nrejected)/dble(max(1_8,ndust_cells))
+                    dble(ode_naccepted)/dble(max(1_8,ndust_cells))
+            end if
+            if (ndust_cells > 0_8) then
+                write(*,'(A,I12,A,F8.2,A,I12)') &
+                    '  Substeps per cell: min=', ode_substeps_min, &
+                    ', avg=', dble(ode_substeps_sum)/dble(ndust_cells), &
+                    ', max=', ode_substeps_max
             end if
             if (ode_nreduced > 0_8) then
-                write(*,*) '  Timestep reductions attributed per process:'
+                write(*,*) '  Timestep reduction fraction per process:'
                 if (ndust_processes > 0 .and. allocated(ode_reduction_count_dust)) then
                     do ii = 1, ndust_processes
-                        write(*,'(A,A,A,I12)') '    dust: ', &
+                        write(*,'(A,A,A,F7.2,A,I12,A)') '    dust: ', &
                             trim(dust_processes_list(ii)%name), ' = ', &
-                            ode_reduction_count_dust(ii)
+                            1d2*dble(ode_reduction_count_dust(ii))/dble(ode_nreduced), &
+                            '% (', ode_reduction_count_dust(ii), ')'
                     end do
                 end if
                 if (npah_processes > 0 .and. allocated(ode_reduction_count_pah)) then
                     do ii = 1, npah_processes
-                        write(*,'(A,A,A,I12)') '    pah:  ', &
+                        write(*,'(A,A,A,F7.2,A,I12,A)') '    pah:  ', &
                             trim(pah_processes_list(ii)%name), ' = ', &
-                            ode_reduction_count_pah(ii)
+                            1d2*dble(ode_reduction_count_pah(ii))/dble(ode_nreduced), &
+                            '% (', ode_reduction_count_pah(ii), ')'
                     end do
                 end if
             end if
@@ -606,98 +557,34 @@ module dust_commons
             else
                 write(*,*) '  No Tdust solver calls this step.'
             end if
-            ! 8. Print dust/PAH mass rates [g/cm3/s per bin]
-            write(*,*) ' --- Dust/PAH mass rates [g/cm3/s per bin] ---'
-            write(*,format_str) 'dM Acc        =', dM_acc/(dt*scale_t)
-            if (dust_sputtering.or.pah_sputtering) write(*,format_str) 'dM Spu        =', dM_spu/(dt*scale_t)
-            if (dust_coagulation) write(*,format_str) 'dM Coa        =', dM_coa/(dt*scale_t)
-            if (dust_shattering) write(*,format_str) 'dM Sha        =', dM_sha/(dt*scale_t)
-            if (dust_turbulent_model) write(*,format_str) 'dM Sha Dest   =', dM_sha_dest/(dt*scale_t)
-            if (pah_freezing) write(*,format_str) 'dM Fre        =', dM_fre/(dt*scale_t)
-            if (pah_coalescence) write(*,format_str) 'dM Coal       =', dM_coal/(dt*scale_t)
-            if (dust_SNdest) write(*,format_str) 'dM SNd  (II)  =', dM_SNIId*(scale_d*scale_l**3)/(dt*scale_t)
-            if (dust_SNdest) write(*,format_str) 'dM SNd  (Ia)  =', dM_SNIad*(scale_d*scale_l**3)/(dt*scale_t)
-            if (dust_inSN) write(*,format_str) 'dM Prod (II)  =', dM_prod_SNII*(scale_d*scale_l**3)/(dt*scale_t)
-            if (dust_inSNIa) write(*,format_str) 'dM Prod (Ia)  =', dM_prod_SNIa*(scale_d*scale_l**3)/(dt*scale_t)
-            if (dust_inSW) write(*,format_str) 'dM Prod (SW)  =', dM_prod_SW*(scale_d*scale_l**3)/(dt*scale_t)
-            write(*,format_str) 'dM Ast        =', dM_ast*(scale_d*scale_l**3)/(dt*scale_t)
-            if (pah_photolysis) write(*,format_str) 'dM Subl       =', dM_subl/(dt*scale_t)
-            if (pah_cluster_evaporation) write(*,format_str) 'dM Evap       =', dM_evap/(dt*scale_t)
-            if (dust_ratd) write(*,format_str) 'dM RATD       =', dM_ratd/(dt*scale_t)
-            if (dust_ratd) write(*,format_str) 'dM RATD Dest  =', dM_ratd_dest/(dt*scale_t)
-            ! 9. Print ODE loop count statistics
-            if (any(ntot_dust_loopcnt > 0)) then
-                if (ndchemtype==1) then
-                    write(*,124)ntot_dust_loopcnt,dble(ntot_dust_loopcnt) / dble(ndust_cells), nmax_dust_loopcnt, nmin_dust_loopcnt
-                elseif (ndchemtype==2) then
-                    write(*,125) ntot_dust_loopcnt
-                    write(*,126) dble(ntot_dust_loopcnt) / dble(ndust_cells)
-                    write(*,127) nmax_dust_loopcnt
-                    write(*,128) nmin_dust_loopcnt
-                end if
-                nt0_limiter_real(:,:) = 1d2 * nt0_limiter(:,:) / dble(sum(ntot_dust_loopcnt(:)))
-                write(format_str, '(A, I0, A)') '(A,', ndust + npah, 'ES10.2)'
-                write(*,*) 'Avg % of times the dust processes was the limiting factor'
-                write(*,format_str) 'Accretion        = ', nt0_limiter_real(1:ndust+npah,1)
-                write(*,format_str) 'Sputtering       = ', nt0_limiter_real(1:ndust+npah,2)
-                write(*,format_str) 'Shattering       = ', nt0_limiter_real(1:ndust+npah,3)
-                write(*,format_str) 'Coagulation      = ', nt0_limiter_real(1:ndust+npah,4)
-                write(*,format_str) 'Shatt Dest       = ', nt0_limiter_real(1:ndust+npah,7)
-                write(*,format_str) 'Shatt Small      = ', nt0_limiter_real(1:ndust+npah,8)
-                write(*,format_str) 'Shatt Small Dest = ', nt0_limiter_real(1:ndust+npah,9)
-                write(*,format_str) 'RATD             = ', nt0_limiter_real(1:ndust+npah,5)
-                write(*,format_str) 'RATD Dest        = ', nt0_limiter_real(1:ndust+npah,6)
-                write(*,format_str) 'Sublimation      = ', nt0_limiter_real(1:ndust+npah,10)
-                write(*,format_str) 'Coalescence      = ', nt0_limiter_real(1:ndust+npah,11)
-                write(*,format_str) 'Freezing         = ', nt0_limiter_real(1:ndust+npah,13)
-                write(*,format_str) 'Evaporation      = ', nt0_limiter_real(1:ndust+npah,14)
-                if (any(nt0_limiter_real(:,:) < 0d0)) then
-                    write(*,*) 'WARNING: Some dust processes show negative time fractions!'
-                    write(*,*) 'nt0_limiter(:,:): ', nt0_limiter(:,:)
-                    write(*,*) 'ntot_dust_loopcnt(:): ', ntot_dust_loopcnt(:)
-                    write(*,*) 'sum(ntot_dust_loopcnt(:)): ', sum(ntot_dust_loopcnt(:))
-                    write(*,*) 'nt0_limiter_real(:,:): ', nt0_limiter_real(:,:) 
-                    stop
-                end if
-                ncells_skipped_real(:,:) = 1d2 * ncells_skipped(:,:) / dble(ndust_cells)
-                do ii = 1, ndust+npah
-                    mdust_skipped(ii,:) = mdust_skipped(ii,:) / total_mdust(ii)
+            ! 8. Print per-process ODE mass change rates [g cm-3 s-1 per bin]
+            write(*,*) ' --- ODE process dM/dt [g cm-3 s-1 per bin] ---'
+            if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
+                do ii = 1, ndust_processes
+                    write(*,format_str) 'dust '//trim(dust_processes_list(ii)%name)//' =', &
+                        dM_ode_dust(:, ii) / (dt*scale_t)
                 end do
-                write(*,*) 'Avg % of cells where the dust processes was skipped'
-                write(*,format_str) 'Sputtering       = ', ncells_skipped_real(1:ndust+npah,2)
-                write(*,format_str) 'RATD             = ', nt0_limiter_real(1:ndust+npah,5)   
-                write(*,format_str) 'Evaporation      = ', nt0_limiter_real(1:ndust+npah,14)
-                write(*,*) 'Avg % of dust mass skipped'
-                write(*,format_str) 'Sputtering       = ', mdust_skipped(1:ndust+npah,2)
-                write(*,format_str) 'RATD             = ', mdust_skipped(1:ndust+npah,5)
-                write(*,format_str) 'Evaporation      = ', mdust_skipped(1:ndust+npah,14)    
             end if
-        endif     
-        dM_acc            = 0.0d0; dM_acc_all            = 0.0d0
-        dM_spu            = 0.0d0; dM_spu_all            = 0.0d0
-        dM_coa            = 0.0d0; dM_coa_all            = 0.0d0
-        dM_sha            = 0.0d0; dM_sha_all            = 0.0d0
+            if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
+                do ii = 1, npah_processes
+                    write(*,format_str) 'pah  '//trim(pah_processes_list(ii)%name)//' =', &
+                        dM_ode_pah(:, ii) / (dt*scale_t)
+                end do
+            end if
+            ! 9. Print SN destruction statistics
+            if (dust_SNdest) then
+                write(*,*) ' --- SN dust statistics ---'
+                write(*,format_str) 'dM SNd  (II)  =', dM_SNIId/(dt*scale_t)
+                write(*,format_str) 'dM SNd  (Ia)  =', dM_SNIad/(dt*scale_t)
+            end if
+        endif
         dM_SNIId          = 0.0d0; dM_SNIId_all          = 0.0d0
         dM_SNIad          = 0.0d0; dM_SNIad_all          = 0.0d0
-        dM_prod_SNII      = 0.0d0; dM_prod_SNII_all      = 0.0d0
-        dM_prod_SNIa      = 0.0d0; dM_prod_SNIa_all      = 0.0d0
-        dM_prod_SW        = 0.0d0; dM_prod_SW_all        = 0.0d0
-        dM_ast            = 0.0d0; dM_ast_all            = 0.0d0
-        dM_subl           = 0.0d0; dM_subl_all           = 0.0d0
-        dM_ratd           = 0.0d0; dM_ratd_all           = 0.0d0
-        dM_ratd_dest      = 0.0d0; dM_ratd_dest_all      = 0.0d0
-        dM_fre            = 0.0d0; dM_fre_all            = 0.0d0
-        dM_sha_dest       = 0.0d0; dM_sha_dest_all       = 0.0d0
-        dM_coal           = 0.0d0; dM_coal_all           = 0.0d0
-        dM_evap           = 0.0d0; dM_evap_all           = 0.0d0
+        if (allocated(dM_ode_dust))     dM_ode_dust     = 0.0d0
+        if (allocated(dM_ode_dust_all)) dM_ode_dust_all = 0.0d0
+        if (allocated(dM_ode_pah))      dM_ode_pah      = 0.0d0
+        if (allocated(dM_ode_pah_all))  dM_ode_pah_all  = 0.0d0
         ndust_cells       = 0;     ndust_cells_all       = 0
-        ntot_dust_loopcnt = 0;     ntot_dust_loopcnt_all = 0
-        nmax_dust_loopcnt = 0;     nmax_dust_loopcnt_all = 0
-        nmin_dust_loopcnt = 0;     nmin_dust_loopcnt_all = 0
-        nt0_limiter       = 0;     nt0_limiter_all       = 0
-        ncells_skipped    = 0;     ncells_skipped_all    = 0
-        mdust_skipped     = 0.0d0; mdust_skipped_all     = 0.0d0
-        total_mdust       = 0.0d0; total_mdust_all       = 0.0d0
         tdust_solver_calls = 0_8;       tdust_solver_calls_all = 0_8
         tdust_solver_iter_sum = 0_8;    tdust_solver_iter_sum_all = 0_8
         tdust_solver_iter_min = huge(0_8); tdust_solver_iter_min_all = huge(0_8)
@@ -706,18 +593,13 @@ module dust_commons
         ode_naccepted = 0_8; ode_naccepted_all = 0_8
         ode_nrejected = 0_8; ode_nrejected_all = 0_8
         ode_nreduced  = 0_8; ode_nreduced_all  = 0_8
+        ode_substeps_sum = 0_8;       ode_substeps_sum_all = 0_8
+        ode_substeps_min = huge(0_8); ode_substeps_min_all = huge(0_8)
+        ode_substeps_max = 0_8;       ode_substeps_max_all = 0_8
         if (allocated(ode_reduction_count_dust))     ode_reduction_count_dust     = 0_8
         if (allocated(ode_reduction_count_dust_all)) ode_reduction_count_dust_all = 0_8
         if (allocated(ode_reduction_count_pah))      ode_reduction_count_pah      = 0_8
         if (allocated(ode_reduction_count_pah_all))  ode_reduction_count_pah_all  = 0_8
-        if (ndchemtype==1) then
-124 format(' Duststats: Tot # loops = ',I20,', Avg. # loops = ', ES14.6, ', max. # loops = ', I20, ', min. # loops = ', I10)
-        elseif (ndchemtype==2) then
-125 format(' Duststats: Tot. # loops = ',2I20)
-126 format('            Avg. # loops = ',2ES14.6)
-127 format('            Max. # loops = ',2I20)
-128 format('            Min. # loops = ',2I20)
-        end if
     end subroutine print_dust_log
 
 end module

@@ -76,9 +76,14 @@ module dust_rhs_mod
     public :: dust_rhs, print_last_process_kmax
     public :: reset_timestep_reduction_counters, register_timestep_reduction_cause
     public :: print_timestep_reduction_counters
+    public :: last_dydt_dust_per_proc, last_dydt_pah_per_proc
 
     real(dp), allocatable, save :: last_kmax_dust(:)
     real(dp), allocatable, save :: last_kmax_pah(:)
+    ! Per-process dydt contributions from the most recent dust_rhs call [g cm-3 s-1].
+    ! Indexed as last_dydt_dust_per_proc(ispecies, iprocess).
+    real(dp), allocatable, save :: last_dydt_dust_per_proc(:,:)
+    real(dp), allocatable, save :: last_dydt_pah_per_proc(:,:)
 
     contains
 
@@ -103,24 +108,48 @@ module dust_rhs_mod
             allocate(last_kmax_pah(max(0, npah_processes)))
         end if
 
-        if (allocated(ode_reduction_count_dust)) then
-            if (size(ode_reduction_count_dust) /= ndust_processes) then
-                deallocate(ode_reduction_count_dust)
+        if (dust_log) then
+            if (allocated(ode_reduction_count_dust)) then
+                if (size(ode_reduction_count_dust) /= ndust_processes) then
+                    deallocate(ode_reduction_count_dust)
+                end if
             end if
-        end if
-        if (.not. allocated(ode_reduction_count_dust)) then
-            allocate(ode_reduction_count_dust(max(0, ndust_processes)))
-            ode_reduction_count_dust(:) = 0_8
-        end if
+            if (.not. allocated(ode_reduction_count_dust)) then
+                allocate(ode_reduction_count_dust(max(0, ndust_processes)))
+                ode_reduction_count_dust(:) = 0_8
+            end if
 
-        if (allocated(ode_reduction_count_pah)) then
-            if (size(ode_reduction_count_pah) /= npah_processes) then
-                deallocate(ode_reduction_count_pah)
+            if (allocated(ode_reduction_count_pah)) then
+                if (size(ode_reduction_count_pah) /= npah_processes) then
+                    deallocate(ode_reduction_count_pah)
+                end if
             end if
-        end if
-        if (.not. allocated(ode_reduction_count_pah)) then
-            allocate(ode_reduction_count_pah(max(0, npah_processes)))
-            ode_reduction_count_pah(:) = 0_8
+            if (.not. allocated(ode_reduction_count_pah)) then
+                allocate(ode_reduction_count_pah(max(0, npah_processes)))
+                ode_reduction_count_pah(:) = 0_8
+            end if
+
+            if (allocated(last_dydt_dust_per_proc)) then
+                if (size(last_dydt_dust_per_proc, 1) /= ndust+npah .or. &
+                    size(last_dydt_dust_per_proc, 2) /= max(1, ndust_processes)) then
+                    deallocate(last_dydt_dust_per_proc)
+                end if
+            end if
+            if (.not. allocated(last_dydt_dust_per_proc)) then
+                allocate(last_dydt_dust_per_proc(ndust+npah, max(1, ndust_processes)))
+                last_dydt_dust_per_proc(:,:) = 0.0_dp
+            end if
+
+            if (allocated(last_dydt_pah_per_proc)) then
+                if (size(last_dydt_pah_per_proc, 1) /= ndust+npah .or. &
+                    size(last_dydt_pah_per_proc, 2) /= max(1, npah_processes)) then
+                    deallocate(last_dydt_pah_per_proc)
+                end if
+            end if
+            if (.not. allocated(last_dydt_pah_per_proc)) then
+                allocate(last_dydt_pah_per_proc(ndust+npah, max(1, npah_processes)))
+                last_dydt_pah_per_proc(:,:) = 0.0_dp
+            end if
         end if
     end subroutine ensure_kmax_storage
 
@@ -247,6 +276,7 @@ module dust_rhs_mod
         ! ---- Local variables ----
         integer :: i
         real(dp) :: process_kmax
+        real(dp) :: dydt_dust_before(size(y_dust))
 
         ! 1. Initialize the time derivatives to zero
         dydt_gas(:,:) = 0.0_dp
@@ -255,21 +285,31 @@ module dust_rhs_mod
         call ensure_kmax_storage
         if (allocated(last_kmax_dust)) last_kmax_dust(:) = 0.0_dp
         if (allocated(last_kmax_pah)) last_kmax_pah(:) = 0.0_dp
+        if (dust_log) then
+            if (allocated(last_dydt_dust_per_proc)) last_dydt_dust_per_proc(:,:) = 0.0_dp
+            if (allocated(last_dydt_pah_per_proc))  last_dydt_pah_per_proc(:,:)  = 0.0_dp
+        end if
 
         ! 2. Loop over the dust processes and compute their contribution to the time derivatives
         if (present(kmax)) kmax = 0.0_dp
 
         do i = 1, ndust_processes
             process_kmax = 0.0_dp
+            if (dust_log) dydt_dust_before(:) = dydt_dust(:)
             call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
             last_kmax_dust(i) = process_kmax
+            if (dust_log .and. allocated(last_dydt_dust_per_proc)) &
+                last_dydt_dust_per_proc(:, i) = dydt_dust(:) - dydt_dust_before(:)
             if (present(kmax)) kmax = max(kmax, process_kmax)
         end do
 
         do i = 1, npah_processes
             process_kmax = 0.0_dp
+            if (dust_log) dydt_dust_before(:) = dydt_dust(:)
             call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
             last_kmax_pah(i) = process_kmax
+            if (dust_log .and. allocated(last_dydt_pah_per_proc)) &
+                last_dydt_pah_per_proc(:, i) = dydt_dust(:) - dydt_dust_before(:)
             if (present(kmax)) kmax = max(kmax, process_kmax)
         end do
     end subroutine dust_rhs
@@ -443,6 +483,7 @@ module ode_driver_mod
     use ode_interface_mod
     use dust_rhs_mod, only: print_last_process_kmax, reset_timestep_reduction_counters
     use dust_rhs_mod, only: register_timestep_reduction_cause, print_timestep_reduction_counters
+    use dust_rhs_mod, only: last_dydt_dust_per_proc, last_dydt_pah_per_proc
 
     implicit none
     private
@@ -528,18 +569,33 @@ module ode_driver_mod
                 y_gas_temp(:,:) = y_gas_new(:,:)
                 y_dust_temp(:) = y_dust_new(:)
                 naccepted = naccepted + 1
-                ode_naccepted = ode_naccepted + 1_8
+                if (dust_log) then
+                    ode_naccepted = ode_naccepted + 1_8
+                    ! Accumulate per-process dM contribution using k1-stage rates * h
+                    if (ndust_processes > 0 .and. allocated(dM_ode_dust) .and. &
+                        allocated(last_dydt_dust_per_proc)) then
+                        dM_ode_dust(:, 1:ndust_processes) = dM_ode_dust(:, 1:ndust_processes) + &
+                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h
+                    end if
+                    if (npah_processes > 0 .and. allocated(dM_ode_pah) .and. &
+                        allocated(last_dydt_pah_per_proc)) then
+                        dM_ode_pah(:, 1:npah_processes) = dM_ode_pah(:, 1:npah_processes) + &
+                            last_dydt_pah_per_proc(:, 1:npah_processes) * h
+                    end if
+                end if
             else
                 nrejected = nrejected + 1
-                ode_nrejected = ode_nrejected + 1_8
+                if (dust_log) ode_nrejected = ode_nrejected + 1_8
             end if
 
             ! 5. Update the time step size for the next iteration
             h_candidate = min(max(h_new, h_min), h_max)
             if (h_candidate < h) then
                 nreduced = nreduced + 1
-                ode_nreduced = ode_nreduced + 1_8
-                call register_timestep_reduction_cause
+                if (dust_log) then
+                    ode_nreduced = ode_nreduced + 1_8
+                    call register_timestep_reduction_cause
+                end if
             end if
             h = h_candidate
             icount = icount + 1
@@ -561,6 +617,14 @@ module ode_driver_mod
         ! 6. Set the final solution
         y_gas_final(:,:) = y_gas_temp(:,:)
         y_dust_final(:) = y_dust_temp(:)
+
+        ! 7. Update per-cell substep statistics (only when logging is active)
+        if (dust_log) then
+            ndust_cells       = ndust_cells + 1_8
+            ode_substeps_sum  = ode_substeps_sum + int(naccepted, kind=8)
+            ode_substeps_min  = min(ode_substeps_min, int(naccepted, kind=8))
+            ode_substeps_max  = max(ode_substeps_max, int(naccepted, kind=8))
+        end if
 
         if (debug_enabled) then
             if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then

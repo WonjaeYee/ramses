@@ -164,6 +164,7 @@ module dustbin_types
 
         ! Tables for dust processes
         type(DustTable),dimension(1:n_elements) :: sputtering_tab ! Sputtering tables
+        type(DustTable) :: sublimation_tab ! Thermal sublimation erosion rate table (function of dust temperature)
         type(DustTable),dimension(0:n_elements) :: collisional_tab ! Collisional tables (0 is for electrons)
         type(DustTable) :: mean_charg_tab, sigma_charg_tab ! Charging tables
         type(DustTable) :: peh_tab, rec_tab ! Photoelectric and recombination tables

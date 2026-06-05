@@ -27,6 +27,7 @@ module dust_init
         write(*,*) 'dust_acc_coulomb      = ',dust_acc_coulomb,',        dust_ratd     = ',dust_ratd
         write(*,*) 'dust_turbulent_model  = ',dust_turbulent_model,',        H2ondust      = ',H2ondust
         write(*,*) 'dust_shattering_SN      = ',dust_shattering_SN
+        write(*,*) 'dust_sublimation      = ',dust_sublimation
         do ii = 1, ndchemtype
             write(*,*)'dust chemical group ',ii,' has ',dustbins_per_chemtype(ii),' dust bins',' starting with dust bin ',istart_chemtype(ii)
             write(*,*)'composition: '
@@ -439,6 +440,9 @@ module dust_init
             if (dust_sputtering) then
                 ndust_processes = ndust_processes + 1
             end if
+            if (dust_sublimation) then
+                ndust_processes = ndust_processes + 1
+            end if
             if (dust_coagulation) then
                 ndust_processes = ndust_processes + 1
             end if
@@ -477,6 +481,13 @@ module dust_init
                     else
                         dust_processes_list(ndust_processes)%comp_rate => sputtering_rate
                     end if
+                end if
+                if (dust_sublimation) then
+                    ndust_processes = ndust_processes + 1
+                    dust_processes_list(ndust_processes)%name = 'sublimation'
+                    dust_processes_list(ndust_processes)%source = .false.
+                    dust_processes_list(ndust_processes)%sink = .true.
+                    dust_processes_list(ndust_processes)%comp_rate => sublimation_rate
                 end if
                 if (dust_coagulation) then
                     ndust_processes = ndust_processes + 1
@@ -994,8 +1005,23 @@ module dust_init
             end if
         end do
 
-        ! 6. Initialise the min number of dust chemistry loops
-        nmin_dust_loopcnt = countmax
+        ! 6. Allocate per-process dM tracking arrays (sizes known after init_dust_processes)
+        if (ndust_processes > 0) then
+            if (.not. allocated(dM_ode_dust)) &
+                allocate(dM_ode_dust(ndust+npah, ndust_processes))
+            dM_ode_dust(:,:) = 0.0_dp
+            if (.not. allocated(ode_reduction_count_dust)) &
+                allocate(ode_reduction_count_dust(ndust_processes))
+            ode_reduction_count_dust(:) = 0_8
+        end if
+        if (npah_processes > 0) then
+            if (.not. allocated(dM_ode_pah)) &
+                allocate(dM_ode_pah(ndust+npah, npah_processes))
+            dM_ode_pah(:,:) = 0.0_dp
+            if (.not. allocated(ode_reduction_count_pah)) &
+                allocate(ode_reduction_count_pah(npah_processes))
+            ode_reduction_count_pah(:) = 0_8
+        end if
         smallr_dust = smallr
 
         ! 7. Other constants and parameters
@@ -1018,6 +1044,9 @@ module dust_init
 
         ! 8. Read the dust thermal sputtering tables
         if (sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables
+
+        ! 8b. Read the dust thermal sublimation tables
+        if (dust_sublimation) call init_dust_sublimation_tables
 
         ! 9. Read the dust collisional tables
         call init_dust_collisional_tables
@@ -1381,6 +1410,131 @@ module dust_init
         end do
 
     end subroutine init_thermal_sputtering_tables
+
+    subroutine init_dust_sublimation_tables
+        ! Reads the pre-computed thermal sublimation erosion rate tables for
+        ! each dust bin. Files are named sublimation_rate_DustBin_xx.dat and
+        ! contain a header (lines starting with '#') followed by two columns:
+        !   col 1: dust temperature T_d [K]
+        !   col 2: fractional erosion rate epsilon = |da/dt|/a [s-1]
+        ! The temperature axis is stored as log10(T_d) and the rate as
+        ! log10(epsilon) so that linear interpolation can be done on the fly
+        ! using the dust temperature saved in the dust chemistry workspace.
+        use amr_commons, only: myid
+        implicit none
+
+        logical :: ok, ok_all
+        integer :: nT, istat, j, ii, ndata
+        character(len=20) :: dustlabel
+        character(len=256) :: sublimation_filename
+        character(len=256) :: line
+        real(dp) :: Td, eps
+        real(dp), parameter :: log_floor = -300d0
+
+        ! 1. Check first that all files are in the expected place
+        ok_all = .true.
+        do ii = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            write(sublimation_filename, '(A,A,A,A)') trim(dust_tables_dir), &
+                'sublimation_rate_', trim(dustlabel), '.dat'
+            inquire(file=trim(sublimation_filename), exist=ok)
+            ok_all = ok_all .and. ok
+        end do
+
+        if (.not. ok_all) then
+            if (myid .eq. 1) then
+                write(*, *) 'ERROR IN THERMAL SUBLIMATION TABLES'
+                write(*, *) 'Cannot access dust directory ', TRIM(dust_tables_dir)
+                write(*, *) 'Directory ' // TRIM(dust_tables_dir) // ' not found'
+                write(*, *) 'You need to set this correctly for dust_tables_dir in the namelist.'
+            end if
+            call clean_stop
+        end if
+
+        ! 2. Read the file for each dust bin
+        do ii = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            write(sublimation_filename, '(A,A,A,A)') trim(dust_tables_dir), &
+                'sublimation_rate_', trim(dustlabel), '.dat'
+
+            ! 2.1 First pass: count the number of data rows (skip comments/blanks)
+            open(25, file=trim(sublimation_filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(sublimation_filename)
+                call clean_stop
+            end if
+            ndata = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (len_trim(line) == 0) cycle
+                if (line(1:1) == '#') cycle
+                ndata = ndata + 1
+            end do
+            close(25)
+
+            if (ndata < 2) then
+                write(*, *) 'Error: sublimation table has too few rows: ', trim(sublimation_filename)
+                call clean_stop
+            end if
+            nT = ndata
+
+            ! 2.2 Allocate the DustTable structure (1D table)
+            if (allocated(dustbins_props(ii)%sublimation_tab%npts)) then
+                deallocate(dustbins_props(ii)%sublimation_tab%npts)
+            end if
+            allocate(dustbins_props(ii)%sublimation_tab%npts(1:1))
+            dustbins_props(ii)%sublimation_tab%ndim = 1
+            dustbins_props(ii)%sublimation_tab%npts(1) = nT
+            if (allocated(dustbins_props(ii)%sublimation_tab%ipos_zero)) then
+                deallocate(dustbins_props(ii)%sublimation_tab%ipos_zero)
+            end if
+            allocate(dustbins_props(ii)%sublimation_tab%ipos_zero(1:1))
+            dustbins_props(ii)%sublimation_tab%ipos_zero(:) = 1
+            if (allocated(dustbins_props(ii)%sublimation_tab%tab1d)) then
+                deallocate(dustbins_props(ii)%sublimation_tab%tab1d)
+            end if
+            allocate(dustbins_props(ii)%sublimation_tab%tab1d(1:nT, 1:2))
+            dustbins_props(ii)%sublimation_tab%tab1d = 0d0
+
+            ! 2.3 Second pass: read the temperature and erosion rate values.
+            !     Store log10(T_d) and log10(epsilon) for on-the-fly interpolation.
+            open(25, file=trim(sublimation_filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(sublimation_filename)
+                call clean_stop
+            end if
+            j = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (len_trim(line) == 0) cycle
+                if (line(1:1) == '#') cycle
+                read(line, *, iostat=istat) Td, eps
+                if (istat /= 0) then
+                    write(*, *) 'Error parsing sublimation table row in ', trim(sublimation_filename)
+                    call clean_stop
+                end if
+                j = j + 1
+                if (Td > 0d0) then
+                    dustbins_props(ii)%sublimation_tab%tab1d(j, 1) = log10(Td)
+                else
+                    dustbins_props(ii)%sublimation_tab%tab1d(j, 1) = log_floor
+                end if
+                if (eps > 0d0) then
+                    dustbins_props(ii)%sublimation_tab%tab1d(j, 2) = max(log10(eps), log_floor)
+                else
+                    dustbins_props(ii)%sublimation_tab%tab1d(j, 2) = log_floor
+                end if
+            end do
+            close(25)
+
+            dustbins_props(ii)%sublimation_tab%initialised = .true.
+        end do
+
+    end subroutine init_dust_sublimation_tables
 
     subroutine init_dust_charging_tables
         ! This subroutine reads at the initialisation of dust parameters

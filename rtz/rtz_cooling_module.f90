@@ -122,7 +122,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    ! We use a slightly modified method of Anninos et al. (1997).
    !-------------------------------------------------------------------------
 #ifdef CALIMA
-   use dust_commons, only: icell_call, first_time_call, dust_log, dust_log_tdust_solver_print_reset
+   use dust_commons, only: dust_log, dust_log_tdust_solver_print_reset
 #endif
    implicit none
    real(dp):: aexp
@@ -652,7 +652,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! use auger_ionization_module
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
-      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,h2_prime_before
+      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating
       use dust_interface
 #endif
       implicit none
