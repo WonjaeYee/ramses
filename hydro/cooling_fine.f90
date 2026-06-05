@@ -510,6 +510,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       if (any(rho_dust(i,:).lt.0d0)) then
          write(*,*) 'Negative dust density in cell ', ind_leaf(i)
          write(*,*) 'Dust density: ', rho_dust(i,:)
+         write(*,*) 'PAH density : ', rho_pah(i,:)
          call clean_stop
       end if
       ! PAH densities in g/cm^3
@@ -518,6 +519,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       end do
       if (any(rho_pah(i,:).lt.0d0)) then
          write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
+         write(*,*) 'Dust density: ', rho_dust(i,:)
          write(*,*) 'PAH density: ', rho_pah(i,:)
          call clean_stop
       end if

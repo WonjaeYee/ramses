@@ -178,7 +178,10 @@ module dust_optics
             allocate(group_csa_dust(1:nGroups,1:ndust),&
                      group_css_dust(1:nGroups,1:ndust),&
                      group_csr_dust(1:nGroups,1:ndust),&
-                     group_csrat_dust(1:nGroups,1:ndust))
+                     group_csrat_dust(1:nGroups,1:ndust),&
+                     att_len_dust(1:nGroups,1:ndust))
+                    group_csrat_dust = 0.d0
+                    att_len_dust     = 0.d0
             allocate(sigca_dust(1:nGroups,1:ndust),&
                      sigcs_dust(1:nGroups,1:ndust),&
                      sigcr_dust(1:nGroups,1:ndust),&
@@ -906,8 +909,9 @@ module dust_optics
                 Y(ii) = planck_function(tmp, T)
             end do
 
-            ! Compute normalization factor (integral of Y over the wavelength range)
-            norm = integrate_spectrum_simple(X, Y, 1000)
+            ! Compute normalization factor: photon-number-weighted integral ∫ Y*λ dλ
+            ! consistent with getSEDcsn / initialize_cross_sections_from_blackbody
+            norm = integrate_spectrum_lambda(X, Y, 1000)
 
             ! Process each dust bin
             do isize = 1, ndust
@@ -976,6 +980,21 @@ module dust_optics
             integral = integral + 0.5d0 * (Y(i) + Y(i+1)) * (X(i+1) - X(i))
         end do
     end function integrate_spectrum_simple
+
+    function integrate_spectrum_lambda(X, Y, N) result(integral)
+        ! Photon-number-weighted normalization: ∫ Y*λ dλ
+        ! Matches the fLambda norm used by getSEDcsn in rt_spectra.f90
+        implicit none
+        integer, intent(in) :: N
+        real(kind=8), intent(in) :: X(N), Y(N)
+        real(kind=8) :: integral
+        integer :: i
+
+        integral = 0.d0
+        do i = 1, N - 1
+            integral = integral + 0.5d0 * (Y(i)*X(i) + Y(i+1)*X(i+1)) * (X(i+1) - X(i))
+        end do
+    end function integrate_spectrum_lambda
 
     function integrate_dust_absorbtion(X, Y, N, isize) result(integral)
         implicit none
@@ -1058,17 +1077,19 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize, ion
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
         
         integral = 0.d0
         do i = 1, N - 1
             if (ion == 1) then
-                sigma = getAbsCrosssection_pah_n(X(i), isize)
+                sigma_i   = getAbsCrosssection_pah_n(X(i),   isize)
+                sigma_ip1 = getAbsCrosssection_pah_n(X(i+1), isize)
             else
-                sigma = getAbsCrosssection_pah_i(X(i), isize)
+                sigma_i   = getAbsCrosssection_pah_i(X(i),   isize)
+                sigma_ip1 = getAbsCrosssection_pah_i(X(i+1), isize)
             end if
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
         end do
     end function integrate_pah_absorbtion
 
@@ -1076,17 +1097,19 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize, ion
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
         
         integral = 0.d0
         do i = 1, N - 1
             if (ion == 1) then
-                sigma = getScCrosssection_pah_n(X(i), isize)
+                sigma_i   = getScCrosssection_pah_n(X(i),   isize)
+                sigma_ip1 = getScCrosssection_pah_n(X(i+1), isize)
             else
-                sigma = getScCrosssection_pah_i(X(i), isize)
+                sigma_i   = getScCrosssection_pah_i(X(i),   isize)
+                sigma_ip1 = getScCrosssection_pah_i(X(i+1), isize)
             end if
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
         end do
     end function integrate_pah_scattering
 
@@ -1094,17 +1117,19 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize, ion
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
         
         integral = 0.d0
         do i = 1, N - 1
             if (ion == 1) then
-                sigma = getRpCrosssection_pah_n(X(i), isize)
+                sigma_i   = getRpCrosssection_pah_n(X(i),   isize)
+                sigma_ip1 = getRpCrosssection_pah_n(X(i+1), isize)
             else
-                sigma = getRpCrosssection_pah_i(X(i), isize)
+                sigma_i   = getRpCrosssection_pah_i(X(i),   isize)
+                sigma_ip1 = getRpCrosssection_pah_i(X(i+1), isize)
             end if
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*sigma) * (X(i+1) - X(i))
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
         end do
     end function integrate_pah_radpressure
 
@@ -1570,6 +1595,7 @@ module dust_radiation
         ! Tmin           --> minimum allowed dust temperature (e.g. CMB temp) [K]
         !-------------------------------------------------------------------------
         use dust_cooling, only: compute_dust_coll_heating
+        use dust_commons, only: dust_log_tdust_solver_update
         implicit none
 
         integer,intent(in) :: i_dust
@@ -1583,27 +1609,30 @@ module dust_radiation
 
         integer :: iter
         integer :: max_iter=100
+        integer :: iter_used
         real(dp) :: H0, H1, dH_dT
         real(dp) :: dP_dT
         real(dp) :: f, fprime
-        real(dp) :: T0, eps, T_new
+        real(dp) :: T0, eps, T_new, dT
 
         T0 = T
         eps = 1d-2
+        iter_used = 0
 
         ! =========================================================
         ! 1. Compute Hcoll and derivative once (if collisional cooling is enabled)
         ! =========================================================
         if (dust_coll_cooling) then
+            dT = max(T0*eps,1e-6)
             call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0,&
-                                        dust_charge,H0)
-
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0*(1d0+eps),&
+                                        Coulomb_factor,nH2,nCO,Tgas,T0+dT,&
                                         dust_charge,H1)
 
-            dH_dT = (H1 - H0) / (T0*eps)
+            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
+                                        Coulomb_factor,nH2,nCO,Tgas,max(T0-dT,Tmin),&
+                                        dust_charge,H0)
+
+            dH_dT = (H1 - H0) / (2d0*dT)
         else
             H0 = 0d0
             dH_dT = 0d0
@@ -1613,23 +1642,27 @@ module dust_radiation
         ! 2. Newton iterations (with linearised approximation)
         ! =========================================================
         do iter = 1, max_iter
+            iter_used = iter
             call dust_emission_with_deriv(i_dust,T,P_rad,dP_dT)
-
             f = P_abs + H0 + dH_dT*(T - T0) + recomb_heat - P_rad - pe_heat
             fprime = dH_dT - dP_dT
-
-            if (abs(f) < 1d-6) return
-            if (abs(fprime) < 1d-20) exit
+            if (f .eq. 0d0) then
+                call dust_log_tdust_solver_update(iter_used, .false.)
+                return
+            end if
+            ! if (abs(fprime) < 1d-20) exit
 
             T_new = T - f/fprime
 
             if (T_new < Tmin) then
                 T = Tmin
+                call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
 
             if (abs(T_new - T)/T < 1d-3) then
                 T = T_new
+                call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
             T = T_new
@@ -1637,6 +1670,7 @@ module dust_radiation
 
         ! fallback (rare)
         call solve_Tdust_brent_fast(i_dust,P_abs,H0,dH_dT,T0,recomb_heat,pe_heat,P_rad,Tmin,1d3,T)
+        call dust_log_tdust_solver_update(iter_used, .true.)
 
         ! Save the final collisional heating rate
         if (dust_coll_cooling) then
@@ -1812,6 +1846,7 @@ module dust_radiation
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
         use dust_utils, only: interpolate1D
+        use dust_cooling, only: compute_dust_coll_heating
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -1825,7 +1860,7 @@ module dust_radiation
         real(dp),intent(in),optional :: Ep(:),cs_abs(:,:)
 
         integer :: i,j
-        real(dp) :: P_abs, Tmin, T0
+        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
@@ -1844,6 +1879,24 @@ module dust_radiation
 
             ! --- Initial guess: radiative equilibrium ---
             call get_Tdust_radiative_eq(j, P_abs, Tmin, T0)
+
+            ! --- Check collisional heating at Tgas ---
+            ! If collisional heating dominates radiation, start closer to Tgas
+            if (dust_coll_cooling) then
+                call compute_dust_coll_heating(j,ne,nElement,xelem_ions,&
+                                            Coulomb_factor(j,:),nH2,nCO,Tgas,T0,&
+                                            dust_charge(j),H_coll_at_Tgas)
+                if (H_coll_at_Tgas > P_abs) then
+                    ! Collisional heating dominates the initial guess
+                    call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
+                    ! print*, 'Rank ', myid, ': Collisional heating dominates for dust bin ', j, &
+                    !         ': H_coll at Tgas = ', H_coll_at_Tgas, ' erg/s > P_abs = ', P_abs, ' erg/s. Starting Newton iterations at Tdust = ', T0, ' K'
+                else if (H_coll_at_Tgas < 1d-4 * P_abs) then
+                    ! Radiative heating is much larger than collisional, so we can just assume that
+                    T_dust(j) = max(T0, Tmin)
+                    cycle
+                end if
+            end if
 
             call solve_Tdust_fast(j,P_abs,ne,nElement,xelem_ions,Coulomb_factor(j,:),&
                                 nH2,nCO,Tgas,dust_charge(j),coll_heat(j),&

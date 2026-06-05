@@ -124,14 +124,15 @@ subroutine read_hydro_params(nml_ok)
       dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
       dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
       dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
-      dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
+      dust_sublimation,dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
       ! PAH physics flags
       pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
       pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
       ! Dust modelling options
       sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
       ! PAH modelling options
-      sublimation_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,&
+      photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
+      cluster_evaporation_model,&
       ! Efficiency parameters
       Sconstant,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
       dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
@@ -141,6 +142,7 @@ subroutine read_hydro_params(nml_ok)
       dust_composition,dustbins_per_chemtype,&
       asize,sgrain,amin,amax,fmass_ej,&
       pah_nc,pah_nc_min,pah_nc_max,spah,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
+      pah_is_cluster, &
       ! ISM depletion factors
       fDust_depletions,fCDust_inPAH,GD_solar,DTM_solar,fdustmass_ini,fpahmass_ini,&
       ! Radiation parameters

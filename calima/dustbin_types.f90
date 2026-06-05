@@ -36,6 +36,8 @@ module dustbin_types
         real(dp) :: local_dx = 0d0 ! Local cell size (in cm)
         real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
         real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
+        real(dp) :: local_nCO = 0d0 ! Local CO density (in cm-3)
+        real(dp),dimension(1:n_elements)  :: el_atomic_mass_g ! Element atomic mass [g]
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV
@@ -162,6 +164,7 @@ module dustbin_types
 
         ! Tables for dust processes
         type(DustTable),dimension(1:n_elements) :: sputtering_tab ! Sputtering tables
+        type(DustTable) :: sublimation_tab ! Thermal sublimation erosion rate table (function of dust temperature)
         type(DustTable),dimension(0:n_elements) :: collisional_tab ! Collisional tables (0 is for electrons)
         type(DustTable) :: mean_charg_tab, sigma_charg_tab ! Charging tables
         type(DustTable) :: peh_tab, rec_tab ! Photoelectric and recombination tables
@@ -175,6 +178,7 @@ module dustbin_types
 
     ! ==== PAH bin derived type ====
     type PAHBin
+        logical  :: is_cluster = .false.    ! Whether the PAH bin corresponds to a cluster of PAHs
         integer  :: pah_index               ! Index of the PAH bin
         integer  :: u_hydro_idx             ! Variable index in uold
         integer  :: nc                      ! Number of carbon atoms in the PAH
@@ -240,6 +244,7 @@ contains
         this%local_Jeans = 0d0
         this%local_dx = 0d0
         this%local_ne = 0d0
+        this%local_nCO = 0d0
 
         if (allocated(this%rho_dust)) deallocate(this%rho_dust)
         allocate(this%rho_dust(1:this%ndust))

@@ -154,78 +154,82 @@ module dust_cooling
         real(dp) :: supp_factor,supp_factor_inv
         real(dp):: Hcoll_HM80
         
-        Hcoll    = 0d0
-        lT = log10(Tgas)
-        dT = Tgas - Td
+        if (Tgas > 1d3) then
+            Hcoll    = 0d0
+            lT = log10(Tgas)
+            dT = Tgas - Td
 
-        agrain = dustbins_props(i_dust)%asize_cm
+            agrain = dustbins_props(i_dust)%asize_cm
 
-        ! 1. Do first the contribution from electron collisions
-        nT = dustbins_props(i_dust)%collisional_tab(0)%npts(1)
-        nphi = dustbins_props(i_dust)%collisional_tab(0)%npts(2)
-        if (dust_coll_charge) then
-            phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(-1) ! [eV]
-            call interpolate2D(dustbins_props(i_dust)%collisional_tab(0)%tab1d(1:nT,1), &
-                                dustbins_props(i_dust)%collisional_tab(0)%tab1d(1:nphi,2), &
-                                dustbins_props(i_dust)%collisional_tab(0)%tab2d(1:nT,1:nphi,1), &
-                                nT, nphi, lT, phi_charge, cooling_rate)
-            cooling_rate = 10d0**cooling_rate
-            Hcoll = Hcoll + Coulomb_factor(-1) * ne * cooling_rate * dT
-        else
-            ! 1D interpolation: use stored phi=0 index
-            iphi0 = dustbins_props(i_dust)%collisional_tab(0)%ipos_zero(2)
-            call interpolate1D(dustbins_props(i_dust)%collisional_tab(0)%tab1d(1:nT,1), &
-                                dustbins_props(i_dust)%collisional_tab(0)%tab2d(1:nT,iphi0,1), &
-                                nT, lT, cooling_rate)
-            cooling_rate = 10d0**cooling_rate
-            Hcoll = Hcoll + ne * cooling_rate * dT
-        end if
-
-        ! 2. Loop over all elements
-        species_loop: do iel = 1, n_elements
-            
-            ! Skip if tables not initialized
-            if (.not. dustbins_props(i_dust)%collisional_tab(iel)%initialised) cycle
-            
-            nT = dustbins_props(i_dust)%collisional_tab(iel)%npts(1)
-            nphi = dustbins_props(i_dust)%collisional_tab(iel)%npts(2)
-
+            ! 1. Do first the contribution from electron collisions
+            nT = dustbins_props(i_dust)%collisional_tab(0)%npts(1)
+            nphi = dustbins_props(i_dust)%collisional_tab(0)%npts(2)
             if (dust_coll_charge) then
-                ! Add contributions for all charge states of this element
-                nions_loc = n_elements
-#ifdef RTZ
-                nions_loc = max(1, elements(iel)%n_ions)
-#endif
-                do j = 1, nions_loc
-                    xion = xelem_ions(iel, j)
-                    if (xion <= 1d-20) cycle
-                    phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(j-1) ! [eV]
-                    call interpolate2D(dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nT,1), &
-                                        dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nphi,2), &
-                                        dustbins_props(i_dust)%collisional_tab(iel)%tab2d(1:nT,1:nphi,j), &
-                                        nT, nphi, lT, phi_charge, cooling_rate)
-                    cooling_rate = 10d0**cooling_rate
-                    Hcoll = Hcoll + Coulomb_factor(j-1) * nElement(iel) * xion * cooling_rate * dT
-                end do
+                phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(-1) ! [eV]
+                call interpolate2D(dustbins_props(i_dust)%collisional_tab(0)%tab1d(1:nT,1), &
+                                    dustbins_props(i_dust)%collisional_tab(0)%tab1d(1:nphi,2), &
+                                    dustbins_props(i_dust)%collisional_tab(0)%tab2d(1:nT,1:nphi,1), &
+                                    nT, nphi, lT, phi_charge, cooling_rate)
+                cooling_rate = 10d0**cooling_rate
+                Hcoll = Hcoll + Coulomb_factor(-1) * ne * cooling_rate * dT
             else
-                ! No charge dependence: just add contribution from the total abundance of this element
-                iphi0 = dustbins_props(i_dust)%collisional_tab(iel)%ipos_zero(2)
-                call interpolate1D(dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nT,1), &
-                                    dustbins_props(i_dust)%collisional_tab(iel)%tab2d(1:nT,iphi0,1), &
+                ! 1D interpolation: use stored phi=0 index
+                iphi0 = dustbins_props(i_dust)%collisional_tab(0)%ipos_zero(2)
+                call interpolate1D(dustbins_props(i_dust)%collisional_tab(0)%tab1d(1:nT,1), &
+                                    dustbins_props(i_dust)%collisional_tab(0)%tab2d(1:nT,iphi0,1), &
                                     nT, lT, cooling_rate)
                 cooling_rate = 10d0**cooling_rate
-                Hcoll = Hcoll + nElement(iel) * cooling_rate * dT
+                Hcoll = Hcoll + ne * cooling_rate * dT
             end if
-        
-        end do species_loop
 
-        ! 3. Now compute the low-temperature soft-cube collisional heating from
-        ! Hollenbach and McKee (1980) for Tgas < 1e4 K
-        if (Tgas .lt. 1d5 .and. (dust_coll_lowT)) then
-            supp_factor = 1d0 - 1d0/(1d0+exp(-1d1*(log10(Tgas)-4d0)))
-            supp_factor_inv = 1d0 / (1d0 + exp(-1d1*(log10(Tgas) - 4d0)))
-            call compute_dust_coll_heating_BH80(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,Td,Hcoll_HM80)
-            Hcoll = supp_factor_inv * Hcoll + supp_factor * Hcoll_HM80
+            ! 2. Loop over all elements
+            species_loop: do iel = 1, n_elements
+                
+                ! Skip if tables not initialized
+                if (.not. dustbins_props(i_dust)%collisional_tab(iel)%initialised) cycle
+                
+                nT = dustbins_props(i_dust)%collisional_tab(iel)%npts(1)
+                nphi = dustbins_props(i_dust)%collisional_tab(iel)%npts(2)
+
+                if (dust_coll_charge) then
+                    ! Add contributions for all charge states of this element
+                    nions_loc = n_elements
+#ifdef RTZ
+                    nions_loc = max(1, elements(iel)%n_ions)
+#endif
+                    do j = 1, nions_loc
+                        xion = xelem_ions(iel, j)
+                        if (xion <= 1d-20) cycle
+                        phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(j-1) ! [eV]
+                        call interpolate2D(dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nT,1), &
+                                            dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nphi,2), &
+                                            dustbins_props(i_dust)%collisional_tab(iel)%tab2d(1:nT,1:nphi,1), &
+                                            nT, nphi, lT, phi_charge, cooling_rate)
+                        cooling_rate = 10d0**cooling_rate
+                        Hcoll = Hcoll + Coulomb_factor(j-1) * nElement(iel) * xion * cooling_rate * dT
+                    end do
+                else
+                    ! No charge dependence: just add contribution from the total abundance of this element
+                    iphi0 = dustbins_props(i_dust)%collisional_tab(iel)%ipos_zero(2)
+                    call interpolate1D(dustbins_props(i_dust)%collisional_tab(iel)%tab1d(1:nT,1), &
+                                        dustbins_props(i_dust)%collisional_tab(iel)%tab2d(1:nT,iphi0,1), &
+                                        nT, lT, cooling_rate)
+                    cooling_rate = 10d0**cooling_rate
+                    Hcoll = Hcoll + nElement(iel) * cooling_rate * dT
+                end if
+            
+            end do species_loop
+
+            ! 3. Now compute the low-temperature soft-cube collisional heating from
+            ! Hollenbach and McKee (1980) for Tgas < 1e4 K
+            if (Tgas .lt. 1d5 .and. (dust_coll_lowT)) then
+                supp_factor = 1d0 - 1d0/(1d0+exp(-1d1*(log10(Tgas)-4d0)))
+                supp_factor_inv = 1d0 / (1d0 + exp(-1d1*(log10(Tgas) - 4d0)))
+                call compute_dust_coll_heating_BH80(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,Td,Hcoll_HM80)
+                Hcoll = supp_factor_inv * Hcoll + supp_factor * Hcoll_HM80
+            end if
+        else
+            call compute_dust_coll_heating_BH80(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,Td,Hcoll)
         end if
     end subroutine compute_dust_coll_heating
 
