@@ -2,7 +2,7 @@ module dust_yields
     use hydro_parameters, only:ndust,ndchemtype,nvar,\
                                 imetal,idust,ipah
     use hydro_commons, only:nmetals
-    use constants, only:yr2sec,Myr2sec,amu2g,mC_amu,mO_amu
+    use constants, only:yr2sec,Myr2sec,amu2g,mC_amu,mO_amu,mH_amu
     use dust_commons
 
     contains
@@ -113,5 +113,38 @@ module dust_yields
         end do
         lim_index = minloc(el_density_lim,1)
     end subroutine cmp_lim_elem
+
+    subroutine add_sink_metal_from_dust_species(ivar,accreted_mass,sink_metallicity,isink)
+        implicit none
+        integer,intent(in) :: ivar
+        integer,intent(in) :: isink
+        real(dp),intent(in) :: accreted_mass
+        real(dp),dimension(:,:),intent(inout) :: sink_metallicity
+
+        integer :: iel,metal_index,dust_index,pah_index
+        real(dp) :: carbon_mass
+
+        if (accreted_mass <= 0d0) return
+
+        if (ivar.ge.idust .and. ivar.lt.idust+ndust) then
+            dust_index = ivar - idust + 1
+            do iel = 1, dustbins_props(dust_index)%nelements
+                metal_index = dustbins_props(dust_index)%el_index(iel)
+                if (metal_index >= 1 .and. metal_index <= size(sink_metallicity,2)) then
+                    sink_metallicity(isink,metal_index) = sink_metallicity(isink,metal_index) + &
+                        accreted_mass * dustbins_props(dust_index)%el_mfractions(iel)
+                end if
+            end do
+        else if (ivar.ge.ipah .and. ivar.lt.ipah+npah) then
+            pah_index = ivar - ipah + 1
+            metal_index = pahbins_props(pah_index)%C_index
+            if (metal_index >= 1 .and. metal_index <= size(sink_metallicity,2)) then
+                carbon_mass = accreted_mass * &
+                    (pahbins_props(pah_index)%nc * mC_amu) / &
+                    max(pahbins_props(pah_index)%nc * mC_amu + pahbins_props(pah_index)%n * mH_amu, tiny(1d0))
+                sink_metallicity(isink,metal_index) = sink_metallicity(isink,metal_index) + carbon_mass
+            end if
+        end if
+    end subroutine add_sink_metal_from_dust_species
 
 end module dust_yields

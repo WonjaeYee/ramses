@@ -14,6 +14,8 @@ module dust_dynamics
                                     &,target_a,projectile_a&
                                     &,target_s,projectile_s&
                                     &,target_m,projectile_m)
+        use pm_commons, only: localseed
+        use random, only: ranf
         ! This function returns the relative collision velocity
         ! of two grains (target and projectile) based on a particular
         ! collision model. For further details see Section 2.3.1
@@ -44,7 +46,8 @@ module dust_dynamics
         real(dp) :: ts_target,ts_projectile
         real(dp) :: St_target,St_projectile
         real(dp) :: Stmin,dV_turb
-        real(dp) :: Mach,v_target,v_projectile
+        real(kind=8) :: RandNum
+        real(dp) :: Mach,v_target,v_projectile,rand_costheta
 
         if (trim(model).eq.'Ormel2007') then
             ! This is based on the formulation presented in Kawasaki & Machida (2023)
@@ -111,7 +114,11 @@ module dust_dynamics
             Mach = v_turb / cs_gas
             v_target = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(target_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(target_s/3.5d0)
             v_projectile = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(projectile_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(projectile_s/3.5d0)
-            grain_relative_velocity = sqrt(v_target**2d0 + v_projectile**2d0)
+            call ranf(localseed,RandNum)
+            ! Guard against occasional RNG roundoff/implementation excursions outside [0,1].
+            RandNum = max(0d0, min(1d0, RandNum))
+            rand_costheta = max(-1d0, min(1d0, 2d0 * RandNum - 1d0))
+            grain_relative_velocity = sqrt(v_target**2d0 + v_projectile**2d0 - 2d0 * v_target * v_projectile * rand_costheta)
         else
             ! Just assume that the relative velocity is given by the turbulent velocity
             grain_relative_velocity = v_turb
