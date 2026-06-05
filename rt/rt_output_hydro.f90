@@ -236,6 +236,9 @@ SUBROUTINE write_group_props(update, lun)
      write(lun, 905) group_csn(ip,:)
      write(lun, 906) group_cse(ip,:)
 #endif
+#ifdef RTZ
+     write(lun,905) "Dust                ", group_csn_dust(ip,:)
+#endif
   end do
   write (lun,*) '-------------------------------------------------------'
 
