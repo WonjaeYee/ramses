@@ -365,10 +365,14 @@ contains
 
             ! 2. Interpolate the fractional erosion rate (in log10) at the local dust temperature.
             !    The table axis is stored as log10(T_d), so we interpolate against log10(T_d).
+            !    Tables only cover temperatures hot enough for sublimation to matter
+            !    (timescale < 10 x age of the universe), so below the first tabulated
+            !    temperature the rate is taken to be zero (skip the bin).
             Td_loc = dust_info%T_dust(ii)
             if (Td_loc <= 0d0) cycle
             lTd = log10(Td_loc)
             nT_loc = dustbins_props(ii)%sublimation_tab%npts(1)
+            if (lTd <= dustbins_props(ii)%sublimation_tab%tab1d(1,1)) cycle
             call interpolate1D(dustbins_props(ii)%sublimation_tab%tab1d(1:nT_loc,1), &
                             dustbins_props(ii)%sublimation_tab%tab1d(1:nT_loc,2), &
                             nT_loc, lTd, irate, non_eqw=.true.)
