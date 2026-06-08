@@ -24,7 +24,8 @@ module rtz_cooling_module
    private   ! default
    public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust
 
-   real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
+   ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
+   real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
    real(dp),parameter::T_min=0.1, T_frac=0.1
    real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
    real(dp),parameter::Np_min=1d-13, Np_frac=0.2
