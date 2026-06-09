@@ -75,9 +75,9 @@ contains
         dustAbs = 0d0; dustSc = 0d0; dustRp = 0d0
         if (dinfo%ndust > 0) then
             do ii = 1, dinfo%nGroups
-                dustAbs(ii) = rad_dust_rate(dinfo%csa_dust(ii,:),dinfo%rho_dust(:)) ! [1/s]
-                dustSc (ii) = rad_dust_rate(dinfo%css_dust(ii,:),dinfo%rho_dust(:)) ! [1/s]
-                dustRp (ii) = rad_dust_rate(dinfo%csr_dust(ii,:),dinfo%rho_dust(:)) ! [1/s]
+                dustAbs(ii) = rad_dust_rate(dinfo%csa_dust(:,ii),dinfo%rho_dust(:)) ! [1/s]
+                dustSc (ii) = rad_dust_rate(dinfo%css_dust(:,ii),dinfo%rho_dust(:)) ! [1/s]
+                dustRp (ii) = rad_dust_rate(dinfo%csr_dust(:,ii),dinfo%rho_dust(:)) ! [1/s]
             end do
             dinfo%dustAbs = dustAbs
         end if
@@ -97,9 +97,9 @@ contains
                    &dinfo%fcharge_pah(:,ii))
             end do
             do ii = 1, dinfo%nGroups
-                pahAbs(ii) = pahAbs(ii)+ rad_pah_rate(dinfo%csa_pah(ii,:),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
-                pahSc (ii) = pahSc(ii) + rad_pah_rate(dinfo%css_pah(ii,:),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
-                pahRp (ii) = pahRp(ii) + rad_pah_rate(dinfo%csr_pah(ii,:),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
+                pahAbs(ii) = pahAbs(ii)+ rad_pah_rate(dinfo%csa_pah(:,ii),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
+                pahSc (ii) = pahSc(ii) + rad_pah_rate(dinfo%css_pah(:,ii),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
+                pahRp (ii) = pahRp(ii) + rad_pah_rate(dinfo%csr_pah(:,ii),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
             end do
             dinfo%pahAbs = pahAbs
         end if
@@ -183,8 +183,8 @@ contains
                         call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii))
                         call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%G0_background,ne,Tk,&
                                                         &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
-                        call compute_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%csa_dust(:,ii),&
-                                                    dinfo%l_a(:,ii),dinfo%nGroups,dinfo%local_c,&
+                        call compute_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%csa_dust(ii,:),&
+                                                    dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
                                                     dinfo%local_solid_angle,Np(:),dinfo%group_eV(:),&
                                                     dinfo%Z_dust(ii),dinfo%Z_sigma(ii),Tk,ne,&
                                                     dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
@@ -222,7 +222,7 @@ contains
                         do ii = 1, dinfo%npah
                             call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),G0_total,&
                                                                 ne,Tk,dinfo%fcharge_pah(:,ii),&
-                                                                dinfo%Pabs_pah(1,ii),dinfo%Pinj_pah(ii),&
+                                                                dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                                 dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                         end do
                 else
@@ -231,17 +231,17 @@ contains
                         ! Consider the contribution from the UV background first
                         call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%G0_background,&
                                                             ne,Tk,dinfo%fcharge_pah(:,ii),&
-                                                            dinfo%Pabs_pah(1,ii),dinfo%Pinj_pah(ii),&
+                                                            dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(1+2*(ii-1),:),&
+                                                            dinfo%csa_pah(1+2*(ii-1),:),&
+                                                            dinfo%csa_pah(2+2*(ii-1),:),&
+                                                            dinfo%csa_pah(2+2*(ii-1),:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,dinfo%fcharge_pah(:,ii),&
-                                                            dinfo%Pabs_pah(:,ii),dinfo%Pinj_pah(ii),&
+                                                            dinfo%Pabs_pah(ii,:),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                     end do
                 end if
@@ -250,16 +250,16 @@ contains
                 do ii = 1, dinfo%npah
                     call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%G0_background,&
                                                         ne,Tk,dinfo%fcharge_pah(:,ii),&
-                                                        dinfo%Pabs_pah(1,ii),dinfo%Pinj_pah(ii),&
+                                                        dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                         dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                 end do
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
+                                                        dinfo%csa_pah(1+2*(ii-1),:),&
+                                                        dinfo%csa_pah(2+2*(ii-1),:),&
+                                                        dinfo%csa_pah(2+2*(ii-1),:),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,dinfo%fcharge_pah(:,ii))
@@ -392,8 +392,8 @@ contains
                         call compute_dust_charge_sigma(ii,G0_total,Tk,ne,Z_sigma(ii))
                         call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%G0_background,ne,Tk,&
                                                         &Pinj_dust(ii),Prec_dust(ii))
-                        call compute_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%csa_dust(:,ii),&
-                                                    dinfo%l_a(:,ii),dinfo%nGroups,dinfo%local_c,&
+                        call compute_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%csa_dust(ii,:),&
+                                                    dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
                                                     dinfo%local_solid_angle(:),Np(:),&
                                                     dinfo%group_eV(:),Z_dust(ii),Z_sigma(ii),Tk,ne,&
                                                     Pinj_dust(ii),Prec_dust(ii))

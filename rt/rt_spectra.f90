@@ -924,16 +924,16 @@ SUBROUTINE update_SED_group_props()
         group_cse(ip,1:27,1:27) = sum_cse_all(ip,1:27,1:27) / sum_L_all(ip)
 #ifdef CALIMA
         if (ndust > 0) then
-           group_csa_dust(ip,:) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
-           group_css_dust(ip,:) = sum_dust_css_all(ip,:) / sum_L_all(ip)
-           group_csr_dust(ip,:) = sum_dust_csr_all(ip,:) / sum_L_all(ip)
-           if (dust_ratd) group_csrat_dust(ip,:) = sum_dust_csrat_all(ip,:) / sum_L_all(ip)
-           if (dust_pe_heating) att_len_dust(ip,:) = sum_dust_la_all(ip,:) / sum_L_all(ip)
+           group_csa_dust(:,ip) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
+           group_css_dust(:,ip) = sum_dust_css_all(ip,:) / sum_L_all(ip)
+           group_csr_dust(:,ip) = sum_dust_csr_all(ip,:) / sum_L_all(ip)
+           if (dust_ratd) group_csrat_dust(:,ip) = sum_dust_csrat_all(ip,:) / sum_L_all(ip)
+           if (dust_pe_heating) att_len_dust(:,ip) = sum_dust_la_all(ip,:) / sum_L_all(ip)
         endif
         if (npah > 0) then
-           group_csa_pah(ip,:) = sum_pah_csa_all(ip,:) / sum_L_all(ip)
-           group_css_pah(ip,:) = sum_pah_css_all(ip,:) / sum_L_all(ip)
-           group_csr_pah(ip,:) = sum_pah_csr_all(ip,:) / sum_L_all(ip)
+           group_csa_pah(:,ip) = sum_pah_csa_all(ip,:) / sum_L_all(ip)
+           group_css_pah(:,ip) = sum_pah_css_all(ip,:) / sum_L_all(ip)
+           group_csr_pah(:,ip) = sum_pah_csr_all(ip,:) / sum_L_all(ip)
         endif
 #endif
 #else
@@ -941,16 +941,16 @@ SUBROUTINE update_SED_group_props()
         group_cse(ip,:) = sum_cse_all(ip,:) / sum_L_all(ip)
 #ifdef CALIMA
         if (ndust > 0) then
-           group_csa_dust(ip,:) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
-           group_css_dust(ip,:) = sum_dust_css_all(ip,:) / sum_L_all(ip)
-           group_csr_dust(ip,:) = sum_dust_csr_all(ip,:) / sum_L_all(ip)
-           if (dust_ratd) group_csrat_dust(ip,:) = sum_dust_csrat_all(ip,:) / sum_L_all(ip)
-           if (dust_pe_heating) att_len_dust(ip,:) = sum_dust_la_all(ip,:) / sum_L_all(ip)
+           group_csa_dust(:,ip) = sum_dust_csa_all(ip,:) / sum_L_all(ip)
+           group_css_dust(:,ip) = sum_dust_css_all(ip,:) / sum_L_all(ip)
+           group_csr_dust(:,ip) = sum_dust_csr_all(ip,:) / sum_L_all(ip)
+           if (dust_ratd) group_csrat_dust(:,ip) = sum_dust_csrat_all(ip,:) / sum_L_all(ip)
+           if (dust_pe_heating) att_len_dust(:,ip) = sum_dust_la_all(ip,:) / sum_L_all(ip)
         endif
         if (npah > 0) then
-           group_csa_pah(ip,:) = sum_pah_csa_all(ip,:) / sum_L_all(ip)
-           group_css_pah(ip,:) = sum_pah_css_all(ip,:) / sum_L_all(ip)
-           group_csr_pah(ip,:) = sum_pah_csr_all(ip,:) / sum_L_all(ip)
+           group_csa_pah(:,ip) = sum_pah_csa_all(ip,:) / sum_L_all(ip)
+           group_css_pah(:,ip) = sum_pah_css_all(ip,:) / sum_L_all(ip)
+           group_csr_pah(:,ip) = sum_pah_csr_all(ip,:) / sum_L_all(ip)
         endif
 #endif
 #endif
@@ -981,32 +981,32 @@ SUBROUTINE update_SED_group_props()
 #ifdef CALIMA
      if (ndust > 0) then
         do ii=1,ndust
-           group_csa_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+1)
-           group_css_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+2)
-           group_csr_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+3)
+           group_csa_dust(ii,ip) = SED_table(1,1,ip,counter+3*(ii-1)+1)
+           group_css_dust(ii,ip) = SED_table(1,1,ip,counter+3*(ii-1)+2)
+           group_csr_dust(ii,ip) = SED_table(1,1,ip,counter+3*(ii-1)+3)
         end do
         counter = counter + 3*ndust
         if (dust_ratd) then
            do ii=1,ndust
-              group_csrat_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              group_csrat_dust(ii,ip) = SED_table(1,1,ip,counter+ii)
            end do
            counter = counter + ndust
         endif
         if (dust_pe_heating) then
            do ii=1,ndust
-              att_len_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              att_len_dust(ii,ip) = SED_table(1,1,ip,counter+ii)
            end do
            counter = counter + ndust
         endif
      endif
      if (npah > 0) then
         do ii=1,npah
-           group_csa_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+1)
-           group_csa_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+2)
-           group_css_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+3)
-           group_css_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+4)
-           group_csr_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+5)
-           group_csr_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+6)
+           group_csa_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+           group_csa_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+           group_css_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+           group_css_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+           group_csr_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+           group_csr_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+6)
         end do
      endif
 #endif
@@ -1020,32 +1020,32 @@ SUBROUTINE update_SED_group_props()
 #ifdef CALIMA
      if (ndust > 0) then
         do ii=1,ndust
-           group_csa_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+1)
-           group_css_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+2)
-           group_csr_dust(ip,ii) = SED_table(1,1,ip,counter+3*(ii-1)+3)
+           group_csa_dust(ii,ip) = SED_table(1,1,ip,counter+3*(ii-1)+1)
+           group_css_dust(ii,ip) = SED_table(1,1,ip,counter+3*(ii-1)+2)
+           group_csr_dust(ii,ip) = SED_table(1,1,ip,counter+3*(ii-1)+3)
         end do
         counter = counter + 3*ndust
         if (dust_ratd) then
            do ii=1,ndust
-              group_csrat_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              group_csrat_dust(ii,ip) = SED_table(1,1,ip,counter+ii)
            end do
            counter = counter + ndust
         endif
         if (dust_pe_heating) then
            do ii=1,ndust
-              att_len_dust(ip,ii) = SED_table(1,1,ip,counter+ii)
+              att_len_dust(ii,ip) = SED_table(1,1,ip,counter+ii)
            end do
            counter = counter + ndust
         endif
      endif
      if (npah > 0) then
         do ii=1,npah
-           group_csa_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+1)
-           group_csa_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+2)
-           group_css_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+3)
-           group_css_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+4)
-           group_csr_pah(ip,ii) = SED_table(1,1,ip,counter+6*(ii-1)+5)
-           group_csr_pah(ip,npah+ii) = SED_table(1,1,ip,counter+6*(ii-1)+6)
+           group_csa_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+           group_csa_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+           group_css_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+           group_css_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+           group_csr_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+           group_csr_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+6)
         end do
      endif
 #endif

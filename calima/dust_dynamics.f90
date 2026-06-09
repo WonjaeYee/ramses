@@ -49,6 +49,40 @@ module dust_dynamics
         real(kind=8) :: RandNum
         real(dp) :: Mach,v_target,v_projectile,rand_costheta
 
+        ! Cache for gas-phase invariants to avoid redundant calculations within a cell
+        real(dp),save :: last_T=-1d0, last_rho_gas=-1d0, last_nH=-1d0, last_v_turb=-1d0, last_mu=-1d0, last_L=-1d0
+        character(len=30),save :: last_model=''
+        real(dp),save :: cs_gas_save, v_th_save, tau_L_save, Re_save, tau_eta_save, mfp_save
+        if (T /= last_T .or. rho_gas /= last_rho_gas .or. nH /= last_nH .or. &
+            v_turb /= last_v_turb .or. local_mu /= last_mu .or. inject_L /= last_L .or. &
+            model /= last_model) then
+            
+            last_T = T; last_rho_gas = rho_gas; last_nH = nH
+            last_v_turb = v_turb; last_mu = local_mu; last_L = inject_L
+            last_model = model
+
+            ! Gas sound speed (assumed gas with adiabatic constant of 5d0/3d0)
+            cs_gas_save = sqrt(5d0/3d0 * kB * T / (mH * local_mu))
+            ! Thermal velocity (Maxwelian distribution)
+            v_th_save = sqrt(8d0/pi) * cs_gas_save
+
+            if (trim(model) == 'Ormel2007') then
+                ! Distance of closest particle approach (ionised)
+                rc = e2instatC / (kB * T)
+                ! Particle mean free path
+                mfp_save = 1d0 / (nH * rc**2d0)
+                ! Eddie injection timescale
+                tau_L_save = inject_L / v_turb
+                ! Reynolds number (ratio of inertial to viscous forces)
+                Re_save = 3d0 * v_turb * inject_L / (cs_gas_save * mfp_save)
+                ! Disipation timescale
+                tau_eta_save = tau_L_save / sqrt(Re_save)
+            end if
+        end if
+        
+        cs_gas = cs_gas_save
+        v_th = v_th_save
+
         if (trim(model).eq.'Ormel2007') then
             ! This is based on the formulation presented in Kawasaki & Machida (2023)
             ! which is basically the analytical model of Ormel & Cuzzi (2007)
@@ -56,34 +90,11 @@ module dust_dynamics
             ! 1. Contribution to relative velocity from thermal (Brownian) motion
             dV_thermal = sqrt(8.d0 * kB * T * (target_m + projectile_m)/(target_m * projectile_m))
 
-            ! Gas sound speed (assumed gas with adiabatic constant of 5d0/3d0)
-            cs_gas = sqrt(5d0/3d0 * kB * T / (mH * local_mu))
-
-            ! Thermal velocity (Maxwelian distribution)
-            v_th = sqrt(8d0/pi) * cs_gas
-
             ! 2. Assume that the injection scale of turbulence is a cell size of inject_L length and
             ! the velocity is given by the largest size eddie velocity
-
-            ! Assume the closure equations by Braginskii (1965), based on the Chapman-Enskog scheme
-            ! which is based in the assumption that the macroscopic scale of the plasma is large
-            ! compared to the mean free path or the gyro-radii of the electrons and the ions. In this
-            ! case, the viscosity is dominated by the hydrogen viscosity parallel to the magnetic field
-            ! (Braginskii 1965). This is because the ions carry the majority of the momemtum
-
-            ! Distance of closest particle approach (ionised)
-            rc = e2instatC / (kB * T)
-            ! Particle mean free path
-            mfp = 1d0 / (nH * rc**2d0)
-
-            ! Eddie injection timescale
-            tau_L = inject_L / v_turb
-
-            ! Reynolds number (ratio of inertial to viscous forces)
-            Re = 3d0 * v_turb * inject_L / (cs_gas * mfp)
-
-            ! Disipation timescale
-            tau_eta = tau_L / sqrt(Re)
+            tau_L = tau_L_save
+            Re = Re_save
+            tau_eta = tau_eta_save
             
             ! 3. Stopping time computation (we are always in the Epstein regime for large particles)
             ts_target = target_s * target_a / (rho_gas * v_th)
@@ -107,9 +118,6 @@ module dust_dynamics
         else if (trim(model).eq.'Hirashita2019') then
             ! Velocity scaling with the Mach number as given by the model of Hirashita & Aoyama (2019)
             ! which is a further approximation from the full Ormel & Cuzzi (2007) model (see Appendix C)
-
-            ! Gas sound speed (assumed gas with adiabatic constant of 5d0/3d0)
-            cs_gas = sqrt(5d0/3d0 * kB * T / (mH * local_mu))
 
             Mach = v_turb / cs_gas
             v_target = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(target_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(target_s/3.5d0)

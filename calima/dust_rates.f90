@@ -6,7 +6,7 @@ module dust_rates
 
     implicit none
 
-contains
+    contains
 
     subroutine LeBourlot2012_accretion_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
         ! Compute the accretion rate of dust grains in the unrestricted case, following Le Bourlot et al. (2012).
@@ -31,6 +31,7 @@ contains
         real(dp) :: tacc_max, sfunc, tacc_log
         real(dp),dimension(1:ndust) :: correction_factors
         real(dp) :: diff_rate, diff_rho, diff_nH, diff_T
+        real(dp) :: total_rate_type
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
@@ -43,8 +44,10 @@ contains
 
             associate(bin => dustbins_props(ii1))
                 n_el = bin%nelements
+                sfunc = sigmoid_function(tacc_max,bin%nhmax_acc,dust_info%local_nH)
+
                 if (n_el == 1) then
-                    ! 2. A single-element chemistry type has a trivial limiter.
+                    ! 2. A single-element chemistry type has a limiter.
                     e_index = bin%el_index(1)
                     limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
                 else
@@ -61,14 +64,14 @@ contains
                 end if
 
                 ! 4. Apply the same limiting rate to every dust bin in the chemical type.
+                total_rate_type = 0d0
                 do ii = ii1, ii2
                     rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor ! [s-1]
                     ! TODO: Code a nCO based icing to figure this out
                     ! Apply the same nhmax_acc smoothing used in compute_t_accretion,
                     ! but in rate form via the equivalent smoothed timescale.
-                    if (rate > 0d0) then
-                        tacc_log = log10(1d0 / max(rate, 1d-99) / Myr2sec)
-                        sfunc = sigmoid_function(tacc_max,dustbins_props(ii)%nhmax_acc,dust_info%local_nH)
+                    if (rate > 0d0 .and. sfunc > 0d0) then
+                        tacc_log = log10(1d0 / (rate * Myr2sec))
                         tacc_log = (1d0 - sfunc) * tacc_log + sfunc * tacc_max
                         rate = 1d0 / (10d0**tacc_log * Myr2sec)
                     end if
@@ -79,11 +82,13 @@ contains
                     end if
                     rate = rate * y_dust(ii+dust_info%npah) ! [g cm-3 s-1]
                     dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate  ! [g cm-3 s-1]
-                    do kk = 1, n_el
-                        e_index = bin%el_index(kk)
-                        dydt_gas(e_index,1) = dydt_gas(e_index,1) - rate * bin%el_mfractions(kk) ! [g cm-3 s-1]
-                    end do
+                    total_rate_type = total_rate_type + rate
                 end do
+            ! 6. Update gas phase once per chemical type
+            do kk = 1, n_el
+                e_index = bin%el_index(kk)
+                dydt_gas(e_index,1) = dydt_gas(e_index,1) - total_rate_type * bin%el_mfractions(kk) ! [g cm-3 s-1]
+            end do
             end associate
         end do speciesloop
     end subroutine LeBourlot2012_accretion_rate
@@ -100,7 +105,9 @@ contains
 
         ! ---- Local variables ----
         integer :: jj, ii, ii1, ii2, index
-        real(dp) :: rate1, rate2
+        real(dp) :: rate1, rate2, inv_nH
+
+        inv_nH = 1.0_dp / max(dust_info%local_nH, tiny(1.0_dp))
 
         speciesloop: do jj = 1, ndchemtype
             ! 1. Loop over the dust chemical species.
@@ -114,7 +121,7 @@ contains
                     (dust_info%local_Jeans .gt. 4d0*dust_info%local_dx)) then
                     cycle
                 end if
-                rate1 = dustbins_props(ii)%k0_coa(1) * y_dust(index) / dust_info%local_nH ! [s-1]
+                rate1 = dustbins_props(ii)%k0_coa(1) * y_dust(index) * inv_nH ! [s-1]
                 if (present(kmax)) then
                     kmax = max(kmax, rate1)
                 end if
@@ -215,6 +222,9 @@ contains
         real(dp) :: temp_sigma, temp_L
         real(dp) :: v_rel, v_coag, enhan_factor, p_stick
         real(dp) :: mi, mk, msum, loss_ii, loss_kk
+        real(dp) :: log_nH
+
+        log_nH = log10(max(dust_info%local_nH, 1d-99))
 
         if (dust_eq_test) then
             temp_sigma = 5.67d5 * (dust_info%local_nH/1d2)**(-0.25d0)
@@ -249,8 +259,6 @@ contains
                     ! 3. Compute the enhancement due to ice mantles
                     v_coag = dustbins_props(ii)%vthresh_coag(kk_loc) ! [cm/s]
                     if (poppe_ice_enhancement) then
-                        enhan_factor = (1d0-sigmoid_function(4d0,log10(dustbins_props(jj)%nhmax_acc),log10(dust_info%local_nH))) + &
-                                        sigmoid_function(4d0,log10(dustbins_props(jj)%nhmax_acc),log10(dust_info%local_nH)) * 4d0
                         v_coag = enhan_factor * v_coag
                     end if
 
@@ -303,9 +311,13 @@ contains
 
         ! ---- Local variables ----
         integer :: ii, index, iel, nT_loc, iphi0
-        real(dp) :: rate1, rate2, lT, rate_total, irate
+        real(dp) :: rate1, rate2, lT, rate_total, irate, mass_loss
+        real(dp) :: inv_atomic_mass(1:n_elements)
 
         lT = log10(dust_info%local_Tk)
+        do iel = 1, n_elements
+            inv_atomic_mass(iel) = 1.0_dp / max(dust_info%el_atomic_mass_g(iel), tiny(1.0_dp))
+        end do
 
         ! 1. Loop over the dust bins
         binloop: do ii = 1, dust_info%ndust
@@ -321,7 +333,7 @@ contains
                 call interpolate1D(dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
                                 dustbins_props(ii)%sputtering_tab(iel)%tab2d(1:nT_loc,iphi0,1), &
                                 dustbins_props(ii)%sputtering_tab(iel)%npts(1), lT, irate)
-                rate_total = rate_total + (10d0**irate) * y_gas(iel,1) / dust_info%el_atomic_mass_g(iel) ! [micron / yr]
+                rate_total = rate_total + (10d0**irate) * y_gas(iel,1) * inv_atomic_mass(iel) ! [micron / yr]
             end do
 
             ! 3. Convert to the real erosion rate in [s-1]
@@ -331,10 +343,11 @@ contains
             end if
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
-            dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+            mass_loss = rate1 * y_dust(index)
+            dydt_dust(index) = dydt_dust(index) - mass_loss ! [g cm-3 s-1]
             do iel = 1, dustbins_props(ii)%nelements
                 dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
-                    rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+                    mass_loss * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
             end do
         end do binloop
     end subroutine sputtering_rate
@@ -356,7 +369,7 @@ contains
 
         ! ---- Local variables ----
         integer :: ii, index, iel, nT_loc
-        real(dp) :: rate1, lTd, irate, Td_loc
+        real(dp) :: rate1, lTd, irate, Td_loc, mass_loss
 
         ! 1. Loop over the dust bins
         binloop: do ii = 1, dust_info%ndust
@@ -385,10 +398,11 @@ contains
             end if
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
-            dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+            mass_loss = rate1 * y_dust(index)
+            dydt_dust(index) = dydt_dust(index) - mass_loss ! [g cm-3 s-1]
             do iel = 1, dustbins_props(ii)%nelements
                 dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
-                    rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+                    mass_loss * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
             end do
         end do binloop
     end subroutine sublimation_rate
@@ -465,7 +479,6 @@ contains
         integer :: jj, ii, ii1, ii2, index, pp, ll, iel
         real(dp) :: rate1, rate_dest
         real(dp) :: temp_sigma, temp_L
-        real(dp) :: sigma_mol, sigma_diff
         real(dp) :: coll_factor, v_rel
         real(dp) :: chi_frag_dest
         real(dp), dimension(:), allocatable :: chi_frag
@@ -487,7 +500,7 @@ contains
 
             allocate(chi_frag(ii1:ii2))
             allocate(chi_frag_pah(1:dust_info%npah))
-            
+
             ! Cache PAH interaction flag outside grain loop for efficiency
             interact_pah_flag = dustbins_props(ii1)%interact_pah .and. dust_info%npah > 0
 
@@ -715,17 +728,6 @@ contains
         m_remnant = dustbins_props(id1)%mgrain - m_ej
         m_max = 2d-2*m_ej
         m_min = 1d-6*m_max
-        ! print*, 'Shattering collision between bins ', id1, ' and ', id2
-        ! print*, 'Relative velocity (km/s): ', v_rel_out/1d5
-        ! print*, 'Impacted mass (g): ', dustbins_props(id1)%mgrain
-        ! print*, 'Catastrophic specific energy (erg/g): ', dustbins_props(id1)%catastrophic_spec_energy
-        ! print*, 'Impact energy (erg): ', E_imp
-        ! print*, 'Original mass (g): ', dustbins_props(id1)%mgrain
-        ! print*, 'Ejected mass (g): ', m_ej
-        ! print*, 'Remnant mass (g): ', m_remnant
-        ! print*, 'Fragment mass range (g): ', m_min, ' - ', m_max
-        ! print*, 'Original bin mass range (g): ', dustbins_props(id1)%mgrain_min, ' - ', dustbins_props(id1)%mgrain_max
-        ! call clean_stop
 
         ! 4. Compute the distribution prefactor for ejecta fragments only
         if (m_ej > tiny(m_ej)) then

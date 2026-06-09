@@ -1198,6 +1198,7 @@ module dust_init
                 dustbins_props(ii)%collisional_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 ! Mark table as initialized
+                call finalize_dust_table(dustbins_props(ii)%collisional_tab(i))
                 dustbins_props(ii)%collisional_tab(i)%initialised = .true.
 
                 close(25)
@@ -1277,6 +1278,7 @@ module dust_init
             end do
 
             dustbins_props(ii)%collisional_tab(0)%tab1d(1:nT, 1) = T_grid(1:nT)
+            call finalize_dust_table(dustbins_props(ii)%collisional_tab(0))
             dustbins_props(ii)%collisional_tab(0)%initialised = .true.
             close(25)
             if (allocated(phi_grid)) deallocate(phi_grid)
@@ -1403,6 +1405,7 @@ module dust_init
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 close(25)
+                call finalize_dust_table(dustbins_props(ii)%sputtering_tab(i))
                 dustbins_props(ii)%sputtering_tab(i)%initialised = .true.
 
                 deallocate(phi_grid, T_grid)
@@ -1530,7 +1533,7 @@ module dust_init
                 end if
             end do
             close(25)
-
+            call finalize_dust_table(dustbins_props(ii)%sublimation_tab)
             dustbins_props(ii)%sublimation_tab%initialised = .true.
         end do
 
@@ -1670,10 +1673,12 @@ module dust_init
 
             dustbins_props(ii)%mean_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
             dustbins_props(ii)%mean_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
+            call finalize_dust_table(dustbins_props(ii)%mean_charg_tab)
             dustbins_props(ii)%mean_charg_tab%initialised = .true.
 
             dustbins_props(ii)%sigma_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
             dustbins_props(ii)%sigma_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
+            call finalize_dust_table(dustbins_props(ii)%sigma_charg_tab)
             dustbins_props(ii)%sigma_charg_tab%initialised = .true.
 
             close(26)
@@ -1819,8 +1824,9 @@ module dust_init
 
             close(28)
             close(29)
-
+            call finalize_dust_table(dustbins_props(i)%peh_tab)
             dustbins_props(i)%peh_tab%initialised = .true.
+            call finalize_dust_table(dustbins_props(i)%rec_tab)
             dustbins_props(i)%rec_tab%initialised = .true.
 
             deallocate(gamma_grid, T_grid)
@@ -1904,7 +1910,7 @@ module dust_init
                         read(10, *) rate_grid(i)
                     end do
                     pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 2) = rate_grid(1:nT)
-
+                    call finalize_dust_table(pahbins_props(ipahbin)%sputtering_tab(0))
                     pahbins_props(ipahbin)%sputtering_tab(0)%initialised = .true.
                     close(10)
                     deallocate(T_grid, rate_grid)
@@ -1971,6 +1977,7 @@ module dust_init
                     read(10, *) rate_grid(i)
                 end do
                 pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 2) = rate_grid(1:nT)
+                call finalize_dust_table(pahbins_props(ipahbin)%sputtering_tab(iel))
                 pahbins_props(ipahbin)%sputtering_tab(iel)%initialised = .true.
 
                 close(10)
@@ -2058,6 +2065,7 @@ module dust_init
                     read(111, *) pahbins_props(ipahbin)%dissociation_tab%tab2d(i, j, 1)
                 end do
             end do
+            call finalize_dust_table(pahbins_props(ipahbin)%dissociation_tab)
             pahbins_props(ipahbin)%dissociation_tab%initialised = .true.
             close(111)
         end do
@@ -2164,6 +2172,11 @@ module dust_init
                 if (nstates_interp >= 2) pahbins_props(i)%fcharge_tab(2)%tab2d(j,1,1) = f_neutral_i
                 if (nstates_interp >= 3) pahbins_props(i)%fcharge_tab(3)%tab2d(j,1,1) = f_cation_i
                 if (nstates_interp >= 4) pahbins_props(i)%fcharge_tab(4)%tab2d(j,1,1) = f_dication_i
+            end do
+            call finalize_dust_table(pahbins_props(i)%peh_eff_tab)
+            call finalize_dust_table(pahbins_props(i)%peh_pabs_tab)
+            do istate = 1, nstates_interp
+                call finalize_dust_table(pahbins_props(i)%fcharge_tab(istate))
             end do
 
             close(111)

@@ -764,13 +764,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_sigma = sigma(icell)
       drho_dust(:) = rho_dust(icell,1:ndust)
       dust_helper%rho_dust = rho_dust(icell,1:ndust)
-      do ii = 1, ndust
-         dust_helper%csa_dust(:,ii) = sigca_dust(:, ii)
-         dust_helper%css_dust(:,ii) = sigcs_dust(:, ii)
-         dust_helper%csr_dust(:,ii) = sigcr_dust(:, ii)
-         if (dust_ratd) dust_helper%csrat_dust(:,ii) = sigcrat_dust(:, ii)
-         if (dust_pe_heating) dust_helper%l_a(:,ii) = att_len_dust(:, ii)
-      end do
+      dust_helper%csa_dust = sigca_dust
+      dust_helper%css_dust = sigcs_dust
+      dust_helper%csr_dust = sigcr_dust
+      if (dust_ratd) dust_helper%csrat_dust = sigcrat_dust
+      if (dust_pe_heating) dust_helper%l_a = att_len_dust
       drho_pah(:) = rho_pah(icell,1:npah)
       dust_helper%rho_pah = rho_pah(icell,1:npah)
       dust_helper%csa_pah = sigca_pah

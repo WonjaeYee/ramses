@@ -13,6 +13,8 @@ module dustbin_types
         real(dp), dimension(:,:), allocatable :: tab1d ! 1D table values
         real(dp), dimension(:,:,:), allocatable :: tab2d ! 2D table values
         real(dp), dimension(:,:,:,:), allocatable :: tab3d ! 3D table values
+        real(dp), dimension(:,:), allocatable :: tab1d_log ! Log10 of 1D table values
+        real(dp), dimension(:,:,:), allocatable :: tab2d_log ! Log10 of 2D table values
     end type DustTable
 
     ! ==== Dust Chemistry Info ====
@@ -214,7 +216,24 @@ module dustbin_types
         type(DustTable) :: dissociation_tab ! PAH dissociation tables
     end type PAHBin
 
+    public :: finalize_dust_table
+
 contains
+
+    subroutine finalize_dust_table(table)
+        type(DustTable), intent(inout) :: table
+        if (allocated(table%tab1d)) then
+            if (allocated(table%tab1d_log)) deallocate(table%tab1d_log)
+            allocate(table%tab1d_log(size(table%tab1d,1), size(table%tab1d,2)))
+            table%tab1d_log = log10(max(table%tab1d, 1d-99))
+        end if
+        if (allocated(table%tab2d)) then
+            if (allocated(table%tab2d_log)) deallocate(table%tab2d_log)
+            allocate(table%tab2d_log(size(table%tab2d,1), size(table%tab2d,2), size(table%tab2d,3)))
+            table%tab2d_log = log10(max(table%tab2d, 1d-99))
+        end if
+    end subroutine finalize_dust_table
+
     subroutine init_dust_chemistry_info(this, ndust, npah, nGroups, ncharge_pah_max, nion_charges)
         ! Initializes the DustChemistryInfo derived type by allocating arrays and setting default values.
         ! This is done at RAMSES initialisation, and re-used for each threat
@@ -272,7 +291,7 @@ contains
         this%T_dust = 0d0
 
         if (allocated(this%Pabs_dust)) deallocate(this%Pabs_dust)
-        allocate(this%Pabs_dust(1:this%nGroups,1:this%ndust))
+        allocate(this%Pabs_dust(1:this%ndust,1:this%nGroups))
         this%Pabs_dust = 0d0
 
         if (allocated(this%Pinj_dust)) deallocate(this%Pinj_dust)
@@ -292,7 +311,7 @@ contains
         this%Pcoll_dust = 0d0
 
         if (allocated(this%Pabs_pah)) deallocate(this%Pabs_pah)
-        allocate(this%Pabs_pah(1:this%nGroups,1:this%npah))
+        allocate(this%Pabs_pah(1:this%npah,1:this%nGroups))
         this%Pabs_pah = 0d0
 
         if (allocated(this%Pinj_pah)) deallocate(this%Pinj_pah)
@@ -312,31 +331,31 @@ contains
         this%Pcoll_pah = 0d0
 
         if (allocated(this%csa_dust)) deallocate(this%csa_dust)
-        allocate(this%csa_dust(1:this%nGroups,1:this%ndust))
+        allocate(this%csa_dust(1:this%ndust,1:this%nGroups))
         this%csa_dust = 0d0
 
         if (allocated(this%css_dust)) deallocate(this%css_dust)
-        allocate(this%css_dust(1:this%nGroups,1:this%ndust))
+        allocate(this%css_dust(1:this%ndust,1:this%nGroups))
         this%css_dust = 0d0
 
         if (allocated(this%csr_dust)) deallocate(this%csr_dust)
-        allocate(this%csr_dust(1:this%nGroups,1:this%ndust))
+        allocate(this%csr_dust(1:this%ndust,1:this%nGroups))
         this%csr_dust = 0d0
 
         if (allocated(this%csrat_dust)) deallocate(this%csrat_dust)
-        allocate(this%csrat_dust(1:this%nGroups,1:this%ndust))
+        allocate(this%csrat_dust(1:this%ndust,1:this%nGroups))
         this%csrat_dust = 0d0
 
         if (allocated(this%csa_pah)) deallocate(this%csa_pah)
-        allocate(this%csa_pah(1:this%nGroups,1:2*this%npah))
+        allocate(this%csa_pah(1:2*this%npah,1:this%nGroups))
         this%csa_pah = 0d0
 
         if (allocated(this%css_pah)) deallocate(this%css_pah)
-        allocate(this%css_pah(1:this%nGroups,1:2*this%npah))
+        allocate(this%css_pah(1:2*this%npah,1:this%nGroups))
         this%css_pah = 0d0
         
         if (allocated(this%csr_pah)) deallocate(this%csr_pah)
-        allocate(this%csr_pah(1:this%nGroups,1:2*this%npah))
+        allocate(this%csr_pah(1:2*this%npah,1:this%nGroups))
         this%csr_pah = 0d0
 
         if (allocated(this%dustAbs)) deallocate(this%dustAbs)
@@ -344,7 +363,7 @@ contains
         this%dustAbs = 0d0
 
         if (allocated(this%l_a)) deallocate(this%l_a)
-        allocate(this%l_a(1:this%nGroups,1:this%ndust))
+        allocate(this%l_a(1:this%ndust,1:this%nGroups))
         this%l_a = 0d0
 
         if (allocated(this%pahAbs)) deallocate(this%pahAbs)

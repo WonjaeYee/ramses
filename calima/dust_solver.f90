@@ -48,7 +48,7 @@ module ode_interface_mod
             ! first_call --> Logical flag indicating whether this is the first call to the subroutine
             ! accepted --> Logical flag indicating whether the step was accepted or not (for adaptive time stepping)
             ! break    --> Logical flag indicating whether the integration should be stopped (e.g., if there are no active dust processes)
-            import dp, DustChemistryInfo
+            import dp, DustChemistryInfo, rhs_interface
             implicit none
             ! ---- Input/Output variables ----
             type(DustChemistryInfo), intent(in) :: dust_info
@@ -84,11 +84,26 @@ module dust_rhs_mod
     ! Indexed as last_dydt_dust_per_proc(ispecies, iprocess).
     real(dp), allocatable, save :: last_dydt_dust_per_proc(:,:)
     real(dp), allocatable, save :: last_dydt_pah_per_proc(:,:)
+    real(dp), allocatable, save :: dydt_dust_before_cache(:)
 
     contains
 
     subroutine ensure_kmax_storage
         implicit none
+        logical, save :: first_call = .true.
+
+        if (.not. first_call) return
+
+        first_call = .false.
+
+        if (allocated(dydt_dust_before_cache)) then
+            if (size(dydt_dust_before_cache) /= ndust+npah) then
+                deallocate(dydt_dust_before_cache)
+            end if
+        end if
+        if (.not. allocated(dydt_dust_before_cache)) then
+            allocate(dydt_dust_before_cache(ndust+npah))
+        end if
 
         if (allocated(last_kmax_dust)) then
             if (size(last_kmax_dust) /= ndust_processes) then
@@ -276,7 +291,6 @@ module dust_rhs_mod
         ! ---- Local variables ----
         integer :: i
         real(dp) :: process_kmax
-        real(dp) :: dydt_dust_before(size(y_dust))
 
         ! 1. Initialize the time derivatives to zero
         dydt_gas(:,:) = 0.0_dp
@@ -295,21 +309,28 @@ module dust_rhs_mod
 
         do i = 1, ndust_processes
             process_kmax = 0.0_dp
-            if (dust_log) dydt_dust_before(:) = dydt_dust(:)
-            call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+            if (dust_log) then
+                dydt_dust_before_cache(:) = dydt_dust(:)
+                call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+                if (allocated(last_dydt_dust_per_proc)) &
+                    last_dydt_dust_per_proc(:, i) = dydt_dust(:) - dydt_dust_before_cache(:)
+            else
+                call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+            end if
             last_kmax_dust(i) = process_kmax
-            if (dust_log .and. allocated(last_dydt_dust_per_proc)) &
-                last_dydt_dust_per_proc(:, i) = dydt_dust(:) - dydt_dust_before(:)
             if (present(kmax)) kmax = max(kmax, process_kmax)
         end do
-
         do i = 1, npah_processes
             process_kmax = 0.0_dp
-            if (dust_log) dydt_dust_before(:) = dydt_dust(:)
-            call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+            if (dust_log) then
+                dydt_dust_before_cache(:) = dydt_dust(:)
+                call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+                if (allocated(last_dydt_pah_per_proc)) &
+                    last_dydt_pah_per_proc(:, i) = dydt_dust(:) - dydt_dust_before_cache(:)
+            else
+                call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+            end if
             last_kmax_pah(i) = process_kmax
-            if (dust_log .and. allocated(last_dydt_pah_per_proc)) &
-                last_dydt_pah_per_proc(:, i) = dydt_dust(:) - dydt_dust_before(:)
             if (present(kmax)) kmax = max(kmax, process_kmax)
         end do
     end subroutine dust_rhs
@@ -326,7 +347,52 @@ module rk4_mod
     private
     public :: rk4_step
 
+    ! Cache for intermediate RK4 stages to avoid automatic array allocations
+    real(dp), allocatable, save, target :: k1_gas_cache(:,:), k2_gas_cache(:,:), k3_gas_cache(:,:), k4_gas_cache(:,:)
+    real(dp), allocatable, save, target :: k1_dust_cache(:), k2_dust_cache(:), k3_dust_cache(:), k4_dust_cache(:)
+    real(dp), allocatable, save, target :: y_gas_temp_cache(:,:), y_dust_temp_cache(:)
+    real(dp), allocatable, save, target :: error_gas_cache(:,:), error_dust_cache(:)
+
     contains
+
+    subroutine ensure_rk4_cache(ngas_species, nvar_gas, ndust_total)
+        integer, intent(in) :: ngas_species, nvar_gas, ndust_total
+        logical :: need_realloc
+
+        need_realloc = .false.
+        if (.not. allocated(k1_gas_cache)) then
+            need_realloc = .true.
+        else if (size(k1_gas_cache,1) /= ngas_species .or. size(k1_gas_cache,2) /= nvar_gas) then
+            need_realloc = .true.
+        end if
+
+        if (need_realloc) then
+            if (allocated(k1_gas_cache)) deallocate(k1_gas_cache, k2_gas_cache, k3_gas_cache, k4_gas_cache)
+            if (allocated(y_gas_temp_cache)) deallocate(y_gas_temp_cache)
+            if (allocated(error_gas_cache)) deallocate(error_gas_cache)
+            allocate(k1_gas_cache(ngas_species, nvar_gas), k2_gas_cache(ngas_species, nvar_gas), &
+                     k3_gas_cache(ngas_species, nvar_gas), k4_gas_cache(ngas_species, nvar_gas))
+            allocate(y_gas_temp_cache(ngas_species, nvar_gas))
+            allocate(error_gas_cache(ngas_species, nvar_gas))
+        end if
+
+        need_realloc = .false.
+        if (.not. allocated(k1_dust_cache)) then
+            need_realloc = .true.
+        else if (size(k1_dust_cache) /= ndust_total) then
+            need_realloc = .true.
+        end if
+
+        if (need_realloc) then
+            if (allocated(k1_dust_cache)) deallocate(k1_dust_cache, k2_dust_cache, k3_dust_cache, k4_dust_cache)
+            if (allocated(y_dust_temp_cache)) deallocate(y_dust_temp_cache)
+            if (allocated(error_dust_cache)) deallocate(error_dust_cache)
+            allocate(k1_dust_cache(ndust_total), k2_dust_cache(ndust_total), &
+                     k3_dust_cache(ndust_total), k4_dust_cache(ndust_total))
+            allocate(y_dust_temp_cache(ndust_total))
+            allocate(error_dust_cache(ndust_total))
+        end if
+    end subroutine ensure_rk4_cache
 
     subroutine rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,first_call,break,debug_flag)
         ! Perform a single step of the classical 4th-order Runge-Kutta method (RK4) to solve the ODE system.
@@ -352,15 +418,14 @@ module rk4_mod
         logical, intent(in), optional :: debug_flag
 
         ! ---- Local variables ----
-        real(dp) :: k1_gas(size(y_gas,1),size(y_gas,2))
-        real(dp) :: k2_gas(size(y_gas,1),size(y_gas,2))
-        real(dp) :: k3_gas(size(y_gas,1),size(y_gas,2))
-        real(dp) :: k4_gas(size(y_gas,1),size(y_gas,2))
-        real(dp) :: k1_dust(size(y_dust))
-        real(dp) :: k2_dust(size(y_dust))
-        real(dp) :: k3_dust(size(y_dust))
-        real(dp) :: k4_dust(size(y_dust))
+        real(dp), pointer :: k1_gas(:,:), k2_gas(:,:), k3_gas(:,:), k4_gas(:,:)
+        real(dp), pointer :: k1_dust(:), k2_dust(:), k3_dust(:), k4_dust(:)
         real(dp) :: kmax, h_local
+
+        call ensure_rk4_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
+        k1_gas => k1_gas_cache; k2_gas => k2_gas_cache; k3_gas => k3_gas_cache; k4_gas => k4_gas_cache
+        k1_dust => k1_dust_cache; k2_dust => k2_dust_cache; k3_dust => k3_dust_cache; k4_dust => k4_dust_cache
+
         break = .false.
 
         ! 1. Perform the four RK4 stages
@@ -384,7 +449,7 @@ module rk4_mod
                 call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust)
             end if
         end if
-
+      
         ! 2. Use the provided kmax to compute a guess of the neccessary
         ! time step size for stability, but never increase the time step 
         ! beyond the provided h
@@ -439,9 +504,13 @@ module rk4_mod
         logical, intent(in), optional :: debug_flag
 
         ! ---- Local variables ----
-        real(dp) :: y_gas_temp(size(y_gas,1),size(y_gas,2)), y_dust_temp(size(y_dust))
-        real(dp) :: error_gas(size(y_gas,1),size(y_gas,2)), error_dust(size(y_dust))
+        real(dp), pointer :: y_gas_temp(:,:), y_dust_temp(:)
+        real(dp), pointer :: error_gas(:,:), error_dust(:)
         real(dp) :: max_error, scale
+
+        call ensure_rk4_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
+        y_gas_temp => y_gas_temp_cache; y_dust_temp => y_dust_temp_cache
+        error_gas => error_gas_cache; error_dust => error_dust_cache
 
         ! 1. Perform a raw RK4 step to get the new solution
         if (present(debug_flag)) then
