@@ -226,7 +226,7 @@ module dust_commons
     real(dp),parameter::u_Mathis1983=8.635471d-13 ! [erg/cm3]
 
     ! ==== External dust files ====
-    character(LEN=256)::dust_tables_dir='../lib/dust_tables'    ! Name of folder holding optical properties files
+    character(LEN=256)::dust_tables_dir='../lib/dust_tables/'    ! Name of folder holding pre-computed dust tables (extinction, charging, etc.)
 
     integer*8 :: tdust_solver_calls=0
     integer*8 :: tdust_solver_iter_sum=0

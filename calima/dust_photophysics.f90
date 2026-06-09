@@ -169,23 +169,26 @@ module dust_optics
                 dustbins_props(i)%cs_ext_tab%tab2d(k,1,1) = crp_read
             end do
             close(20)
+            call finalize_dust_table(dustbins_props(i)%cs_abs_tab)
+            call finalize_dust_table(dustbins_props(i)%cs_scat_tab)
+            call finalize_dust_table(dustbins_props(i)%cs_ext_tab)
             dustbins_props(i)%cs_abs_tab%initialised = .true.
             dustbins_props(i)%cs_scat_tab%initialised = .true.
             dustbins_props(i)%cs_ext_tab%initialised = .true.
         end do
 
         if (ndust>0) then
-            allocate(group_csa_dust(1:nGroups,1:ndust),&
-                     group_css_dust(1:nGroups,1:ndust),&
-                     group_csr_dust(1:nGroups,1:ndust),&
-                     group_csrat_dust(1:nGroups,1:ndust),&
-                     att_len_dust(1:nGroups,1:ndust))
+            allocate(group_csa_dust(1:ndust,1:nGroups),&
+                     group_css_dust(1:ndust,1:nGroups),&
+                     group_csr_dust(1:ndust,1:nGroups),&
+                     group_csrat_dust(1:ndust,1:nGroups),&
+                     att_len_dust(1:ndust,1:nGroups))
                     group_csrat_dust = 0.d0
                     att_len_dust     = 0.d0
-            allocate(sigca_dust(1:nGroups,1:ndust),&
-                     sigcs_dust(1:nGroups,1:ndust),&
-                     sigcr_dust(1:nGroups,1:ndust),&
-                     sigcrat_dust(1:nGroups,1:ndust))
+            allocate(sigca_dust(1:ndust,1:nGroups),&
+                     sigcs_dust(1:ndust,1:nGroups),&
+                     sigcr_dust(1:ndust,1:nGroups),&
+                     sigcrat_dust(1:ndust,1:nGroups))
         end if
 
         if (npah > 0) then
@@ -315,7 +318,9 @@ module dust_optics
                     pahbins_props(isize)%cs_ext_tab%tab2d(j,1,2) = crp_ion
                 end do
                 close(12)
-
+                call finalize_dust_table(pahbins_props(isize)%cs_abs_tab)
+                call finalize_dust_table(pahbins_props(isize)%cs_scat_tab)
+                call finalize_dust_table(pahbins_props(isize)%cs_ext_tab)
                 pahbins_props(isize)%cs_abs_tab%initialised = .true.
                 pahbins_props(isize)%cs_scat_tab%initialised = .true.
                 pahbins_props(isize)%cs_ext_tab%initialised = .true.
@@ -323,12 +328,12 @@ module dust_optics
         end if
 
         if (npah>0) then
-            allocate(group_csa_pah(1:nGroups,1:2*npah),&
-                     group_css_pah(1:nGroups,1:2*npah),&
-                     group_csr_pah(1:nGroups,1:2*npah))
-            allocate(sigca_pah(1:nGroups,1:2*npah),&
-                     sigcs_pah(1:nGroups,1:2*npah),&
-                     sigcr_pah(1:nGroups,1:2*npah))
+            allocate(group_csa_pah(1:2*npah,1:nGroups),&
+                     group_css_pah(1:2*npah,1:nGroups),&
+                     group_csr_pah(1:2*npah,1:nGroups))
+            allocate(sigca_pah(1:2*npah,1:nGroups),&
+                     sigcs_pah(1:2*npah,1:nGroups),&
+                     sigcr_pah(1:2*npah,1:nGroups))
         end if
 
     end subroutine init_dust_efficiency_tables
@@ -790,7 +795,10 @@ module dust_optics
                 dP_emit_dT = 4d0 * sb * (dplanck_abs_dT * T_val**4d0 + 4d0 * dustbins_props(i)%Planck_tab%tab2d(j,1,1) * T_val**3d0)
                 dustbins_props(i)%Planckderiv_tab%tab2d(j,1,1) = log10(max(dP_emit_dT, tiny(1d0)))
             end do
-
+            call finalize_dust_table(dustbins_props(i)%Rosseland_tab)
+            call finalize_dust_table(dustbins_props(i)%Planck_tab)
+            call finalize_dust_table(dustbins_props(i)%Planck_power_tab)
+            call finalize_dust_table(dustbins_props(i)%Planckderiv_tab)
             dustbins_props(i)%Rosseland_tab%initialised = .true.
             dustbins_props(i)%Planck_tab%initialised = .true.
             dustbins_props(i)%Planck_power_tab%initialised = .true.
@@ -864,18 +872,18 @@ module dust_optics
         logical :: skip_group
 
         ! Allocate group arrays if not already done
-        if (.not. allocated(group_csa_dust)) allocate(group_csa_dust(nGroups, ndust))
-        if (.not. allocated(group_css_dust)) allocate(group_css_dust(nGroups, ndust))
-        if (.not. allocated(group_csr_dust)) allocate(group_csr_dust(nGroups, ndust))
-        if (.not. allocated(att_len_dust)) allocate(att_len_dust(nGroups, ndust))
+        if (.not. allocated(group_csa_dust)) allocate(group_csa_dust(ndust, nGroups))
+        if (.not. allocated(group_css_dust)) allocate(group_css_dust(ndust, nGroups))
+        if (.not. allocated(group_csr_dust)) allocate(group_csr_dust(ndust, nGroups))
+        if (.not. allocated(att_len_dust)) allocate(att_len_dust(ndust, nGroups))
         ! RAT cross-sections per group/dust-bin
-        if (.not. allocated(group_csrat_dust)) allocate(group_csrat_dust(nGroups, ndust))
+        if (.not. allocated(group_csrat_dust)) allocate(group_csrat_dust(ndust, nGroups))
 
         if (npah > 0) then
-            ! PAH group arrays store neutral and ion interlaced: (nGroups, 2*npah)
-            if (.not. allocated(group_csa_pah)) allocate(group_csa_pah(nGroups, 2*npah))
-            if (.not. allocated(group_css_pah)) allocate(group_css_pah(nGroups, 2*npah))
-            if (.not. allocated(group_csr_pah)) allocate(group_csr_pah(nGroups, 2*npah))
+            ! PAH group arrays store neutral and ion interlaced: (2*npah, nGroups)
+            if (.not. allocated(group_csa_pah)) allocate(group_csa_pah(2*npah, nGroups))
+            if (.not. allocated(group_css_pah)) allocate(group_css_pah(2*npah, nGroups))
+            if (.not. allocated(group_csr_pah)) allocate(group_csr_pah(2*npah, nGroups))
         end if
 
         ! Initialize to zero
@@ -917,23 +925,23 @@ module dust_optics
             do isize = 1, ndust
                 ! Absorption cross-section: integral of f*Y*lambda*sigma_abs over wavelength
                 result = integrate_dust_absorbtion(X, Y, 1000, isize)
-                group_csa_dust(ip, isize) = result / norm
+                group_csa_dust(isize, ip) = result / norm
                 
                 ! Scattering cross-section: integral of f*Y*lambda*sigma_scat over wavelength
                 result = integrate_dust_scattering(X, Y, 1000, isize)
-                group_css_dust(ip, isize) = result / norm
+                group_css_dust(isize, ip) = result / norm
                 
                 ! Radiation pressure cross-section: integral of f*Y*lambda*sigma_rp over wavelength
                 result = integrate_dust_radpressure(X, Y, 1000, isize)
-                group_csr_dust(ip, isize) = result / norm
+                group_csr_dust(isize, ip) = result / norm
                 
                 ! Attenuation length: integral of f*Y*lambda*la over wavelength
                 result = integrate_dust_attenuationlength(X, Y, 1000, isize)
-                att_len_dust(ip, isize) = result / norm
+                att_len_dust(isize, ip) = result / norm
 
                 ! RAT cross-section: use helper trapezoidal integrator
                 result = integrate_dust_RAT(X, Y, 1000, isize)
-                group_csrat_dust(ip, isize) = result / norm
+                group_csrat_dust(isize, ip) = result / norm
             end do
 
             ! Process each PAH bin
@@ -944,23 +952,23 @@ module dust_optics
 
                     ! Neutral PAHs (ion=1)
                     result = integrate_pah_absorbtion(X, Y, 1000, isize, 1)
-                    group_csa_pah(ip, idx_n) = result / norm
+                    group_csa_pah(idx_n, ip) = result / norm
 
                     result = integrate_pah_scattering(X, Y, 1000, isize, 1)
-                    group_css_pah(ip, idx_n) = result / norm
+                    group_css_pah(idx_n, ip) = result / norm
 
                     result = integrate_pah_radpressure(X, Y, 1000, isize, 1)
-                    group_csr_pah(ip, idx_n) = result / norm
+                    group_csr_pah(idx_n, ip) = result / norm
 
                     ! Ionised PAHs (ion=2)
                     result = integrate_pah_absorbtion(X, Y, 1000, isize, 2)
-                    group_csa_pah(ip, idx_i) = result / norm
+                    group_csa_pah(idx_i, ip) = result / norm
 
                     result = integrate_pah_scattering(X, Y, 1000, isize, 2)
-                    group_css_pah(ip, idx_i) = result / norm
+                    group_css_pah(idx_i, ip) = result / norm
 
                     result = integrate_pah_radpressure(X, Y, 1000, isize, 2)
-                    group_csr_pah(ip, idx_i) = result / norm
+                    group_csr_pah(idx_i, ip) = result / norm
                 end do
             end if
         end do  ! end loop over groups
@@ -974,10 +982,14 @@ module dust_optics
         real(kind=8), intent(in) :: X(N), Y(N)
         real(kind=8) :: integral
         integer :: i
+        real(kind=8) :: y_i, y_ip1
         
         integral = 0.d0
+        y_i = Y(1)
         do i = 1, N - 1
-            integral = integral + 0.5d0 * (Y(i) + Y(i+1)) * (X(i+1) - X(i))
+            y_ip1 = Y(i+1)
+            integral = integral + 0.5d0 * (y_i + y_ip1) * (X(i+1) - X(i))
+            y_i = y_ip1
         end do
     end function integrate_spectrum_simple
 
@@ -989,10 +1001,14 @@ module dust_optics
         real(kind=8), intent(in) :: X(N), Y(N)
         real(kind=8) :: integral
         integer :: i
+        real(kind=8) :: term_i, term_ip1
 
         integral = 0.d0
+        term_i = Y(1)*X(1)
         do i = 1, N - 1
-            integral = integral + 0.5d0 * (Y(i)*X(i) + Y(i+1)*X(i+1)) * (X(i+1) - X(i))
+            term_ip1 = Y(i+1)*X(1+i)
+            integral = integral + 0.5d0 * (term_i + term_ip1) * (X(i+1) - X(i))
+            term_i = term_ip1
         end do
     end function integrate_spectrum_lambda
 
@@ -1000,14 +1016,16 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
-        
+
         integral = 0.d0
+        sigma_i = getAbsCrosssection(X(1), isize)
         do i = 1, N - 1
-            sigma = getAbsCrosssection(X(i), isize)
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getAbsCrosssection(X(i+1), isize)) &
-                                  * (X(i+1) - X(i))
+            sigma_ip1 = getAbsCrosssection(X(i+1), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
+                                   * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_dust_absorbtion
 
@@ -1015,14 +1033,16 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
-        
+
         integral = 0.d0
+        sigma_i = getScCrosssection(X(1), isize)
         do i = 1, N - 1
-            sigma = getScCrosssection(X(i), isize)
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getScCrosssection(X(i+1), isize)) &
-                                  * (X(i+1) - X(i))
+            sigma_ip1 = getScCrosssection(X(i+1), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
+                                   * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_dust_scattering
 
@@ -1030,14 +1050,16 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
-        
+
         integral = 0.d0
+        sigma_i = getRpCrosssection(X(1), isize)
         do i = 1, N - 1
-            sigma = getRpCrosssection(X(i), isize)
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getRpCrosssection(X(i+1), isize)) &
-                                  * (X(i+1) - X(i))
+            sigma_ip1 = getRpCrosssection(X(i+1), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
+                                   * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_dust_radpressure
 
@@ -1045,16 +1067,18 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, la
+        real(kind=8) :: integral, la_i, la_ip1
         integer :: i
-        
+
         integral = 0.d0
+        la_i = getla_dustbin(X(1), isize)
         do i = 1, N - 1
-            la = getla_dustbin(X(i), isize)
-            if (la < huge(1.d0)) then
-                integral = integral + 0.5d0 * (Y(i)*X(i)*la + Y(i+1)*X(i+1)*getla_dustbin(X(i+1), isize)) &
+            la_ip1 = getla_dustbin(X(i+1), isize)
+            if (la_i < huge(1.d0)) then
+                integral = integral + 0.5d0 * (Y(i)*X(i)*la_i + Y(i+1)*X(i+1)*la_ip1) &
                                       * (X(i+1) - X(i))
             end if
+            la_i = la_ip1
         end do
     end function integrate_dust_attenuationlength
 
@@ -1062,14 +1086,16 @@ module dust_optics
         implicit none
         integer, intent(in) :: N, isize
         real(kind=8), intent(in) :: X(N), Y(N)
-        real(kind=8) :: integral, sigma
+        real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
 
         integral = 0.d0
+        sigma_i = getRATCrosssection(X(1), isize)
         do i = 1, N - 1
-            sigma = getRATCrosssection(X(i), isize)
-            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma + Y(i+1)*X(i+1)*getRATCrosssection(X(i+1), isize)) &
-                                  * (X(i+1) - X(i))
+            sigma_ip1 = getRATCrosssection(X(i+1), isize)
+            integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
+                                   * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_dust_RAT
 
@@ -1079,17 +1105,21 @@ module dust_optics
         real(kind=8), intent(in) :: X(N), Y(N)
         real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
-        
+
         integral = 0.d0
+        if (ion == 1) then
+            sigma_i = getAbsCrosssection_pah_n(X(1), isize)
+        else
+            sigma_i = getAbsCrosssection_pah_i(X(1), isize)
+        end if
         do i = 1, N - 1
             if (ion == 1) then
-                sigma_i   = getAbsCrosssection_pah_n(X(i),   isize)
                 sigma_ip1 = getAbsCrosssection_pah_n(X(i+1), isize)
             else
-                sigma_i   = getAbsCrosssection_pah_i(X(i),   isize)
                 sigma_ip1 = getAbsCrosssection_pah_i(X(i+1), isize)
             end if
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_pah_absorbtion
 
@@ -1099,17 +1129,21 @@ module dust_optics
         real(kind=8), intent(in) :: X(N), Y(N)
         real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
-        
+
         integral = 0.d0
+        if (ion == 1) then
+            sigma_i = getScCrosssection_pah_n(X(1), isize)
+        else
+            sigma_i = getScCrosssection_pah_i(X(1), isize)
+        end if
         do i = 1, N - 1
             if (ion == 1) then
-                sigma_i   = getScCrosssection_pah_n(X(i),   isize)
                 sigma_ip1 = getScCrosssection_pah_n(X(i+1), isize)
             else
-                sigma_i   = getScCrosssection_pah_i(X(i),   isize)
                 sigma_ip1 = getScCrosssection_pah_i(X(i+1), isize)
             end if
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_pah_scattering
 
@@ -1119,17 +1153,21 @@ module dust_optics
         real(kind=8), intent(in) :: X(N), Y(N)
         real(kind=8) :: integral, sigma_i, sigma_ip1
         integer :: i
-        
+
         integral = 0.d0
+        if (ion == 1) then
+            sigma_i = getRpCrosssection_pah_n(X(1), isize)
+        else
+            sigma_i = getRpCrosssection_pah_i(X(1), isize)
+        end if
         do i = 1, N - 1
             if (ion == 1) then
-                sigma_i   = getRpCrosssection_pah_n(X(i),   isize)
                 sigma_ip1 = getRpCrosssection_pah_n(X(i+1), isize)
             else
-                sigma_i   = getRpCrosssection_pah_i(X(i),   isize)
                 sigma_ip1 = getRpCrosssection_pah_i(X(i+1), isize)
             end if
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
+            sigma_i = sigma_ip1
         end do
     end function integrate_pah_radpressure
 
@@ -1174,8 +1212,8 @@ module dust_optics
         real(dp) :: cs
 
         npts = dustbins_props(isize)%cs_abs_tab%npts(1)
-        call interpolate1D(log10(dustbins_props(isize)%cs_abs_tab%tab1d(1:npts,1)), &
-                   log10(dustbins_props(isize)%cs_abs_tab%tab2d(1:npts,1,1)), &
+        call interpolate1D(dustbins_props(isize)%cs_abs_tab%tab1d_log(1:npts,1), &
+                   dustbins_props(isize)%cs_abs_tab%tab2d_log(1:npts,1,1), &
                    npts,log10(lambda),cs)
         getAbsCrosssection = 10**cs
 
@@ -1196,8 +1234,8 @@ module dust_optics
         real(dp) :: cs
 
         npts = dustbins_props(isize)%cs_scat_tab%npts(1)
-        call interpolate1D(log10(dustbins_props(isize)%cs_scat_tab%tab1d(1:npts,1)), &
-                   log10(dustbins_props(isize)%cs_scat_tab%tab2d(1:npts,1,1)), &
+        call interpolate1D(dustbins_props(isize)%cs_scat_tab%tab1d_log(1:npts,1), &
+                   dustbins_props(isize)%cs_scat_tab%tab2d_log(1:npts,1,1), &
                    npts, log10(lambda),cs)
         getScCrosssection = 10**cs
 
@@ -1218,8 +1256,8 @@ module dust_optics
         real(dp) :: cs
 
         npts = dustbins_props(isize)%cs_ext_tab%npts(1)
-        call interpolate1D(log10(dustbins_props(isize)%cs_ext_tab%tab1d(1:npts,1)), &
-                   log10(dustbins_props(isize)%cs_ext_tab%tab2d(1:npts,1,1)), &
+        call interpolate1D(dustbins_props(isize)%cs_ext_tab%tab1d_log(1:npts,1), &
+                   dustbins_props(isize)%cs_ext_tab%tab2d_log(1:npts,1,1), &
                    npts, log10(lambda),cs)
         getRpCrosssection = 10**cs
 
@@ -1240,8 +1278,8 @@ module dust_optics
         real(dp) :: cs
         
         npts = pahbins_props(isize)%cs_abs_tab%npts(1)
-        call interpolate1D(log10(pahbins_props(isize)%cs_abs_tab%tab1d(1:npts,1)), &
-                   log10(pahbins_props(isize)%cs_abs_tab%tab2d(1:npts,1,1)), &
+        call interpolate1D(pahbins_props(isize)%cs_abs_tab%tab1d_log(1:npts,1), &
+                   pahbins_props(isize)%cs_abs_tab%tab2d_log(1:npts,1,1), &
                    npts, log10(lambda),cs)
         getAbsCrosssection_pah_n = 10**cs
 
@@ -1262,8 +1300,8 @@ module dust_optics
         real(dp) :: cs
         
         npts = pahbins_props(isize)%cs_scat_tab%npts(1)
-        call interpolate1D(log10(pahbins_props(isize)%cs_scat_tab%tab1d(1:npts,1)), &
-                   log10(pahbins_props(isize)%cs_scat_tab%tab2d(1:npts,1,1)), &
+        call interpolate1D(pahbins_props(isize)%cs_scat_tab%tab1d_log(1:npts,1), &
+                   pahbins_props(isize)%cs_scat_tab%tab2d_log(1:npts,1,1), &
                    npts, log10(lambda),cs)
         getScCrosssection_pah_n = 10**cs
 
@@ -1284,8 +1322,8 @@ module dust_optics
         real(dp) :: cs
         
         npts = pahbins_props(isize)%cs_ext_tab%npts(1)
-        call interpolate1D(log10(pahbins_props(isize)%cs_ext_tab%tab1d(1:npts,1)), &
-                   log10(pahbins_props(isize)%cs_ext_tab%tab2d(1:npts,1,1)), &
+        call interpolate1D(pahbins_props(isize)%cs_ext_tab%tab1d_log(1:npts,1), &
+                   pahbins_props(isize)%cs_ext_tab%tab2d_log(1:npts,1,1), &
                    npts, log10(lambda),cs)
         getRpCrosssection_pah_n = 10**cs
 
@@ -1306,8 +1344,8 @@ module dust_optics
         real(dp) :: cs
         
         npts = pahbins_props(isize)%cs_abs_tab%npts(1)
-        call interpolate1D(log10(pahbins_props(isize)%cs_abs_tab%tab1d(1:npts,1)), &
-                   log10(pahbins_props(isize)%cs_abs_tab%tab2d(1:npts,1,2)), &
+        call interpolate1D(pahbins_props(isize)%cs_abs_tab%tab1d_log(1:npts,1), &
+                   pahbins_props(isize)%cs_abs_tab%tab2d_log(1:npts,1,2), &
                    npts, log10(lambda),cs)
         getAbsCrosssection_pah_i = 10**cs
 
@@ -1328,8 +1366,8 @@ module dust_optics
         real(dp) :: cs
         
         npts = pahbins_props(isize)%cs_scat_tab%npts(1)
-        call interpolate1D(log10(pahbins_props(isize)%cs_scat_tab%tab1d(1:npts,1)), &
-                   log10(pahbins_props(isize)%cs_scat_tab%tab2d(1:npts,1,2)), &
+        call interpolate1D(pahbins_props(isize)%cs_scat_tab%tab1d_log(1:npts,1), &
+                   pahbins_props(isize)%cs_scat_tab%tab2d_log(1:npts,1,2), &
                    npts, log10(lambda),cs)
         getScCrosssection_pah_i = 10**cs
 
@@ -1350,8 +1388,8 @@ module dust_optics
         real(dp) :: cs
         
         npts = pahbins_props(isize)%cs_ext_tab%npts(1)
-        call interpolate1D(log10(pahbins_props(isize)%cs_ext_tab%tab1d(1:npts,1)), &
-                   log10(pahbins_props(isize)%cs_ext_tab%tab2d(1:npts,1,2)), &
+        call interpolate1D(pahbins_props(isize)%cs_ext_tab%tab1d_log(1:npts,1), &
+                   pahbins_props(isize)%cs_ext_tab%tab2d_log(1:npts,1,2), &
                    npts, log10(lambda),cs)
         getRpCrosssection_pah_i = 10**cs
 
@@ -1872,7 +1910,7 @@ module dust_radiation
             if (present(Ep) .and. present(cs_abs)) then
                 if (.not.all(Ep.eq.0d0)) then
                     do i = 1, size(Ep)
-                        P_abs = P_abs + Ep(i) * cs_abs(i,j) * eV2erg ! [erg/s]
+                        P_abs = P_abs + Ep(i) * cs_abs(j,i) * eV2erg ! [erg/s]
                     end do
                 end if
             endif

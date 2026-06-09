@@ -507,7 +507,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       do i=1,nleaf
          rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
       end do
-      if (any(rho_dust(i,:).lt.0d0)) then
+      if (any(rho_dust(:,:).lt.0d0)) then
          write(*,*) 'Negative dust density in cell ', ind_leaf(i)
          write(*,*) 'Dust density: ', rho_dust(i,:)
          write(*,*) 'PAH density : ', rho_pah(i,:)
@@ -517,7 +517,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       do i=1,nleaf
          rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
       end do
-      if (any(rho_pah(i,:).lt.0d0)) then
+      if (any(rho_pah(:,:).lt.0d0)) then
          write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
          write(*,*) 'Dust density: ', rho_dust(i,:)
          write(*,*) 'PAH density: ', rho_pah(i,:)
