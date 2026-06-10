@@ -255,7 +255,7 @@ ifeq ($(COMPILER),INTEL)
       FFLAGS += -fpe0 -init=zero -init=arrays
    else
       F90 += -O3
-      FFLAGS += -fpe0 -init=zero -init=arrays -heap-arrays 10 -g -traceback -check bounds -check pointers -check uninit -fpe0
+      # FFLAGS += -fpe0 -init=zero -init=arrays -heap-arrays 10 -g -traceback -check bounds -check pointers -check uninit -fpe0
    endif
 endif
 
