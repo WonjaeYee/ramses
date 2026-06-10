@@ -30,7 +30,7 @@ contains
 
         if (fixed_rad_ani .eq. -1d0) then
             do i = 1, size(Np)
-                if (Np(i) .le. 0d0) cycle
+                if (Np(i) .le. dinfo%smallNp) cycle
                 rad_ani = sqrt(sum(Fp(:,i)**2d0)) / (Np(i) * dinfo%local_c)
                 dinfo%local_rad_ani(i) = rad_ani
                 dinfo%local_solid_angle(i) = 2d0 * pi * (1d0 + (1d0 - rad_ani)**2d0) 
@@ -176,7 +176,7 @@ contains
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
             if (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
-                    if (dust_pe_heating_isrf .or. all(Np.eq.0d0)) then
+                    if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
                         call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),G0_total,ne,Tk,&
                                                         &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
                     else
@@ -385,7 +385,7 @@ contains
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
             if (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
-                    if (dust_pe_heating_isrf .or. all(Np.eq.0d0)) then
+                    if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
                         call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),G0_total,ne,Tk,&
                                                         &Pinj_dust(ii),Prec_dust(ii))
                     else

@@ -404,11 +404,39 @@ module dust_utils
         ! Output
         real(dp) :: emittance                ! Emittance in erg/s/cm^2/cm/steradian
         ! Local variables
-        real(dp) :: exponent
+        real(dp) :: exponent, prefactor
 
-        ! Compute the Planck function
+        ! Guard 1: Safety check for zero or negative inputs
+        if (wavelength <= 0.0d0 .or. T <= 0.0d0) then
+            emittance = 0.0d0
+            return
+        end if
+
+        ! Compute the exponent
         exponent = hplanck * c_cgs / (wavelength * kB * T)
-        emittance = (2.0d0 * hplanck * c_cgs**2 / wavelength**5) / (safe_exp(exponent) - 1.0d0)
+
+        ! Guard 2: Handle the Wien tail safely using negative exponents
+        if (exponent > 500.0d0) then
+            ! e^(-500) is incredibly tiny (~10^-217). Anything higher is effectively 0.
+            emittance = 0.0d0
+            return
+        else if (exponent > 10.0d0) then
+            ! Use the mathematically identical alternative: 1 / (e^x - 1) ≈ e^(-x)
+            prefactor = 2.0d0 * hplanck * c_cgs**2 / wavelength**5
+            emittance = prefactor * safe_exp(-exponent)
+        else
+            ! Guard 3: Prevent division by zero in the Rayleigh-Jeans limit (very small exponent)
+            if (exponent < 1.0d-12) then
+                ! Rayleigh-Jeans approximation: B_lambda ≈ 2*c*kB*T / lambda^4
+                emittance = 2.0d0 * c_cgs * kB * T / wavelength**4
+            else
+                ! Standard calculation for normal ranges
+                prefactor = 2.0d0 * hplanck * c_cgs**2 / wavelength**5
+                emittance = prefactor / (safe_exp(exponent) - 1.0d0)
+            end if
+        end if
+
+        if (isnan(emittance)) emittance = 0.0d0
     end function planck_function
 
     function planck_function_derivative(wavelength, T) result(derivative)
@@ -433,10 +461,30 @@ module dust_utils
 
         ! Compute the Planck function derivative
         exponent = hplanck * c_cgs / (wavelength * kB * T)
-        expo = safe_exp(exponent)
-        prefactor = 2.0d0 * hplanck * c_cgs**2 / wavelength**5
-        derivative = prefactor * expo * exponent / (T * (expo - 1.0d0)**2)
-        if (isnan(derivative)) derivative = 0d0
+
+        ! 2. Check for the Wien tail (large exponent)
+        if (exponent > 500.0d0) then
+            ! If exponent is huge, e^(-exponent) is essentially 0.
+            ! This avoids calculating e^680 and prevents the crash entirely.
+            derivative = 0.0d0
+            return
+        else if (exponent > 10.0d0) then
+            ! For moderately large exponents, use the simplified version:
+            ! expo / (expo - 1)^2 simplifies perfectly to safe_exp(-exponent)
+            prefactor = 2.0d0 * hplanck * (c_cgs**2) / (wavelength**5)
+            derivative = (prefactor * exponent / T) * safe_exp(-exponent)
+        else
+            ! For normal/small exponents, use the standard equation
+            expo = safe_exp(exponent)
+            if (abs(expo - 1.0d0) < 1.0d-12) then
+                derivative = 0.0d0
+            else
+                prefactor = 2.0d0 * hplanck * (c_cgs**2) / (wavelength**5)
+                derivative = prefactor * expo * exponent / (T * (expo - 1.0d0)**2)
+            end if
+        end if
+
+        if (isnan(derivative)) derivative = 0.0d0
     end function planck_function_derivative
 
     function a_to_Nc(a) result(Nc)

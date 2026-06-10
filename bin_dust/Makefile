@@ -13,7 +13,7 @@ DEBUG = 0
 # Do we want to test coverage?
 GCOV = 0
 # Compiler flavor: GNU or INTEL
-COMPILER = GNU
+COMPILER = INTEL
 # Size of vector cache
 NVECTOR = 1
 # Number of dimensions
@@ -35,7 +35,7 @@ USE_TURB = 1
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
 MPI = 1
-MPIF90 = mpif90
+MPIF90 = mpiifort
 # Root name of executable
 EXEC = ramses
 # Number of additional energies
@@ -49,7 +49,7 @@ ATON = 0
 # Number of photon groups for RT
 NGROUPS = 8
 # Number of passive scalars
-NPSCAL = 0
+NPSCAL = 1
 # Light MPI communicator structure (for > 10k MPI processes)
 LIGHT_MPI_COMM = 0
 
@@ -69,6 +69,20 @@ CO = 1
 
 # Individual stars
 INDI_STAR = 1
+
+# test purpose
+# - static sink
+STATIC_SINK = 0
+# - no radiative feedback
+NO_FEEDBACK_RAD = 0
+# - no kinematic feedback (wind ejecta)
+NO_FEEDBACK_KIN = 0
+# - divide photon rate with 8 for reflective boundary conditions
+ONE_EIGHTH_TEST = 0
+# - to keep photons, skip the RTZ cooling step
+SKIP_RTZ_COOLING = 0
+# - stellar ejecta only from MIST module (no portinari, no pop III, no SNIa)
+USE_ONLY_MIST = 0
 
 # Number of ions for RT
 ifeq ($(RTZ),1)
@@ -158,15 +172,36 @@ ifeq ($(CALIMA),1)
 endif
 
 # For individual stars
-ifeq ($(INDI_STAR),1)
+ifeq ($(INDI_STAR), 1)
    DEFINES += -DINDIVIDUAL_SINK_STARS
 endif
+
+# test purposes
+ifeq ($(STATIC_SINK), 1)
+   DEFINES += -DSTATIC_SINK
+endif
+ifeq ($(NO_FEEDBACK_RAD), 1)
+   DEFINES += -DNO_FEEDBACK_RAD
+endif
+ifeq ($(NO_FEEDBACK_KIN), 1)
+   DEFINES += -DNO_FEEDBACK_KIN
+endif
+ifeq ($(ONE_EIGHTH_TEST), 1)
+   DEFINES += -DONE_EIGHTH_TEST
+endif
+ifeq ($(SKIP_RTZ_COOLING), 1)
+   DEFINES += -DSKIP_RTZ_COOLING
+endif
+ifeq ($(USE_ONLY_MIST), 1)
+   DEFINES += -DUSE_ONLY_MIST
+endif
+
 #############################################################################
 # Fortran compiler options and directives
-FFLAGS = -cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
-#FFLAGS = -cpp -O0 -free -fallow-argument-mismatch $(DEFINES)  -g -fbacktrace #-cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
-F90 = $(MPIF90)
-FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+# FFLAGS = -cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+# #FFLAGS = -cpp -O0 -free -fallow-argument-mismatch $(DEFINES)  -g -fbacktrace #-cpp $(DEFINES) -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
+# F90 = $(MPIF90)
+# FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 
 # temporal use to traceback NaN errors
 # FFLAGS = -cpp $(DEFINES)
@@ -177,51 +212,52 @@ FC = gfortran -O3 -ffree-line-length-none -fimplicit-none -fPIE -g -fbacktrace
 # FC  += -g -fbacktrace -ffpe-trap=invalid,zero,overflow -fcheck=bounds
 
 # GNU compiler (gfortran)
-# ifeq ($(COMPILER),GNU)
-#    FFLAGS = -cpp $(DEFINES)
-#    ifeq ($(MPI),1)
-#       F90 = $(MPIF90)
-#       FC = gfortran
-#    else
-#       F90 = gfortran
-#       FC = gfortran
-#       FFLAGS += -DWITHOUTMPI
-#    endif
-#    F90 += -ffree-line-length-none -fimplicit-none -fPIE
-#    FC += -ffree-line-length-none -fimplicit-none -fPIE
-#    ifeq ($(GCOV),1)
-#          F90 += -O0 -fprofile-arcs -ftest-coverage
-#    else
-#       ifeq ($(DEBUG),1)
-#          F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
-#          # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
-#       else
-#          F90 += -O3 -mcmodel=medium
-#       endif
-#    endif
-# endif
+ifeq ($(COMPILER),GNU)
+   FFLAGS = -cpp $(DEFINES)
+   ifeq ($(MPI),1)
+      F90 = $(MPIF90)
+      FC = gfortran
+   else
+      F90 = gfortran
+      FC = gfortran
+      FFLAGS += -DWITHOUTMPI
+   endif
+   F90 += -ffree-line-length-none -fimplicit-none -fPIE
+   FC += -ffree-line-length-none -fimplicit-none -fPIE
+   ifeq ($(GCOV),1)
+         F90 += -O0 -fprofile-arcs -ftest-coverage
+   else
+      ifeq ($(DEBUG),1)
+         F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
+         # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
+      else
+         F90 += -O3 -mcmodel=medium
+      endif
+   endif
+endif
 
 # # Intel compiler
-# ifeq ($(COMPILER),INTEL)
-#    FFLAGS = -cpp $(DEFINES)
-#    ifeq ($(MPI),1)
-#       F90 = $(MPIF90)
-#       FC = ifort
-#       FFLAGS += -DNOSYSTEM
-#    else
-#       F90 = ifort
-#       FC = ifort
-#       FFLAGS += -DWITHOUTMPI
-#    endif
-#    F90 += -fp-model source
-#    FC += -fp-model source
-#    ifeq ($(DEBUG),1)
-#       F90 += -warn all -O0 -g -traceback -check bounds
-#       FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
-#    else
-#       F90 += -O2
-#    endif
-# endif
+ifeq ($(COMPILER),INTEL)
+   FFLAGS = -cpp $(DEFINES)
+   ifeq ($(MPI),1)
+      F90 = $(MPIF90)
+      FC = ifort
+      FFLAGS += -DNOSYSTEM
+   else
+      F90 = ifort
+      FC = ifort
+      FFLAGS += -DWITHOUTMPI
+   endif
+   F90 += -fp-model source
+   FC += -fp-model source
+   ifeq ($(DEBUG),1)
+      F90 += -warn all -O0 -g -traceback -check bounds
+      FFLAGS += -fpe0 -init=zero -init=arrays
+   else
+      F90 += -O3
+      # FFLAGS += -fpe0 -init=zero -init=arrays -heap-arrays 10 -g -traceback -check bounds -check pointers -check uninit -fpe0
+   endif
+endif
 
 #############################################################################
 MOD = mod
@@ -239,13 +275,10 @@ ifeq ($(GRACKLE),1)
    LIBS_OBJ     = -I$(HOME)/local/include -DCONFIG_BFLOAT_8 -DH5_USE_16_API -fPIC
 endif
 ifeq ($(USE_TURB),1)
-   # LIBS_TURB = -L$(HOME)/local/lib -lfftw3
-   # LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
-   # LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
-   # LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
-   FFTW_LIBRARY_PATH = /opt/homebrew/opt/fftw
-   LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
-   LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
+   LIBS_TURB = -L$(HOME)/local/lib -lfftw3
+   LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
+   LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
+   LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
 endif
 LIBS = $(LIBMPI) $(LIBS_GRACKLE) $(LIBS_TURB)
 #############################################################################

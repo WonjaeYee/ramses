@@ -1067,6 +1067,64 @@ module dust_init
 
     end subroutine init_CALIMA_dust
 
+    subroutine read_CALIMA_params(nml_ok,nGroups)
+        use amr_commons, only:myid
+        implicit none
+        logical, intent(inout) :: nml_ok
+        integer, intent(in) :: nGroups
+
+        logical :: check_dust
+
+        ! Initialise as fine
+        nml_ok = .true.
+
+        namelist/calima_params/&
+                ! Dust physics flags
+                dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+                dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
+                dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
+                dust_sublimation,dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
+                ! PAH physics flags
+                pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
+                pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
+                ! Dust modelling options
+                sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
+                ! PAH modelling options
+                photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
+                cluster_evaporation_model,&
+                ! Efficiency parameters
+                Sconstant,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
+                dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
+                Coulomb_enhance,tensile_strength,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
+                separate_refractive_index,slope_frag_func,errmax,countmax,GDinit,DTMinit,fpah_ini,smallr_dust,&
+                ! Dust grain and PAHs bin properties
+                dust_composition,dustbins_per_chemtype,&
+                asize,sgrain,amin,amax,fmass_ej,&
+                pah_nc,pah_nc_min,pah_nc_max,spah,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
+                pah_is_cluster, &
+                ! ISM depletion factors
+                fDust_depletions,fCDust_inPAH,GD_solar,DTM_solar,fdustmass_ini,fpahmass_ini,&
+                ! Radiation parameters
+                fixed_rad_ani,fixed_lambda_mean,&
+                ! External dust files
+                dust_tables_dir
+
+        ! 1. Read namelist file
+        rewind(1)
+        read(1,NML=calima_params,END=301)
+301     continue ! No harm if no CALIMA namelist
+
+        ! 2. Check that the parameters are consistent and set any internal variables
+        check_dust = check_params_dust(myid)
+        if(.not.check_dust) then
+            nml_ok = .false.
+            return
+        end if
+
+        ! 3. If everything is fine, we initialise CALIMA dust parameters and tables
+        call init_CALIMA_dust(nGroups)
+    end subroutine read_CALIMA_params
+
     subroutine cmp_lim_elem(dust_index,n_el,el_density,lim_index)
         implicit none
         integer,intent(in) :: dust_index
@@ -1198,7 +1256,6 @@ module dust_init
                 dustbins_props(ii)%collisional_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 ! Mark table as initialized
-                call finalize_dust_table(dustbins_props(ii)%collisional_tab(i))
                 dustbins_props(ii)%collisional_tab(i)%initialised = .true.
 
                 close(25)
@@ -1278,7 +1335,6 @@ module dust_init
             end do
 
             dustbins_props(ii)%collisional_tab(0)%tab1d(1:nT, 1) = T_grid(1:nT)
-            call finalize_dust_table(dustbins_props(ii)%collisional_tab(0))
             dustbins_props(ii)%collisional_tab(0)%initialised = .true.
             close(25)
             if (allocated(phi_grid)) deallocate(phi_grid)
@@ -1405,7 +1461,6 @@ module dust_init
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 close(25)
-                call finalize_dust_table(dustbins_props(ii)%sputtering_tab(i))
                 dustbins_props(ii)%sputtering_tab(i)%initialised = .true.
 
                 deallocate(phi_grid, T_grid)
@@ -1533,7 +1588,6 @@ module dust_init
                 end if
             end do
             close(25)
-            call finalize_dust_table(dustbins_props(ii)%sublimation_tab)
             dustbins_props(ii)%sublimation_tab%initialised = .true.
         end do
 
@@ -1673,12 +1727,10 @@ module dust_init
 
             dustbins_props(ii)%mean_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
             dustbins_props(ii)%mean_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            call finalize_dust_table(dustbins_props(ii)%mean_charg_tab)
             dustbins_props(ii)%mean_charg_tab%initialised = .true.
 
             dustbins_props(ii)%sigma_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
             dustbins_props(ii)%sigma_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            call finalize_dust_table(dustbins_props(ii)%sigma_charg_tab)
             dustbins_props(ii)%sigma_charg_tab%initialised = .true.
 
             close(26)
@@ -1824,9 +1876,7 @@ module dust_init
 
             close(28)
             close(29)
-            call finalize_dust_table(dustbins_props(i)%peh_tab)
             dustbins_props(i)%peh_tab%initialised = .true.
-            call finalize_dust_table(dustbins_props(i)%rec_tab)
             dustbins_props(i)%rec_tab%initialised = .true.
 
             deallocate(gamma_grid, T_grid)
@@ -1910,7 +1960,6 @@ module dust_init
                         read(10, *) rate_grid(i)
                     end do
                     pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 2) = rate_grid(1:nT)
-                    call finalize_dust_table(pahbins_props(ipahbin)%sputtering_tab(0))
                     pahbins_props(ipahbin)%sputtering_tab(0)%initialised = .true.
                     close(10)
                     deallocate(T_grid, rate_grid)
@@ -1977,7 +2026,6 @@ module dust_init
                     read(10, *) rate_grid(i)
                 end do
                 pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 2) = rate_grid(1:nT)
-                call finalize_dust_table(pahbins_props(ipahbin)%sputtering_tab(iel))
                 pahbins_props(ipahbin)%sputtering_tab(iel)%initialised = .true.
 
                 close(10)
@@ -2065,7 +2113,6 @@ module dust_init
                     read(111, *) pahbins_props(ipahbin)%dissociation_tab%tab2d(i, j, 1)
                 end do
             end do
-            call finalize_dust_table(pahbins_props(ipahbin)%dissociation_tab)
             pahbins_props(ipahbin)%dissociation_tab%initialised = .true.
             close(111)
         end do
@@ -2173,12 +2220,8 @@ module dust_init
                 if (nstates_interp >= 3) pahbins_props(i)%fcharge_tab(3)%tab2d(j,1,1) = f_cation_i
                 if (nstates_interp >= 4) pahbins_props(i)%fcharge_tab(4)%tab2d(j,1,1) = f_dication_i
             end do
-            call finalize_dust_table(pahbins_props(i)%peh_eff_tab)
-            call finalize_dust_table(pahbins_props(i)%peh_pabs_tab)
-            do istate = 1, nstates_interp
-                call finalize_dust_table(pahbins_props(i)%fcharge_tab(istate))
-            end do
-
+            pahbins_props(i)%peh_eff_tab%initialised = .true.
+            pahbins_props(i)%peh_pabs_tab%initialised = .true.
             close(111)
         end do
     end subroutine init_pah_peh_tables

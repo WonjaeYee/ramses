@@ -18,6 +18,7 @@ subroutine init_hydro
   character(LEN=80)::fileloc
   character(LEN=5)::nchar,ncharcpu
   integer,parameter::tag=1108
+  integer::ivar_mapped,ivar_abs
 #if NENER>0
   integer::irad
 #endif
@@ -198,19 +199,55 @@ subroutine init_hydro
                  end do
 #if NVAR>NHYDRO+NENER
                  ! Read passive scalars
-                 do ivar=nhydro+1+nener,max(nvar2,nvar)
-                    if(remap_pscalar(ivar-nhydro).gt.-1) read(ilun)xx
-                    if(ivar.gt.nvar)then
-                       continue
-                    endif
-                    do i=1,ncache
-                       if(remap_pscalar(ivar-nhydro).gt.0)then
-                          uold(ind_grid(i)+iskip,remap_pscalar(ivar-nhydro))=xx(i)*max(uold(ind_grid(i)+iskip,1),smallr)
-                       else if(remap_pscalar(ivar-nhydro).lt.0) then
-                          uold(ind_grid(i)+iskip,abs(remap_pscalar(ivar-nhydro)))=0d0
+                 if(nvar2.eq.nvar)then
+                    do ivar=nhydro+1+nener,nvar
+                       ivar_mapped = remap_pscalar(ivar-nhydro)
+                       if(ivar_mapped.gt.-1) read(ilun)xx
+                       if(ivar_mapped.gt.0)then
+                          do i=1,ncache
+                             uold(ind_grid(i)+iskip,ivar_mapped)=xx(i)*max(uold(ind_grid(i)+iskip,1),smallr)
+                          end do
+                       else if(ivar_mapped.lt.0) then
+                          ivar_abs = abs(ivar_mapped)
+                          do i=1,ncache
+                             uold(ind_grid(i)+iskip,ivar_abs)=0d0
+                          end do
                        endif
                     end do
-                 end do
+                 else if(nvar2.gt.nvar)then
+                    do ivar=nhydro+1+nener,nvar
+                       ivar_mapped = remap_pscalar(ivar-nhydro)
+                       if(ivar_mapped.gt.-1) read(ilun)xx
+                       if(ivar_mapped.gt.0)then
+                          do i=1,ncache
+                             uold(ind_grid(i)+iskip,ivar_mapped)=xx(i)*max(uold(ind_grid(i)+iskip,1),smallr)
+                          end do
+                       else if(ivar_mapped.lt.0) then
+                          ivar_abs = abs(ivar_mapped)
+                          do i=1,ncache
+                             uold(ind_grid(i)+iskip,ivar_abs)=0d0
+                          end do
+                       endif
+                    end do
+                    do ivar=nvar+1,nvar2
+                       read(ilun)xx
+                    end do
+                 else
+                    do ivar=nhydro+1+nener,nvar2
+                       ivar_mapped = remap_pscalar(ivar-nhydro)
+                       if(ivar_mapped.gt.-1) read(ilun)xx
+                       if(ivar_mapped.gt.0)then
+                          do i=1,ncache
+                             uold(ind_grid(i)+iskip,ivar_mapped)=xx(i)*max(uold(ind_grid(i)+iskip,1),smallr)
+                          end do
+                       else if(ivar_mapped.lt.0) then
+                          ivar_abs = abs(ivar_mapped)
+                          do i=1,ncache
+                             uold(ind_grid(i)+iskip,ivar_abs)=0d0
+                          end do
+                       endif
+                    end do
+                 endif
 #endif
                  ! Read equilibrium density and pressure profiles
                  if(strict_equilibrium>0)then

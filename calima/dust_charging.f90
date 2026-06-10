@@ -149,7 +149,7 @@ module dust_charging
         end if
 
         ! 1. Compute charging parameter
-        lgamma = log10(G0 * sqrt(Tgas) / ne)
+        lgamma = log10(max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20)) ! Avoid division by zero or very small numbers
         lT = log10(Tgas)
 
         ! 2. Interpolate the pre-computed per-grain table
@@ -189,7 +189,7 @@ module dust_charging
         end if
 
         ! 1. Compute charging parameter
-        lgamma = log10(G0 * sqrt(Tgas) / ne)
+        lgamma = log10(max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20)) ! Avoid division by zero or very small numbers
         lT = log10(Tgas)
 
         ! 2. Interpolate the pre-computed per-grain table

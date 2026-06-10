@@ -652,7 +652,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 !         end do
 !
         ! for static test, temporarily disable RTZ solver
-#ifndef SKIP_RTZ_COOLING
+      if (rtz_cooling) then
         call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
                               ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
                               ,dx_SS_H2, err_idx &
@@ -666,7 +666,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 #endif
                               )
-#endif
+      end if
 ! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'

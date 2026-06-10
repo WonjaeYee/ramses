@@ -27,7 +27,7 @@ module rtz_cooling_module
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
    real(dp),parameter::T_min=0.1, T_frac=0.1
-   real(dp),parameter::x_min=1d-20, x_fm=1d-6, x_frac=0.1
+   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6, x_frac=0.1
    real(dp),parameter::Np_min=1d-13, Np_frac=0.2
    real(dp),parameter::Fp_frac=0.5
    real(dp),dimension(nGroups, 3)::signc_dust
@@ -765,6 +765,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
       dust_helper%G0_background = UV_background_G0
       dust_helper%local_sigma = sigma(icell)
+      dust_helper%smallNp = smallNp
       drho_dust(:) = rho_dust(icell,1:ndust)
       dust_helper%rho_dust = rho_dust(icell,1:ndust)
       dust_helper%csa_dust = sigca_dust
