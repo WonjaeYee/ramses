@@ -39,6 +39,7 @@ module dustbin_types
         real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
         real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
         real(dp) :: local_nCO = 0d0 ! Local CO density (in cm-3)
+        real(dp) :: smallNp = 0d0 ! Threshold for small photon number density below which we consider the radiation field to be negligible for processes like photoelectric heating and radiation pressure
         real(dp),dimension(1:n_elements)  :: el_atomic_mass_g ! Element atomic mass [g]
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
@@ -264,6 +265,7 @@ contains
         this%local_dx = 0d0
         this%local_ne = 0d0
         this%local_nCO = 0d0
+        this%smallNp = 0d0
 
         if (allocated(this%rho_dust)) deallocate(this%rho_dust)
         allocate(this%rho_dust(1:this%ndust))

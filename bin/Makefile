@@ -9,11 +9,11 @@
 # Compilation time parameters
 
 # Do we want a debug build? 1=Yes, 0=No
-DEBUG = 0
+DEBUG = 1
 # Do we want to test coverage?
 GCOV = 0
 # Compiler flavor: GNU or INTEL
-COMPILER = GNU
+COMPILER = INTEL
 # Size of vector cache
 NVECTOR = 1
 # Number of dimensions
@@ -29,17 +29,15 @@ RT = 0
 # Use RTZ? 1=Yes, 0=No (note, do not set both RT and RTZ to 1!)
 RTZ = 1
 # Use CALIMA dust and PAH chemistry modelling? 1=Yes, 0=No
-CALIMA = 1
+CALIMA = 0
 # Use turbulence? 1=Yes, 0=No (requires fftw3)
-USE_TURB = 0
+USE_TURB = 1
 TURB_GRID_SIZE = 64
 # Use MPI? 1=Yes, 0=No
 MPI = 1
-MPIF90 = mpif90
+MPIF90 = mpiifort
 # Root name of executable
-# EXEC = /work/projects/leo/bin/ramses_260518-test-new-mist_
-# EXEC = /work/projects/rum2026/bin/ramses_260518-test-new-mist_no-mpi_
-EXEC = /work/projects/imf/bin/ramses_260518-test-calima_
+EXEC = ramses
 # Number of additional energies
 NENER = 1
 # Use Grackle cooling? 1=Yes, 0=No
@@ -51,7 +49,7 @@ ATON = 0
 # Number of photon groups for RT
 NGROUPS = 8
 # Number of passive scalars
-NPSCAL = 0
+NPSCAL = 1
 # Light MPI communicator structure (for > 10k MPI processes)
 LIGHT_MPI_COMM = 0
 
@@ -69,19 +67,6 @@ N_SULFUR_IONS = 6
 N_IRON_IONS = 6
 CO = 1
 
-# N_HYDROGEN_IONS = 2
-# N_H2 = 1
-# N_HELIUM_IONS = 3
-# N_CARBON_IONS = 0
-# N_NITROGEN_IONS = 0
-# N_OXYGEN_IONS = 0
-# N_NEON_IONS = 0
-# N_MAGNESIUM_IONS = 0
-# N_SILICON_IONS = 0
-# N_SULFUR_IONS = 0
-# N_IRON_IONS = 0
-# CO = 0
-# 
 # Individual stars
 INDI_STAR = 1
 
@@ -267,14 +252,11 @@ ifeq ($(COMPILER),INTEL)
    FC += -fp-model source
    ifeq ($(DEBUG),1)
       F90 += -warn all -O0 -g -traceback -check bounds
-      FFLAGS += -fpe0 -ftrapuv -init=zero -init=snan -init=arrays
+      FFLAGS += -fpe0 -init=zero -init=arrays
    else
-      F90 += -O2
+      F90 += -O3
    endif
 endif
-
-# add flags here manually
-FFLAGS += -g -fbacktrace
 
 #############################################################################
 MOD = mod
@@ -292,13 +274,10 @@ ifeq ($(GRACKLE),1)
    LIBS_OBJ     = -I$(HOME)/local/include -DCONFIG_BFLOAT_8 -DH5_USE_16_API -fPIC
 endif
 ifeq ($(USE_TURB),1)
-   # LIBS_TURB = -L$(HOME)/local/lib -lfftw3
-   # LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
-   # LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
-   # LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
-   FFTW_LIBRARY_PATH = /opt/homebrew/opt/fftw
-   LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
-   LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
+   LIBS_TURB = -L$(HOME)/local/lib -lfftw3
+   LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
+   LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
+   LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
 endif
 LIBS = $(LIBMPI) $(LIBS_GRACKLE) $(LIBS_TURB)
 #############################################################################

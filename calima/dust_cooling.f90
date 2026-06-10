@@ -62,6 +62,7 @@ module dust_cooling
 #else
                 mproj = el_atomic_masses_amu(iel) * amu2g
 #endif
+                if (mproj <= 0d0) cycle
                 bh80_species_prefactor(i,iel) = sqrt(8d0*kB/(pi*mproj)) * pi * agrain**2d0
             end do
         end do

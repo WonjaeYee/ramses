@@ -382,7 +382,11 @@ module dust_optics
                     if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_iso)
                     call clean_stop
                 end if
+                do j = 1, 6
+                    read(20,*) ! Skip header lines (assumed to be 6).
+                end do
                 read(20,'(i8)') nwav(1)
+                read(20,*) ! Skip column names
 
                 if (allocated(dustbins_props(i)%Im_n(1)%npts)) deallocate(dustbins_props(i)%Im_n(1)%npts)
                 allocate(dustbins_props(i)%Im_n(1)%npts(1:1))
@@ -410,14 +414,22 @@ module dust_optics
                     if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_per)
                     call clean_stop
                 end if
+                do j = 1, 6
+                    read(20,*) ! Skip header lines (assumed to be 6).
+                end do
                 read(20,'(i8)') nwav(1)
+                read(20,*) ! Skip column names
 
                 open(unit=21,file=f_par,status='old',action='read',iostat=istat)
                 if (istat /= 0) then
                     if (myid.eq.1) write(*,*) 'Error opening file ', trim(f_par)
                     call clean_stop
                 end if
+                do j = 1, 6
+                    read(21,*) ! Skip header lines (assumed to be 6).
+                end do
                 read(21,'(i8)') nwav(2)
+                read(21,*) ! Skip column names
 
                 do j = 1, 2
                     if (allocated(dustbins_props(i)%Im_n(j)%npts)) deallocate(dustbins_props(i)%Im_n(j)%npts)
@@ -502,22 +514,8 @@ module dust_optics
         real(dp) :: Im_n_iso, Im_n_per, Im_n_par
         real(dp) :: lambdasize_cm
 
-        if (.not.allocated(dustbins_props(isize)%Im_n)) then
-            getla_dustbin = huge(1d0)
-            return
-        end if
         lambdasize_cm = lambda * 1d-8  ! convert from angstrom to cm
         if (dustbins_props(isize)%separate_refractive_index) then
-            if (size(dustbins_props(isize)%Im_n) < 2) then
-                getla_dustbin = huge(1d0)
-                return
-            end if
-            if ((.not. dustbins_props(isize)%Im_n(1)%initialised) .or. &
-                (.not. dustbins_props(isize)%Im_n(2)%initialised)) then
-                getla_dustbin = huge(1d0)
-                return
-            end if
-
             npts = dustbins_props(isize)%Im_n(1)%npts(1)
             call interpolate1D(dustbins_props(isize)%Im_n(1)%tab1d(1:npts,1), &
                                dustbins_props(isize)%Im_n(1)%tab2d(1:npts,1,1), &
@@ -529,11 +527,6 @@ module dust_optics
             Im_n_par = 10d0**Im_n_par
             getla_dustbin = photon_attenuation_length(lambdasize_cm, Im_n_per, .true., Im_n_par)
         else
-            if (.not. dustbins_props(isize)%Im_n(1)%initialised) then
-                getla_dustbin = huge(1d0)
-                return
-            end if
-
             npts = dustbins_props(isize)%Im_n(1)%npts(1)
             call interpolate1D(dustbins_props(isize)%Im_n(1)%tab1d(1:npts,1), &
                                dustbins_props(isize)%Im_n(1)%tab2d(1:npts,1,1), &
@@ -570,6 +563,13 @@ module dust_optics
         ! Trapezoidal integration
         do i = 1, n - 1
             delta_lambda = wavelength(i+1) - wavelength(i)
+
+            ! Quick pre-check for the exponent at both wavelengths
+            ! If both are deep in the Wien tail (exponent > 700), the weight is 0.
+            if ((hplanck * c_cgs / (wavelength(i) * kB * T) > 700.0d0) .and. &
+                (hplanck * c_cgs / (wavelength(i+1) * kB * T) > 700.0d0)) then
+                cycle ! Skip this interval entirely, its contribution is 0
+            end if
 
             ! Compute the Planck derivative at points i and i+1
             planck_derivative_i   = planck_function_derivative(wavelength(i), T)
@@ -2032,6 +2032,7 @@ module dust_photoelectric_heating
     use hydro_parameters, only:ndust
     use constants, only: pi, eV2erg, e2instatC
     use dust_utils, only: interpolate1D, interpolate2D
+    use safe_math, only: safe_exp
 
     implicit none
     private   ! default
@@ -2317,8 +2318,8 @@ module dust_photoelectric_heating
 
         beta = a / la
         alpha = a / le + a / la
-        y1 = (beta / alpha)**2d0 * (alpha**2d0 - 2d0 * alpha + 2d0 - 2d0 * exp(-alpha)) \
-                / (beta**2d0 - 2d0 * beta + 2d0 - 2d0 * exp(-beta))
+        y1 = (beta / alpha)**2d0 * (alpha**2d0 - 2d0 * alpha + 2d0 - 2d0 * safe_exp(-alpha)) \
+                / (beta**2d0 - 2d0 * beta + 2d0 - 2d0 * safe_exp(-beta))
     end function Watson73_y1
 
     function y0_graphite(theta,W) result(y0)
@@ -2434,7 +2435,7 @@ module dust_photoelectric_heating
             ltilde = (2d0 - nu/tau) * (1d0 + 1d0/sqrt(tau - nu))
         else
             theta = 1d0 / (1d0 + 1d0/sqrt(nu))
-            ltilde = (2d0 + nu/tau) * (1d0 + 1d0/sqrt(1.5d0/tau + 3d0*nu)) * exp(-theta*nu/tau)
+            ltilde = (2d0 + nu/tau) * (1d0 + 1d0/sqrt(1.5d0/tau + 3d0*nu)) * safe_exp(-theta*nu/tau)
         end if
     end function DS87_lambda
 
@@ -2467,7 +2468,7 @@ module dust_photoelectric_heating
             J = (1d0 - nu/tau) * (1d0 + sqrt(2d0/(tau - 2d0*nu)))
         else
             theta = 1d0 / (1d0 + 1d0/sqrt(nu))
-            J = ((1d0 + 1d0/sqrt(4d0*tau + 3d0*nu))**2d0) * exp(-theta*nu/tau)
+            J = ((1d0 + 1d0/sqrt(4d0*tau + 3d0*nu))**2d0) * safe_exp(-theta*nu/tau)
         end if
     end function DS87_J
 
@@ -2500,17 +2501,17 @@ module dust_photoelectric_heating
 
         if (Z == 0d0) then
             Nc = 468d0 * (a/1d-7)**3d0
-            s_e = 5d-1 * (1d0 - exp(-a/l_e)) * 1d0 / (1d0 + exp(real(exp_factor,dp) - Nc))
+            s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
         else if (Z < 0d0) then
             Zmin = most_negative_allowed_charge(a*10d0,use_separate_refractive_index)
             if (Z > Zmin) then
                 Nc = 468d0 * (a/1d-7)**3d0
-                s_e = 5d-1 * (1d0 - exp(-a/l_e)) * 1d0 / (1d0 + exp(real(exp_factor,dp) - Nc))
+                s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
             else
                 s_e = 0d0
             end if
         else
-            s_e = 5d-1 * (1d0 - exp(-a/l_e))
+            s_e = 5d-1 * (1d0 - safe_exp(-a/l_e))
         end if
     end function e_sticking_coeff
 
@@ -2710,6 +2711,7 @@ module dust_photoelectric_heating
             prec_charge = 0.0d0
             s_e = e_sticking_coeff(Zcharge,asize_cm,l_e,use_separate_refractive_index)
             if (s_e .gt. 0d0) then
+                print*,'DEBUG: i_dust=',i_dust,' Zcharge=',Zcharge,' s_e=',s_e
                 ltilde = DS87_lambda(Zcharge,-1d0,asize_cm,Tgas)
                 ! NOTE: The constant prefactor is precomputed in rec_pref.
                 ! pi * sqrt(8d0 * kB / pi / m_e) * kB = 2.69463707d-10 [cm**3*g/(K**(3/2)*s**3)]
@@ -2757,7 +2759,7 @@ module dust_photoelectric_heating
         integer :: ngamma, nT
 
         ! 1. Compute the ionisation parameter
-        gamma = G0 * sqrt(Tgas) / ne
+        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
         log_gamma = log10(gamma)
         log_T = log10(Tgas)
 
@@ -2945,7 +2947,7 @@ module pah_photoelectric_heating
         real(dp), intent(in) :: T
         real(dp) :: k_att
         
-        k_att = Carelli13_a * (T / 300.0d0)**Carelli13_b * exp(-Carelli13_c / T)
+        k_att = Carelli13_a * (T / 300.0d0)**Carelli13_b * safe_exp(-Carelli13_c / T)
     end function attachment_rate_Carelli13
 
     function attachment_rate_Tielens05(Nc) result(k_att)
@@ -3318,7 +3320,7 @@ module pah_photoelectric_heating
         integer :: nstates, nstates_interp, ngamma, istate
         real(dp) :: gamma, f_total
 
-        gamma = G0 * sqrt(Tgas) / ne
+        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
         nstates = pahbins_props(i_pah)%ncharge_states
         nstates_interp = min(nstates,4)
         fcharge_pahs(:) = 0d0
@@ -3377,7 +3379,7 @@ module pah_photoelectric_heating
         nmolecules = rho_pah / pahbins_props(i_pah)%mpah
 
         ! 1. Get the interpolated value for the PAH PE efficiency
-        gamma = G0 * sqrt(Tgas) / ne
+        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
         if ((.not. pahbins_props(i_pah)%peh_eff_tab%initialised) .or. &
             (.not. pahbins_props(i_pah)%peh_pabs_tab%initialised)) then
             if (myid == 1) write(*,*) 'Error: PAH PEH tables not initialised for PAH bin ', i_pah
