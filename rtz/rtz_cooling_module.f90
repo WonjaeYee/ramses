@@ -498,6 +498,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,*) '     ddt:', ddt
             write(*,*) '  dt_rec:', dt_rec, new_line('')
             write(*,*) 'code:', code
+#ifdef CALIMA
+            write(*,*) '   dust_T    :', dust_helper%T_dust(1:ndust)
+            write(*,*) '   dust_Z    :', dust_helper%Z_dust(1:ndust)
+            write(*,*) '   Pabs_dust :', dust_helper%Pabs_dust(1:ndust,:)
+            write(*,*) '   Pinj_dust :', dust_helper%Pinj_dust(1:ndust)
+            write(*,*) '   Prad_dust :', dust_helper%Prad_dust(1:ndust)
+            write(*,*) '   Prec_dust :', dust_helper%Prec_dust(1:ndust)
+            write(*,*) '   Pcoll_dust:', dust_helper%Pcoll_dust(1:ndust)
+#endif
             if (code==1) then
                write(*,*) ' - from photon density Np update'
                write(*,*) '      Np:', Np(:, i)
@@ -568,7 +577,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             else if (code==10) then
                write(*,*) ' - from dust update'
                write(*,*) '     rho_dust:', rho_dust(i,1:ndust)
-               write(*,*) '   drho_dust:', drho_dust(1:ndust)
+               write(*,*) '     drho_dust :', drho_dust(1:ndust)
 #endif
             end if
             write(*,*) 'loopCodes:', loopCodes

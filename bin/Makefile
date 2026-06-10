@@ -9,7 +9,7 @@
 # Compilation time parameters
 
 # Do we want a debug build? 1=Yes, 0=No
-DEBUG = 1
+DEBUG = 0
 # Do we want to test coverage?
 GCOV = 0
 # Compiler flavor: GNU or INTEL

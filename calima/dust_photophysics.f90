@@ -682,14 +682,15 @@ module dust_optics
         character(len=256) :: sed_dir_loc
         real(dp) :: log_Tmin, log_Tmax, log_step, T_val
         real(dp) :: dplanck_abs_dT, P_emit, dP_emit_dT
-        integer :: i,j,k
+        integer :: i,j,k, nbins
         character(len=7) :: i_str
 
         ! 1. Pre-compute temperature grid parameters
-        !    Temperatures range from 1K to 10^3 K in log10 steps of 0.1
+        !    Temperatures range from 1K to 10^5 K
         log_Tmin = 0d0
-        log_Tmax = 3d0
-        log_step = (log_Tmax - log_Tmin) / (100.d0 - 1.d0)
+        log_Tmax = 5d0
+        nbins = 500
+        log_step = (log_Tmax - log_Tmin) / (dble(nbins) - 1.d0)
 
         ! 2. Loop over grain bins and compute mean cross-sections directly
         do i = 1, ndust
@@ -699,58 +700,58 @@ module dust_optics
             if (allocated(dustbins_props(i)%Rosseland_tab%npts)) deallocate(dustbins_props(i)%Rosseland_tab%npts)
             allocate(dustbins_props(i)%Rosseland_tab%npts(1:2))
             dustbins_props(i)%Rosseland_tab%ndim = 2
-            dustbins_props(i)%Rosseland_tab%npts(1) = 100
+            dustbins_props(i)%Rosseland_tab%npts(1) = nbins
             dustbins_props(i)%Rosseland_tab%npts(2) = 3
             if (allocated(dustbins_props(i)%Rosseland_tab%ipos_zero)) deallocate(dustbins_props(i)%Rosseland_tab%ipos_zero)
             allocate(dustbins_props(i)%Rosseland_tab%ipos_zero(1:2))
             dustbins_props(i)%Rosseland_tab%ipos_zero = (/1,1/)
             if (allocated(dustbins_props(i)%Rosseland_tab%tab1d)) deallocate(dustbins_props(i)%Rosseland_tab%tab1d)
-            allocate(dustbins_props(i)%Rosseland_tab%tab1d(1:100,1:1))
+            allocate(dustbins_props(i)%Rosseland_tab%tab1d(1:nbins,1:1))
             if (allocated(dustbins_props(i)%Rosseland_tab%tab2d)) deallocate(dustbins_props(i)%Rosseland_tab%tab2d)
-            allocate(dustbins_props(i)%Rosseland_tab%tab2d(1:100,1:1,1:3))
+            allocate(dustbins_props(i)%Rosseland_tab%tab2d(1:nbins,1:1,1:3))
 
             ! 2.b Allocate and initialize Planck mean table
             if (allocated(dustbins_props(i)%Planck_tab%npts)) deallocate(dustbins_props(i)%Planck_tab%npts)
             allocate(dustbins_props(i)%Planck_tab%npts(1:2))
             dustbins_props(i)%Planck_tab%ndim = 2
-            dustbins_props(i)%Planck_tab%npts(1) = 100
+            dustbins_props(i)%Planck_tab%npts(1) = nbins
             dustbins_props(i)%Planck_tab%npts(2) = 3
             if (allocated(dustbins_props(i)%Planck_tab%ipos_zero)) deallocate(dustbins_props(i)%Planck_tab%ipos_zero)
             allocate(dustbins_props(i)%Planck_tab%ipos_zero(1:2))
             dustbins_props(i)%Planck_tab%ipos_zero = (/1,1/)
             if (allocated(dustbins_props(i)%Planck_tab%tab1d)) deallocate(dustbins_props(i)%Planck_tab%tab1d)
-            allocate(dustbins_props(i)%Planck_tab%tab1d(1:100,1:1))
+            allocate(dustbins_props(i)%Planck_tab%tab1d(1:nbins,1:1))
             if (allocated(dustbins_props(i)%Planck_tab%tab2d)) deallocate(dustbins_props(i)%Planck_tab%tab2d)
-            allocate(dustbins_props(i)%Planck_tab%tab2d(1:100,1:1,1:3))
+            allocate(dustbins_props(i)%Planck_tab%tab2d(1:nbins,1:1,1:3))
 
             ! 2.c Allocate and initialize Planck power table (for temperature equilibrium in log-log space)
             if (allocated(dustbins_props(i)%Planck_power_tab%npts)) deallocate(dustbins_props(i)%Planck_power_tab%npts)
             allocate(dustbins_props(i)%Planck_power_tab%npts(1:1))
             dustbins_props(i)%Planck_power_tab%ndim = 1
-            dustbins_props(i)%Planck_power_tab%npts(1) = 100
+            dustbins_props(i)%Planck_power_tab%npts(1) = nbins
             if (allocated(dustbins_props(i)%Planck_power_tab%ipos_zero)) deallocate(dustbins_props(i)%Planck_power_tab%ipos_zero)
             allocate(dustbins_props(i)%Planck_power_tab%ipos_zero(1:1))
             dustbins_props(i)%Planck_power_tab%ipos_zero(1) = 1
             if (allocated(dustbins_props(i)%Planck_power_tab%tab1d)) deallocate(dustbins_props(i)%Planck_power_tab%tab1d)
-            allocate(dustbins_props(i)%Planck_power_tab%tab1d(1:100,1:1))
+            allocate(dustbins_props(i)%Planck_power_tab%tab1d(1:nbins,1:1))
             if (allocated(dustbins_props(i)%Planck_power_tab%tab2d)) deallocate(dustbins_props(i)%Planck_power_tab%tab2d)
-            allocate(dustbins_props(i)%Planck_power_tab%tab2d(1:100,1:1,1:1))
+            allocate(dustbins_props(i)%Planck_power_tab%tab2d(1:nbins,1:1,1:1))
 
             ! 2.d Allocate and initialize Planck derivative table (dP_emit/dT)
             if (allocated(dustbins_props(i)%Planckderiv_tab%npts)) deallocate(dustbins_props(i)%Planckderiv_tab%npts)
             allocate(dustbins_props(i)%Planckderiv_tab%npts(1:1))
             dustbins_props(i)%Planckderiv_tab%ndim = 1
-            dustbins_props(i)%Planckderiv_tab%npts(1) = 100
+            dustbins_props(i)%Planckderiv_tab%npts(1) = nbins
             if (allocated(dustbins_props(i)%Planckderiv_tab%ipos_zero)) deallocate(dustbins_props(i)%Planckderiv_tab%ipos_zero)
             allocate(dustbins_props(i)%Planckderiv_tab%ipos_zero(1:1))
             dustbins_props(i)%Planckderiv_tab%ipos_zero(1) = 1
             if (allocated(dustbins_props(i)%Planckderiv_tab%tab1d)) deallocate(dustbins_props(i)%Planckderiv_tab%tab1d)
-            allocate(dustbins_props(i)%Planckderiv_tab%tab1d(1:100,1:1))
+            allocate(dustbins_props(i)%Planckderiv_tab%tab1d(1:nbins,1:1))
             if (allocated(dustbins_props(i)%Planckderiv_tab%tab2d)) deallocate(dustbins_props(i)%Planckderiv_tab%tab2d)
-            allocate(dustbins_props(i)%Planckderiv_tab%tab2d(1:100,1:1,1:1))
+            allocate(dustbins_props(i)%Planckderiv_tab%tab2d(1:nbins,1:1,1:1))
 
             ! 2.e Compute all mean cross-sections and store directly in dustbin tables
-            do j = 1, 100
+            do j = 1, nbins
                 T_val = 10**(log_Tmin + log_step * (j - 1))
 
                 ! Store temperature in linear space (for Rosseland and Planck tables)
@@ -822,7 +823,7 @@ module dust_optics
                 write(i_str, '(I2.2)') i  ! convert i to string without leading spaces
                 open(unit=20+i,file=trim(sed_dir_loc)//'/rosseland_mean_DustBin_'//trim(i_str)//'.list',status='unknown')
                 open(unit=30+i,file=trim(sed_dir_loc)//'/planck_mean_DustBin_'// trim(i_str)//'.list',status='unknown')
-                do j = 1, 100
+                do j = 1, nbins
                     write(20+i,'(2e14.6)') dustbins_props(i)%Rosseland_tab%tab1d(j,1), dustbins_props(i)%Rosseland_tab%tab2d(j,1,1)
                     write(20+i,'(2e14.6)') dustbins_props(i)%Rosseland_tab%tab1d(j,1), dustbins_props(i)%Rosseland_tab%tab2d(j,1,2)
                     write(20+i,'(2e14.6)') dustbins_props(i)%Rosseland_tab%tab1d(j,1), dustbins_props(i)%Rosseland_tab%tab2d(j,1,3)
