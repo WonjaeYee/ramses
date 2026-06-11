@@ -31,6 +31,12 @@ module rtz_cooling_module
    real(dp),parameter::Np_min=1d-13, Np_frac=0.2
    real(dp),parameter::Fp_frac=0.5
    real(dp),dimension(nGroups, 3)::signc_dust
+   real(dp), save :: t_rad = 0.0_dp
+   real(dp), save :: t_cool = 0.0_dp
+   real(dp), save :: t_dust = 0.0_dp
+   real(dp), save :: t_mol = 0.0_dp
+   real(dp), save :: t_ion = 0.0_dp
+   real(dp), save :: t_last = 0.0_dp
   
   ! temporal brutal force trial
   ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
@@ -216,6 +222,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    ! Check if we are running in equilibrium mode
    if (rtz_equilibrium_test.gt.0) then
+      t_rad = 0.0_dp
+      t_cool = 0.0_dp
+      t_dust = 0.0_dp
+      t_mol = 0.0_dp
+      t_ion = 0.0_dp
+      t_last = 0.0_dp
       call cpu_time(eqm_tstart)
 
       ! Open files for all elements
@@ -428,7 +440,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       eqm_elapsed = max(0d0, eqm_tend - eqm_tstart)
       eqm_minutes = int(eqm_elapsed / 60d0)
       eqm_seconds = eqm_elapsed - 60d0 * real(eqm_minutes, dp)
-      write(*,'(A,I0,A,F8.3,A)') 'rtz_equilibrium_test runtime: ', eqm_minutes, ' min ', eqm_seconds, ' s'
+      write(*,'(A,I0,A,F8.3,A)') 'rtz_equilibrium_test total runtime: ', eqm_minutes, ' min ', eqm_seconds, ' s'
+      write(*,*) '--- Timing Breakdown ---'
+      write(*,'(A,F10.3,A)') '  RT/Radiation update:   ', t_rad, ' s'
+      write(*,'(A,F10.3,A)') '  Cooling/all_cooling:   ', t_cool, ' s'
+      write(*,'(A,F10.3,A)') '  Dust update (CALIMA):  ', t_dust, ' s'
+      write(*,'(A,F10.3,A)') '  Molecules chemistry:   ', t_mol, ' s'
+      write(*,'(A,F10.3,A)') '  Gas-phase ionizations: ', t_ion, ' s'
+      write(*,*) '------------------------'
       stop "Program terminated due to equilibrium test"
 
    ! Otherwise perform the normal loop
@@ -664,7 +683,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! use auger_ionization_module
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
-      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating
+      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type
       use dust_interface
 #endif
       implicit none
@@ -708,6 +727,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp),dimension(1:27,1:10,1:NGROUPS)::auger_yields
       real(dp)::loc_auger_prob
       integer::i_a
+      real(dp) :: t_now
       !-----------------------------------------------------------------------
       !-----------------------------------------------------------------------
       ! Variables specific to CALIMA
@@ -715,10 +735,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer::ii
       real(dp)::rho_dust_tot
       real(dp),dimension(1:nGroups)::pahAbs,pahSc,pahRp
+      logical::dust_step_ok
 #endif
       !-----------------------------------------------------------------------
 
       ! RTZ variable initialization
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_last)
+      end if
       rho = get_rho_rtz(nElement(:,icell))
 #ifndef CALIMA
       ! Include dust if we are tracking oxygen
@@ -945,6 +969,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(dUU .gt. 1d0) then
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+               if (rtz_equilibrium_test.gt.0) then
+                  call cpu_time(t_now)
+                  t_rad = t_rad + (t_now - t_last)
+               end if
                code=1 ;   RETURN                        ! ddt(icell) too big
             endif
 
@@ -964,6 +992,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if(dUU .gt. 1d0) then
                   dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                   dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                  if (rtz_equilibrium_test.gt.0) then
+                     call cpu_time(t_now)
+                     t_rad = t_rad + (t_now - t_last)
+                  end if
                   code=2 ;   RETURN                     ! ddt(icell) too big
                endif
             end do
@@ -1027,6 +1059,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
 #endif
       ! UPDATE TEMPERATURE *************************************************
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_now)
+         t_rad = t_rad + (t_now - t_last)
+         t_last = t_now
+      end if
       !if(c_switch(icell) .and. .not. rt_isTconst .and. .not. rt_T_rad) then
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
@@ -1088,6 +1125,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !  write(*,*) "Broken Temperature", T2(icell), nH(icell), dT2, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0), Crate, loopcnt, dUU
             dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
             dt_rec = min(dt_rec,0.5d0*ddt(icell))
+            if (rtz_equilibrium_test.gt.0) then
+               call cpu_time(t_now)
+               t_cool = t_cool + (t_now - t_last)
+            end if
             code=3 ; RETURN
          endif
          TK=dT2*mu
@@ -1117,6 +1158,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(dUU .gt. 1.) then
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+               if (rtz_equilibrium_test.gt.0) then
+                  call cpu_time(t_now)
+                  t_cool = t_cool + (t_now - t_last)
+               end if
                code=4 ;   RETURN
             endif
 
@@ -1125,6 +1170,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(dUU .gt. 1.) then                           ! 10% rule for T2
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+               if (rtz_equilibrium_test.gt.0) then
+                  call cpu_time(t_now)
+                  t_cool = t_cool + (t_now - t_last)
+               end if
                code=5 ; RETURN
             endif
             TK=dT2*mu
@@ -1133,6 +1182,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          endif
       endif
 #endif
+
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_now)
+         t_cool = t_cool + (t_now - t_last)
+         t_last = t_now
+      end if
 
 #ifdef CALIMA
       !/////////////////////////////////////////
@@ -1150,11 +1205,24 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef RT
                               ,dNp(:)&
 #endif
-                              )
+                              ,step_ok=dust_step_ok)
+      if (.not. dust_step_ok) then
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_now)
+            t_dust = t_dust + (t_now - t_last)
+         end if
+         code = 10
+         RETURN
+      end if
       if (ndust > 0) drho_dust(:) = dust_helper%rho_dust
       if (npah  > 0) drho_pah(:)  = dust_helper%rho_pah
-#endif
 
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_now)
+         t_dust = t_dust + (t_now - t_last)
+         t_last = t_now
+      end if
+#endif
       !/////////////////////////////////////////
       !//           UPDATE MOLECULES          //
       !/////////////////////////////////////////
@@ -1237,6 +1305,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+               if (rtz_equilibrium_test.gt.0) then
+                  call cpu_time(t_now)
+                  t_mol = t_mol + (t_now - t_last)
+               end if
                code=6 !TODO(code) update this code for each ion
                RETURN
             end if
@@ -1349,6 +1421,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   ! write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
                   dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                   dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                  if (rtz_equilibrium_test.gt.0) then
+                     call cpu_time(t_now)
+                     t_mol = t_mol + (t_now - t_last)
+                  end if
                   code=7 !TODO(code) update this code for each ion
                   RETURN
                end if
@@ -1365,6 +1441,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 #endif
 
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_now)
+         t_mol = t_mol + (t_now - t_last)
+         t_last = t_now
+      end if
       !/////////////////////////////////////////
       !//       UPDATE IONIZATION STATES      //
       !/////////////////////////////////////////
@@ -1645,6 +1726,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      !write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                     if (rtz_equilibrium_test.gt.0) then
+                        call cpu_time(t_now)
+                        t_ion = t_ion + (t_now - t_last)
+                     end if
                      code=8 !TODO(code) update this code for each ion
                      RETURN
                   end if
@@ -1661,6 +1746,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      print_neInit = neInit
                      print_ne = ne
                      print_nElement_dep = nElement_dep
+                     if (rtz_equilibrium_test.gt.0) then
+                        call cpu_time(t_now)
+                        t_ion = t_ion + (t_now - t_last)
+                     end if
                      code=9
                      RETURN
                   end if
@@ -1713,6 +1802,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       endif
 
       ! CLEAN UP AND RETURN ************************************************
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_now)
+         t_ion = t_ion + (t_now - t_last)
+      end if
       dT2 = dT2-T2(icell) ; dXion(:,:) = dXion(:,:)-xion(:,:,icell)
       dnElement(:) = dnElement(:) - nElement(:,icell)
 #ifdef CO

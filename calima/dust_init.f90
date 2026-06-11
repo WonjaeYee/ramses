@@ -22,6 +22,15 @@ module dust_init
 
         write(*,*) '>>> DUST PARAMETERS ======================================'
         write(*,*) '   idust      = ',idust,',   ndust    = ',ndust,',   ndchemtype = ',ndchemtype
+        if (dust_solver_type == 1) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK4)'
+        else if (dust_solver_type == 2) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Anninos)'
+        else if (dust_solver_type == 3) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK54)'
+        else
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Unknown)'
+        end if
         write(*,*) 'dust_acc              = ',dust_accretion  ,',        dust_sput     = ',dust_sputtering
         write(*,*) 'dust_coa              = ',dust_coagulation,',        dust_sha      = ',dust_shattering
         write(*,*) 'dust_acc_coulomb      = ',dust_acc_coulomb,',        dust_ratd     = ',dust_ratd
@@ -625,6 +634,10 @@ module dust_init
         use amr_commons, only:myid
         use dust_photoelectric_heating, only: most_negative_allowed_charge
         use dust_optics, only:getRATCrosssection
+        use rk4_mod, only: rk4_step
+        use anninos_mod, only: anninos_step
+        use rk54_mod, only: rk54_step
+        use ode_interface_mod, only: dust_solver_step
         implicit none
         integer, intent(in) :: nGroups
         logical :: check_for_pahs
@@ -1060,6 +1073,20 @@ module dust_init
         ! 12. Cache the BH80 collisional heating factors that only depend on the dust bins
         call init_dust_coll_heating_BH80_cache
 
+        ! Select the ODE solver procedure pointer
+        if (dust_solver_type == 1) then
+            dust_solver_step => rk4_step
+        else if (dust_solver_type == 2) then
+            dust_solver_step => anninos_step
+        else if (dust_solver_type == 3) then
+            dust_solver_step => rk54_step
+        else
+            if (myid == 1) then
+                write(*,*) 'ERROR: Invalid dust_solver_type = ', dust_solver_type
+            end if
+            call clean_stop()
+        end if
+
         ! 13. Print the CALIMA dust properties for the user
         if (myid == 1) then
             call print_dust_parameters
@@ -1077,7 +1104,7 @@ module dust_init
 
         namelist/calima_params/&
                 ! Dust physics flags
-                dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+                dust_log,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
                 dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
                 dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
                 dust_sublimation,dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&

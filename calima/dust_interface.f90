@@ -363,7 +363,7 @@ contains
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
             do ii = 1, dinfo%ndust
-                call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii))
+                call compute_mean_dust_charge(ii,G0_total,Tk,ne,Z_dust(ii))
             end do
 
             ! 2. If needed, precompute the Coulomb factors
@@ -490,11 +490,12 @@ contains
         end if
     end subroutine compute_dust_coolrates
 
-    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np)
+    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np,step_ok)
 
         use ode_driver_mod, only: integrate_dust_ode
-        use rk4_mod, only: rk4_step
+        use ode_interface_mod, only: dust_solver_step
         use dust_rhs_mod, only: dust_rhs
+        use dust_rates, only: compute_rate_caches
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
 #ifdef RTZ
         use rtz_module, only:elements
@@ -507,12 +508,16 @@ contains
         real(dp), intent(in) :: dt
         real(dp), intent(inout) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in), optional :: Np(:)
+        logical, intent(out), optional :: step_ok
 
         ! --- Local variables ----
         integer :: ii
         real(dp) :: sum_check
         real(dp), dimension(:,:), allocatable :: y_gas, y_gas_out
         real(dp), dimension(:), allocatable :: y_dust, y_dust_out
+
+        ! Precompute/cache rate factors for this cell-update step
+        call compute_rate_caches(dinfo)
 
         ! 1. Compute the local RAT-D quantities if we run with dust_ratd
         if (dust_ratd) then
@@ -567,8 +572,9 @@ contains
         end if
 
         ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
-        call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,rk4_step,&
-                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log)
+        if (present(step_ok)) step_ok = .true.
+        call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
+                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
 
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then

@@ -16,7 +16,7 @@ module dust_commons
     ! ==== Flags and logicals (read from nml) ====
     logical, parameter ::dust=.true.             ! CALIMA always includes dust
     logical ::dust_log=.false.                   ! Activate dust logging
-    logical ::dust_10percent=.true.              ! Activate the 10% rule for the chemistry solver
+    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
     logical ::dust_eq_test=.false.               ! Activate dust equilibrium test parameters
     logical ::dust_SNdest=.false.                ! Dust destruction in SN explosions
@@ -249,6 +249,7 @@ module dust_commons
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah
     integer*8, dimension(:), allocatable :: ode_reduction_count_dust_all
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah_all
+
     contains
 
     subroutine dust_log_tdust_solver_update(n_iter, used_brent)
