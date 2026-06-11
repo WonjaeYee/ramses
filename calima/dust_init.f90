@@ -1075,9 +1075,6 @@ module dust_init
 
         logical :: check_dust
 
-        ! Initialise as fine
-        nml_ok = .true.
-
         namelist/calima_params/&
                 ! Dust physics flags
                 dust_log,dust_10percent,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
@@ -1108,6 +1105,9 @@ module dust_init
                 fixed_rad_ani,fixed_lambda_mean,&
                 ! External dust files
                 dust_tables_dir
+
+        ! Initialise as fine
+        nml_ok = .true.
 
         ! 1. Read namelist file
         rewind(1)

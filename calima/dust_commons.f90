@@ -378,7 +378,7 @@ module dust_commons
         ! 2. Print the total masses
         if(myid==1)then
             if (cosmo) then
-222             format('aexp:'e13.6,' Gas='e13.6,' Fe=',e13.6,&
+222             format('aexp:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
                 & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
                 & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
                 & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
@@ -388,7 +388,7 @@ module dust_commons
                     &total_dust_mass_species(3),total_dust_mass_species(4),total_dust_mass_species(5),&
                     &total_dust_mass_species(6),total_CO_mass
             else
-223             format('t:'e13.6,' Gas='e13.6,' Fe=',e13.6,&
+223             format('t:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
                 & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
                 & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
                 & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
