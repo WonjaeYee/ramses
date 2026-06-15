@@ -224,6 +224,7 @@ module dust_commons
     ! (1983) as described in Eq. 31 of Weingartner & Draine (2001)
     ! and integrated from 0.1-13.6 eV
     real(dp),parameter::u_Mathis1983=8.635471d-13 ! [erg/cm3]
+    real(dp),parameter::Td_max = 1d5 ! [K]
 
     ! ==== External dust files ====
     character(LEN=256)::dust_tables_dir='../lib/dust_tables/'    ! Name of folder holding pre-computed dust tables (extinction, charging, etc.)
@@ -548,9 +549,8 @@ module dust_commons
             write(*,*) ' --- Tdust solver ---'
             if (tdust_solver_calls > 0_8) then
                 tdust_avg_iter = real(tdust_solver_iter_sum, dp) / real(tdust_solver_calls, dp)
-                write(*,'(A,I0,A,F8.3,A,I0,A,I0,A,I0,A,F5.1,A)') &
-                    '  calls=', tdust_solver_calls, &
-                    ', avg_iter=', tdust_avg_iter, &
+                write(*,'(A,F8.3,A,I0,A,I0,A,I0,A,F5.1,A)') &
+                    'avg_iter=', tdust_avg_iter, &
                     ', min=', tdust_solver_iter_min, &
                     ', max=', tdust_solver_iter_max, &
                     ', brent=', tdust_solver_brent_calls, &

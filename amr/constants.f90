@@ -5,6 +5,8 @@ module constants
   real(dp),parameter ::twopi        = 6.2831853d0
   real(dp),parameter ::pi           = twopi/2d0
   real(dp),parameter ::sq2pi        = sqrt(twopi)
+  real(dp),parameter ::euler_e      = 2.7182818284590452d0
+  real(dp),parameter ::ln10         = 2.3025850929940459d0
 
   real(dp),parameter ::mu_mol       = 1.2195d0
 
