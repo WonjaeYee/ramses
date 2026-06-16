@@ -10,6 +10,10 @@ module dust_interface
             compute_dust_coolrates,compute_local_anisotropy_factor,&
             compute_dust_update
 
+    ! Cache to avoid automatic array allocations in compute_dust_update
+    real(dp), allocatable, save, target :: y_gas_cache(:,:), y_gas_out_cache(:,:)
+    real(dp), allocatable, save, target :: y_dust_cache(:), y_dust_out_cache(:)
+
 contains
     subroutine compute_local_anisotropy_factor(dinfo,Fp,Np)
         ! Computes the local radiation anisotropy factor and solid angle 
@@ -27,6 +31,8 @@ contains
         ! ---- Local variables ----
         integer :: i
         real(dp) :: rad_ani
+
+        if (all(Np.le.dinfo%smallNp)) return
 
         if (fixed_rad_ani .eq. -1d0) then
             do i = 1, size(Np)
@@ -146,11 +152,12 @@ contains
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
 
         ! ---- Local variables ----
-        integer :: ii,j
+        integer :: ii,j,idx_g,idx_T
         real(dp) :: Zel, nHI
-        real(dp),dimension(:),allocatable :: Zvals
-        real(dp),dimension(:),allocatable :: fcharge
-        
+        real(dp),dimension(1:256) :: Zvals
+        real(dp),dimension(1:256) :: fcharge
+        integer :: n_charge
+
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
             do ii = 1, dinfo%ndust
@@ -159,18 +166,20 @@ contains
 
             ! 2. If needed, precompute the Coulomb factors
             if (Coulomb_precompute) then
+                idx_g = -1
+                idx_T = -1
                 do ii = 1, dinfo%ndust
                     ! Compute the dust charge distribution (approx. Gaussian)
-                    call compute_dust_charge_dist(ii,G0_total,Tk,ne,Zvals,fcharge)
+                    call compute_dust_charge_dist(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),Zvals,fcharge,n_charge,idx_g,idx_T)
+                    dinfo%Coulomb_factor(ii,0) = 1d0
                     do j = -1, dinfo%nion_charges
+                        if (j == 0) cycle
                         Zel = dble(j)
                         call compute_Coulomb_focusing(Tk,dustbins_props(ii)%asize_cm,&
-                                                        fcharge,Zvals,&
+                                                        fcharge,Zvals,n_charge,&
                                                         Zel,dinfo%Coulomb_factor(ii,j))
                     end do
                 end do
-            else
-                dinfo%Coulomb_factor(:,:) = 1d0
             end if
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
@@ -316,10 +325,11 @@ contains
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
 
         ! ---- Local variables ----
-        integer :: ii,j
+        integer :: ii,j,idx_g,idx_T
         real(dp) :: Zel, nHI
-        real(dp),dimension(:),allocatable :: Zvals
-        real(dp),dimension(:),allocatable :: fcharge
+        real(dp),dimension(1:256) :: Zvals
+        real(dp),dimension(1:256) :: fcharge
+        integer :: n_charge
         real(dp), dimension(1:dinfo%ndust) :: Z_dust, T_dust, Z_sigma
         real(dp), dimension(1:dinfo%ncharge_pah_max,1:dinfo%npah) :: fcharge_pah
         real(dp), dimension(1:dinfo%ndust,-1:dinfo%nion_charges) :: Coulomb_factor
@@ -338,18 +348,13 @@ contains
                 total_rec_power = sum(dinfo%Prec_dust)
                 total_inj_power = sum(dinfo%Pinj_dust)
                 total_col_power = sum(dinfo%Pcoll_dust)
-                ! if (total_rec_power .gt. total_inj_power) then
-                !     write(*,*) 'WARNING in compute_dust_coolrates: total recombination power exceeds total injection power for dust: Prec=',total_rec_power,' Pinj=',total_inj_power
-                !     write(*,*) 'G0_total=',G0_total,' Tk=',Tk,' ne=',ne,' gamma=',G0_total*1.13d0/ne/Tk**0.5
-                !     call clean_stop
-                ! end if
+                if (H2ondust) then
+                    H2_formation_rate = dinfo%H2_formation_rate
+                end if
             end if
             if (dinfo%npah  > 0) then
                 total_rec_power = total_rec_power + sum(dinfo%Prec_pah)
                 total_inj_power = total_inj_power + sum(dinfo%Pinj_pah)
-            end if
-            if (H2ondust) then
-                H2_formation_rate = dinfo%H2_formation_rate
             end if
             dinfo%use_precomp = .false. ! Reset the flag for next time
             return
@@ -363,18 +368,22 @@ contains
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
             do ii = 1, dinfo%ndust
-                call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii))
+                call compute_mean_dust_charge(ii,G0_total,Tk,ne,Z_dust(ii))
             end do
 
             ! 2. If needed, precompute the Coulomb factors
             if (Coulomb_precompute) then
+                idx_g = -1
+                idx_T = -1
                 do ii = 1, dinfo%ndust
                     ! Compute the dust charge distribution (approx. Gaussian)
-                    call compute_dust_charge_dist(ii,G0_total,Tk,ne,Zvals,fcharge)
+                    call compute_dust_charge_dist(ii,G0_total,Tk,ne,Z_dust(ii),Zvals,fcharge,n_charge,idx_g,idx_T)
+                    Coulomb_factor(ii,0) = 1d0
                     do j = -1, dinfo%nion_charges
+                        if (j == 0) cycle
                         Zel = dble(j)
                         call compute_Coulomb_focusing(Tk,dustbins_props(ii)%asize_cm,&
-                                                        fcharge,Zvals,Zel,&
+                                                        fcharge,Zvals,n_charge,Zel,&
                                                         Coulomb_factor(ii,j))
                     end do
                 end do
@@ -490,11 +499,12 @@ contains
         end if
     end subroutine compute_dust_coolrates
 
-    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np)
+    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np,step_ok)
 
         use ode_driver_mod, only: integrate_dust_ode
-        use rk4_mod, only: rk4_step
+        use ode_interface_mod, only: dust_solver_step
         use dust_rhs_mod, only: dust_rhs
+        use dust_rates, only: compute_rate_caches
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
 #ifdef RTZ
         use rtz_module, only:elements
@@ -507,12 +517,22 @@ contains
         real(dp), intent(in) :: dt
         real(dp), intent(inout) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in), optional :: Np(:)
+        logical, intent(out), optional :: step_ok
 
         ! --- Local variables ----
-        integer :: ii
+        integer :: ii, ndust_total
         real(dp) :: sum_check
-        real(dp), dimension(:,:), allocatable :: y_gas, y_gas_out
-        real(dp), dimension(:), allocatable :: y_dust, y_dust_out
+        real(dp), pointer :: y_gas(:,:), y_gas_out(:,:)
+        real(dp), pointer :: y_dust(:), y_dust_out(:)
+
+        ! If no dust or PAH process is active, just return
+        if (ndust_processes.eq.0 .and. npah_processes.eq.0) then
+            if (present(step_ok)) step_ok = .true.
+            return
+        end if
+
+        ! Precompute/cache rate factors for this cell-update step
+        call compute_rate_caches(dinfo)
 
         ! 1. Compute the local RAT-D quantities if we run with dust_ratd
         if (dust_ratd) then
@@ -530,19 +550,29 @@ contains
         end if
 
         ! 2. Now setup the arrays for gas and dust quantities to send to the ODE solver
+        ndust_total = 0
+        if (dinfo%ndust > 0) ndust_total = ndust_total + dinfo%ndust
+        if (dinfo%npah > 0) ndust_total = ndust_total + dinfo%npah
+
         if (carry_gas_ions) then
-            allocate(y_gas(1:n_elements,1:n_elements))
-            allocate(y_gas_out(1:n_elements,1:n_elements))
+            call ensure_update_cache(n_elements, n_elements + 1, ndust_total)
+        else
+            call ensure_update_cache(n_elements, 1, ndust_total)
+        end if
+        y_gas => y_gas_cache; y_gas_out => y_gas_out_cache
+        y_dust => y_dust_cache; y_dust_out => y_dust_out_cache
+
+        if (carry_gas_ions) then
             do ii = 1, n_elements
 #ifdef RTZ
-                y_gas(ii,:) = nElement(ii) * xelem_ions(ii,:) * elements(ii)%atomic_mass_g
+                y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
+                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * elements(ii)%atomic_mass_g
 #else
-                y_gas(ii,:) = nElement(ii) * xelem_ions(ii,:) * el_atomic_masses_g(ii)
+                y_gas(ii,1) = nElement(ii) * el_atomic_masses_g(ii)
+                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * el_atomic_masses_g(ii)
 #endif
             end do
         else
-            allocate(y_gas(1:n_elements,1))
-            allocate(y_gas_out(1:n_elements,1))
             do ii = 1, n_elements
 #ifdef RTZ
                 y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
@@ -552,37 +582,43 @@ contains
             end do
         end if
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
-            allocate(y_dust(1:dinfo%npah + dinfo%ndust))
-            allocate(y_dust_out(1:dinfo%npah + dinfo%ndust))
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
             y_dust(dinfo%npah+1:dinfo%npah+dinfo%ndust) = dinfo%rho_dust(1:dinfo%ndust)
         else if (dinfo%ndust > 0) then
-            allocate(y_dust(1:dinfo%ndust))
-            allocate(y_dust_out(1:dinfo%ndust))
             y_dust(1:dinfo%ndust) = dinfo%rho_dust(1:dinfo%ndust)
         else if (dinfo%npah > 0) then
-            allocate(y_dust(1:dinfo%npah))
-            allocate(y_dust_out(1:dinfo%npah))
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
         end if
 
         ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
-        call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,rk4_step,&
-                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log)
+        if (present(step_ok)) step_ok = .true.
+        call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
+                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
 
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then
             do ii = 1, n_elements
 #ifdef RTZ
-                nElement(ii) = sum(y_gas_out(ii,:)) / elements(ii)%atomic_mass_g
-                xelem_ions(ii,:) = y_gas_out(ii,:) / nElement(ii) / elements(ii)%atomic_mass_g
+                nElement(ii) = y_gas_out(ii,1) / elements(ii)%atomic_mass_g
+                if (nElement(ii) > 1d-30) then
+                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / elements(ii)%atomic_mass_g
+                    ! Make sure that xelem_ions add up to 1 for each element
+                    sum_check = sum(xelem_ions(ii,:))
+                    if (sum_check > 1d-30) then
+                        xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
+                    end if
+                end if
 #else
-                nElement(ii) = sum(y_gas_out(ii,:)) / el_atomic_masses_g(ii)
-                xelem_ions(ii,:) = y_gas_out(ii,:) / nElement(ii) / el_atomic_masses_g(ii)
+                nElement(ii) = y_gas_out(ii,1) / el_atomic_masses_g(ii)
+                if (nElement(ii) > 1d-30) then
+                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / el_atomic_masses_g(ii)
+                    ! Make sure that xelem_ions add up to 1 for each element
+                    sum_check = sum(xelem_ions(ii,:))
+                    if (sum_check > 1d-30) then
+                        xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
+                    end if
+                end if
 #endif
-                ! Make sure that xelem_ions add up to 1 for each element
-                sum_check = sum(xelem_ions(ii,:))
-                xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
             end do
         else
             do ii = 1, n_elements
@@ -603,4 +639,42 @@ contains
         end if
 
     end subroutine compute_dust_update
+
+    subroutine ensure_update_cache(n1, n2, ndust_total)
+        integer, intent(in) :: n1, n2, ndust_total
+        logical :: need_realloc
+
+        need_realloc = .false.
+        if (.not. allocated(y_gas_cache)) then
+            need_realloc = .true.
+        else if (size(y_gas_cache,1) /= n1 .or. size(y_gas_cache,2) /= n2) then
+            need_realloc = .true.
+        end if
+
+        if (need_realloc) then
+            if (allocated(y_gas_cache)) then
+                deallocate(y_gas_cache)
+                deallocate(y_gas_out_cache)
+            end if
+            allocate(y_gas_cache(n1, n2))
+            allocate(y_gas_out_cache(n1, n2))
+        end if
+
+        need_realloc = .false.
+        if (.not. allocated(y_dust_cache)) then
+            need_realloc = .true.
+        else if (size(y_dust_cache) /= ndust_total) then
+            need_realloc = .true.
+        end if
+
+        if (need_realloc) then
+            if (allocated(y_dust_cache)) then
+                deallocate(y_dust_cache)
+                deallocate(y_dust_out_cache)
+            end if
+            allocate(y_dust_cache(ndust_total))
+            allocate(y_dust_out_cache(ndust_total))
+        end if
+    end subroutine ensure_update_cache
+
 end module dust_interface

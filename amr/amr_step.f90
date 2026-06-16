@@ -17,6 +17,9 @@ recursive subroutine amr_step(ilevel,icount)
 #if USE_TURB==1
   use turb_commons
 #endif
+#ifdef CALIMA
+  use dust_commons, only: dust_log,print_dust_log
+#endif
   use mpi_mod
   implicit none
 #ifndef WITHOUTMPI
@@ -608,6 +611,16 @@ recursive subroutine amr_step(ilevel,icount)
      if(nsubcycle(ilevel-1)==1)dtnew(ilevel-1)=dtnew(ilevel)
      if(icount==2)dtnew(ilevel-1)=dtold(ilevel)+dtnew(ilevel)
   end if
+
+  ! -------------------------------
+  ! Print CALIMA log if needed
+  ! -------------------------------
+#ifdef CALIMA
+  if(ilevel==levelmin.and.dust_log.and.dtnew(ilevel).gt.0d0) then
+    call print_dust_log(myid,dtnew(levelmin),t,aexp)
+  end if
+#endif
+
 
   ! Reset move flag flag
   if(MC_tracer) then

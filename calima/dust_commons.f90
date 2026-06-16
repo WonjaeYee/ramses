@@ -16,7 +16,7 @@ module dust_commons
     ! ==== Flags and logicals (read from nml) ====
     logical, parameter ::dust=.true.             ! CALIMA always includes dust
     logical ::dust_log=.false.                   ! Activate dust logging
-    logical ::dust_10percent=.true.              ! Activate the 10% rule for the chemistry solver
+    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
     logical ::dust_eq_test=.false.               ! Activate dust equilibrium test parameters
     logical ::dust_SNdest=.false.                ! Dust destruction in SN explosions
@@ -224,6 +224,7 @@ module dust_commons
     ! (1983) as described in Eq. 31 of Weingartner & Draine (2001)
     ! and integrated from 0.1-13.6 eV
     real(dp),parameter::u_Mathis1983=8.635471d-13 ! [erg/cm3]
+    real(dp),parameter::Td_max = 1d5 ! [K]
 
     ! ==== External dust files ====
     character(LEN=256)::dust_tables_dir='../lib/dust_tables/'    ! Name of folder holding pre-computed dust tables (extinction, charging, etc.)
@@ -249,6 +250,7 @@ module dust_commons
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah
     integer*8, dimension(:), allocatable :: ode_reduction_count_dust_all
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah_all
+
     contains
 
     subroutine dust_log_tdust_solver_update(n_iter, used_brent)
@@ -378,7 +380,7 @@ module dust_commons
         ! 2. Print the total masses
         if(myid==1)then
             if (cosmo) then
-222             format('aexp:'e13.6,' Gas='e13.6,' Fe=',e13.6,&
+222             format('aexp:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
                 & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
                 & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
                 & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
@@ -388,7 +390,7 @@ module dust_commons
                     &total_dust_mass_species(3),total_dust_mass_species(4),total_dust_mass_species(5),&
                     &total_dust_mass_species(6),total_CO_mass
             else
-223             format('t:'e13.6,' Gas='e13.6,' Fe=',e13.6,&
+223             format('t:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
                 & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
                 & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
                 & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
@@ -547,9 +549,8 @@ module dust_commons
             write(*,*) ' --- Tdust solver ---'
             if (tdust_solver_calls > 0_8) then
                 tdust_avg_iter = real(tdust_solver_iter_sum, dp) / real(tdust_solver_calls, dp)
-                write(*,'(A,I0,A,F8.3,A,I0,A,I0,A,I0,A,F5.1,A)') &
-                    '  calls=', tdust_solver_calls, &
-                    ', avg_iter=', tdust_avg_iter, &
+                write(*,'(A,F8.3,A,I0,A,I0,A,I0,A,F5.1,A)') &
+                    'avg_iter=', tdust_avg_iter, &
                     ', min=', tdust_solver_iter_min, &
                     ', max=', tdust_solver_iter_max, &
                     ', brent=', tdust_solver_brent_calls, &
