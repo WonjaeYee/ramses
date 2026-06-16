@@ -123,7 +123,7 @@ module dust_charging
         Zdust = idnint(Zdust)  ! Should be the nearest integer value
     end subroutine compute_mean_dust_charge_Ibanez2019
 
-    subroutine compute_mean_dust_charge(i_dust,G0,Tgas,ne,Zdust)
+    subroutine compute_mean_dust_charge(i_dust,G0,Tgas,ne,Zdust,idx_x,idx_y)
         ! ====== Mean Dust Charge ======
         ! This subroutine computes the mean dust charge following inteporlation
         ! of the equilibrium distribution properties presented in Rodríguez Montero
@@ -133,6 +133,7 @@ module dust_charging
         integer, intent(in) :: i_dust
         real(dp), intent(in) :: G0,Tgas,ne
         real(dp), intent(inout) :: Zdust
+        integer, intent(inout), optional :: idx_x, idx_y
 
         real(dp) :: lgamma,lT
         real(dp) :: Zsigma
@@ -157,13 +158,10 @@ module dust_charging
             Zdust = 0d0
             return
         end if
-        call interpolate2D(dustbins_props(i_dust)%mean_charg_tab%tab1d(1:dustbins_props(i_dust)%mean_charg_tab%npts(1),1), &
-                           dustbins_props(i_dust)%mean_charg_tab%tab1d(1:dustbins_props(i_dust)%mean_charg_tab%npts(2),2), &
-                           dustbins_props(i_dust)%mean_charg_tab%tab2d(1:dustbins_props(i_dust)%mean_charg_tab%npts(1),1:dustbins_props(i_dust)%mean_charg_tab%npts(2),1), &
-                           dustbins_props(i_dust)%mean_charg_tab%npts(1), dustbins_props(i_dust)%mean_charg_tab%npts(2), lgamma, lT, Zdust)
+        call dustbins_props(i_dust)%mean_charg_tab%interpolate(lgamma, lT, Zdust, idx_x, idx_y)
     end subroutine compute_mean_dust_charge
 
-    subroutine compute_dust_charge_sigma(i_dust,G0,Tgas,ne,Zsigma)
+    subroutine compute_dust_charge_sigma(i_dust,G0,Tgas,ne,Zsigma,idx_x,idx_y)
         ! ====== Dust Charge Sigma ======
         ! This subroutine computes the dust charge sigma following inteporlation
         ! of the equilibrium distribution properties presented in Rodríguez Montero
@@ -173,6 +171,7 @@ module dust_charging
         integer, intent(in) :: i_dust
         real(dp), intent(in) :: G0,Tgas,ne
         real(dp), intent(inout) :: Zsigma
+        integer, intent(inout), optional :: idx_x, idx_y
 
         real(dp) :: lgamma,lT
         real(dp) :: Z_avg
@@ -198,55 +197,77 @@ module dust_charging
             return
         end if
 
-        call interpolate2D(dustbins_props(i_dust)%sigma_charg_tab%tab1d(1:dustbins_props(i_dust)%sigma_charg_tab%npts(1),1), &
-                           dustbins_props(i_dust)%sigma_charg_tab%tab1d(1:dustbins_props(i_dust)%sigma_charg_tab%npts(2),2), &
-                           dustbins_props(i_dust)%sigma_charg_tab%tab2d(1:dustbins_props(i_dust)%sigma_charg_tab%npts(1),1:dustbins_props(i_dust)%sigma_charg_tab%npts(2),1), &
-                           dustbins_props(i_dust)%sigma_charg_tab%npts(1), dustbins_props(i_dust)%sigma_charg_tab%npts(2), lgamma, lT, Zsigma)
+        call dustbins_props(i_dust)%sigma_charg_tab%interpolate(lgamma, lT, Zsigma, idx_x, idx_y)
 
     end subroutine compute_dust_charge_sigma
 
-    subroutine compute_dust_charge_dist(i_dust,G0,Tgas,ne,Zdust,fcharge)
+    subroutine compute_dust_charge_dist(i_dust,G0,Tgas,ne,Z_avg,Zdust,fcharge,n_charge,idx_x,idx_y)
         ! ====== CHARGE DISTRIBUTION ======
-        ! This subroutine computes the dust charge distribution following inteporlation
+        ! This subroutine computes the dust charge distribution following interpolation
         ! of the equilibrium distribution properties presented in Rodríguez Montero
         ! et al. (2026), which in turn is based on the model from Weingartner &
         ! Draine (2001)
         use constants, only: sq2pi
         implicit none
         integer, intent(in) :: i_dust
-        real(dp), intent(in) :: G0,Tgas,ne
-        real(dp), dimension(:), allocatable, intent(inout) :: Zdust
-        real(dp), dimension(:), allocatable, intent(inout) :: fcharge
+        real(dp), intent(in) :: G0,Tgas,ne,Z_avg
+        real(dp), dimension(:), intent(inout) :: Zdust
+        real(dp), dimension(:), intent(inout) :: fcharge
+        integer, intent(out) :: n_charge
+        integer, intent(inout), optional :: idx_x,idx_y
 
-        integer :: j,kk,isize
+        integer :: j,kk,isize,idx_g,idx_T
         integer :: Zmin,Zmax
-        real(dp) :: gamma,Z_avg,Zsigma
+        real(dp) :: gamma,Zsigma
+        real(dp) :: inv_Zsigma, inv_sqrt2pi_Zsigma, factor
 
         ! 1. Compute charging parameter
         gamma = G0 * sqrt(Tgas) / ne
 
+        if (present(idx_x)) then
+            idx_g = idx_x
+        else
+            idx_g = -1
+        end if
+        if (present(idx_y)) then
+            idx_T = idx_y
+        else
+            idx_T = -1
+        end if
+
         ! 2. Get the interpolated mean and sigma of the distribution
-        call compute_mean_dust_charge(i_dust,G0,Tgas,ne,Z_avg)
-        call compute_dust_charge_sigma(i_dust,G0,Tgas,ne,Zsigma)
+        call compute_dust_charge_sigma(i_dust,G0,Tgas,ne,Zsigma,idx_g,idx_T)
+
+        if (present(idx_x)) idx_x = idx_g
+        if (present(idx_y)) idx_y = idx_T
 
         ! 3. Compute approx. min and max of distribution by considering the points
         ! 3 sigma away from the mean (also, charge should be the nearest integer value)
         Zmin = nint(Z_avg - 3 * Zsigma)
         Zmax = nint(Z_avg + 3 * Zsigma)
-        if (allocated(Zdust)) deallocate(Zdust)
-        if (allocated(fcharge)) deallocate(fcharge)
-        allocate(Zdust(1:(Zmax-Zmin+1)))
-        allocate(fcharge(1:(Zmax-Zmin+1)))
+        n_charge = Zmax - Zmin + 1
+
+        if (n_charge > size(Zdust)) then
+            n_charge = size(Zdust)
+            Zmin = nint(Z_avg - dble(n_charge)/2d0)
+            Zmax = Zmin + n_charge - 1
+        end if
+
         ! And now compute charge values and the Gaussian distribution
-        do j=1,Zmax-Zmin+1
+        inv_Zsigma = 1d0 / Zsigma
+        inv_sqrt2pi_Zsigma = 1d0 / (Zsigma * sq2pi)
+        factor = -0.5d0 * (inv_Zsigma * inv_Zsigma)
+        do j=1,n_charge
             Zdust(j) = dble(Zmin + j - 1)
-            fcharge(j) = (1d0 / (Zsigma * sq2pi)) * exp(-0.5d0*((Zdust(j) - Z_avg) / Zsigma)**2)
+            fcharge(j) = inv_sqrt2pi_Zsigma * exp(factor * (Zdust(j) - Z_avg)**2)
         end do
         ! Renormalise distribution to make sure it adds to 1
-        fcharge(:) = fcharge(:) / sum(fcharge(:))
+        if (n_charge > 0) then
+            fcharge(1:n_charge) = fcharge(1:n_charge) / sum(fcharge(1:n_charge))
+        end if
     end subroutine compute_dust_charge_dist
 
-    subroutine compute_Coulomb_focusing(Tgas,agrain,fcharge,Zdust,Zion,D_Coulomb)
+    subroutine compute_Coulomb_focusing(Tgas,agrain,fcharge,Zdust,n_charge,Zion,D_Coulomb)
         ! ====== Coulomb enhancement factor =====
         ! This is based on Eq. 6-7 in Weingartner & Draine (1999) which allows
         ! the computation of the Coulomb enhancement factor from the charge
@@ -257,34 +278,82 @@ module dust_charging
         use constants, only: pi,e2instatC
         implicit none
         
-        real(dp), dimension(:), intent(in) :: fcharge
-        real(dp), dimension(:), intent(in) :: Zdust
+        integer, intent(in) :: n_charge
+        real(dp), dimension(n_charge), intent(in) :: fcharge
+        real(dp), dimension(n_charge), intent(in) :: Zdust
         real(dp), intent(in) :: Zion,agrain,Tgas
         real(dp), intent(inout) :: D_Coulomb
 
-        integer :: j
-        real(dp) :: Zg,Bfact
+        integer :: j, Zmin, j_zero, j_start, j_end
+        real(dp) :: Zg, Bfact_zero, inv_kT_a, C, exp_minus_C, term
 
         D_Coulomb = 0d0
         if (Zion.ne.0d0) then
-            ! Loop over the charge distribution, adding each contribution
-            do j=1,size(Zdust,1)
-                Zg = Zdust(j)
-                if (Zg*Zion.gt.0) then
-                    Bfact = exp(-Zg*Zion*e2instatC / (kB*Tgas*agrain))
-                elseif (Zg*Zion.lt.0) then
-                    Bfact = 1d0 - Zg*Zion*e2instatC / (kB*Tgas*agrain)
-                elseif (Zg.eq.0) then
-                    Bfact = 1d0 + sqrt(pi*Zion**2*e2instatC / (2d0*kB*Tgas*agrain))
+            if (n_charge .gt. 0) then
+                inv_kT_a = e2instatC / (kB*Tgas*agrain)
+                C = Zion * inv_kT_a
+                Zmin = nint(Zdust(1))
+                j_zero = 1 - Zmin
+                Bfact_zero = 1d0 + sqrt(pi * Zion**2 * inv_kT_a / 2d0)
+                
+                if (Zion .gt. 0d0) then
+                    ! Zg < 0 => Zg * Zion < 0
+                    j_start = 1
+                    j_end = min(n_charge, j_zero - 1)
+                    do j = j_start, j_end
+                        Zg = Zdust(j)
+                        D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
+                    end do
+                    
+                    ! Zg == 0
+                    if (j_zero .ge. 1 .and. j_zero .le. n_charge) then
+                        D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
+                    end if
+                    
+                    ! Zg > 0 => Zg * Zion > 0
+                    j_start = max(1, j_zero + 1)
+                    j_end = n_charge
+                    if (j_start .le. j_end) then
+                        exp_minus_C = exp(-C)
+                        term = exp(-Zdust(j_start) * C)
+                        do j = j_start, j_end
+                            D_Coulomb = D_Coulomb + fcharge(j) * term
+                            term = term * exp_minus_C
+                        end do
+                    end if
+                else
+                    ! Zion < 0
+                    ! Zg < 0 => Zg * Zion > 0
+                    j_start = 1
+                    j_end = min(n_charge, j_zero - 1)
+                    if (j_start .le. j_end) then
+                        exp_minus_C = exp(-C)
+                        term = exp(-Zdust(j_start) * C)
+                        do j = j_start, j_end
+                            D_Coulomb = D_Coulomb + fcharge(j) * term
+                            term = term * exp_minus_C
+                        end do
+                    end if
+                    
+                    ! Zg == 0
+                    if (j_zero .ge. 1 .and. j_zero .le. n_charge) then
+                        D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
+                    end if
+                    
+                    ! Zg > 0 => Zg * Zion < 0
+                    j_start = max(1, j_zero + 1)
+                    j_end = n_charge
+                    do j = j_start, j_end
+                        Zg = Zdust(j)
+                        D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
+                    end do
                 end if
-                D_Coulomb = D_Coulomb + fcharge(j) * Bfact
-            end do
+            end if
             D_Coulomb = max(D_Coulomb,1d-10)
         else
             ! In the case of neutral atom, there is no Coulomb focusing
             D_Coulomb = 1d0
         end if
-
     end subroutine compute_Coulomb_focusing
 
     subroutine two_point_charge_mix(mu, zmin, zlo, zhi, wlo, whi)

@@ -3,6 +3,9 @@ module dust_rates
     use constants
     use dust_commons
     use dust_utils
+#ifdef RTZ
+    use rtz_module, only: elements
+#endif
 
     implicit none
 
@@ -379,7 +382,7 @@ module dust_rates
                     if (rate > 0d0 .and. sfunc > 0d0) then
                         tacc_log = log10(1d0 / (rate * Myr2sec))
                         tacc_log = (1d0 - sfunc) * tacc_log + sfunc * tacc_max
-                        rate = 1d0 / (10d0**tacc_log * Myr2sec)
+                        rate = 1d0 / (exp(tacc_log * ln10) * Myr2sec)
                     end if
 
                     ! 5. Get the maximum rate computed here, if requested.
@@ -584,15 +587,12 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: ii, index, iel, nT_loc, iphi0
+        integer :: ii, index, iel, nT_loc, iphi0, idx_T
         real(dp) :: rate1, rate2, lT, rate_total, irate, mass_loss
-        real(dp) :: inv_atomic_mass(1:n_elements)
 
         lT = log10(dust_info%local_Tk)
-        do iel = 1, n_elements
-            inv_atomic_mass(iel) = 1.0_dp / max(dust_info%el_atomic_mass_g(iel), tiny(1.0_dp))
-        end do
 
+        idx_T = -1
         ! 1. Loop over the dust bins
         binloop: do ii = 1, dust_info%ndust
             rate_total = 0d0
@@ -600,14 +600,12 @@ module dust_rates
 
             ! 2. Loop over elements in the gas phase
             do iel = 1, n_elements
-                if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
                 if (y_gas(iel,1) < 1d-40) cycle
+                if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
                 nT_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(1)
                 iphi0 = dustbins_props(ii)%sputtering_tab(iel)%ipos_zero(2)
-                call interpolate1D(dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
-                                dustbins_props(ii)%sputtering_tab(iel)%tab2d(1:nT_loc,iphi0,1), &
-                                dustbins_props(ii)%sputtering_tab(iel)%npts(1), lT, irate)
-                rate_total = rate_total + (10d0**irate) * y_gas(iel,1) * inv_atomic_mass(iel) ! [micron / yr]
+                call dustbins_props(ii)%sputtering_tab(iel)%interpolate(lT, irate, idx_T)
+                rate_total = rate_total + exp(irate * ln10) * y_gas(iel,1) * dust_info%inv_atomic_mass(iel) ! [micron / yr]
             end do
 
             ! 3. Convert to the real erosion rate in [s-1]
@@ -662,17 +660,14 @@ module dust_rates
             !    (timescale < 10 x age of the universe), so below the first tabulated
             !    temperature the rate is taken to be zero (skip the bin).
             Td_loc = dust_info%T_dust(ii)
-            if (Td_loc <= 0d0) cycle
+            if (Td_loc <= dustbins_props(ii)%T_sublimation_min) cycle
             lTd = log10(Td_loc)
             nT_loc = dustbins_props(ii)%sublimation_tab%npts(1)
-            if (lTd <= dustbins_props(ii)%sublimation_tab%tab1d(1,1)) cycle
-            call interpolate1D(dustbins_props(ii)%sublimation_tab%tab1d(1:nT_loc,1), &
-                            dustbins_props(ii)%sublimation_tab%tab1d(1:nT_loc,2), &
-                            nT_loc, lTd, irate, non_eqw=.true.)
+            call dustbins_props(ii)%sublimation_tab%interpolate(lTd, irate)
 
             ! 3. Convert the size erosion rate (|da/dt|/a) into the mass loss rate.
             !    Since m ~ a^3, the fractional mass loss rate is 3 * (|da/dt|/a) [s-1].
-            rate1 = 3d0 * (10d0**irate) ! [s-1]
+            rate1 = 3d0 * exp(irate * ln10) ! [s-1]
             if (present(kmax)) then
                 kmax = max(kmax, abs(rate1))
             end if
@@ -705,10 +700,13 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: ii, index, iel, nT_loc, nphi_loc, iion, izion
-        real(dp) :: rate1, rate2, lT, rate_total, irate, rate_element, phi_charge
+        integer :: ii, index, iel, nT_loc, nphi_loc, iion, izion, idx_T, nions_loc
+        real(dp) :: rate1, rate2, lT, rate_total, irate, rate_element, phi_charge, mass_loss
+        real(dp) :: min_abundance_density
 
         lT = log10(dust_info%local_Tk)
+        idx_T = -1
+        min_abundance_density = 1d-10 * dust_info%local_rho
 
         ! 1. Loop over the dust bins
         binloop: do ii = 1, dust_info%ndust
@@ -718,23 +716,27 @@ module dust_rates
             ! 2. Loop over elements in the gas phase
             do iel = 1, n_elements
                 rate_element = 0d0
+                if (y_gas(iel,1) < min_abundance_density) cycle
                 if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
+
+                nions_loc = n_elements
+#ifdef RTZ
+                nions_loc = max(1, elements(iel)%n_ions)
+#endif
+
                 nT_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(1)
                 nphi_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(2)
                 ! 3. Loop over the ions of the element
-                do iion = 1, n_elements
-                    if (y_gas(iel,iion) < 1d-40) cycle
+                do iion = 1, nions_loc
+                    if (y_gas(iel,iion+1) < min_abundance_density) cycle
                     izion = iion - 1
                     phi_charge = dust_info%Z_dust(ii) * dustbins_props(ii)%phi_prefact(izion)
-                    call interpolate2D(dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nT_loc,1), &
-                        dustbins_props(ii)%sputtering_tab(iel)%tab1d(1:nphi_loc,2), &
-                        dustbins_props(ii)%sputtering_tab(iel)%tab2d(1:nT_loc,1:nphi_loc,1), &
-                        dustbins_props(ii)%sputtering_tab(iel)%npts(1), dustbins_props(ii)%sputtering_tab(iel)%npts(2), lT, phi_charge, irate)
-                    rate_element = rate_element + irate * y_gas(iel,iion) ! [micron / yr]
+                    call dustbins_props(ii)%sputtering_tab(iel)%interpolate(lT, phi_charge, irate, idx_x=idx_T)
+                    if (irate < -30d0) cycle
+                    rate_element = rate_element + exp(irate * ln10) * y_gas(iel,iion+1) ! [micron / yr]
                 end do
-                rate_total = rate_total + rate_element / dust_info%el_atomic_mass_g(iel) ! [micron / yr]
+                rate_total = rate_total + rate_element * dust_info%inv_atomic_mass(iel) ! [micron / yr]
             end do
-
             ! 3. Convert to the real erosion rate in [s-1]
             rate1 = 3d0 * rate_total / dustbins_props(ii)%asize / yr2sec ! [s-1]
             if (present(kmax)) then
@@ -742,13 +744,13 @@ module dust_rates
             end if
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
-            dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+            mass_loss = rate1 * y_dust(index) ! [g cm-3 s-1]
+            dydt_dust(index) = dydt_dust(index) - mass_loss ! [g cm-3 s-1]
             do iel = 1, dustbins_props(ii)%nelements
                 dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
-                    rate1 * y_dust(index) * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
+                    mass_loss * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
             end do
         end do binloop
-        
     end subroutine charged_sputtering_rate
 
     subroutine turbulent_shattering_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
@@ -1174,11 +1176,12 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: pp, iel, nT_loc
+        integer :: pp, iel, nT_loc, idx_T
         real(dp) :: lT, R_total, rate1, rate2, J_rate
         real(dp), dimension(:), allocatable :: J_rate_all
 
         lT = log10(dust_info%local_Tk)
+        idx_T = -1
 
         ! 1. Loop over PAHs
         pahloop: do pp = 1, dust_info%npah
@@ -1192,11 +1195,9 @@ module dust_rates
             do iel = 0, n_elements
                 if (.not. pahbins_props(pp)%sputtering_tab(iel)%initialised) cycle
                 nT_loc = pahbins_props(pp)%sputtering_tab(iel)%npts(1)
-                call interpolate1D(pahbins_props(pp)%sputtering_tab(iel)%tab1d(1:nT_loc, 1), &
-                    pahbins_props(pp)%sputtering_tab(iel)%tab1d(1:nT_loc, 2), &
-                    nT_loc, lT, J_rate_all(iel))
+                call pahbins_props(pp)%sputtering_tab(iel)%interpolate(lT, J_rate_all(iel), idx_T)
             end do
-            J_rate_all(:) = 10d0**J_rate_all(:)
+            J_rate_all(:) = exp(J_rate_all(:) * ln10)
 
             ! 3. Electron contribution to sputtering rate
             if (pahbins_props(pp)%sputtering_tab(0)%initialised) then
@@ -1246,25 +1247,24 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: pp
+        integer :: pp, idx_G0, idx_nH
         real(dp):: log_nH, log_G0
         real(dp):: rate1, rate2
 
         log_nH = log10(dust_info%local_nH)
         log_G0 = log10(dust_info%local_G0)
 
+        idx_G0 = -1
+        idx_nH = -1
+
         ! 1. Loop over PAH sizes
         pahloop: do pp = 1, dust_info%npah
             if (pahbins_props(pp)%is_cluster) cycle ! TODO: Photolysis only implemented for non-cluster PAHs for now
             if (.not. pahbins_props(pp)%dissociation_tab%initialised) cycle
 
-            call interpolate2D(pahbins_props(pp)%dissociation_tab%tab1d(:,1), &
-                pahbins_props(pp)%dissociation_tab%tab1d(:,2), &
-                pahbins_props(pp)%dissociation_tab%tab2d(:,:,1), &
-                pahbins_props(pp)%dissociation_tab%npts(1), pahbins_props(pp)%dissociation_tab%npts(2), &
-                log_G0, log_nH, rate1)
+            call pahbins_props(pp)%dissociation_tab%interpolate(log_G0, log_nH, rate1, idx_G0, idx_nH)
 
-            rate1 = 10d0**rate1 ! [s-1]
+            rate1 = exp(rate1 * ln10) ! [s-1]
 
             if (rate1 > 0d0) then
                 if (present(kmax)) then
@@ -1310,7 +1310,7 @@ module dust_rates
         pahloop: do pp = 1, dust_info%npah
             if (.not. pahbins_props(pp)%is_cluster) cycle ! Cluster evaporation is only for PAH clusters
             k_single = dust_info%local_G0 / 0.19306d0
-            k_multi = 1d0 / (10d0**(-3.1692061d0 * log10(dust_info%local_G0) + 13.5642486d0))
+            k_multi = 1d0 / exp((-3.1692061d0 * log10(dust_info%local_G0) + 13.5642486d0) * ln10)
             rate1 = min(k_single, k_multi) / yr2sec ! [s-1]
 
             if (rate1 > 0d0) then

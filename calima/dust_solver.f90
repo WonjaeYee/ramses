@@ -335,6 +335,7 @@ module rk4_mod
     real(dp), allocatable, save, target :: k1_dust_cache(:), k2_dust_cache(:), k3_dust_cache(:), k4_dust_cache(:)
     real(dp), allocatable, save, target :: y_gas_temp_cache(:,:), y_dust_temp_cache(:)
     real(dp), allocatable, save, target :: error_gas_cache(:,:), error_dust_cache(:)
+    real(dp), allocatable, save, target :: y_gas_stage_cache(:,:), y_dust_stage_cache(:)
 
     contains
 
@@ -357,10 +358,12 @@ module rk4_mod
             if (allocated(k1_gas_cache)) deallocate(k1_gas_cache, k2_gas_cache, k3_gas_cache, k4_gas_cache)
             if (allocated(y_gas_temp_cache)) deallocate(y_gas_temp_cache)
             if (allocated(error_gas_cache)) deallocate(error_gas_cache)
+            if (allocated(y_gas_stage_cache)) deallocate(y_gas_stage_cache)
             allocate(k1_gas_cache(ngas_species, nvar_gas), k2_gas_cache(ngas_species, nvar_gas), &
                      k3_gas_cache(ngas_species, nvar_gas), k4_gas_cache(ngas_species, nvar_gas))
             allocate(y_gas_temp_cache(ngas_species, nvar_gas))
             allocate(error_gas_cache(ngas_species, nvar_gas))
+            allocate(y_gas_stage_cache(ngas_species, nvar_gas))
         end if
 
         need_realloc = .false.
@@ -374,10 +377,12 @@ module rk4_mod
             if (allocated(k1_dust_cache)) deallocate(k1_dust_cache, k2_dust_cache, k3_dust_cache, k4_dust_cache)
             if (allocated(y_dust_temp_cache)) deallocate(y_dust_temp_cache)
             if (allocated(error_dust_cache)) deallocate(error_dust_cache)
+            if (allocated(y_dust_stage_cache)) deallocate(y_dust_stage_cache)
             allocate(k1_dust_cache(ndust_total), k2_dust_cache(ndust_total), &
                      k3_dust_cache(ndust_total), k4_dust_cache(ndust_total))
             allocate(y_dust_temp_cache(ndust_total))
             allocate(error_dust_cache(ndust_total))
+            allocate(y_dust_stage_cache(ndust_total))
         end if
     end subroutine ensure_rk4_cache
 
@@ -409,11 +414,13 @@ module rk4_mod
         ! ---- Local variables ----
         real(dp), pointer :: k1_gas(:,:), k2_gas(:,:), k3_gas(:,:), k4_gas(:,:)
         real(dp), pointer :: k1_dust(:), k2_dust(:), k3_dust(:), k4_dust(:)
+        real(dp), pointer :: y_gas_stage(:,:), y_dust_stage(:)
         real(dp) :: kmax, h_local
 
         call ensure_rk4_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
         k1_gas => k1_gas_cache; k2_gas => k2_gas_cache; k3_gas => k3_gas_cache; k4_gas => k4_gas_cache
         k1_dust => k1_dust_cache; k2_dust => k2_dust_cache; k3_dust => k3_dust_cache; k4_dust => k4_dust_cache
+        y_gas_stage => y_gas_stage_cache; y_dust_stage => y_dust_stage_cache
 
         break = .false.
 
@@ -448,13 +455,29 @@ module rk4_mod
             h_local = h
         end if
         if (present(debug_flag)) then
-            call rhs(dust_info,y_gas+h_local*HALF*k1_gas,y_dust+h_local*HALF*k1_dust,k2_gas,k2_dust,debug_flag=debug_flag)
-            call rhs(dust_info,y_gas+h_local*HALF*k2_gas,y_dust+h_local*HALF*k2_dust,k3_gas,k3_dust,debug_flag=debug_flag)
-            call rhs(dust_info,y_gas+h_local*k3_gas,y_dust+h_local*k3_dust,k4_gas,k4_dust,debug_flag=debug_flag)
+            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag)
+
+            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag)
+
+            y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
+            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag)
         else
-            call rhs(dust_info,y_gas+h_local*HALF*k1_gas,y_dust+h_local*HALF*k1_dust,k2_gas,k2_dust)
-            call rhs(dust_info,y_gas+h_local*HALF*k2_gas,y_dust+h_local*HALF*k2_dust,k3_gas,k3_dust)
-            call rhs(dust_info,y_gas+h_local*k3_gas,y_dust+h_local*k3_dust,k4_gas,k4_dust)
+            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust)
+
+            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust)
+
+            y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
+            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust)
         end if
 
         ! 3. Combine the stages to compute the new solution

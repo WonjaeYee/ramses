@@ -37,6 +37,13 @@ module rtz_cooling_module
    real(dp), save :: t_mol = 0.0_dp
    real(dp), save :: t_ion = 0.0_dp
    real(dp), save :: t_last = 0.0_dp
+#ifdef CALIMA
+   real(dp), save :: t_dust_rad_rates = 0.0_dp
+   real(dp), save :: t_dust_anisotropy = 0.0_dp
+   real(dp), save :: t_dust_precool = 0.0_dp
+   real(dp), save :: t_dust_update = 0.0_dp
+#endif
+
   
   ! temporal brutal force trial
   ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
@@ -228,6 +235,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       t_mol = 0.0_dp
       t_ion = 0.0_dp
       t_last = 0.0_dp
+#ifdef CALIMA
+      t_dust_rad_rates = 0.0_dp
+      t_dust_anisotropy = 0.0_dp
+      t_dust_precool = 0.0_dp
+      t_dust_update = 0.0_dp
+#endif
       call cpu_time(eqm_tstart)
 
       ! Open files for all elements
@@ -447,6 +460,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       write(*,'(A,F10.3,A)') '  Dust update (CALIMA):  ', t_dust, ' s'
       write(*,'(A,F10.3,A)') '  Molecules chemistry:   ', t_mol, ' s'
       write(*,'(A,F10.3,A)') '  Gas-phase ionizations: ', t_ion, ' s'
+#ifdef CALIMA
+      write(*,*) '  --- CALIMA Dust Subroutines Breakdown ---'
+      write(*,'(A,F10.3,A)') '    compute_dust_rad_rates:      ', t_dust_rad_rates, ' s'
+      write(*,'(A,F10.3,A)') '    compute_local_anisotropy:    ', t_dust_anisotropy, ' s'
+      write(*,'(A,F10.3,A)') '    compute_dust_precool:        ', t_dust_precool, ' s'
+      write(*,'(A,F10.3,A)') '    compute_dust_update:         ', t_dust_update, ' s'
+#endif
       write(*,*) '------------------------'
       stop "Program terminated due to equilibrium test"
 
@@ -520,7 +540,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
             write(*,*) '   dust_T    :', dust_helper%T_dust(1:ndust)
             write(*,*) '   dust_Z    :', dust_helper%Z_dust(1:ndust)
-            write(*,*) '   Pabs_dust :', dust_helper%Pabs_dust(1:ndust,:)
             write(*,*) '   Pinj_dust :', dust_helper%Pinj_dust(1:ndust)
             write(*,*) '   Prad_dust :', dust_helper%Prad_dust(1:ndust)
             write(*,*) '   Prec_dust :', dust_helper%Prec_dust(1:ndust)
@@ -683,7 +702,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! use auger_ionization_module
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
-      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type
+      use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
+                             &ndust_processes,npah_processes
       use dust_interface
 #endif
       implicit none
@@ -736,6 +756,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp)::rho_dust_tot
       real(dp),dimension(1:nGroups)::pahAbs,pahSc,pahRp
       logical::dust_step_ok
+      real(dp)::t_sub_start, t_sub_end
 #endif
       !-----------------------------------------------------------------------
 
@@ -874,9 +895,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_advect) then
          dust_helper%local_c = rt_c_cgs(ilevel)
          dust_helper%group_eV(:) = group_egy(:)
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_sub_start)
+         end if
          call compute_dust_rad_rates(dust_helper,total_G0,Tk,ne,&
                                     &dustAbs,dustSc,dustRp,&
                                     &pahAbs,pahSc,pahRp)
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_sub_end)
+            t_dust_rad_rates = t_dust_rad_rates + (t_sub_end - t_sub_start)
+         end if
       end if
 #else
       ! Set dust opacities--------------------------------------------------
@@ -1036,14 +1064,39 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! -----------------------------------------------------------------
       endif !if(rt)
 #endif
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_now)
+         t_rad = t_rad + (t_now - t_last)
+         t_last = t_now
+      end if
 #ifdef CALIMA
       ! Prepare CALIMA variables for cooling rate calculations
       xH2_loc = dXion(1,3) / 2d0
-      call compute_local_anisotropy_factor(dust_helper, dFp(:,:), dNp(:))
-      call compute_dust_precool(dust_helper, total_G0, TK, ne, nElement_dep(:), &
-                                 dXion(:,:),  xH2_loc * nElement_dep(1), nCO(icell)&
+      if (.not. all(dNp .le. dust_helper%smallNp)) then
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_sub_start)
+         end if
+         call compute_local_anisotropy_factor(dust_helper, dFp, dNp)
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_sub_end)
+            t_dust_anisotropy = t_dust_anisotropy + (t_sub_end - t_sub_start)
+         end if
+      else
+         dust_helper%local_rad_ani(:) = 0d0
+         dust_helper%local_solid_angle(:) = 0d0
+      end if
+ 
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_sub_start)
+      end if
+      call compute_dust_precool(dust_helper, total_G0, TK, ne, nElement_dep, &
+                                 dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
-                                 ,dNp(:))
+                                 ,dNp)
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_sub_end)
+         t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
+      end if
       if (rt_isIR) then
          do ii = 1, ndust
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
@@ -1056,14 +1109,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 #else
                     & )
+      if (rtz_equilibrium_test.gt.0) then
+         call cpu_time(t_sub_end)
+         t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
+      end if
 #endif
 #endif
       ! UPDATE TEMPERATURE *************************************************
-      if (rtz_equilibrium_test.gt.0) then
-         call cpu_time(t_now)
-         t_rad = t_rad + (t_now - t_last)
-         t_last = t_now
-      end if
       !if(c_switch(icell) .and. .not. rt_isTconst .and. .not. rt_T_rad) then
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
@@ -1201,11 +1253,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_G0 = total_G0
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
-      call compute_dust_update(dust_helper,nElement_dep(:),dXion(:,:),ddt(icell)&
+      if (ndust_processes .gt. 0 .or. npah_processes .gt. 0) then
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_sub_start)
+         end if
+         call compute_dust_update(dust_helper,nElement_dep,dXion,ddt(icell)&
 #ifdef RT
-                              ,dNp(:)&
+                                 ,dNp&
 #endif
-                              ,step_ok=dust_step_ok)
+                                 ,step_ok=dust_step_ok)
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_sub_end)
+            t_dust_update = t_dust_update + (t_sub_end - t_sub_start)
+         end if
+      else
+         dust_step_ok = .true.
+      end if
       if (.not. dust_step_ok) then
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_now)
@@ -2033,7 +2096,7 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
                            sigca_pah,sigcs_pah,sigcr_pah,&
                            group_csa_dust, group_css_dust, group_csr_dust, &
                            group_csa_pah, group_css_pah, group_csr_pah, &
-                           group_csrat_dust
+                           group_csrat_dust, dust_ratd
 #endif
    implicit none
 #ifdef RT
@@ -2064,7 +2127,9 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
       sigca_dust(:,:) = group_csa_dust * rt_c_cgs(ilevel)
       sigcs_dust(:,:) = group_css_dust * rt_c_cgs(ilevel)
       sigcr_dust(:,:) = group_csr_dust * rt_c_cgs(ilevel)
-      sigcrat_dust(:,:) = group_csrat_dust * rt_c_cgs(ilevel)
+      if (dust_ratd) then
+         sigcrat_dust(:,:) = group_csrat_dust * rt_c_cgs(ilevel)
+      end if
    end if
    if (npah>0) then
       sigca_pah(:,:) = group_csa_pah * rt_c_cgs(ilevel)
