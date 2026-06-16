@@ -364,6 +364,19 @@ contains
         total_inj_power = 0d0
         total_col_power = 0d0
         H2_formation_rate = -1d0
+        Z_dust = 0d0
+        T_dust = 0d0
+        Z_sigma = 0d0
+        fcharge_pah = 0d0
+        Coulomb_factor = 1d0
+        Pinj_dust = 0d0
+        Prec_dust = 0d0
+        Pcoll_dust = 0d0
+        Prad_dust = 0d0
+        Pinj_pah = 0d0
+        Prec_pah = 0d0
+        Prad_pah = 0d0
+        Pabs_pah = 0d0
 
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
