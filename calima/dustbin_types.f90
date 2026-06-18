@@ -47,6 +47,7 @@ module dustbin_types
         real(dp) :: local_rho = 0d0 ! Local total cell mass density (in g/cm3)
         real(dp) :: local_Jeans = 0d0 ! Local Jeans length (in cm)
         real(dp) :: local_dx = 0d0 ! Local cell size (in cm)
+        real(dp) :: local_vol = 0d0 ! Local cell volume (in cm^3)
         real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
         real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
         real(dp) :: local_nCO = 0d0 ! Local CO density (in cm-3)
@@ -410,6 +411,7 @@ contains
         this%local_rho = 0d0
         this%local_Jeans = 0d0
         this%local_dx = 0d0
+        this%local_vol = 0d0
         this%local_ne = 0d0
         this%local_nCO = 0d0
         this%smallNp = 0d0

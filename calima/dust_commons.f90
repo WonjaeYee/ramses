@@ -558,25 +558,25 @@ module dust_commons
             else
                 write(*,*) '  No Tdust solver calls this step.'
             end if
-            ! 8. Print per-process ODE mass change rates [g cm-3 s-1 per bin]
-            write(*,*) ' --- ODE process dM/dt [g cm-3 s-1 per bin] ---'
+            ! 8. Print per-process ODE mass change rates [Msun/yr per bin]
+            write(*,*) ' --- ODE process dM/dt [Msun/yr per bin] ---'
             if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
                 do ii = 1, ndust_processes
                     write(*,format_str) 'dust '//trim(dust_processes_list(ii)%name)//' =', &
-                        dM_ode_dust(:, ii) / (dt*scale_t)
+                        dM_ode_dust(:, ii) / (dt*scale_t) / M_sun * yr2sec
                 end do
             end if
             if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
                 do ii = 1, npah_processes
                     write(*,format_str) 'pah  '//trim(pah_processes_list(ii)%name)//' =', &
-                        dM_ode_pah(:, ii) / (dt*scale_t)
+                        dM_ode_pah(:, ii) / (dt*scale_t) / M_sun * yr2sec
                 end do
             end if
             ! 9. Print SN destruction statistics
             if (dust_SNdest) then
                 write(*,*) ' --- SN dust statistics ---'
-                write(*,format_str) 'dM SNd  (II)  =', dM_SNIId/(dt*scale_t)
-                write(*,format_str) 'dM SNd  (Ia)  =', dM_SNIad/(dt*scale_t)
+                write(*,format_str) 'dM SNd  (II)  =', dM_SNIId/(dt*scale_t) / M_sun * yr2sec
+                write(*,format_str) 'dM SNd  (Ia)  =', dM_SNIad/(dt*scale_t) / M_sun * yr2sec
             end if
         endif
         dM_SNIId          = 0.0d0; dM_SNIId_all          = 0.0d0

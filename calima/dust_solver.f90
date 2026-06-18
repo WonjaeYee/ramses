@@ -1080,9 +1080,31 @@ module ode_driver_mod
             if (accepted) then
                 y_gas_final(:,:) = y_gas_new(:,:)
                 y_dust_final(:) = y_dust_new(:)
+                if (dust_log) then
+                    ode_naccepted = ode_naccepted + 1_8
+                    ! Accumulate per-process dM contribution using k1-stage rates * h
+                    if (ndust_processes > 0 .and. allocated(dM_ode_dust) .and. &
+                        allocated(last_dydt_dust_per_proc)) then
+                        dM_ode_dust(:, 1:ndust_processes) = dM_ode_dust(:, 1:ndust_processes) + &
+                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h * dust_info%local_vol
+                    end if
+                    if (npah_processes > 0 .and. allocated(dM_ode_pah) .and. &
+                        allocated(last_dydt_pah_per_proc)) then
+                        dM_ode_pah(:, 1:npah_processes) = dM_ode_pah(:, 1:npah_processes) + &
+                            last_dydt_pah_per_proc(:, 1:npah_processes) * h * dust_info%local_vol
+                    end if
+                    ndust_cells       = ndust_cells + 1_8
+                    ode_substeps_sum  = ode_substeps_sum + 1
+                    ode_substeps_min  = min(ode_substeps_min, 1)
+                    ode_substeps_max  = max(ode_substeps_max, 1)
+                end if
             else
                 y_gas_final(:,:) = y_gas(:,:)
                 y_dust_final(:) = y_dust(:)
+                if (dust_log) then
+                    ode_nreduced = ode_nreduced + 1_8
+                    call register_timestep_reduction_cause
+                end if
             end if
             return
         end if
@@ -1118,12 +1140,12 @@ module ode_driver_mod
                     if (ndust_processes > 0 .and. allocated(dM_ode_dust) .and. &
                         allocated(last_dydt_dust_per_proc)) then
                         dM_ode_dust(:, 1:ndust_processes) = dM_ode_dust(:, 1:ndust_processes) + &
-                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h
+                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h * dust_info%local_vol
                     end if
                     if (npah_processes > 0 .and. allocated(dM_ode_pah) .and. &
                         allocated(last_dydt_pah_per_proc)) then
                         dM_ode_pah(:, 1:npah_processes) = dM_ode_pah(:, 1:npah_processes) + &
-                            last_dydt_pah_per_proc(:, 1:npah_processes) * h
+                            last_dydt_pah_per_proc(:, 1:npah_processes) * h * dust_info%local_vol
                     end if
                 end if
             else
