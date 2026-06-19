@@ -890,7 +890,7 @@ module dust_optics
         integer, intent(in) :: nGroups
 
         real(kind=8) :: lambda_min, lambda_max, delta_lambda
-        real(kind=8) :: X(1000), Y(1000)
+        real(kind=8) :: lambda(1000), f(1000)
         real(kind=8) :: norm, result
         integer :: ip, ii, isize, idx_n, idx_i
 
@@ -937,37 +937,37 @@ module dust_optics
             lambda_min = (hplanck * c_cgs / (group_L1(ip) * eV2erg))  ! [cm]
             delta_lambda = (lambda_max - lambda_min) / 999.d0
 
-            ! Fill wavelength grid X (in cm) and blackbody spectrum Y
+            ! Fill wavelength grid lambda (in cm) and blackbody spectrum Y
             do ii = 1, 1000
-                X(ii) = lambda_min + (delta_lambda * (dble(ii) - 1.d0))
-                Y(ii) = planck_function(X(ii), T)
+                lambda(ii) = lambda_min + (delta_lambda * (dble(ii) - 1.d0))
+                f(ii) = planck_function(lambda(ii), T)
             end do
 
-            ! Compute normalization factor: photon-number-weighted integral ∫ Y*λ dλ
+            ! Compute normalization factor: photon-number-weighted integral ∫ f*λ dλ
             ! consistent with getSEDcsn / initialize_cross_sections_from_blackbody
-            norm = integrate_spectrum_lambda(X, Y, 1000)
+            norm = integrate_spectrum_lambda(lambda, f, 1000)
 
             ! Process each dust bin
             do isize = 1, ndust
-                ! Absorption cross-section: integral of f*Y*lambda*sigma_abs over wavelength
-                result = integrate_dust_absorption(X, Y, 1000, dustbins_props(isize)%cs_abs_tab)
+                ! Absorption cross-section: integral of f*lambda*sigma_abs over wavelength
+                result = integrate_dust_absorption(lambda, f, 1000, dustbins_props(isize)%cs_abs_tab)
                 group_csa_dust(isize, ip) = result / norm
                 
-                ! Scattering cross-section: integral of f*Y*lambda*sigma_scat over wavelength
-                result = integrate_dust_scattering(X, Y, 1000, dustbins_props(isize)%cs_scat_tab)
+                ! Scattering cross-section: integral of f*lambda*sigma_scat over wavelength
+                result = integrate_dust_scattering(lambda, f, 1000, dustbins_props(isize)%cs_scat_tab)
                 group_css_dust(isize, ip) = result / norm
                 
-                ! Radiation pressure cross-section: integral of f*Y*lambda*sigma_rp over wavelength
-                result = integrate_dust_radpressure(X, Y, 1000, dustbins_props(isize)%cs_ext_tab)
+                ! Radiation pressure cross-section: integral of f*lambda*sigma_rp over wavelength
+                result = integrate_dust_radpressure(lambda, f, 1000, dustbins_props(isize)%cs_ext_tab)
                 group_csr_dust(isize, ip) = result / norm
 
-                ! Attenuation length: integral of f*Y*lambda*la over wavelength
+                ! Attenuation length: integral of f*lambda*la over wavelength
                 if (dust_pe_heating) then
                     if (dustbins_props(isize)%separate_refractive_index) then
-                        result = integrate_dust_attenuationlength(X, Y, 1000, isize, &
+                        result = integrate_dust_attenuationlength(lambda, f, 1000, isize, &
                                     dustbins_props(isize)%Im_n(1), dustbins_props(isize)%Im_n(2))
                     else
-                        result = integrate_dust_attenuationlength(X, Y, 1000, isize, &
+                        result = integrate_dust_attenuationlength(lambda, f, 1000, isize, &
                                     dustbins_props(isize)%Im_n(1))
                     end if
                     att_len_dust(isize, ip) = result / norm
@@ -975,11 +975,10 @@ module dust_optics
                 
                 ! RAT cross-section: use helper trapezoidal integrator
                 if (dust_ratd) then
-                    result = integrate_dust_RAT(X, Y, 1000, isize)
+                    result = integrate_dust_RAT(lambda, f, 1000, isize)
                     group_csrat_dust(isize, ip) = result / norm
                 end if
             end do
-
             ! Process each PAH bin
             if (npah > 0) then
                 do isize = 1, npah
@@ -987,28 +986,27 @@ module dust_optics
                     idx_i = 2*(isize-1) + 2  ! ion index
 
                     ! Neutral PAHs
-                    result = integrate_pah_absorption(X, Y, 1000, pahbins_props(isize)%cs_abs_tab_n)
+                    result = integrate_pah_absorption(lambda, f, 1000, pahbins_props(isize)%cs_abs_tab_n)
                     group_csa_pah(idx_n, ip) = result / norm
 
-                    result = integrate_pah_scattering(X, Y, 1000, pahbins_props(isize)%cs_scat_tab_n)
+                    result = integrate_pah_scattering(lambda, f, 1000, pahbins_props(isize)%cs_scat_tab_n)
                     group_css_pah(idx_n, ip) = result / norm
 
-                    result = integrate_pah_radpressure(X, Y, 1000, pahbins_props(isize)%cs_ext_tab_n)
+                    result = integrate_pah_radpressure(lambda, f, 1000, pahbins_props(isize)%cs_ext_tab_n)
                     group_csr_pah(idx_n, ip) = result / norm
 
                     ! Ionised PAHs
-                    result = integrate_pah_absorption(X, Y, 1000, pahbins_props(isize)%cs_abs_tab_i)
+                    result = integrate_pah_absorption(lambda, f, 1000, pahbins_props(isize)%cs_abs_tab_i)
                     group_csa_pah(idx_i, ip) = result / norm
 
-                    result = integrate_pah_scattering(X, Y, 1000, pahbins_props(isize)%cs_scat_tab_i)
+                    result = integrate_pah_scattering(lambda, f, 1000, pahbins_props(isize)%cs_scat_tab_i)
                     group_css_pah(idx_i, ip) = result / norm
 
-                    result = integrate_pah_radpressure(X, Y, 1000, pahbins_props(isize)%cs_ext_tab_i)
+                    result = integrate_pah_radpressure(lambda, f, 1000, pahbins_props(isize)%cs_ext_tab_i)
                     group_csr_pah(idx_i, ip) = result / norm
                 end do
             end if
         end do  ! end loop over groups
-
     end subroutine initialize_cross_sections_from_blackbody_dust_pah
 
     ! Helper integration functions
@@ -1055,16 +1053,15 @@ module dust_optics
         type(DustTable), intent(in) :: table
         real(kind=8) :: integral, sigma_i, sigma_ip1
         real(kind=8) :: lwav, lcs
-        integer :: i, idx
+        integer :: i
 
         integral = 0.d0
-        idx = 1
         lwav = log10(X(1) * 1.0d8)
-        call table%interpolate(lwav, lcs, idx)
+        call table%interpolate(lwav, lcs)
         sigma_i = exp(lcs * ln10)
         do i = 1, N - 1
             lwav = log10(X(i+1) * 1.0d8)
-            call table%interpolate(lwav, lcs, idx)
+            call table%interpolate(lwav, lcs)
             sigma_ip1 = exp(lcs * ln10)
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
                                    * (X(i+1) - X(i))
@@ -1079,16 +1076,15 @@ module dust_optics
         type(DustTable), intent(in) :: table
         real(kind=8) :: integral, sigma_i, sigma_ip1
         real(kind=8) :: lwav, lcs
-        integer :: i, idx
+        integer :: i
 
         integral = 0.d0
-        idx = 1
         lwav = log10(X(1) * 1.0d8)
-        call table%interpolate(lwav, lcs, idx)
+        call table%interpolate(lwav, lcs)
         sigma_i = exp(lcs * ln10)
         do i = 1, N - 1
             lwav = log10(X(i+1) * 1.0d8)
-            call table%interpolate(lwav, lcs, idx)
+            call table%interpolate(lwav, lcs)
             sigma_ip1 = exp(lcs * ln10)
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
                                    * (X(i+1) - X(i))
@@ -1103,16 +1099,15 @@ module dust_optics
         type(DustTable), intent(in) :: table
         real(kind=8) :: integral, sigma_i, sigma_ip1
         real(kind=8) :: lwav, lcs
-        integer :: i, idx
+        integer :: i
 
         integral = 0.d0
-        idx = 1
         lwav = log10(X(1) * 1.0d8)
-        call table%interpolate(lwav, lcs, idx)
+        call table%interpolate(lwav, lcs)
         sigma_i = exp(lcs * ln10)
         do i = 1, N - 1
             lwav = log10(X(i+1) * 1.0d8)
-            call table%interpolate(lwav, lcs, idx)
+            call table%interpolate(lwav, lcs)
             sigma_ip1 = exp(lcs * ln10)
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) &
                                    * (X(i+1) - X(i))
@@ -1127,35 +1122,33 @@ module dust_optics
         type(DustTable), intent(in) :: im_table1
         type(DustTable), intent(in), optional :: im_table2
         real(kind=8) :: integral, la_i, la_ip1
-        integer :: i, idx1, idx2
+        integer :: i
         real(dp) :: im_per, im_par, im_iso
 
         integral = 0.d0
-        idx1 = 1
-        idx2 = 1
 
         ! For X(1)
         if (dustbins_props(isize)%separate_refractive_index) then
             if (present(im_table2)) then
-                call im_table1%interpolate(log10(X(1)*1d8), im_per, idx1)
-                call im_table2%interpolate(log10(X(1)*1d8), im_par, idx2)
+                call im_table1%interpolate(log10(X(1)*1d8), im_per)
+                call im_table2%interpolate(log10(X(1)*1d8), im_par)
                 la_i = photon_attenuation_length(X(1), exp(im_per * ln10), .true., exp(im_par * ln10))
             else
                 write(*,*) 'ERROR: separate_refractive_index=.true. but im_table2 not passed!'
                 call clean_stop
             end if
         else
-            call im_table1%interpolate(log10(X(1)*1d8), im_iso, idx1)
+            call im_table1%interpolate(log10(X(1)*1d8), im_iso)
             la_i = photon_attenuation_length(X(1), exp(im_iso * ln10), .false.)
         end if
 
         do i = 1, N - 1
             if (dustbins_props(isize)%separate_refractive_index) then
-                call im_table1%interpolate(log10(X(i+1)*1d8), im_per, idx1)
-                call im_table2%interpolate(log10(X(i+1)*1d8), im_par, idx2)
+                call im_table1%interpolate(log10(X(i+1)*1d8), im_per)
+                call im_table2%interpolate(log10(X(i+1)*1d8), im_par)
                 la_ip1 = photon_attenuation_length(X(i+1), exp(im_per * ln10), .true., exp(im_par * ln10))
             else
-                call im_table1%interpolate(log10(X(i+1)*1d8), im_iso, idx1)
+                call im_table1%interpolate(log10(X(i+1)*1d8), im_iso)
                 la_ip1 = photon_attenuation_length(X(i+1), exp(im_iso * ln10), .false.)
             end if
 
@@ -1191,16 +1184,15 @@ module dust_optics
         type(DustTable), intent(in) :: table
         real(kind=8) :: integral, sigma_i, sigma_ip1
         real(kind=8) :: lwav, lcs
-        integer :: i, idx
+        integer :: i
 
         integral = 0.d0
-        idx = 1
         lwav = log10(X(1) * 1.0d8)
-        call table%interpolate(lwav, lcs, idx)
+        call table%interpolate(lwav, lcs)
         sigma_i = exp(lcs * ln10)
         do i = 1, N - 1
             lwav = log10(X(i+1) * 1.0d8)
-            call table%interpolate(lwav, lcs, idx)
+            call table%interpolate(lwav, lcs)
             sigma_ip1 = exp(lcs * ln10)
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
             sigma_i = sigma_ip1
@@ -1214,16 +1206,15 @@ module dust_optics
         type(DustTable), intent(in) :: table
         real(kind=8) :: integral, sigma_i, sigma_ip1
         real(kind=8) :: lwav, lcs
-        integer :: i, idx
+        integer :: i
 
         integral = 0.d0
-        idx = 1
         lwav = log10(X(1) * 1.0d8)
-        call table%interpolate(lwav, lcs, idx)
+        call table%interpolate(lwav, lcs)
         sigma_i = exp(lcs * ln10)
         do i = 1, N - 1
             lwav = log10(X(i+1) * 1.0d8)
-            call table%interpolate(lwav, lcs, idx)
+            call table%interpolate(lwav, lcs)
             sigma_ip1 = exp(lcs * ln10)
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
             sigma_i = sigma_ip1
@@ -1237,16 +1228,15 @@ module dust_optics
         type(DustTable), intent(in) :: table
         real(kind=8) :: integral, sigma_i, sigma_ip1
         real(kind=8) :: lwav, lcs
-        integer :: i, idx
+        integer :: i
 
         integral = 0.d0
-        idx = 1
         lwav = log10(X(1) * 1.0d8)
-        call table%interpolate(lwav, lcs, idx)
+        call table%interpolate(lwav, lcs)
         sigma_i = exp(lcs * ln10)
         do i = 1, N - 1
             lwav = log10(X(i+1) * 1.0d8)
-            call table%interpolate(lwav, lcs, idx)
+            call table%interpolate(lwav, lcs)
             sigma_ip1 = exp(lcs * ln10)
             integral = integral + 0.5d0 * (Y(i)*X(i)*sigma_i + Y(i+1)*X(i+1)*sigma_ip1) * (X(i+1) - X(i))
             sigma_i = sigma_ip1

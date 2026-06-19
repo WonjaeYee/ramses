@@ -138,7 +138,7 @@ module dust_utils
         ! Find index for interpolation (xi now within bounds)
 
         if (present(idx_x)) then
-            if (idx_x > 0 .and. idx_x < ni) then
+            if (idx_x > 0 .and. idx_x < ni .and. xi >= x(idx_x) .and. xi <= x(idx_x+1)) then
                 i = idx_x
             else
                 i = locate(x, ni, xi)
@@ -182,7 +182,7 @@ module dust_utils
         ! Find index for interpolation (xi now within bounds)
 
         if (present(idx_x)) then
-            if (idx_x > 0 .and. idx_x < ni) then
+            if (idx_x > 0 .and. idx_x < ni .and. xi >= x(idx_x) .and. xi <= x(idx_x+1)) then
                 i = idx_x
             else
                 i = locate_eqw(x, ni, xi, inv_dx)
@@ -226,7 +226,7 @@ module dust_utils
 
         ! Find indices for interpolation using clamped coordinates
         if (present(idx_x)) then
-            if (idx_x > 0 .and. idx_x < ni) then
+            if (idx_x > 0 .and. idx_x < ni .and. xi_copy >= x(idx_x) .and. xi_copy <= x(idx_x+1)) then
                 i = idx_x
             else
                 i = locate(x, ni, xi_copy)
@@ -237,7 +237,7 @@ module dust_utils
         end if
 
         if (present(idx_y)) then
-            if (idx_y > 0 .and. idx_y < nj) then
+            if (idx_y > 0 .and. idx_y < nj .and. yi_copy >= y(idx_y) .and. yi_copy <= y(idx_y+1)) then
                 j = idx_y
             else
                 j = locate(y, nj, yi_copy)
@@ -296,7 +296,7 @@ module dust_utils
 
         ! Find indices for interpolation using clamped coordinates
         if (present(idx_x)) then
-            if (idx_x > 0 .and. idx_x < ni) then
+            if (idx_x > 0 .and. idx_x < ni .and. xi_copy >= x(idx_x) .and. xi_copy <= x(idx_x+1)) then
                 i = idx_x
             else
                 i = locate_eqw(x, ni, xi_copy, inv_dx)
@@ -307,7 +307,7 @@ module dust_utils
         end if
 
         if (present(idx_y)) then
-            if (idx_y > 0 .and. idx_y < nj) then
+            if (idx_y > 0 .and. idx_y < nj .and. yi_copy >= y(idx_y) .and. yi_copy <= y(idx_y+1)) then
                 j = idx_y
             else
                 j = locate_eqw(y, nj, yi_copy, inv_dy)
@@ -366,7 +366,7 @@ module dust_utils
 
         ! Find indices for interpolation using clamped coordinates
         if (present(idx_x)) then
-            if (idx_x > 0 .and. idx_x < ni) then
+            if (idx_x > 0 .and. idx_x < ni .and. xi_copy >= x(idx_x) .and. xi_copy <= x(idx_x+1)) then
                 i = idx_x
             else
                 i = locate(x, ni, xi_copy)
@@ -377,7 +377,7 @@ module dust_utils
         end if
 
         if (present(idx_y)) then
-            if (idx_y > 0 .and. idx_y < nj) then
+            if (idx_y > 0 .and. idx_y < nj .and. yi_copy >= y(idx_y) .and. yi_copy <= y(idx_y+1)) then
                 j = idx_y
             else
                 j = locate(y, nj, yi_copy)
@@ -388,7 +388,7 @@ module dust_utils
         end if
 
         if (present(idx_z)) then
-            if (idx_z > 0 .and. idx_z < nk) then
+            if (idx_z > 0 .and. idx_z < nk .and. zi_copy >= z(idx_z) .and. zi_copy <= z(idx_z+1)) then
                 k = idx_z
             else
                 k = locate(z, nk, zi_copy)
@@ -461,7 +461,7 @@ module dust_utils
 
         ! Find indices for interpolation using clamped coordinates
         if (present(idx_x)) then
-            if (idx_x > 0 .and. idx_x < ni) then
+            if (idx_x > 0 .and. idx_x < ni .and. xi_copy >= x(idx_x) .and. xi_copy <= x(idx_x+1)) then
                 i = idx_x
             else
                 i = locate_eqw(x, ni, xi_copy, inv_dx)
@@ -472,7 +472,7 @@ module dust_utils
         end if
 
         if (present(idx_y)) then
-            if (idx_y > 0 .and. idx_y < nj) then
+            if (idx_y > 0 .and. idx_y < nj .and. yi_copy >= y(idx_y) .and. yi_copy <= y(idx_y+1)) then
                 j = idx_y
             else
                 j = locate_eqw(y, nj, yi_copy, inv_dy)
@@ -483,7 +483,7 @@ module dust_utils
         end if
 
         if (present(idx_z)) then
-            if (idx_z > 0 .and. idx_z < nk) then
+            if (idx_z > 0 .and. idx_z < nk .and. zi_copy >= z(idx_z) .and. zi_copy <= z(idx_z+1)) then
                 k = idx_z
             else
                 k = locate_eqw(z, nk, zi_copy, inv_dz)

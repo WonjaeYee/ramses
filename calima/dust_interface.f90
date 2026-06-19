@@ -469,10 +469,10 @@ contains
                                                             Pabs_pah(1,ii),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(1+2*(ii-1),:),&
+                                                            dinfo%csa_pah(1+2*(ii-1),:),&
+                                                            dinfo%csa_pah(2+2*(ii-1),:),&
+                                                            dinfo%csa_pah(2+2*(ii-1),:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
@@ -491,10 +491,10 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
+                                                        dinfo%csa_pah(1+2*(ii-1),:),&
+                                                        dinfo%csa_pah(2+2*(ii-1),:),&
+                                                        dinfo%csa_pah(2+2*(ii-1),:),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,fcharge_pah(:,ii))

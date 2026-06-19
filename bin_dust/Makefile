@@ -231,7 +231,7 @@ ifeq ($(COMPILER),GNU)
          F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
          # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
       else
-         F90 += -O3 -mcmodel=medium
+         F90 += -O3
       endif
    endif
 endif
@@ -279,6 +279,9 @@ ifeq ($(USE_TURB),1)
    LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
    LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
    LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
+#    FFTW_LIBRARY_PATH = /opt/homebrew/opt/fftw
+#    LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
+#    LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
 endif
 LIBS = $(LIBMPI) $(LIBS_GRACKLE) $(LIBS_TURB)
 #############################################################################
