@@ -18,7 +18,8 @@ recursive subroutine amr_step(ilevel,icount)
   use turb_commons
 #endif
 #ifdef CALIMA
-  use dust_commons, only: dust_log,print_dust_log
+  use dust_commons, only: dust_log,print_dust_log,dust_tva
+  use dust_dynamics, only: dust_diffusion_fine
 #endif
   use mpi_mod
   implicit none
@@ -394,6 +395,14 @@ recursive subroutine amr_step(ilevel,icount)
      ! Hyperbolic solver
                                call timer('hydro - godunov','start')
      call godunov_fine(ilevel)
+
+#ifdef CALIMA
+     ! CALIMA DYNAMICS
+     if (dust_tva .and. ndust>0) then
+                               call timer('hydro - dust','start')
+        call dust_diffusion_fine(ilevel)
+     end if
+#endif
 
 !  if(myid==9.and.ilevel==8) then
 !   write(*,*) 'in `amr_step`, after `godunov_fine`'

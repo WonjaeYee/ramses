@@ -184,6 +184,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   ! Local scratch arrays to safely cache variables before they are overwritten
   real(dp),dimension(1:nvector)::rho_save, p_save, cs_save
 #ifdef CALIMA
+  real(dp)::eps_total, rho_gas
   real(dp),dimension(1:nvector,1:ndust)::rho_dust_save
   integer :: id
 #endif
@@ -232,7 +233,17 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 
   ! Compute pressure
   do k = 1, ncell
+#ifndef CALIMA
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
+#else
+     eps_total=0.0d0
+     do id = 1,ndust
+        eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+     end do
+     eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+     rho_gas = rho_save(k)*(1.0d0-eps_total)
+     uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
+#endif
      p_save(k) = uu(k,neul)          ! Cache gas thermal pressure
   end do
 #if NENER>0
@@ -255,7 +266,17 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   end do
 #endif
   do k = 1, ncell
+#ifndef CALIMA
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
+#else
+     eps_total=0.0d0
+     do id = 1,ndust
+        eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+     end do
+     eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+     rho_gas = rho_save(k)*(1.0d0-eps_total)
+     uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+#endif
      cs_save(k) = uu(k,neul)         ! Cache mixture sound speed
   end do
 
