@@ -442,6 +442,7 @@ module dust_commons
         ! 2. If MPI, get the cell count from all CPUs
 #ifndef WITHOUTMPI
         call MPI_ALLREDUCE(ndust_cells, ndust_cells_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        ndust_cells = ndust_cells_all
 #endif
 #ifndef WITHOUTMPI
         ! 3. If MPI, reduce SN mass changes and ODE per-process mass changes

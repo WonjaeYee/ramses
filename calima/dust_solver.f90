@@ -1084,9 +1084,6 @@ module ode_driver_mod
         nrejected = 0
         nreduced = 0
         firstcall = .true.
-
-        call reset_timestep_reduction_counters
-
         y_gas_temp(:,:) = y_gas(:,:)
         y_dust_temp(:) = y_dust(:)
 
@@ -1138,14 +1135,15 @@ module ode_driver_mod
                 end if
             else
                 nrejected = nrejected + 1
-                if (dust_log) ode_nrejected = ode_nrejected + 1_8
-                if (.not. solver_substepped) then
-                    step_ok = .false.
-                    if (dust_log) then
-                        ode_nrejected = ode_nrejected + 1_8
+                if (dust_log) then
+                    ode_nrejected = ode_nrejected + 1_8
+                    if (.not. solver_substepped) then
                         ode_nreduced = ode_nreduced + 1_8
                         call register_timestep_reduction_cause
                     end if
+                end if
+                if (.not. solver_substepped) then
+                    step_ok = .false.
                     exit
                 end if
             end if
@@ -1182,8 +1180,8 @@ module ode_driver_mod
         y_gas_final(:,:) = y_gas_temp(:,:)
         y_dust_final(:) = y_dust_temp(:)
 
-        ! 7. Update per-cell substep statistics (only when logging is active)
-        if (dust_log) then
+        ! 7. Update per-cell substep statistics (only when logging is active and step succeeded)
+        if (dust_log .and. step_ok) then
             ndust_cells       = ndust_cells + 1_8
             ode_substeps_sum  = ode_substeps_sum + int(naccepted, kind=8)
             ode_substeps_min  = min(ode_substeps_min, int(naccepted, kind=8))
