@@ -17,6 +17,7 @@ module dust_commons
     logical, parameter ::dust=.true.             ! CALIMA always includes dust
     logical ::dust_log=.false.                   ! Activate dust logging
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
+    logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
     logical ::dust_eq_test=.false.               ! Activate dust equilibrium test parameters
     logical ::dust_SNdest=.false.                ! Dust destruction in SN explosions
@@ -59,6 +60,15 @@ module dust_commons
     logical ::pah_pe_heating_isrf=.false.        ! Activate the simple PAH PE heating based on an averaged ISRF G0
     logical ::pah_pe_nolyman=.false.             ! Deactivate the 13.6 eV limit for PAH PE heating
     logical ::H2onpah=.false.                    ! Formation of H2 molecules on PAHs
+
+    ! ==== Dust standalone testing (read from nml) ====
+    logical ::dust_test=.false.                  ! Activate accretion solver test
+    real(dp) ::test_nH=1.0d2                     ! Target test gas hydrogen density [cm-3]
+    real(dp) ::test_Tk=1.0d1                     ! Target test gas temperature [K]
+    integer ::test_nsteps=100                    ! Target test solver steps
+    real(dp) ::test_dt=1.0d4                     ! Target test solver step size [yr]
+    real(dp) ::test_ne=1.0d-2                    ! Target test gas electron density [cm-3]
+    real(dp) ::test_mu=1.0d0                     ! Target test gas mean molecular weight
 
     ! ==== Dust modelling options (read from nml) ====
     character(LEN=30)::sputtering_model='Tsai1998'    ! Thermal sputtering law (Tsai&Matthews 1995)
@@ -334,8 +344,8 @@ module dust_commons
                         do ii=1,npah
                             total_dust_mass_species(ii) = total_dust_mass_species(ii) + (uold(ind_cell(i),ipah+ii-1) * dx_loc**3)
                         end do
-                        do ii=npah,ndust+npah
-                            total_dust_mass_species(ii) = total_dust_mass_species(ii) + (uold(ind_cell(i),idust+ii-npah-1) * dx_loc**3)
+                        do ii=1,ndust
+                            total_dust_mass_species(npah+ii) = total_dust_mass_species(npah+ii) + (uold(ind_cell(i),idust+ii-1) * dx_loc**3)
                         end do
                         ! Add total metal mass
                         do ii=1,n_elements
@@ -579,6 +589,10 @@ module dust_commons
                 write(*,format_str) 'dM SNd  (Ia)  =', dM_SNIad/(dt*scale_t) / M_sun * yr2sec
             end if
         endif
+
+        ! Print total dust and PAH masses in simulation box
+        call print_box_dust_masses()
+
         dM_SNIId          = 0.0d0; dM_SNIId_all          = 0.0d0
         dM_SNIad          = 0.0d0; dM_SNIad_all          = 0.0d0
         if (allocated(dM_ode_dust))     dM_ode_dust     = 0.0d0
@@ -602,5 +616,106 @@ module dust_commons
         if (allocated(ode_reduction_count_pah))      ode_reduction_count_pah      = 0_8
         if (allocated(ode_reduction_count_pah_all))  ode_reduction_count_pah_all  = 0_8
     end subroutine print_dust_log
+
+    subroutine print_box_dust_masses()
+        use amr_commons
+        use hydro_commons, only: uold, imetal,nmetals
+        use constants, only: M_sun
+#ifndef WITHOUTMPI
+        use mpi_mod
+#endif
+        implicit none
+        integer :: ilevel, i, ind, iskip, ii, icell, igrid, nx_loc, ncache, ngrid
+        integer, dimension(1:nvector) :: ind_grid, ind_cell
+        real(dp) :: dx, dx_loc, scale, scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2, scale_msun
+        real(dp), dimension(1:ndust+npah) :: local_bin_masses, global_bin_masses
+        real(dp) :: local_gas_mass, local_metal_mass, global_gas_mass, global_metal_mass
+#ifndef WITHOUTMPI
+        integer :: mpi_err
+#endif
+
+        ! 1. Initialize local bin masses
+        local_bin_masses = 0d0
+        global_bin_masses = 0d0
+        local_gas_mass = 0d0
+        local_metal_mass = 0d0
+        global_gas_mass = 0d0
+        global_metal_mass = 0d0
+
+        ! 2. Compute local grid leaf cell contributions
+        nx_loc = (icoarse_max - icoarse_min + 1)
+        scale = boxlen / dble(nx_loc)
+
+        do ilevel = 1, nlevelmax
+            dx = 0.5d0**ilevel
+            dx_loc = dx * scale
+            ncache = active(ilevel)%ngrid
+            do igrid = 1, ncache, nvector
+                ngrid = min(nvector, ncache - igrid + 1)
+                do i = 1, ngrid
+                    ind_grid(i) = active(ilevel)%igrid(igrid + i - 1)
+                end do
+                do ind = 1, twotondim
+                    iskip = ncoarse + (ind - 1) * ngridmax
+                    do i = 1, ngrid
+                        ind_cell(i) = iskip + ind_grid(i)
+                    end do
+                    do i = 1, ngrid
+                        if (son(ind_cell(i)) == 0) then
+                            local_gas_mass = local_gas_mass + (uold(ind_cell(i), 1) * dx_loc**3)
+                            ! Accumulate metal mass
+                            do ii = 1, nmetals
+                                local_metal_mass = local_metal_mass + (uold(ind_cell(i), imetal + ii) * dx_loc**3)
+                            end do
+                            ! Accumulate PAH bin masses
+                            do ii = 1, npah
+                                local_bin_masses(ii) = local_bin_masses(ii) + &
+                                    (uold(ind_cell(i), ipah + ii - 1) * dx_loc**3)
+                            end do
+                            ! Accumulate dust bin masses
+                            do ii = 1, ndust
+                                local_bin_masses(npah + ii) = local_bin_masses(npah + ii) + &
+                                    (uold(ind_cell(i), idust + ii - 1) * dx_loc**3)
+                            end do
+                        end if
+                    end do
+                end do
+            end do
+        end do
+
+        ! 3. Reduce across MPI processors and convert to solar masses
+        call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
+        scale_msun = (scale_l**3 * scale_d) / M_sun
+
+#ifndef WITHOUTMPI
+        call MPI_ALLREDUCE(local_bin_masses, global_bin_masses, ndust + npah, &
+            MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(local_gas_mass, global_gas_mass, 1, &
+            MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(local_metal_mass, global_metal_mass, 1, &
+            MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+#else
+        global_bin_masses = local_bin_masses
+#endif
+        global_bin_masses = global_bin_masses * scale_msun
+        global_gas_mass = global_gas_mass * scale_msun
+        global_metal_mass = global_metal_mass * scale_msun
+
+        ! 4. Print the diagnostics on task 1
+        if (myid == 1) then
+            write(*,*) ' --- Total dust / PAH bin masses in box [Msun] ---'
+            do ii = 1, npah
+                write(*, '(A, I2, A, ES14.6)') '  PAH bin ', ii, ': ', global_bin_masses(ii)
+            end do
+            do ii = 1, ndust
+                write(*, '(A, I2, A, ES14.6)') '  Dust bin ', ii, ': ', global_bin_masses(npah + ii)
+            end do
+            write(*, '(A, ES14.6)') '  Total dust+PAH mass in box [Msun]: ', sum(global_bin_masses)
+            write(*, '(A, ES14.6)') '  Total gas mass in box [Msun]: ', global_gas_mass
+            write(*, '(A, ES14.6)') '  Total metal mass in box [Msun]: ', global_metal_mass
+            write(*, '(A, ES14.6)') '  Total dust-to-gas ratio in the box: ', sum(global_bin_masses) / global_gas_mass
+            write(*, '(A, ES14.6)') '  Total dust-to-metal ratio in the box: ', sum(global_bin_masses) / global_metal_mass
+        end if
+    end subroutine print_box_dust_masses
 
 end module

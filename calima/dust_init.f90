@@ -647,6 +647,7 @@ module dust_init
         real(dp) :: mf_max,mf_min,prefactor,chi_total,frac_tot,mcoag
         real(dp) :: R
         integer :: iend_chemtype
+        external :: run_dust_solver_test
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
         if (sum(dustbins_per_chemtype) /= ndust) then
@@ -732,7 +733,7 @@ module dust_init
                     end if
                     dustbins_props(ii)%el_mfractions(kk) = elements(jj)%atomic_mass * dust_composition(ichemtype,jj)
                     dustbins_props(ii)%el_atomic_masses_amu(kk) = elements(jj)%atomic_mass
-                    dustbins_props(ii)%el_atomic_masses_g(kk) = elements(jj)%atomic_mass * amu2g
+                    dustbins_props(ii)%el_atomic_masses_g(kk) = elements(jj)%atomic_mass_g
                     dustbins_props(ii)%el_nions(kk) = elements(jj)%n_ions
                     dustbins_props(ii)%el_names(kk) = elements(jj)%symbol
 #else
@@ -1078,10 +1079,13 @@ module dust_init
         ! Select the ODE solver procedure pointer
         if (dust_solver_type == 1) then
             dust_solver_step => rk4_step
+            solver_substepped = .true.
         else if (dust_solver_type == 2) then
             dust_solver_step => anninos_step
+            solver_substepped = .false.
         else if (dust_solver_type == 3) then
             dust_solver_step => rk54_step
+            solver_substepped = .true.
         else
             if (myid == 1) then
                 write(*,*) 'ERROR: Invalid dust_solver_type = ', dust_solver_type
@@ -1092,6 +1096,10 @@ module dust_init
         ! 13. Print the CALIMA dust properties for the user
         if (myid == 1) then
             call print_dust_parameters
+        end if
+
+        if (dust_test) then
+            call run_dust_solver_test()
         end if
 
     end subroutine init_CALIMA_dust
@@ -1107,6 +1115,7 @@ module dust_init
         namelist/calima_params/&
                 ! Dust physics flags
                 dust_log,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+                dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,&
                 dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
                 dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
                 dust_sublimation,dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&

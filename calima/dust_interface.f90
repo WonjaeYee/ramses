@@ -530,7 +530,7 @@ contains
         real(dp), intent(in) :: dt
         real(dp), intent(inout) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in), optional :: Np(:)
-        logical, intent(out), optional :: step_ok
+        logical, intent(out) :: step_ok
 
         ! --- Local variables ----
         integer :: ii, ndust_total
@@ -540,7 +540,7 @@ contains
 
         ! If no dust or PAH process is active, just return
         if (ndust_processes.eq.0 .and. npah_processes.eq.0) then
-            if (present(step_ok)) step_ok = .true.
+            step_ok = .true.
             return
         end if
 
@@ -604,7 +604,7 @@ contains
         end if
 
         ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
-        if (present(step_ok)) step_ok = .true.
+        step_ok = .true.
         call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
                                 y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
 
