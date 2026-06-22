@@ -262,4 +262,347 @@ module dust_dynamics
         end if
     end subroutine dust_shock_destruction
 
+    subroutine cmpdt_dust_diffusion(rho,rho_dust,P,cs,dx,dt,ncell)
+        ! This subroutine computes the maximum time step for the dust diffusion
+        ! for each cell. This is then used to update the time step for the dust diffusion
+        ! in the main time loop.
+        ! rho -> total mixture density (gas + dust) [code density]
+        ! rho_dust -> dust mass density [code density]
+        ! P -> total mixture pressure (gas + dust) [code pressure]
+        ! cs -> sound speed of the mixture [code velocity]
+        ! dx -> cell width [code length]
+        ! dt <-> time step [code time]
+        ! ncell -> number of cells
+        
+        use hydro_parameters, only: courant_factor,smallr
+        implicit none
+        ! Input variables
+        real(dp),dimension(1:nvector),intent(in) :: rho,P,cs
+        real(dp),dimension(1:nvector,1:ndust),intent(in) :: rho_dust
+        real(dp),intent(in) :: dx
+        real(dp),intent(inout) :: dt
+        integer,intent(in) :: ncell
+
+        ! Local variables
+        integer ::jbin,k
+        real(dp)::eps_tot, eps_i, rho_g_loc, t_s_loc, D_i
+        real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
+        real(dp)::agrain_code,sgrain_code,dtcell
+
+        ! 1. Get the current code units
+        call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+
+        ! 2. Loop over cells
+        do k = 1, ncell
+            ! 3. Sum up all bin fractions to find the remaining gas background fraction
+            eps_tot = 0.0_dp
+            do jbin = 1, ndust
+                eps_tot = eps_tot + (rho_dust(k,jbin) / rho(k))
+            end do
+            eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
+            
+            ! 4. Find the intrinsic gas density: rho_g = (1 - eps_tot) * rho_mixture
+            rho_g_loc = max((1.0_dp - eps_tot) * rho(k), smallr)
+
+            ! 5. Loop over dust bins
+            do jbin = 1, ndust
+                eps_i = rho_dust(k,jbin) / rho(k)
+
+                ! 6. Convert the grain size and grain material density from cgs to code units
+                agrain_code = dustbins_props(jbin)%asize_cm/scale_l
+                sgrain_code = dustbins_props(jbin)%sgrain/scale_d
+
+                ! 7. Epstein drag regime stopping time: t_s = (rho_solid * a) / (rho_g * c_s)
+                t_s_loc = (sgrain_code * agrain_code) / max(rho_g_loc * cs(k), smallr)
+
+                ! 8. Laibe & Price / Lebreuilly et al. 2019 Diffusion Coefficient:
+                ! D_i = eps_i * (1 - eps_total) * t_s * (P_g / rho_g)
+                D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P(k) / rho_g_loc)
+
+                ! Parabolic restriction check: dt <= dx^2 / (2 * D_i)
+                if (D_i > 0.0_dp) then
+                    dtcell = courant_factor * (dx**2) / (2.0_dp * D_i)
+                    dt = min(dt, dtcell)
+                end if
+            end do
+        end do
+    end subroutine cmpdt_dust_diffusion
+
+    subroutine dust_upwind_correct1(ind_grid,ncache,ilevel)
+        use amr_commons
+        use hydro_commons
+        implicit none
+        integer::ilevel,ncache
+        integer,dimension(1:nvector)::ind_grid
+
+        ! Cache blocks matching the sizes found in godfine1
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar),save::uloc
+        logical ,dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::ok
+        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndust,1:ndim),save::dflux
+        
+        integer,dimension(1:nvector),save::ind_cell, ind_father, igrid_nbor, ind_exist, ind_nexist, ind_buffer
+        integer,dimension(1:nvector,1:threetondim)::nbors_father_cells
+        integer,dimension(1:nvector,0:twondim)::ibuffer_father
+        real(dp),dimension(1:nvector,0:twondim,1:nvar)::u1
+        real(dp),dimension(1:nvector,1:twotondim,1:nvar)::u2
+
+        integer::i,j,ivar,idim,iskip,ind_son
+        integer::i0,j0,k0,i1,j1,k1,i2,j2,k2,i3,j3,k3,nexist,nbuffer,ind_father_idx
+        integer::i1min,i1max,j1min,j1max,k1min,k1max
+        integer::i2min,i2max,j2min,j2max,k2min,k2max
+        integer::i3min,i3max,j3min,j3max,k3min,k3max
+        real(dp)::dx,scale,oneontwotondim,dt
+        real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
+        real(dp),dimension(1:ndust)::agrain_code,sgrain_code
+
+        ! Get the current code units
+        call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+
+        ! Get grain radii and material density in code units
+        do i = 1, ndust
+            agrain_code(i) = dustbins_props(i)%asize_cm / scale_l
+            sgrain_code(i) = dustbins_props(i)%sgrain / scale_d
+        end do
+
+        oneontwotondim = 1d0/dble(twotondim)
+        scale=boxlen/dble(icoarse_max-icoarse_min+1)
+        dx=0.5d0**ilevel*scale
+        dt=dtnew(ilevel)
+
+        ! Integer constants
+        i1min=0; i1max=0; i2min=0; i2max=0; i3min=1; i3max=1
+        j1min=0; j1max=0; j2min=0; j2max=0; j3min=1; j3max=1
+        k1min=0; k1max=0; k2min=0; k2max=0; k3min=1; k3max=1
+        if(ndim>0)then
+            i1max=2; i2max=1; i3max=2
+        end if
+        if(ndim>1)then
+            j1max=2; j2max=1; j3max=2
+        end if
+        if(ndim>2)then
+            k1max=2; k2max=1; k3max=2
+        end if
+
+        ! Gather 3^ndim neighboring father cells
+        do i=1,ncache
+            ind_cell(i)=father(ind_grid(i))
+        end do
+        call get3cubefather(ind_cell,nbors_father_cells,ncache,ilevel)
+
+        ! Loop over neighboring grid tree to construct localized uloc stencil block
+        do k1=k1min,k1max; do j1=j1min,j1max; do i1=i1min,i1max
+            ! Check if neighboring grid exists
+            nbuffer=0; nexist=0
+            ind_father_idx=1+i1+3*j1+9*k1
+            do i=1,ncache
+                igrid_nbor(i)=son(nbors_father_cells(i,ind_father_idx))
+                if(igrid_nbor(i)>0) then
+                    nexist=nexist+1
+                    ind_exist(nexist)=i
+                else
+                    nbuffer=nbuffer+1
+                    ind_nexist(nbuffer)=i
+                    ind_buffer(nbuffer)=nbors_father_cells(i,ind_father_idx)
+                end if
+            end do
+
+            ! If not, interpolate hydro variables from parent cells
+            if(nbuffer>0) then
+                call getnborfather(ind_buffer,ibuffer_father,nbuffer,ilevel)
+                do j=0,twondim; do ivar=1,nvar; do i=1,nbuffer
+                    u1(i,j,ivar)=uold(ibuffer_father(i,j),ivar)
+                end do; end do; end do
+                call interpol_hydro(u1,u2,nbuffer)
+            endif
+
+            do k2=k2min,k2max; do j2=j2min,j2max; do i2=i2min,i2max
+                ind_son=1+i2+2*j2+4*k2
+                iskip=ncoarse+(ind_son-1)*ngridmax
+                do i=1,nexist
+                ind_cell(i)=iskip+igrid_nbor(ind_exist(i))
+                end do
+                i3=1; j3=1; k3=1
+                if(ndim>0)i3=1+2*(i1-1)+i2
+                if(ndim>1)j3=1+2*(j1-1)+j2
+                if(ndim>2)k3=1+2*(k1-1)+k2
+
+                do ivar=1,nvar
+                    do i=1,nexist;  uloc(ind_exist(i),i3,j3,k3,ivar)=uold(ind_cell(i),ivar); end do
+                    do i=1,nbuffer; uloc(ind_nexist(i),i3,j3,k3,ivar)=u2(i,ind_son,ivar); end do
+                end do
+                do i=1,nexist;  ok(ind_exist(i),i3,j3,k3)=son(ind_cell(i))>0; end do
+                do i=1,nbuffer; ok(ind_nexist(i),i3,j3,k3)=.false.; end do
+            end do; end do; end do
+        end do; end do; end do
+
+        ! Call the actual mathematical worker to get our upwinded mass corrections
+        call calculate_pure_drag_fluxes(uloc,dflux,dx,dt,ncache,agrain_code,sgrain_code)
+
+        ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
+        ! zero out the flux; the finer level handles it and restricts it down later
+        do idim=1,ndim
+            i0=0; j0=0; k0=0
+            if(idim==1)i0=1
+            if(idim==2)j0=1
+            if(idim==3)k0=1
+            do k3=1,2+k0; do j3=1,2+j0; do i3=1,2+i0
+                do i=1,ncache
+                if(ok(i,i3-i0,j3-j0,k3-k0) .or. ok(i,i3,j3,k3))then
+                    dflux(i,i3,j3,k3,:,idim)=0.0d0
+                end if
+                end do
+            end do; end do; end do
+        end do
+
+        ! Apply the divergence of the fluxes to update unew array
+        do idim=1,ndim
+            i0=0; j0=0; k0=0
+            if(idim==1)i0=1
+            if(idim==2)j0=1
+            if(idim==3)k0=1
+            do k2=0,1; do j2=0,1; do i2=0,1
+                ind_son=1+i2+2*j2+4*k2
+                iskip=ncoarse+(ind_son-1)*ngridmax
+                do i=1,ncache
+                ind_cell(i)=iskip+ind_grid(i)
+                end do
+                i3=1+i2; j3=1+j2; k3=1+k2
+                
+                do ivar=1,ndust
+                do i=1,ncache
+                    unew(ind_cell(i),idust+ivar-1)=unew(ind_cell(i),idust+ivar-1)+ &
+                        (dflux(i,i3,j3,k3,ivar,idim) - dflux(i,i3+i0,j3+j0,k3+k0,ivar,idim))
+                end do
+                end do
+            end do; end do; end do
+        end do
+
+    end subroutine dust_upwind_correct1
+
+    subroutine calculate_pure_drag_fluxes(uloc,dflux,dx,dt,ngrid,agrain_code,sgrain_code)
+        use amr_parameters
+        use hydro_parameters
+        implicit none
+        integer :: ngrid
+        real(dp):: dx, dt
+        ! Input stencil containing 5^ndim neighbor states gathered via tree blocks
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar)::uloc
+        ! Input grain properties in code units
+        real(dp),dimension(1:ndust)::agrain_code, sgrain_code
+        ! Output array for multi-bin interface fluxes across dimensions
+        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndust,1:ndim)::dflux
+
+        ! Primitive gas/mixture scratch fields
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2)::Pg, rho_mix, c_s
+        ! Array for dust fraction: eps = rho_d / rho_mixture
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust)::eps
+        ! Slope array for MUSCL linear reconstructions
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust)::slope_x
+        
+        integer :: i,j,k,l,jbin
+        integer :: ilo,jlo,klo,ihi,jhi,khi
+        real(dp):: dlft, drgt, dcen, u_drift, eps_tot_L, eps_tot_R, t_s_face
+        real(dp):: grad_P, rho_face, c_s_face, eps_L, eps_R, eps_gdnv
+
+        dflux = 0.0_dp
+
+        ! Define standard internal loop boundaries relative to stencil buffer limits
+        ilo = MIN(1, iu1+2); ihi = MAX(1, iu2-2)
+        jlo = MIN(1, ju1+2); jhi = MAX(1, ju2-2)
+        klo = MIN(1, ku1+2); khi = MAX(1, ku2-2)
+
+        ! ========================================================================
+        ! STEP 1: PRIMITIVE VARIABLE EXTRACTION & VARIABLE MAPPING
+        ! ========================================================================
+        ! We iterate across the full stencil buffer bounds (iu1:iu2, etc.) to 
+        ! calculate localized gas pressure fields and native dust fraction metrics.
+        do k=ku1,ku2; do j=ju1,ju2; do i=iu1,iu2; do l=1,ngrid
+            ! Extract bulk fluid mixture density: \rho = \rho_g + \sum \rho_i
+            rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr)
+            
+            ! Reconstruct thermal gas pressure: P_g = (\gamma - 1) * (E_tot - E_kin)
+            ! uloc(:,:,:,:,neul) maps to total energy density; uloc(:,:,:,:,2) maps to X-momentum
+            Pg(l,i,j,k) = max((gamma-1.0_dp)*(uloc(l,i,j,k,neul) - &
+                        0.5_dp*(uloc(l,i,j,k,2)**2)/rho_mix(l,i,j,k)), smallr*smallc**2)
+            
+            ! Sound speed of mixture: c_s = \sqrt{\gamma * P_g / \rho}
+            c_s(l,i,j,k) = sqrt(gamma*Pg(l,i,j,k)/rho_mix(l,i,j,k))
+            
+            ! Extract dust mass fraction for each separate bin
+            do jbin=1,ndust
+                ! Convert conservative density state (rho * epsilon) into primitive fraction (epsilon)
+                eps(l,i,j,k,jbin) = uloc(l,i,j,k,idust+jbin-1) / rho_mix(l,i,j,k)
+            end do
+        end do; end do; end do; end do
+
+        ! ========================================================================
+        ! STEP 2: MUSCL SPATIAL RECONSTRUCTION (SLOPE LIMITING)
+        ! ========================================================================
+        ! To maintain monotonic profiles and preserve strict positivity (\epsilon >= 0), 
+        ! we evaluate localized slopes via a MinMod TVD limiter constraint
+        do jbin=1,ndust
+            do k=ku1+1,ku2-1; do j=ju1+1,ju2-1; do i=iu1+1,iu2-1; do l=1,ngrid
+                ! Downwind fraction difference: \Delta \epsilon_{left} = \epsilon_j - \epsilon_{j-1}
+                dlft = eps(l,i,j,k,jbin) - eps(l,i-1,j,k,jbin)
+                ! Upwind fraction difference: \Delta \epsilon_{right} = \epsilon_{j+1} - \epsilon_j
+                drgt = eps(l,i+1,j,k,jbin) - eps(l,i,j,k,jbin)
+                dcen = 0.5_dp * (dlft + drgt)
+                
+                ! MinMod Limiter selection: forces slope to 0 if a gradient inversion occurs
+                if (dlft * drgt <= 0.0_dp) then
+                    slope_x(l,i,j,k,jbin) = 0.0_dp
+                else
+                    slope_x(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(abs(dlft), abs(drgt))
+                end if
+            end do; end do; end do; end do
+        end do
+
+        ! ========================================================================
+        ! STEP 3: INTERFACE DRIFT VELOCITY & RIEMANN FLUX EVALUATION
+        ! ========================================================================
+        ! We loop over internal edge interfaces (from if1 to if2) inside active grid zones
+        do k=klo,khi; do j=jlo,jhi; do i=if1,if2; do l=1,ngrid
+            ! Spatial central difference of background gas pressure across interface: \nabla P_g
+            grad_P   = (Pg(l,i,j,k) - Pg(l,i-1,j,k)) / dx
+            
+            ! Arithmetic interface-centered fluid means
+            rho_face = 0.5_dp * (rho_mix(l,i,j,k) + rho_mix(l,i-1,j,k))
+            c_s_face = 0.5_dp * (c_s(l,i,j,k) + c_s(l,i-1,j,k))
+            
+            ! Find the total collective dust fraction at left and right boundaries: \sum \epsilon_k
+            eps_tot_L = sum(eps(l,i-1,j,k,:))
+            eps_tot_R = sum(eps(l,i,j,k,:))
+
+            do jbin=1,ndust
+                ! Epstein drag regime stopping time at the face interface:
+                ! t_s = (\rho_solid * a_bin) / (\rho_g * c_s) where \rho_g = (1 - \epsilon_tot) * \rho
+                t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / max((1.0_dp - eps_tot_L)*rho_face * c_s_face, smallr)
+                
+                ! Lebreuilly et al. (2019) / Laibe & Price (2014) Differential Drift Velocity:
+                ! w_drift = (1 - \epsilon_tot) * t_s * (\nabla P_g / \rho)
+                u_drift  = (1.0_dp - 0.5_dp*(eps_tot_L + eps_tot_R)) * t_s_face * grad_P / rho_face
+                
+                ! Predict time-centered (\Delta t / 2) boundary interface states:
+                ! \epsilon^L = \epsilon_j + (dx/2)*slope - (dt/2)*w_drift*slope
+                eps_L = eps(l,i-1,j,k,jbin) + 0.5_dp*slope_x(l,i-1,j,k,jbin) - &
+                        (0.5_dp*dt/dx)*u_drift*slope_x(l,i-1,j,k,jbin)
+                ! \epsilon^R = \epsilon_{j+1} - (dx/2)*slope - (dt/2)*w_drift*slope
+                eps_R = eps(l,i,j,k,jbin)   - 0.5_dp*slope_x(l,i,j,k,jbin)   - &
+                        (0.5_dp*dt/dx)*u_drift*slope_x(l,i,j,k,jbin)
+                
+                ! Hyperbolic Upwind Riemann Selector based on sign of drift speed:
+                ! Downwind advection path selection maps upstream edge variables
+                if (u_drift >= 0.0_dp) then
+                    eps_gdnv = eps_L
+                else
+                    eps_gdnv = eps_R
+                end if
+                
+                ! Formulate conservative transport flux scaled into RAMSES density volume limits:
+                ! Flux = w_drift * \rho_mixture * \epsilon_gdnv * (\Delta t / \Delta x)
+                dflux(l,i,j,k,jbin,1) = u_drift * rho_face * eps_gdnv * (dt / dx)
+            end do
+        end do; end do; end do; end do
+    end subroutine calculate_pure_drag_fluxes
+
 end module dust_dynamics

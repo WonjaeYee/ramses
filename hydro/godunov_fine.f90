@@ -5,6 +5,10 @@
 subroutine godunov_fine(ilevel)
   use amr_commons
   use hydro_commons
+#ifdef CALIMA
+  use dust_commons, only: dust_tva,ndust
+  use dust_dynamics, only: dust_upwind_correct1
+#endif
   implicit none
   integer::ilevel
   !--------------------------------------------------------------------------
@@ -29,6 +33,21 @@ subroutine godunov_fine(ilevel)
      end do
      call godfine1(ind_grid,ngrid,ilevel)
   end do
+
+#ifdef CALIMA
+  ! CALIMA DYNAMICS: Run the upwind post-Godunov dust correction pass
+  if (dust_tva .and. ndust>0) then
+      if(verbose)write(*,222)ilevel
+      do igrid=1,ncache,nvector
+         ngrid=MIN(nvector,ncache-igrid+1)
+         do i=1,ngrid
+            ind_grid(i)=active(ilevel)%igrid(igrid+i-1)
+         end do
+         call dust_upwind_correct1(ind_grid,ngrid,ilevel)
+      end do
+  end if
+222 format('   Entering dust upwind correction for level ',i2)
+#endif
 
 111 format('   Entering godunov_fine for level ',i2)
 

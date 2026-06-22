@@ -60,6 +60,10 @@ module dust_commons
     logical ::pah_pe_nolyman=.false.             ! Deactivate the 13.6 eV limit for PAH PE heating
     logical ::H2onpah=.false.                    ! Formation of H2 molecules on PAHs
 
+    ! ==== Dust dynamics (read from nml) ====
+    logical ::dust_tva=.false.                   ! Activate the dust dynamics using the Terminal Velocity Approximation (TVA)
+    
+
     ! ==== Dust modelling options (read from nml) ====
     character(LEN=30)::sputtering_model='Tsai1998'    ! Thermal sputtering law (Tsai&Matthews 1995)
     character(LEN=30)::accretion_model='Chaabouni2012'    ! Accretion model

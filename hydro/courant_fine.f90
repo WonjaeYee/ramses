@@ -165,6 +165,10 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   use amr_parameters
   use hydro_parameters
   use const
+#ifdef CALIMA
+  use dust_commons, only: dust_tva, ndust
+  use dust_dynamics, only: cmpdt_dust_diffusion
+#endif
   implicit none
   integer::ncell
   real(dp)::dx,dt
@@ -177,11 +181,19 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   integer::irad
 #endif
 
+  ! Local scratch arrays to safely cache variables before they are overwritten
+  real(dp),dimension(1:nvector)::rho_save, p_save, cs_save
+#ifdef CALIMA
+  real(dp),dimension(1:nvector,1:ndust)::rho_dust_save
+  integer :: id
+#endif
+
   smallp = smallc**2/gamma
 
   ! Convert to primitive variables
   do k = 1,ncell
      uu(k,1)=max(uu(k,1),smallr)
+     rho_save(k)=uu(k,1)             ! Cache mixture density
   end do
   ! Velocity
   do idim = 1,ndim
@@ -221,6 +233,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   ! Compute pressure
   do k = 1, ncell
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
+     p_save(k) = uu(k,neul)          ! Cache gas thermal pressure
   end do
 #if NENER>0
   do irad = 1,nener
@@ -243,6 +256,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #endif
   do k = 1, ncell
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
+     cs_save(k) = uu(k,neul)         ! Cache mixture sound speed
   end do
 
   ! Compute wave speed
@@ -275,6 +289,18 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
      dtcell = dx/uu(k,neul)*(sqrt(one+two*courant_factor*uu(k,1))-one)/uu(k,1)
      dt = min(dt,dtcell)
   end do
+
+#ifdef CALIMA
+  if (dust_tva .and. ndust>0) then
+   ! CALIMA MODIFICATION: Explicit Parabolic Diffusion Timestep Constraint
+   do k=1,ncell
+      do id=1,ndust
+         rho_dust_save(k,id)=uu(k,idust+id-1)
+      end do
+   end do
+   call cmpdt_dust_diffusion(rho_save,rho_dust_save,p_save,cs_save,dx,dt,ncell)
+  end if
+#endif
 
 end subroutine cmpdt
 !###########################################################
