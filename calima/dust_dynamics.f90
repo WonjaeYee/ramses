@@ -316,25 +316,41 @@ module dust_dynamics
         real(dp)::eps_tot, eps_i, rho_g_loc, t_s_loc, D_i
         real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
         real(dp)::agrain_code,sgrain_code,dtcell
+        real(dp)::rho_loc, P_loc, cs_loc
 
         ! 1. Get the current code units
         call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
 
         ! 2. Loop over cells
         do k = 1, ncell
+            if (condinit_kind .eq. 'dustydiffuse') then
+                rho_loc = 1.0_dp
+                cs_loc = 1.0_dp
+            else
+                rho_loc = rho(k)
+                cs_loc = cs(k)
+            end if
+
             ! 3. Sum up all bin fractions to find the remaining gas background fraction
             eps_tot = 0.0_dp
             do jbin = 1, ndust
-                eps_tot = eps_tot + (rho_dust(k,jbin) / rho(k))
+                eps_tot = eps_tot + (rho_dust(k,jbin) / rho_loc)
             end do
+
+            if (condinit_kind .eq. 'dustydiffuse') then
+                P_loc = (1.0_dp - eps_tot) * rho_loc
+            else
+                P_loc = P(k)
+            end if
+
             eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
             
             ! 4. Find the intrinsic gas density: rho_g = (1 - eps_tot) * rho_mixture
-            rho_g_loc = max((1.0_dp - eps_tot) * rho(k), smallr)
+            rho_g_loc = max((1.0_dp - eps_tot) * rho_loc, smallr)
 
             ! 5. Loop over dust bins
             do jbin = 1, ndust
-                eps_i = rho_dust(k,jbin) / rho(k)
+                eps_i = rho_dust(k,jbin) / rho_loc
 
                 ! 6. Convert the grain size and grain material density from cgs to code units
                 agrain_code = dustbins_props(jbin)%asize_cm/scale_l
@@ -344,7 +360,7 @@ module dust_dynamics
                 if (condinit_kind == 'dustydiffuse') then
                     t_s_loc = 0.1_dp
                 else
-                    t_s_loc = (sgrain_code * agrain_code) / max(rho_g_loc * cs(k), smallr)
+                    t_s_loc = (sgrain_code * agrain_code) / max(rho_g_loc * cs_loc, smallr)
                 end if
 
                 ! 8. Laibe & Price / Lebreuilly et al. 2019 Diffusion Coefficient:
@@ -352,7 +368,7 @@ module dust_dynamics
                 if (condinit_kind == 'dustydiffuse') then
                     D_i = eps_i * (1.0_dp - eps_tot) * 0.1_dp
                 else
-                    D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P(k) / rho_g_loc)
+                    D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P_loc / rho_g_loc)
                 end if
 
                 ! Parabolic restriction check: dt <= dx^2 / (2 * D_i)
@@ -383,7 +399,7 @@ module dust_dynamics
         real(dp),dimension(1:nvector,0:twondim,1:nvar_all)::u1
         real(dp),dimension(1:nvector,1:twotondim,1:nvar_all)::u2
 
-        integer::i,j,ivar,idim,iskip,ind_son
+        integer::i,j,ivar,idim,iskip,ind_son,nb_noneigh
         integer::i0,j0,k0,i1,j1,k1,i2,j2,k2,i3,j3,k3,nexist,nbuffer,ind_father_idx,i3max_loop,j3max_loop,k3max_loop
         integer::i1min,i1max,j1min,j1max,k1min,k1max
         integer::i2min,i2max,j2min,j2max,k2min,k2max
@@ -528,6 +544,72 @@ module dust_dynamics
             end do; end do; end do
         end do
 
+        ! Update neighboring coarser cells (flux correction at coarse-fine boundaries)
+        do idim=1,ndim
+            i0=0; j0=0; k0=0
+            if(idim==1)i0=1
+            if(idim==2)j0=1
+            if(idim==3)k0=1
+
+            ! Left boundary: check if neighbor coarser cell exists
+            nb_noneigh=0
+            do i=1,ncache
+                if (son(nbor(ind_grid(i),2*idim-1))==0) then
+                    nb_noneigh = nb_noneigh + 1
+                    ind_buffer(nb_noneigh) = nbor(ind_grid(i),2*idim-1)
+                    ind_cell(nb_noneigh) = i
+                end if
+            end do
+            ! Update conservative variables
+            do ivar=1,ndust
+                do k3=k3min,k3max-k0
+                do j3=j3min,j3max-j0
+                do i3=i3min,i3max-i0
+                    do i=1,nb_noneigh
+                        unew(ind_buffer(i),idust+ivar-1)=unew(ind_buffer(i),idust+ivar-1) &
+                            - dflux(ind_cell(i),i3,j3,k3,ivar,idim)*oneontwotondim
+                    end do
+                end do; end do; end do
+            end do
+            do k3=k3min,k3max-k0
+            do j3=j3min,j3max-j0
+            do i3=i3min,i3max-i0
+                do i=1,nb_noneigh
+                    unew(ind_buffer(i),neul)=unew(ind_buffer(i),neul) &
+                        - eflux(ind_cell(i),i3,j3,k3,idim)*oneontwotondim
+                end do
+            end do; end do; end do
+
+            ! Right boundary: check if neighbor coarser cell exists
+            nb_noneigh=0
+            do i=1,ncache
+                if (son(nbor(ind_grid(i),2*idim))==0) then
+                    nb_noneigh = nb_noneigh + 1
+                    ind_buffer(nb_noneigh) = nbor(ind_grid(i),2*idim)
+                    ind_cell(nb_noneigh) = i
+                end if
+            end do
+            ! Update conservative variables
+            do ivar=1,ndust
+                do k3=k3min+k0,k3max
+                do j3=j3min+j0,j3max
+                do i3=i3min+i0,i3max
+                    do i=1,nb_noneigh
+                        unew(ind_buffer(i),idust+ivar-1)=unew(ind_buffer(i),idust+ivar-1) &
+                            + dflux(ind_cell(i),i3+i0,j3+j0,k3+k0,ivar,idim)*oneontwotondim
+                    end do
+                end do; end do; end do
+            end do
+            do k3=k3min+k0,k3max
+            do j3=j3min+j0,j3max
+            do i3=i3min+i0,i3max
+                do i=1,nb_noneigh
+                    unew(ind_buffer(i),neul)=unew(ind_buffer(i),neul) &
+                        + eflux(ind_cell(i),i3+i0,j3+j0,k3+k0,idim)*oneontwotondim
+                end do
+            end do; end do; end do
+        end do
+
     end subroutine dust_upwind_correct1
 
     subroutine calculate_pure_drag_fluxes(uloc, dflux, eflux, dx, dt, ngrid, &
@@ -581,7 +663,11 @@ module dust_dynamics
         ! fractions ahead of time, ensuring pressure and sound speed match Lebreuilly 2019.
         do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
             ! Bulk mixture density: \rho = \rho_g + \sum \rho_dust
-            rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr) 
+            if (condinit_kind == 'dustydiffuse') then
+                rho_mix(l,i,j,k) = 1.0_dp
+            else
+                rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr) 
+            end if 
             
             ! Extract total dust fraction to solve for underlying gas content
             eps_tot_cell = 0.0_dp

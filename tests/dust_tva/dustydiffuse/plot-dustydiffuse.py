@@ -43,9 +43,12 @@ x_c = 0.5 * L
 gamma = 1.4
 c_s = 1.0  # Enforced isothermal sound speed
 
-eta_0 = 0.1  # Enforced diffusion coefficient (t_s * c_s**2)
-t_0 = (x_c**2) / (6.0 * eps_0 * eta_0)
-C = eps_0 * (eta_0 * t_0)**(1.0/3.0)
+xc = 0.2
+eps_0 = 0.1
+ts = 0.1
+cs = 1
+C = (eps_0*xc/np.sqrt(6))**(2./3.)
+t0 = C**3. / (ts*cs**2.*eps_0**3.)
 
 # Generate a fine grid for plotting a smooth analytic line
 x_fine = np.linspace(0.0, L, 2000)
@@ -62,23 +65,23 @@ for idx in output_indices:
     f_dust_num = snapshot["data"]["DustBin_01"][order]
     rho_dust_num = rho_num * f_dust_num
     
-    # Evaluate analytical solution at time t
-    S = eta_0 * (t + t_0)
-    dist_periodic = (x_fine - x_center + L/2.0) % L - L/2.0
-    term = C - dist_periodic**2 / (6.0 * S**(2.0/3.0))
-    rho_dust_analytic = (1.0 / S**(1.0/3.0)) * np.maximum(term, 0.0)
-    
-    # Plot analytical solution (solid line)
-    label_analytic = "Analytic Initial" if idx == 1 else f"t={t:.1f} (Analytic)"
-    ax.plot(
-        x_fine, 
-        rho_dust_analytic, 
-        "-", 
-        color=colors[idx], 
-        linewidth=2.0, 
-        alpha=0.4,
-        label=label_analytic
-    )
+    if t != 0:
+        # Evaluate analytical solution at time t
+        t_eff = t + t0
+        eps_analytic = (ts*cs**2.*t_eff)**(-1./3.) * (C - 1./6.*(x_num-0.5)**2./(ts*cs**2*t_eff)**(2./3.))
+        eps_analytic = np.maximum(0.0, eps_analytic)
+        rho_dust_analytic = rho_num * eps_analytic
+        # Plot analytical solution (solid line)
+        label_analytic = f"t={t:.1f} (Analytic)"
+        ax.plot(
+            x_num, 
+            rho_dust_analytic, 
+            "-", 
+            color=colors[idx], 
+            linewidth=2.0, 
+            alpha=0.4,
+            label=label_analytic
+        )
     
     # Plot numerical solution (dashed line)
     label_numerical = "Numerical Initial" if idx == 1 else f"Numerical t={t:.1f}"

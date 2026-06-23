@@ -269,13 +269,17 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
 #else
-     eps_total=0.0d0
-     do id = 1,ndust
-        eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
-     end do
-     eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-     rho_gas = rho_save(k)*(1.0d0-eps_total)
-     uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+      eps_total=0.0d0
+      do id = 1,ndust
+         eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+      end do
+      eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+      rho_gas = rho_save(k)*(1.0d0-eps_total)
+      if (condinit_kind == 'dustydiffuse') then
+         uu(k,neul) = 1.0d0
+      else
+         uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+      end if
 #endif
      cs_save(k) = uu(k,neul)         ! Cache mixture sound speed
   end do

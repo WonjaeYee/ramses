@@ -27,11 +27,12 @@ length_x=1.0
 d_region=1.0
 u_region=0.0
 p_region=0.0
+var_region(1,1)=1d-20
 /
 
 &OUTPUT_PARAMS
 noutput=4
-tout=1.0,5.0,10.0,20.0
+tout=0.5,1.0,2.0,5.0
 /
 
 &HYDRO_PARAMS
@@ -47,13 +48,12 @@ err_grad_u=0.05
 err_grad_p=0.05
 interpol_var=0
 interpol_type=2
-!err_grad_var(1)=0.05
+err_grad_var(1)=0.05
 /
 
 &CALIMA_PARAMS
 dust_tva=.true.
 use_w_drift_test=.false.
-w_drift_test=1.0,0.0,0.0
 dust_composition(1,6) = 1d0
 dustbins_per_chemtype=1
 asize=1000.0d0 ! Grain size bin centre [microns] (leads to agrain_code = 0.1)
