@@ -332,7 +332,7 @@ module dust_rates
         ! dydt_gas  <--> 2D array with the time derivative of the gas phase abundances [g cm-3 s-1]
         ! dydt_dust <--> 1D array with the time derivative of the dust phase abundances [g cm-3 s-1]
         ! kmax      --> Maximum allowed rate for the process (optional output)
-        
+        use dust_surface_chemistry, only: ice_sticking_coefficient
         implicit none
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
@@ -344,14 +344,15 @@ module dust_rates
         integer :: jj, ii, ii1, ii2, kk, e_index
         integer :: n_el
         real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
-        real(dp) :: tacc_max, sfunc, tacc_log
-        real(dp),dimension(1:ndust) :: correction_factors
-        real(dp) :: diff_rate, diff_rho, diff_nH, diff_T
-        real(dp) :: total_rate_type
+        real(dp) :: total_rate_type, sticking_ice,nO
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
-        tacc_max = 5d0
+#ifdef RTZ
+        nO = y_gas(8,1) / elements(8)%atomic_mass_g
+#else
+        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+#endif
 
         speciesloop: do jj = 1, ndchemtype
             ! 1. Loop over the dust chemical species.
@@ -360,7 +361,6 @@ module dust_rates
 
             associate(bin => dustbins_props(ii1))
                 n_el = bin%nelements
-                sfunc = sigmoid_function(tacc_max,log10(bin%nhmax_acc),log10(max(dust_info%local_nH,1d-10)))
 
                 if (n_el == 1) then
                     ! 2. A single-element chemistry type has a limiter.
@@ -382,16 +382,8 @@ module dust_rates
                 ! 4. Apply the same limiting rate to every dust bin in the chemical type.
                 total_rate_type = 0d0
                 do ii = ii1, ii2
-                    rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor ! [s-1]
-                    ! TODO: Code a nCO based icing to figure this out
-                    ! Apply the same nhmax_acc smoothing used in compute_t_accretion,
-                    ! but in rate form via the equivalent smoothed timescale.
-                    if (rate > 0d0 .and. sfunc > 0d0) then
-                        tacc_log = log10(1d0 / (rate * Myr2sec))
-                        tacc_log = (1d0 - sfunc) * tacc_log + sfunc * tacc_max
-                        rate = 1d0 / (exp(tacc_log * ln10) * Myr2sec)
-                    end if
-
+                    sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
+                    rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
                     ! 5. Get the maximum rate computed here, if requested.
                     if (present(kmax)) then
                         kmax = max(kmax, abs(rate))

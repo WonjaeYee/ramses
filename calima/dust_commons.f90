@@ -77,6 +77,7 @@ module dust_commons
     character(LEN=30)::coagulation_model='Aoyama2017' ! Model for the coagulation dispersion velocity
     character(LEN=30)::dust_velocity_model='Ormel2007' ! Model for the relative velocity of grains
     character(LEN=30)::charging_model='Ibanez2019'     ! Model for the grain charge distribution
+    character(LEN=30)::ice_model='Hollenbach2009'     ! Model for ice formation on dust grains
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
 
     ! ==== PAH modelling options (read from nml) ====
