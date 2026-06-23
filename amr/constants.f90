@@ -45,7 +45,7 @@ module constants
   real(dp),parameter ::mMg_amu      = 24.305d0      ! Mg atom mass [amu]; IUPAC
   real(dp),parameter ::mSi_amu      = 28.0855d0     ! Si atom mass [amu]; IUPAC
   real(dp),parameter ::mS_amu       = 32.065d0      ! S atom mass [amu]; IUPAC
-  real(dp),parameter ::mFe_amu      = 55.854d0      ! Fe atom mass [amu]; IUPAC
+  real(dp),parameter ::mFe_amu      = 55.845d0      ! Fe atom mass [amu]; IUPAC
   real(dp),parameter ::mCO_amu      = 28.0101d0     ! CO molecule mass [amu]; NIST
   real(dp),parameter ::mH           = 1.6738233d-24 ! H atom mass [g]
   real(dp),parameter ::mCO          = 4.6511863d-23 ! CO molecule mass [g]
