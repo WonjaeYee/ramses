@@ -187,6 +187,7 @@ module dust_rates
         real(dp), dimension(:), intent(out) :: chi_frag_pah_out
 
         integer :: pp_local, ll_local, ii1, ii2, nearest_idx
+        integer :: global_ii1, global_ii2, ll_global
         real(dp) :: E_imp, phi, m_ej, m_remnant, m_max, m_min
         real(dp) :: prefactor, m_tot, denom, logdist, min_logdist
         logical :: remnant_assigned
@@ -195,6 +196,9 @@ module dust_rates
 
         ii1 = lbound(chi_frag_out, 1)
         ii2 = ubound(chi_frag_out, 1)
+
+        global_ii1 = istart_chemtype(dustbins_props(id1)%interact_group)
+        global_ii2 = global_ii1 + dustbins_per_chemtype(dustbins_props(id1)%interact_group) - 1
 
         v_rel_out = cached_v_rel_dust_dust(id1, id2)
 
@@ -231,8 +235,8 @@ module dust_rates
                     chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             else
-                if (m_min < dustbins_props(ii1)%mgrain_min) then
-                    chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                if (m_min < dustbins_props(global_ii1)%mgrain_min) then
+                    chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             end if
         end if
@@ -250,11 +254,12 @@ module dust_rates
 
         if (prefactor > 0d0) then
             do ll_local = ii1, ii2
-                if ((m_min.ge.dustbins_props(ll_local)%mgrain_max).or.(m_max<dustbins_props(ll_local)%mgrain_min)) then
+                ll_global = ll_local + global_ii1 - ii1
+                if ((m_min.ge.dustbins_props(ll_global)%mgrain_max).or.(m_max<dustbins_props(ll_global)%mgrain_min)) then
                     chi_frag_out(ll_local) = 0d0
                 else
-                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_local)%mgrain_max,m_max)**slope_frag_func - &
-                                                max(dustbins_props(ll_local)%mgrain_min,m_min)**slope_frag_func)
+                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_global)%mgrain_max,m_max)**slope_frag_func - &
+                                                max(dustbins_props(ll_global)%mgrain_min,m_min)**slope_frag_func)
                 end if
             end do
         end if
@@ -272,9 +277,9 @@ module dust_rates
             end if
 
             if (.not. remnant_assigned) then
-                if ((ii1 <= id1) .and. (id1 <= ii2)) then
+                if ((global_ii1 <= id1) .and. (id1 <= global_ii2)) then
                     if ((dustbins_props(id1)%mgrain_min <= m_remnant) .and. (m_remnant <= dustbins_props(id1)%mgrain_max)) then
-                        chi_frag_out(id1) = chi_frag_out(id1) + m_remnant
+                        chi_frag_out(id1 - global_ii1 + ii1) = chi_frag_out(id1 - global_ii1 + ii1) + m_remnant
                         remnant_assigned = .true.
                     end if
                 end if
@@ -282,7 +287,8 @@ module dust_rates
 
             if (.not. remnant_assigned) then
                 do ll_local = ii1, ii2
-                    if ((dustbins_props(ll_local)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_local)%mgrain_max)) then
+                    ll_global = ll_local + global_ii1 - ii1
+                    if ((dustbins_props(ll_global)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_global)%mgrain_max)) then
                         chi_frag_out(ll_local) = chi_frag_out(ll_local) + m_remnant
                         remnant_assigned = .true.
                         exit
@@ -292,9 +298,10 @@ module dust_rates
 
             if (.not. remnant_assigned) then
                 nearest_idx = ii1
-                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ii1)%mgrain))
+                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(global_ii1)%mgrain))
                 do ll_local = ii1 + 1, ii2
-                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_local)%mgrain))
+                    ll_global = ll_local + global_ii1 - ii1
+                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_global)%mgrain))
                     if (logdist < min_logdist) then
                         min_logdist = logdist
                         nearest_idx = ll_local
@@ -353,7 +360,7 @@ module dust_rates
 
             associate(bin => dustbins_props(ii1))
                 n_el = bin%nelements
-                sfunc = sigmoid_function(tacc_max,bin%nhmax_acc,dust_info%local_nH)
+                sfunc = sigmoid_function(tacc_max,log10(bin%nhmax_acc),log10(max(dust_info%local_nH,1d-10)))
 
                 if (n_el == 1) then
                     ! 2. A single-element chemistry type has a limiter.
@@ -1011,6 +1018,7 @@ module dust_rates
         real(dp), dimension(:), intent(out) :: chi_frag_pah_out
 
         integer :: pp_local, ll_local, ii1, ii2, nearest_idx
+        integer :: global_ii1, global_ii2, ll_global
         real(dp) :: E_imp, phi, m_ej, m_remnant, m_max, m_min
         real(dp) :: prefactor, m_tot, denom, logdist, min_logdist
         logical :: remnant_assigned
@@ -1019,6 +1027,9 @@ module dust_rates
         ! Infer ii1 and ii2 from the bounds of the output arrays
         ii1 = lbound(chi_frag_out, 1)
         ii2 = ubound(chi_frag_out, 1)
+
+        global_ii1 = istart_chemtype(dustbins_props(id1)%interact_group)
+        global_ii2 = global_ii1 + dustbins_per_chemtype(dustbins_props(id1)%interact_group) - 1
 
         ! 1. Compute the relative velocity of two grains
         v_rel_out = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
@@ -1065,8 +1076,8 @@ module dust_rates
                     chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             else
-                if (m_min < dustbins_props(ii1)%mgrain_min) then
-                    chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                if (m_min < dustbins_props(global_ii1)%mgrain_min) then
+                    chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             end if
         end if
@@ -1086,11 +1097,12 @@ module dust_rates
         ! 7. Ejecta contribution in dust bins of the chemical type (can include id1/id2 bins)
         if (prefactor > 0d0) then
             do ll_local = ii1, ii2
-                if ((m_min.ge.dustbins_props(ll_local)%mgrain_max).or.(m_max<dustbins_props(ll_local)%mgrain_min)) then
+                ll_global = ll_local + global_ii1 - ii1
+                if ((m_min.ge.dustbins_props(ll_global)%mgrain_max).or.(m_max<dustbins_props(ll_global)%mgrain_min)) then
                     chi_frag_out(ll_local) = 0d0
                 else
-                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_local)%mgrain_max,m_max)**slope_frag_func - &
-                                                max(dustbins_props(ll_local)%mgrain_min,m_min)**slope_frag_func)
+                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_global)%mgrain_max,m_max)**slope_frag_func - &
+                                                max(dustbins_props(ll_global)%mgrain_min,m_min)**slope_frag_func)
                 end if
             end do
         end if
@@ -1110,10 +1122,9 @@ module dust_rates
             end if
 
             if (.not. remnant_assigned) then
-                ! First try the impact bin explicitly to avoid systematic down-binning.
-                if ((ii1 <= id1) .and. (id1 <= ii2)) then
+                if ((global_ii1 <= id1) .and. (id1 <= global_ii2)) then
                     if ((dustbins_props(id1)%mgrain_min <= m_remnant) .and. (m_remnant <= dustbins_props(id1)%mgrain_max)) then
-                        chi_frag_out(id1) = chi_frag_out(id1) + m_remnant
+                        chi_frag_out(id1 - global_ii1 + ii1) = chi_frag_out(id1 - global_ii1 + ii1) + m_remnant
                         remnant_assigned = .true.
                     end if
                 end if
@@ -1121,7 +1132,8 @@ module dust_rates
 
             if (.not. remnant_assigned) then
                 do ll_local = ii1, ii2
-                    if ((dustbins_props(ll_local)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_local)%mgrain_max)) then
+                    ll_global = ll_local + global_ii1 - ii1
+                    if ((dustbins_props(ll_global)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_global)%mgrain_max)) then
                         chi_frag_out(ll_local) = chi_frag_out(ll_local) + m_remnant
                         remnant_assigned = .true.
                         exit
@@ -1130,11 +1142,11 @@ module dust_rates
             end if
 
             if (.not. remnant_assigned) then
-                ! If remnant is outside formal bin bounds, put it in the nearest dust bin by mass.
                 nearest_idx = ii1
-                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ii1)%mgrain))
+                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(global_ii1)%mgrain))
                 do ll_local = ii1 + 1, ii2
-                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_local)%mgrain))
+                    ll_global = ll_local + global_ii1 - ii1
+                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_global)%mgrain))
                     if (logdist < min_logdist) then
                         min_logdist = logdist
                         nearest_idx = ll_local

@@ -231,7 +231,7 @@ ifeq ($(COMPILER),GNU)
          F90 += -g -O3 -fbacktrace -fbounds-check -Wuninitialized -Wall
          # FFLAGS += -ffpe-trap=zero,underflow,overflow,invalid -finit-real=nan
       else
-         F90 += -O3 -mcmodel=medium
+         F90 += -O3
       endif
    endif
 endif
@@ -279,6 +279,9 @@ ifeq ($(USE_TURB),1)
    LIBS_OBJ_TURB = -I$(HOME)/local/include -lfftw3
    LIBS_TURB = -L$(LD_LIBRARY_PATH) -lfftw3
    LIBS_OBJ_TURB = -I$(LD_LIBRARY_PATH)/../include -lfftw3
+#    FFTW_LIBRARY_PATH = /opt/homebrew/opt/fftw
+#    LIBS_TURB = -L$(FFTW_LIBRARY_PATH)/lib -lfftw3
+#    LIBS_OBJ_TURB = -I$(FFTW_LIBRARY_PATH)/include -lfftw3
 endif
 LIBS = $(LIBMPI) $(LIBS_GRACKLE) $(LIBS_TURB)
 #############################################################################
@@ -320,7 +323,7 @@ ifeq ($(CALIMA),1)
    endif
    MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_cooling.o \
                dust_dynamics.o dust_photophysics.o dust_seeding.o dust_surface_chemistry.o \
-               dust_rates.o dust_init.o dust_solver.o dust_interface.o
+               dust_rates.o dust_solver.o dust_interface.o dust_init.o
 endif
 ifeq ($(RT),1)
    MODOBJ += rt_parameters.o rt_hydro_commons.o coolrates_module.o \

@@ -364,6 +364,19 @@ contains
         total_inj_power = 0d0
         total_col_power = 0d0
         H2_formation_rate = -1d0
+        Z_dust = 0d0
+        T_dust = 0d0
+        Z_sigma = 0d0
+        fcharge_pah = 0d0
+        Coulomb_factor = 1d0
+        Pinj_dust = 0d0
+        Prec_dust = 0d0
+        Pcoll_dust = 0d0
+        Prad_dust = 0d0
+        Pinj_pah = 0d0
+        Prec_pah = 0d0
+        Prad_pah = 0d0
+        Pabs_pah = 0d0
 
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
@@ -456,10 +469,10 @@ contains
                                                             Pabs_pah(1,ii),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
-                                                            dinfo%csa_pah(:,2+2*(ii-1)),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(1+2*(ii-1),:),&
+                                                            dinfo%csa_pah(1+2*(ii-1),:),&
+                                                            dinfo%csa_pah(2+2*(ii-1),:),&
+                                                            dinfo%csa_pah(2+2*(ii-1),:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
@@ -478,10 +491,10 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,1+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
-                                                        dinfo%csa_pah(:,2+2*(ii-1)),&
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
+                                                        dinfo%csa_pah(1+2*(ii-1),:),&
+                                                        dinfo%csa_pah(2+2*(ii-1),:),&
+                                                        dinfo%csa_pah(2+2*(ii-1),:),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,fcharge_pah(:,ii))
@@ -517,7 +530,7 @@ contains
         real(dp), intent(in) :: dt
         real(dp), intent(inout) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in), optional :: Np(:)
-        logical, intent(out), optional :: step_ok
+        logical, intent(out) :: step_ok
 
         ! --- Local variables ----
         integer :: ii, ndust_total
@@ -527,7 +540,7 @@ contains
 
         ! If no dust or PAH process is active, just return
         if (ndust_processes.eq.0 .and. npah_processes.eq.0) then
-            if (present(step_ok)) step_ok = .true.
+            step_ok = .true.
             return
         end if
 
@@ -591,7 +604,7 @@ contains
         end if
 
         ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
-        if (present(step_ok)) step_ok = .true.
+        step_ok = .true.
         call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
                                 y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
 

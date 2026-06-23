@@ -694,7 +694,7 @@ SUBROUTINE init_SED_table()
               end do
            end if
         end do
-
+        
         ! Deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            tbl(ia,iz,2+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
@@ -1055,12 +1055,12 @@ SUBROUTINE update_SED_group_props()
      endif
      if (npah > 0) then
         do ii=1,npah
-           call inp_SED_table(age, Z, counter+6*(ii-1)+1, .true., pah_csa_star(:,ii))
-           call inp_SED_table(age, Z, counter+6*(ii-1)+2, .true., pah_csa_star(:,npah+ii))
-           call inp_SED_table(age, Z, counter+6*(ii-1)+3, .true., pah_css_star(:,ii))
-           call inp_SED_table(age, Z, counter+6*(ii-1)+4, .true., pah_css_star(:,npah+ii))
-           call inp_SED_table(age, Z, counter+6*(ii-1)+5, .true., pah_csr_star(:,ii))
-           call inp_SED_table(age, Z, counter+6*(ii-1)+6, .true., pah_csr_star(:,npah+ii))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+1, .true., pah_csa_star(:,2*(ii-1)+1))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+2, .true., pah_csa_star(:,2*(ii-1)+2))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+3, .true., pah_css_star(:,2*(ii-1)+1))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+4, .true., pah_css_star(:,2*(ii-1)+2))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+5, .true., pah_csr_star(:,2*(ii-1)+1))
+           call inp_SED_table(age, Z, counter+6*(ii-1)+6, .true., pah_csr_star(:,2*(ii-1)+2))
         end do
      endif
 #endif
@@ -1259,12 +1259,12 @@ SUBROUTINE update_SED_group_props()
      endif
      if (npah > 0) then
         do ii=1,npah
-           group_csa_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+1)
-           group_csa_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+2)
-           group_css_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+3)
-           group_css_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+4)
-           group_csr_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+5)
-           group_csr_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+6)
+           group_csa_pah(2*(ii-1)+1,ip) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+           group_csa_pah(2*(ii-1)+2,ip) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+           group_css_pah(2*(ii-1)+1,ip) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+           group_css_pah(2*(ii-1)+2,ip) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+           group_csr_pah(2*(ii-1)+1,ip) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+           group_csr_pah(2*(ii-1)+2,ip) = SED_table(1,1,ip,counter+6*(ii-1)+6)
         end do
      endif
 #endif
@@ -1298,12 +1298,12 @@ SUBROUTINE update_SED_group_props()
      endif
      if (npah > 0) then
         do ii=1,npah
-           group_csa_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+1)
-           group_csa_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+2)
-           group_css_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+3)
-           group_css_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+4)
-           group_csr_pah(ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+5)
-           group_csr_pah(npah+ii,ip) = SED_table(1,1,ip,counter+6*(ii-1)+6)
+           group_csa_pah(2*(ii-1)+1,ip) = SED_table(1,1,ip,counter+6*(ii-1)+1)
+           group_csa_pah(2*(ii-1)+2,ip) = SED_table(1,1,ip,counter+6*(ii-1)+2)
+           group_css_pah(2*(ii-1)+1,ip) = SED_table(1,1,ip,counter+6*(ii-1)+3)
+           group_css_pah(2*(ii-1)+2,ip) = SED_table(1,1,ip,counter+6*(ii-1)+4)
+           group_csr_pah(2*(ii-1)+1,ip) = SED_table(1,1,ip,counter+6*(ii-1)+5)
+           group_csr_pah(2*(ii-1)+2,ip) = SED_table(1,1,ip,counter+6*(ii-1)+6)
         end do
      endif
 #endif

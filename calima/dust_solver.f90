@@ -15,7 +15,7 @@ module ode_interface_mod
     real(dp), parameter :: SIXTH = 1.0_dp / 6.0_dp
 
     abstract interface
-        subroutine rhs_interface(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,debug_flag)
+        subroutine rhs_interface(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,debug_flag,write_cache)
             import :: dp, DustChemistryInfo
             implicit none
             type(DustChemistryInfo), intent(in) :: dust_info
@@ -23,11 +23,12 @@ module ode_interface_mod
             real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
             real(dp), intent(inout), optional :: kmax
             logical, intent(in), optional :: debug_flag
+            logical, intent(in), optional :: write_cache
         end subroutine rhs_interface
     end interface
 
     abstract interface
-        subroutine solver_step_interface(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag)
+        subroutine solver_step_interface(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag,step_ok_present)
             import :: dp, DustChemistryInfo, rhs_interface
             implicit none
             type(DustChemistryInfo), intent(in) :: dust_info
@@ -40,6 +41,7 @@ module ode_interface_mod
             logical, intent(out) :: break
             logical, intent(in) :: firstcall
             logical, intent(in), optional :: debug_flag
+            logical, intent(in), optional :: step_ok_present
         end subroutine solver_step_interface
     end interface
 
@@ -252,7 +254,7 @@ module dust_rhs_mod
         end if
     end subroutine print_timestep_reduction_counters
 
-    subroutine dust_rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,debug_flag)
+    subroutine dust_rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,debug_flag,write_cache)
         ! Compute the right-hand side of the ODE system for the dust chemistry. This function will be called
         ! by the ODE solver to compute the time derivatives of the gas and dust abundances.
         ! dust_info  --> DustChemistryInfo type containing physical parameters and metadata.
@@ -262,6 +264,7 @@ module dust_rhs_mod
         ! dydt_dust  <--> 1D array with the time derivative of the dust phase abundances [g cm-3 s-1]
         ! kmax       <--> Maximum allowed rate for the process [s-1] (optional output)
         ! debug_flag --> Optional logical flag to enable verbose debugging.
+        ! write_cache --> Optional logical flag to write to last_dydt caches.
 
         implicit none
         ! ---- Input/Output variables ----
@@ -270,10 +273,12 @@ module dust_rhs_mod
         real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
         real(dp), intent(inout), optional :: kmax
         logical, intent(in), optional :: debug_flag
+        logical, intent(in), optional :: write_cache
 
         ! ---- Local variables ----
         integer :: i
         real(dp) :: process_kmax
+        logical :: do_write_cache, do_write_cache_proc
 
         ! 1. Initialize the time derivatives to zero
         dydt_gas(:,:) = 0.0_dp
@@ -283,8 +288,12 @@ module dust_rhs_mod
         if (allocated(last_kmax_dust)) last_kmax_dust(:) = 0.0_dp
         if (allocated(last_kmax_pah)) last_kmax_pah(:) = 0.0_dp
         if (dust_log) then
-            if (allocated(last_dydt_dust_per_proc)) last_dydt_dust_per_proc(:,:) = 0.0_dp
-            if (allocated(last_dydt_pah_per_proc))  last_dydt_pah_per_proc(:,:)  = 0.0_dp
+            do_write_cache = .true.
+            if (present(write_cache)) do_write_cache = write_cache
+            if (do_write_cache) then
+                if (allocated(last_dydt_dust_per_proc)) last_dydt_dust_per_proc(:,:) = 0.0_dp
+                if (allocated(last_dydt_pah_per_proc))  last_dydt_pah_per_proc(:,:)  = 0.0_dp
+            end if
         end if
 
         ! 2. Loop over the dust processes and compute their contribution to the time derivatives
@@ -292,7 +301,9 @@ module dust_rhs_mod
 
         do i = 1, ndust_processes
             process_kmax = 0.0_dp
-            if (dust_log) then
+            do_write_cache_proc = .true.
+            if (present(write_cache)) do_write_cache_proc = write_cache
+            if (dust_log .and. do_write_cache_proc) then
                 dydt_dust_before_cache(:) = dydt_dust(:)
                 call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
                 if (allocated(last_dydt_dust_per_proc)) &
@@ -305,7 +316,9 @@ module dust_rhs_mod
         end do
         do i = 1, npah_processes
             process_kmax = 0.0_dp
-            if (dust_log) then
+            do_write_cache_proc = .true.
+            if (present(write_cache)) do_write_cache_proc = write_cache
+            if (dust_log .and. do_write_cache_proc) then
                 dydt_dust_before_cache(:) = dydt_dust(:)
                 call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
                 if (allocated(last_dydt_pah_per_proc)) &
@@ -386,7 +399,7 @@ module rk4_mod
         end if
     end subroutine ensure_rk4_cache
 
-    subroutine rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,first_call,break,debug_flag)
+    subroutine rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,first_call,break,debug_flag,step_ok_present)
         ! Perform a single step of the classical 4th-order Runge-Kutta method (RK4) to solve the ODE system.
         ! This is a "raw" implementation that does not include any adaptive time stepping or error control.
         ! dust_info  --> DustChemistryInfo type containing physical parameters and metadata.
@@ -399,6 +412,7 @@ module rk4_mod
         ! first_call --> Logical flag indicating whether this is the first call to the subroutine
         ! break      <-- Logical flag indicating whether the integration should be stopped (e.g., if there are no active dust processes)
         ! debug_flag --> Optional logical flag to enable verbose debugging.
+        ! step_ok_present --> Optional logical flag indicating whether we check a single step_ok (disables timestep restriction)
 
         implicit none
         ! ---- Input/Output variables ----
@@ -410,6 +424,7 @@ module rk4_mod
         logical, intent(in) :: first_call
         logical, intent(out) :: break
         logical, intent(in), optional :: debug_flag
+        logical, intent(in), optional :: step_ok_present
 
         ! ---- Local variables ----
         real(dp), pointer :: k1_gas(:,:), k2_gas(:,:), k3_gas(:,:), k4_gas(:,:)
@@ -428,9 +443,9 @@ module rk4_mod
         if (first_call) then
             ! On the first call, we compute kmax to get an estimate of the necessary time step size for stability.
             if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,debug_flag=debug_flag)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,debug_flag=debug_flag,write_cache=.true.)
             else
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,write_cache=.true.)
             end if
             if (kmax.eq.0d0) then
                 ! If kmax is zero it means there are no active dust
@@ -440,16 +455,16 @@ module rk4_mod
             end if
         else
             if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,debug_flag=debug_flag)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,debug_flag=debug_flag,write_cache=.true.)
             else
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,write_cache=.true.)
             end if
         end if
       
         ! 2. Use the provided kmax to compute a guess of the neccessary
         ! time step size for stability, but never increase the time step 
         ! beyond the provided h
-        if (first_call) then
+        if (first_call .and. .not. (present(step_ok_present) .and. step_ok_present)) then
             h_local = min(1d0 / kmax,h)
         else
             h_local = h
@@ -457,27 +472,27 @@ module rk4_mod
         if (present(debug_flag)) then
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
             y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
             y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
             y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
             y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
             y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
             y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust)
+            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,write_cache=.false.)
         end if
 
         ! 3. Combine the stages to compute the new solution
@@ -488,7 +503,7 @@ module rk4_mod
         h = h_local
     end subroutine rk4_raw
 
-    subroutine rk4_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,first_call,accepted,break,debug_flag)
+    subroutine rk4_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,first_call,accepted,break,debug_flag,step_ok_present)
         ! Perform a single step of the RK4 method with adaptive time stepping and error control.
         ! This is a wrapper around the rk4_raw subroutine that includes logic for adjusting the time step size
         ! based on the estimated error of the solution.
@@ -504,6 +519,7 @@ module rk4_mod
         ! accepted   <-- Logical flag indicating whether the step was accepted or not (for adaptive time stepping)
         ! break      <-- Logical flag indicating whether the integration should be stopped (e.g., if there are no active dust processes)
         ! debug_flag --> Optional logical flag to enable verbose debugging.
+        ! step_ok_present --> Optional logical flag indicating whether we check a single step_ok
 
         implicit none
         ! ---- Input/Output variables ----
@@ -516,6 +532,7 @@ module rk4_mod
         logical, intent(out) :: accepted,break
         logical, intent(in) :: first_call
         logical, intent(in), optional :: debug_flag
+        logical, intent(in), optional :: step_ok_present
 
         ! ---- Local variables ----
         real(dp), pointer :: y_gas_temp(:,:), y_dust_temp(:)
@@ -528,9 +545,9 @@ module rk4_mod
 
         ! 1. Perform a raw RK4 step to get the new solution
         if (present(debug_flag)) then
-            call rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_temp,y_dust_temp,first_call,break,debug_flag=debug_flag)
+            call rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_temp,y_dust_temp,first_call,break,debug_flag=debug_flag,step_ok_present=step_ok_present)
         else
-            call rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_temp,y_dust_temp,first_call,break)
+            call rk4_raw(dust_info,y_gas,y_dust,h,rhs,y_gas_temp,y_dust_temp,first_call,break,step_ok_present=step_ok_present)
         end if
         if (break) then
             ! If break is true, it means there are no active dust processes, so we can skip the rest of the logic.
@@ -612,7 +629,7 @@ module anninos_mod
         end if
     end subroutine ensure_anninos_cache
 
-    subroutine anninos_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag)
+    subroutine anninos_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag,step_ok_present)
         ! Perform a single integration step using the quasi-implicit Anninos et al. (1997) method.
         ! dust_info  --> DustChemistryInfo type with physical parameters.
         ! y_gas      --> 2D array with the gas phase abundances at the start of the step [g cm-3].
@@ -626,6 +643,8 @@ module anninos_mod
         ! accepted   <-- Logical flag indicating whether the step satisfied error limits (10% rule).
         ! break      <-- Logical flag indicating whether integration can be stopped early.
         ! debug_flag --> Optional logical flag to enable verbose debugging.
+        ! step_ok_present --> Optional logical flag indicating whether we check a single step_ok
+
         implicit none
         ! ---- Input/Output variables ----
         type(DustChemistryInfo), intent(in) :: dust_info
@@ -637,6 +656,7 @@ module anninos_mod
         logical, intent(out) :: accepted, break
         logical, intent(in) :: firstcall
         logical, intent(in), optional :: debug_flag
+        logical, intent(in), optional :: step_ok_present
 
         ! ---- Local variables ----
         real(dp), pointer :: dydt_gas(:,:), dydt_dust(:)
@@ -654,9 +674,9 @@ module anninos_mod
         ! 1. Evaluate RHS
         if (firstcall) then
             if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,debug_flag=debug_flag)
+                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,debug_flag=debug_flag,write_cache=.true.)
             else
-                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax,write_cache=.true.)
             end if
             if (kmax == 0.0_dp) then
                 break = .true.
@@ -666,9 +686,9 @@ module anninos_mod
             end if
         else
             if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,debug_flag=debug_flag)
+                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,debug_flag=debug_flag,write_cache=.true.)
             else
-                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust)
+                call rhs(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,write_cache=.true.)
             end if
         end if
 
@@ -811,7 +831,7 @@ module rk54_mod
         end if
     end subroutine ensure_rk54_cache
 
-    subroutine rk54_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag)
+    subroutine rk54_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag,step_ok_present)
         ! Perform a single step of the Runge-Kutta-Fehlberg 5(4) method with adaptive time stepping.
         ! dust_info  --> DustChemistryInfo type with physical parameters.
         ! y_gas      --> 2D array with the gas phase abundances at the start of the step [g cm-3].
@@ -825,6 +845,8 @@ module rk54_mod
         ! accepted   <-- Logical flag indicating whether the step satisfied error limits (10% rule).
         ! break      <-- Logical flag indicating whether integration can be stopped early.
         ! debug_flag --> Optional logical flag to enable verbose debugging.
+        ! step_ok_present --> Optional logical flag indicating whether we check a single step_ok (disables timestep restriction)
+
         implicit none
         ! ---- Input/Output variables ----
         type(DustChemistryInfo), intent(in) :: dust_info
@@ -836,6 +858,7 @@ module rk54_mod
         logical, intent(out) :: accepted, break
         logical, intent(in) :: firstcall
         logical, intent(in), optional :: debug_flag
+        logical, intent(in), optional :: step_ok_present
 
         ! ---- Local variables ----
         real(dp), pointer :: k1_gas(:,:), k2_gas(:,:), k3_gas(:,:), k4_gas(:,:), k5_gas(:,:), k6_gas(:,:)
@@ -901,9 +924,9 @@ module rk54_mod
         ! Stage 1
         if (firstcall) then
             if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,debug_flag=debug_flag)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,debug_flag=debug_flag,write_cache=.true.)
             else
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,write_cache=.true.)
             end if
             if (kmax == 0.0_dp) then
                 break = .true.
@@ -913,13 +936,13 @@ module rk54_mod
             end if
         else
             if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,debug_flag=debug_flag)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,debug_flag=debug_flag,write_cache=.true.)
             else
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust)
+                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,write_cache=.true.)
             end if
         end if
 
-        if (firstcall) then
+        if (firstcall .and. .not. (present(step_ok_present) .and. step_ok_present)) then
             h_local = min(1d0 / kmax, h)
         else
             h_local = h
@@ -929,45 +952,45 @@ module rk54_mod
         y_gas_temp = y_gas + h_local * a21 * k1_gas
         y_dust_temp = y_dust + h_local * a21 * k1_dust
         if (present(debug_flag)) then
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
         else
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust,write_cache=.false.)
         end if
 
         ! Stage 3
         y_gas_temp = y_gas + h_local * (a31 * k1_gas + a32 * k2_gas)
         y_dust_temp = y_dust + h_local * (a31 * k1_dust + a32 * k2_dust)
         if (present(debug_flag)) then
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
         else
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust,write_cache=.false.)
         end if
 
         ! Stage 4
         y_gas_temp = y_gas + h_local * (a41 * k1_gas + a42 * k2_gas + a43 * k3_gas)
         y_dust_temp = y_dust + h_local * (a41 * k1_dust + a42 * k2_dust + a43 * k3_dust)
         if (present(debug_flag)) then
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         else
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust,write_cache=.false.)
         end if
 
         ! Stage 5
         y_gas_temp = y_gas + h_local * (a51 * k1_gas + a52 * k2_gas + a53 * k3_gas + a54 * k4_gas)
         y_dust_temp = y_dust + h_local * (a51 * k1_dust + a52 * k2_dust + a53 * k3_dust + a54 * k4_dust)
         if (present(debug_flag)) then
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust,debug_flag=debug_flag,write_cache=.false.)
         else
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust,write_cache=.false.)
         end if
 
         ! Stage 6
         y_gas_temp = y_gas + h_local * (a61 * k1_gas + a62 * k2_gas + a63 * k3_gas + a64 * k4_gas + a65 * k5_gas)
         y_dust_temp = y_dust + h_local * (a61 * k1_dust + a62 * k2_dust + a63 * k3_dust + a64 * k4_dust + a65 * k5_dust)
         if (present(debug_flag)) then
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust,debug_flag=debug_flag)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust,debug_flag=debug_flag,write_cache=.false.)
         else
-            call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust)
+            call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust,write_cache=.false.)
         end if
 
         ! Compute 5th-order solutions
@@ -1022,7 +1045,7 @@ module ode_driver_mod
         ! h_min       --> Minimum allowed time step size for the ODE solver [s]
         ! h_max       --> Maximum allowed time step size for the ODE solver [s]
         ! debug_flag  --> Optional logical flag to enable verbose debugging.
-        ! step_ok     <-- Optional logical flag indicating whether the single integration step was accepted.
+        ! step_ok     <-- Logical flag indicating whether the single integration step was accepted.
 
         implicit none
         ! ---- Input/Output variables ----
@@ -1034,7 +1057,7 @@ module ode_driver_mod
         real(dp), intent(out) :: y_gas_final(:,:), y_dust_final(:)
         real(dp), intent(in) :: h_init, h_min, h_max
         logical, intent(in), optional :: debug_flag
-        logical, intent(out), optional :: step_ok
+        logical, intent(out) :: step_ok
 
         ! ---- Local variables ----
         integer :: icount
@@ -1050,52 +1073,35 @@ module ode_driver_mod
         if (present(debug_flag)) debug_enabled = debug_flag
 
         ! 1. Initialize the time step size for the ODE solver
-        h = min(min(max(h_init, h_min), h_max),dt)
+        if (.not. solver_substepped) then
+            h = dt
+        else
+            h = min(min(max(h_init, h_min), h_max),dt)
+        end if
         tau = 0.0_dp
         icount = 0
         naccepted = 0
         nrejected = 0
         nreduced = 0
         firstcall = .true.
-
-        call reset_timestep_reduction_counters
-
         y_gas_temp(:,:) = y_gas(:,:)
         y_dust_temp(:) = y_dust(:)
 
-        if (present(step_ok)) then
-            h = dt
-            if (present(debug_flag)) then
-                call step_fn(dust_info,y_gas_temp,y_dust_temp,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag=debug_flag)
-            else
-                call step_fn(dust_info,y_gas_temp,y_dust_temp,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break)
-            end if
-            if (break) then
-                y_gas_final(:,:) = y_gas(:,:)
-                y_dust_final(:) = y_dust(:)
-                step_ok = .true.
-                return
-            end if
-            step_ok = accepted
-            if (accepted) then
-                y_gas_final(:,:) = y_gas_new(:,:)
-                y_dust_final(:) = y_dust_new(:)
-            else
-                y_gas_final(:,:) = y_gas(:,:)
-                y_dust_final(:) = y_dust(:)
-            end if
-            return
-        end if
+        step_ok = .true.
 
         ! 2. Integrate the ODE system until we have covered the full time step dt
         do while (tau < dt)
-            h = min(h, dt - tau)  ! Adjust the time step size to not overshoot the time step
+            if (.not. solver_substepped) then
+                h = dt - tau
+            else
+                h = min(h, dt - tau)  ! Adjust the time step size to not overshoot the time step
+            end if
 
             ! 3. Call the ODE solver step function to perform a single integration step
             if (present(debug_flag)) then
-                call step_fn(dust_info,y_gas_temp,y_dust_temp,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag=debug_flag)
+                call step_fn(dust_info,y_gas_temp,y_dust_temp,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag=debug_flag,step_ok_present=(.not. solver_substepped))
             else
-                call step_fn(dust_info,y_gas_temp,y_dust_temp,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break)
+                call step_fn(dust_info,y_gas_temp,y_dust_temp,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,step_ok_present=(.not. solver_substepped))
             end if
             firstcall = .false.
             if (break) then
@@ -1103,6 +1109,7 @@ module ode_driver_mod
                 ! the rest of the integration and just return the initial state.
                 y_gas_final(:,:) = y_gas(:,:)
                 y_dust_final(:) = y_dust(:)
+                step_ok = .true.
                 return
             end if
 
@@ -1118,42 +1125,54 @@ module ode_driver_mod
                     if (ndust_processes > 0 .and. allocated(dM_ode_dust) .and. &
                         allocated(last_dydt_dust_per_proc)) then
                         dM_ode_dust(:, 1:ndust_processes) = dM_ode_dust(:, 1:ndust_processes) + &
-                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h
+                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h * dust_info%local_vol
                     end if
                     if (npah_processes > 0 .and. allocated(dM_ode_pah) .and. &
                         allocated(last_dydt_pah_per_proc)) then
                         dM_ode_pah(:, 1:npah_processes) = dM_ode_pah(:, 1:npah_processes) + &
-                            last_dydt_pah_per_proc(:, 1:npah_processes) * h
+                            last_dydt_pah_per_proc(:, 1:npah_processes) * h * dust_info%local_vol
                     end if
                 end if
             else
                 nrejected = nrejected + 1
-                if (dust_log) ode_nrejected = ode_nrejected + 1_8
-            end if
-
-            ! 5. Update the time step size for the next iteration
-            h_candidate = min(max(h_new, h_min), h_max)
-            if (h_candidate < h) then
-                nreduced = nreduced + 1
                 if (dust_log) then
-                    ode_nreduced = ode_nreduced + 1_8
-                    call register_timestep_reduction_cause
+                    ode_nrejected = ode_nrejected + 1_8
+                    if (.not. solver_substepped) then
+                        ode_nreduced = ode_nreduced + 1_8
+                        call register_timestep_reduction_cause
+                    end if
+                end if
+                if (.not. solver_substepped) then
+                    step_ok = .false.
+                    exit
                 end if
             end if
-            h = h_candidate
-            icount = icount + 1
-            if (icount > countmax) then
-                print *, "Warning: Maximum number of ODE solver iterations reached. Integration may not have converged."
-                print *, '  Requested total dt [s]        = ', dt
-                print *, '  Integrated tau [s]            = ', tau
-                print *, '  Last attempted timestep h [s] = ', h
-                print *, '  Last proposed h_new [s]       = ', h_new
-                print *, '  Accepted steps                = ', naccepted
-                print *, '  Rejected steps                = ', nrejected
-                print *, '  Number of timestep reductions = ', nreduced
-                call print_last_process_kmax
-                call print_timestep_reduction_counters
-                call clean_stop
+
+            ! 5. Update the time step size for the next iteration (only if solver is substepped)
+            if (solver_substepped) then
+                h_candidate = min(max(h_new, h_min), h_max)
+                if (h_candidate < h) then
+                    nreduced = nreduced + 1
+                    if (dust_log) then
+                        ode_nreduced = ode_nreduced + 1_8
+                        call register_timestep_reduction_cause
+                    end if
+                end if
+                h = h_candidate
+                icount = icount + 1
+                if (icount > countmax) then
+                    print *, "Warning: Maximum number of ODE solver iterations reached. Integration may not have converged."
+                    print *, '  Requested total dt [s]        = ', dt
+                    print *, '  Integrated tau [s]            = ', tau
+                    print *, '  Last attempted timestep h [s] = ', h
+                    print *, '  Last proposed h_new [s]       = ', h_new
+                    print *, '  Accepted steps                = ', naccepted
+                    print *, '  Rejected steps                = ', nrejected
+                    print *, '  Number of timestep reductions = ', nreduced
+                    call print_last_process_kmax
+                    call print_timestep_reduction_counters
+                    call clean_stop
+                end if
             end if
         end do
 
@@ -1161,8 +1180,8 @@ module ode_driver_mod
         y_gas_final(:,:) = y_gas_temp(:,:)
         y_dust_final(:) = y_dust_temp(:)
 
-        ! 7. Update per-cell substep statistics (only when logging is active)
-        if (dust_log) then
+        ! 7. Update per-cell substep statistics (only when logging is active and step succeeded)
+        if (dust_log .and. step_ok) then
             ndust_cells       = ndust_cells + 1_8
             ode_substeps_sum  = ode_substeps_sum + int(naccepted, kind=8)
             ode_substeps_min  = min(ode_substeps_min, int(naccepted, kind=8))
