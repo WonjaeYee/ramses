@@ -301,6 +301,7 @@ module dust_dynamics
         ! dt <-> time step [code time]
         ! ncell -> number of cells
         
+        use amr_parameters, only: condinit_kind
         use hydro_parameters, only: courant_factor,smallr
         implicit none
         ! Input variables
@@ -340,11 +341,19 @@ module dust_dynamics
                 sgrain_code = dustbins_props(jbin)%sgrain/scale_d
 
                 ! 7. Epstein drag regime stopping time: t_s = (rho_solid * a) / (rho_g * c_s)
-                t_s_loc = (sgrain_code * agrain_code) / max(rho_g_loc * cs(k), smallr)
+                if (condinit_kind == 'dustydiffuse') then
+                    t_s_loc = 0.1_dp
+                else
+                    t_s_loc = (sgrain_code * agrain_code) / max(rho_g_loc * cs(k), smallr)
+                end if
 
                 ! 8. Laibe & Price / Lebreuilly et al. 2019 Diffusion Coefficient:
                 ! D_i = eps_i * (1 - eps_total) * t_s * (P_g / rho_g)
-                D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P(k) / rho_g_loc)
+                if (condinit_kind == 'dustydiffuse') then
+                    D_i = eps_i * (1.0_dp - eps_tot) * 0.1_dp
+                else
+                    D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P(k) / rho_g_loc)
+                end if
 
                 ! Parabolic restriction check: dt <= dx^2 / (2 * D_i)
                 if (D_i > 0.0_dp) then
@@ -592,10 +601,13 @@ module dust_dynamics
             eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken, smallc**2/gamma/(gamma-one))
             
             ! Gas Thermal Pressure: P_g = (\gamma - 1) * \rho_g * e_int
-            Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_gas_cell * eint_cell(l,i,j,k), smallr*smallc**2)
-            
-            ! Multi-phase sound speed: c_s = \sqrt{\gamma * P_g / \rho_g}
-            c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / rho_gas_cell)
+            if (condinit_kind == 'dustydiffuse') then
+                Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot_cell) * rho_mix(l,i,j,k)
+                c_s(l,i,j,k) = 1.0_dp
+            else
+                Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_gas_cell * eint_cell(l,i,j,k), smallr*smallc**2)
+                c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / rho_gas_cell)
+            end if
         end do; end do; end do; end do
 
 
@@ -678,7 +690,11 @@ module dust_dynamics
                     do jbin = 1, ndust
                         ! Epstein drag regime stopping time at the face interface:
                         ! t_s = (\rho_solid * a) / (\rho_g * c_s) where \rho_g = (1 - \epsilon_tot) * \rho
-                        t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / max((one - eps_tot_L) * rho_face * c_s_face, smallr) 
+                        if (condinit_kind == 'dustydiffuse') then
+                            t_s_face = 0.1_dp
+                        else
+                            t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / max((one - eps_tot_L) * rho_face * c_s_face, smallr) 
+                        end if
                         
                         ! Lebreuilly et al. (2019) Differential Drift Velocity:
                         ! w_drift = (1 - \epsilon_tot) * t_s * (\nabla P_g / \rho)

@@ -149,6 +149,7 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
            error=2.0d0*max( &
                 & abs((dd-dm)/(dd+dm+err_grad_floor(irad))), &
                 & abs((dm-dg)/(dm+dg+err_grad_floor(irad))))
+           print*,error
            ok(k) = ok(k) .or. error > err_grad_var(irad)
         end do
       end if

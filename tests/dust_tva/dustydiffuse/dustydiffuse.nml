@@ -1,0 +1,64 @@
+This is the RAMSES parameter file for the DustyAdvect test.
+
+&RUN_PARAMS
+hydro=.true.
+static=.true.
+/
+
+&AMR_PARAMS
+levelmin=4
+levelmax=10
+ngridmax=2000
+nparttot=1 
+nexpand=1
+boxlen=1.0
+/
+
+&BOUNDARY_PARAMS
+nboundary=0
+/
+
+&INIT_PARAMS
+condinit_kind='dustydiffuse'
+nregion=1
+region_type(1)='square'
+x_center=0.5
+length_x=1.0
+d_region=1.0
+u_region=0.0
+p_region=0.0
+/
+
+&OUTPUT_PARAMS
+noutput=4
+tout=1.0,5.0,10.0,20.0
+/
+
+&HYDRO_PARAMS
+gamma=1.4
+courant_factor=0.8
+slope_type=2
+riemann='hllc'
+/
+
+&REFINE_PARAMS
+err_grad_d=0.05
+err_grad_u=0.05
+err_grad_p=0.05
+interpol_var=0
+interpol_type=2
+!err_grad_var(1)=0.05
+/
+
+&CALIMA_PARAMS
+dust_tva=.true.
+use_w_drift_test=.false.
+w_drift_test=1.0,0.0,0.0
+dust_composition(1,6) = 1d0
+dustbins_per_chemtype=1
+asize=1000.0d0 ! Grain size bin centre [microns] (leads to agrain_code = 0.1)
+sgrain=1.4d0 ! Grain material density [g/cm^3] (leads to sgrain_code = 1.4)
+amin = 3d-2! Minimum size grain bin [microns]
+amax = 2000.0d0! Maximum size grain bin [microns]
+dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
+/

@@ -37,6 +37,9 @@ subroutine condinit(x,u,dx,nn)
   case('ana_disk_potential')
      call ana_disk_potential_condinit(x, q, dx, nn)
 
+  case('dustydiffuse')
+     call dustydiffuse_condinit(x, q, dx, nn)
+
   ! Add here, if you wish, some user-defined initial conditions
   ! ........
 
@@ -129,3 +132,49 @@ subroutine ana_disk_potential_condinit(x,q,dx,nn)
   end do
 
 end subroutine ana_disk_potential_condinit
+
+
+!================================================================
+!================================================================
+!================================================================
+!================================================================
+subroutine dustydiffuse_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use constants
+
+  implicit none
+  integer ::nn                            ! Number of cells
+  real(dp)::dx                            ! Cell size
+  real(dp),dimension(1:nvector,1:nvar)::q ! Primitive variables
+  real(dp),dimension(1:nvector,1:ndim)::x ! Cell center position.
+  !================================================================
+  ! This routine generates the initial conditions for the DustyDiffuse
+  ! test case.
+  !================================================================
+  integer::i,ivar
+  real(dp)::dist,eps_val
+
+  ! Call built-in initial condition generator to set background gas properties
+  call region_condinit(x,q,dx,nn)
+
+  do i=1,nn
+     ! Distance from the center of the box (0.5 * boxlen)
+     dist = x(i,1) - 0.5d0*boxlen
+     if (dist > 0.5d0*boxlen) dist = dist - boxlen
+     if (dist < -0.5d0*boxlen) dist = dist + boxlen
+
+     ! epsilon = 0.1 * (1 - (dist / (0.5 * boxlen))**2)
+     eps_val = 0.1d0 * (1.0d0 - (dist / (0.2d0*boxlen))**2)
+     eps_val = max(eps_val, 0.0d0)
+
+     do ivar=1,ndust
+        q(i,idust+ivar-1) = eps_val
+     end do
+
+     ! Set gas pressure to an isothermal equation of state:
+     ! Pg = c_s_iso**2 * (1.0 - epsilon) * rho_total (with c_s_iso = 1.0)
+     q(i,ndim+2) = 1.0d0**2 * (1.0d0 - eps_val) * q(i,1)
+  end do
+
+end subroutine dustydiffuse_condinit
