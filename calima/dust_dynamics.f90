@@ -375,7 +375,7 @@ module dust_dynamics
         real(dp),dimension(1:nvector,1:twotondim,1:nvar_all)::u2
 
         integer::i,j,ivar,idim,iskip,ind_son
-        integer::i0,j0,k0,i1,j1,k1,i2,j2,k2,i3,j3,k3,nexist,nbuffer,ind_father_idx
+        integer::i0,j0,k0,i1,j1,k1,i2,j2,k2,i3,j3,k3,nexist,nbuffer,ind_father_idx,i3max_loop,j3max_loop,k3max_loop
         integer::i1min,i1max,j1min,j1max,k1min,k1max
         integer::i2min,i2max,j2min,j2max,k2min,k2max
         integer::i3min,i3max,j3min,j3max,k3min,k3max
@@ -473,7 +473,15 @@ module dust_dynamics
             if(idim==1)i0=1
             if(idim==2)j0=1
             if(idim==3)k0=1
-            do k3=1,2+k0; do j3=1,2+j0; do i3=1,2+i0
+            
+            i3max_loop = 1
+            j3max_loop = 1
+            k3max_loop = 1
+            if(ndim>0) i3max_loop = 2+i0
+            if(ndim>1) j3max_loop = 2+j0
+            if(ndim>2) k3max_loop = 2+k0
+            
+            do k3=1,k3max_loop; do j3=1,j3max_loop; do i3=1,i3max_loop
                 do i=1,ncache
                     if(ok(i,i3-i0,j3-j0,k3-k0) .or. ok(i,i3,j3,k3))then
                         dflux(i,i3,j3,k3,:,idim)=0.0d0
@@ -489,7 +497,7 @@ module dust_dynamics
             if(idim==1)i0=1
             if(idim==2)j0=1
             if(idim==3)k0=1
-            do k2=0,1; do j2=0,1; do i2=0,1
+            do k2=0,k2max; do j2=0,j2max; do i2=0,i2max
                 ind_son=1+i2+2*j2+4*k2
                 iskip=ncoarse+(ind_son-1)*ngridmax
                 do i=1,ncache
@@ -674,7 +682,11 @@ module dust_dynamics
                         
                         ! Lebreuilly et al. (2019) Differential Drift Velocity:
                         ! w_drift = (1 - \epsilon_tot) * t_s * (\nabla P_g / \rho)
-                        u_drift  = (one - half * (eps_tot_L + eps_tot_R)) * t_s_face * grad_P / rho_face 
+                        if (use_w_drift_test) then
+                            u_drift = w_drift_test(idim)
+                        else
+                            u_drift  = (one - half * (eps_tot_L + eps_tot_R)) * t_s_face * grad_P / rho_face 
+                        end if
                         
                         ! Hancock Reconstructions: Predict time-centered (\Delta t / 2) boundary values
                         if (idim == 1) then

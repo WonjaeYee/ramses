@@ -6,15 +6,16 @@
 !                           module: 21 Feb 2022)
 
 module dust_commons
-    use amr_parameters, only:dp
+    use amr_parameters, only:dp,metal
     use hydro_parameters, only:n_elements,ndust,ndchemtype,npah,idust,ipah
+    use constants, only: amu2g
     use dust_utils
     use dustbin_types
 
     implicit none
 
     ! ==== Flags and logicals (read from nml) ====
-    logical, parameter ::dust=.true.             ! CALIMA always includes dust
+    logical, parameter ::dust=(ndust>0)             ! CALIMA includes dust if ndust > 0
     logical ::dust_log=.false.                   ! Activate dust logging
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
@@ -43,7 +44,7 @@ module dust_commons
     logical ::ratd_only_rtadv=.false.            ! Only allow for RATD if the rt_advect=.true.
     logical ::poppe_ice_enhancement=.false.      ! Whether to use the empirical enhancement in coagulation threshold due to ice mantel
     logical ::H2ondust=.false.                   ! Activate H2 formation on dust
-    logical, parameter ::dust_pahs=.true.       ! CALIMA always includes PAHs
+    logical, parameter ::dust_pahs=(npah>0)       ! CALIMA includes PAHs if npah > 0
     logical ::dust_turbulent_model=.false.       ! Activate the subgrid model of turbulent shattering and coagulation
     logical ::pah_accretion=.false.              ! Activate the simple growth of PAH mass by accretion of gas phase C atoms
     logical ::pah_acc_spu=.false.                ! Activate the destruction of PAHs by accretion of C+
@@ -62,6 +63,8 @@ module dust_commons
 
     ! ==== Dust dynamics (read from nml) ====
     logical ::dust_tva=.false.                   ! Activate the dust dynamics using the Terminal Velocity Approximation (TVA)
+    logical ::use_w_drift_test=.false.           ! Override the drift velocity with a constant value for testing
+    real(dp),dimension(1:3)::w_drift_test=0.0_dp  ! Constant drift velocity for each dimension (X, Y, Z)
     
 
     ! ==== Dust modelling options (read from nml) ====
@@ -153,20 +156,20 @@ module dust_commons
 
     ! ==== Element parameters in the case of no RTZ module ====
 #ifndef RTZ
-    real(dp),dimension(1:n_elements) :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
+    real(dp),dimension(1:n_elements),parameter :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
                                                                 10.811d0, 12.0107d0, 14.0067d0, 15.9994d0, 18.9984032d0, &
                                                                 20.1797d0, 22.98976928d0, 24.3050d0, 26.9815386d0, &
                                                                 28.0855d0, 30.973762d0, 32.065d0, 35.453d0, &
                                                                 39.948d0, 39.0983d0, 40.078d0, 44.955910d0, &
                                                                 47.867d0, 50.9415d0, 51.9961d0, 54.938044d0, &
                                                                 55.845d0, 58.933195d0/)
-    real(dp),dimension(1:n_elements) :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
-    character(LEN=2),dimension(1:n_elements) :: el_names = (/'H','He','Li','Be','B', &
-                                                                'C','N','O','F','Ne', &
-                                                                'Na','Mg','Al','Si', &
-                                                                'P','S','Cl','Ar', &
-                                                                'K','Ca','Sc','Ti', &
-                                                                'V','Cr','Mn','Fe', &
+    real(dp),dimension(1:n_elements),parameter :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
+    character(LEN=2),dimension(1:n_elements),parameter :: el_names = (/'H ', 'He', 'Li', 'Be', 'B ', &
+                                                                'C ', 'N ', 'O ', 'F ', 'Ne', &
+                                                                'Na', 'Mg', 'Al', 'Si', &
+                                                                'P ', 'S ', 'Cl', 'Ar', &
+                                                                'K ', 'Ca', 'Sc', 'Ti', &
+                                                                'V ', 'Cr', 'Mn', 'Fe', &
                                                                 'Co'/)
 #endif
 
@@ -338,13 +341,15 @@ module dust_commons
                         do ii=1,npah
                             total_dust_mass_species(ii) = total_dust_mass_species(ii) + (uold(ind_cell(i),ipah+ii-1) * dx_loc**3)
                         end do
-                        do ii=npah,ndust+npah
+                        do ii=npah+1,ndust+npah
                             total_dust_mass_species(ii) = total_dust_mass_species(ii) + (uold(ind_cell(i),idust+ii-npah-1) * dx_loc**3)
                         end do
                         ! Add total metal mass
-                        do ii=1,n_elements
-                            total_metal_mass(ii) = total_metal_mass(ii) + (uold(ind_cell(i),imetal+ii-1) * dx_loc**3)
-                        end do
+                        if (metal) then
+                            do ii=1,n_elements
+                                total_metal_mass(ii) = total_metal_mass(ii) + (uold(ind_cell(i),imetal+ii-1) * dx_loc**3)
+                            end do
+                        end if
                         ! Add total CO mass
                         total_CO_mass = total_CO_mass + (uold(ind_cell(i),ico) * dx_loc**3)
                     end if
@@ -363,6 +368,7 @@ module dust_commons
         integer,intent(in) :: myid
         real(dp),intent(in) :: tcurrent,scale_factor
         real(dp) :: scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2,scale_msun
+        real(dp) :: tmp_species_mass(1:6), tmp_metal_mass(1:7)
 #ifndef WITHOUTMPI
         integer ::mpi_err
 #endif
@@ -382,27 +388,35 @@ module dust_commons
         total_CO_mass = total_CO_mass_all * scale_msun
 #endif
         ! 2. Print the total masses
+        tmp_species_mass = 0d0
+        if (ndust + npah > 0) then
+            tmp_species_mass(1:min(6, ndust+npah)) = total_dust_mass_species(1:min(6, ndust+npah))
+        end if
+        tmp_metal_mass = 0d0
+        if (n_elements > 0) then
+            tmp_metal_mass(1:min(7, n_elements)) = total_metal_mass(1:min(7, n_elements))
+        end if
         if(myid==1)then
             if (cosmo) then
 222             format('aexp:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
                 & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
                 & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
                 & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
-                write(*,222)scale_factor,total_gas_mass,total_metal_mass(1),total_metal_mass(2),&
-                    &total_metal_mass(3),total_metal_mass(4),total_metal_mass(5),total_metal_mass(6),&
-                    &total_metal_mass(7),total_dust_mass_species(1),total_dust_mass_species(2),&
-                    &total_dust_mass_species(3),total_dust_mass_species(4),total_dust_mass_species(5),&
-                    &total_dust_mass_species(6),total_CO_mass
+                write(*,222)scale_factor,total_gas_mass,tmp_metal_mass(1),tmp_metal_mass(2),&
+                    &tmp_metal_mass(3),tmp_metal_mass(4),tmp_metal_mass(5),tmp_metal_mass(6),&
+                    &tmp_metal_mass(7),tmp_species_mass(1),tmp_species_mass(2),&
+                    &tmp_species_mass(3),tmp_species_mass(4),tmp_species_mass(5),&
+                    &tmp_species_mass(6),total_CO_mass
             else
 223             format('t:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
                 & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
                 & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
                 & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
-                write(*,223)tcurrent*scale_t / Myr2sec,total_gas_mass,total_metal_mass(1),total_metal_mass(2),&
-                    &total_metal_mass(3),total_metal_mass(4),total_metal_mass(5),total_metal_mass(6),&
-                    &total_metal_mass(7),total_dust_mass_species(1),total_dust_mass_species(2),&
-                    &total_dust_mass_species(3),total_dust_mass_species(4),total_dust_mass_species(5),&
-                    &total_dust_mass_species(6),total_CO_mass
+                write(*,223)tcurrent*scale_t / Myr2sec,total_gas_mass,tmp_metal_mass(1),tmp_metal_mass(2),&
+                    &tmp_metal_mass(3),tmp_metal_mass(4),tmp_metal_mass(5),tmp_metal_mass(6),&
+                    &tmp_metal_mass(7),tmp_species_mass(1),tmp_species_mass(2),&
+                    &tmp_species_mass(3),tmp_species_mass(4),tmp_species_mass(5),&
+                    &tmp_species_mass(6),total_CO_mass
             end if
         end if
 

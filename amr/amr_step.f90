@@ -297,7 +297,9 @@ recursive subroutine amr_step(ilevel,icount)
   end if
 
   ! to use sink with poisson=.false., comment this line
+#if NDIM==3
   if(sink.and.hydro)call collect_acczone_avg(ilevel)
+#endif
 
 #ifdef RT
   ! Turn on RT in case of rt_stars and first stars just created:

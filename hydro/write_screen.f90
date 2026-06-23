@@ -4,6 +4,9 @@ subroutine write_screen
   use pm_commons
   use poisson_commons
   use mpi_mod
+#ifdef CALIMA
+  use hydro_parameters, only: ndust, npah, idust, ipah
+#endif
   implicit none
 #ifndef WITHOUTMPI
   integer::info
@@ -20,6 +23,12 @@ subroutine write_screen
 #if NENER>0
   integer::irad
   real(qdp),dimension(:,:),allocatable::prad_all,prad
+#endif
+#ifdef CALIMA
+  real(qdp),dimension(:,:),allocatable::dust_dens,dust_dens_all
+  character(len=500)::hdr
+  character(len=20)::temp_str
+  integer::kbin
 #endif
 
   integer,dimension(1:ncpu)::iskip,ncell_loc,ncell_all
@@ -92,6 +101,10 @@ subroutine write_screen
   allocate(prad(1:ncell,1:nener),prad_all(1:ncell,1:nener))
   prad=0.0D0; prad_all=0.0D0
 #endif
+#ifdef CALIMA
+  allocate(dust_dens(1:ncell,1:ndust),dust_dens_all(1:ncell,1:ndust))
+  dust_dens=0.0D0; dust_dens_all=0.0D0
+#endif
 
   icell=iskip(myid)
   do ilevel=1,nlevelmax
@@ -141,6 +154,11 @@ subroutine write_screen
                        prad(icell,irad)=(gamma_rad(irad)-1.0d0)*uold(ind_cell(i),3+irad)
                     end do
 #endif
+#ifdef CALIMA
+                    do kbin=1,ndust
+                       dust_dens(icell,kbin)=uold(ind_cell(i),idust+kbin-1)
+                    end do
+#endif
                  end if
               end do
            end do
@@ -181,23 +199,34 @@ subroutine write_screen
   call MPI_ALLREDUCE(prad,prad_all,ncell*nener,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,info)
   prad=prad_all
 #endif
+#ifdef CALIMA
+  call MPI_ALLREDUCE(dust_dens,dust_dens_all,ncell*ndust,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,info)
+  dust_dens=dust_dens_all
+#endif
 #endif
 
   if(myid==1)then
      write(*,*)'================================================'
 #if NENER>0
      if(poisson)then
-        write(*,*)'lev      x           d          u          Pnt      P        rho       f'
+        hdr = 'lev      x           d          u          Pnt      P        rho       f'
      else
-        write(*,*)'lev      x           d          u          Pnt      P'
+        hdr = 'lev      x           d          u          Pnt      P'
      endif
 #else
      if(poisson)then
-        write(*,*)'lev      x           d          u          P        rho       f'
+        hdr = 'lev      x           d          u          P        rho       f'
      else
-        write(*,*)'lev      x           d          u          P'
+        hdr = 'lev      x           d          u          P'
      endif
 #endif
+#ifdef CALIMA
+     do kbin=1,ndust
+        write(temp_str, '(A,I2.2)') '    d_d', kbin
+        hdr = trim(hdr) // temp_str
+     end do
+#endif
+     write(*,*) trim(hdr)
      ! Sort radius
      allocate(ind_sort(1:ncell))
      call quick_sort(rr,ind_sort,ncell)
@@ -213,6 +242,7 @@ subroutine write_screen
         ddd=MAX(dd(ind_sort(i)),smallr)
         ppp=MAX((gamma-1.0d0)*ei(ind_sort(i)),ddd*smallp)
         if(poisson)then
+#ifdef CALIMA
         write(*,113) &
              & ll(ind_sort(i)),  &
              & (rr(i)-dble(icoarse_min))*scale, &
@@ -220,12 +250,26 @@ subroutine write_screen
              & uu(ind_sort(i)), &
 #if NENER>0
              & prad(ind_sort(i),1), &
-
+#endif
+             & ppp, &
+             & dtot(ind_sort(i)),  &
+             & gg(ind_sort(i)), &
+             & (dust_dens(ind_sort(i),kbin),kbin=1,ndust)
+#else
+        write(*,113) &
+             & ll(ind_sort(i)),  &
+             & (rr(i)-dble(icoarse_min))*scale, &
+             & ddd , &
+             & uu(ind_sort(i)), &
+#if NENER>0
+             & prad(ind_sort(i),1), &
 #endif
              & ppp, &
              & dtot(ind_sort(i)),  &
              & gg(ind_sort(i))
+#endif
         else
+#ifdef CALIMA
         write(*,113) &
              & ll(ind_sort(i)),  &
              & (rr(i)-dble(icoarse_min))*scale, &
@@ -233,9 +277,20 @@ subroutine write_screen
              & uu(ind_sort(i)), &
 #if NENER>0
              & prad(ind_sort(i),1), &
-
+#endif
+             & ppp, &
+             & (dust_dens(ind_sort(i),kbin),kbin=1,ndust)
+#else
+        write(*,113) &
+             & ll(ind_sort(i)),  &
+             & (rr(i)-dble(icoarse_min))*scale, &
+             & ddd , &
+             & uu(ind_sort(i)), &
+#if NENER>0
+             & prad(ind_sort(i),1), &
 #endif
              & ppp
+#endif
         endif
      end do
      deallocate(ind_sort)
@@ -248,13 +303,17 @@ subroutine write_screen
 #if NENER>0
   deallocate(prad,prad_all)
 #endif
+#ifdef CALIMA
+  if (allocated(dust_dens)) deallocate(dust_dens)
+  if (allocated(dust_dens_all)) deallocate(dust_dens_all)
+#endif
   end if
 
 #ifndef WITHOUTMPI
   call MPI_BARRIER(MPI_COMM_WORLD,info)
 #endif
 
-113 format(i3,1x,1pe12.5,1x,9(1pe10.3,1x))
+113 format(i3,1x,1pe12.5,1x,99(1pe10.3,1x))
 114 format(' Output ',i5,' cells')
 
 end subroutine write_screen

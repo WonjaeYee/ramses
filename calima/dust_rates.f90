@@ -125,6 +125,7 @@ module dust_rates
         end do
 
         ! 2. Cache PAH-dust relative velocities and sticking probabilities
+#if NPAH > 0
         do pp = 1, dust_info%npah
             dust_start = pahbins_props(pp)%dust_index_interact
             if (dust_start <= 0) cycle
@@ -145,6 +146,7 @@ module dust_rates
                 cached_p_stick_pah_dust(pp,kk) = sticking_probability_from_velocity(v_rel, v_stick_thresh)
             end do
         end do
+#endif
 
         ! 3. Cache shattering fragments
         do jj = 1, ndchemtype
@@ -226,17 +228,22 @@ module dust_rates
         chi_frag_out(:) = 0d0
         chi_frag_pah_out(:) = 0d0
         if (prefactor > 0d0) then
+#if NPAH > 0
             if (interact_pah) then
                 if (m_min < pahbins_props(1)%mpah_min) then
                     chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             else
+#endif
                 if (m_min < dustbins_props(ii1)%mgrain_min) then
                     chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
+#if NPAH > 0
             end if
+#endif
         end if
 
+#if NPAH > 0
         if (interact_pah .and. prefactor > 0d0) then
             do pp_local = 1, dust_info%npah
                 if ((m_min.ge.pahbins_props(pp_local)%mpah_max).or.(m_max<pahbins_props(pp_local)%mpah_min)) then
@@ -247,6 +254,7 @@ module dust_rates
                 end if
             end do
         end if
+#endif
 
         if (prefactor > 0d0) then
             do ll_local = ii1, ii2
@@ -1060,18 +1068,23 @@ module dust_rates
         chi_frag_out(:) = 0d0
         chi_frag_pah_out(:) = 0d0
         if (prefactor > 0d0) then
+#if NPAH > 0
             if (interact_pah) then
                 if (m_min < pahbins_props(1)%mpah_min) then
                     chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             else
+#endif
                 if (m_min < dustbins_props(ii1)%mgrain_min) then
                     chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
+#if NPAH > 0
             end if
+#endif
         end if
 
         ! 6. Ejecta contribution in PAH bins
+#if NPAH > 0
         if (interact_pah .and. prefactor > 0d0) then
             do pp_local = 1, dust_info%npah
                 if ((m_min.ge.pahbins_props(pp_local)%mpah_max).or.(m_max<pahbins_props(pp_local)%mpah_min)) then
@@ -1082,6 +1095,7 @@ module dust_rates
                 end if
             end do
         end if
+#endif
 
         ! 7. Ejecta contribution in dust bins of the chemical type (can include id1/id2 bins)
         if (prefactor > 0d0) then
@@ -1450,6 +1464,7 @@ module dust_rates
         real(dp) :: v_rel, D_av, Z_single
         real(dp) :: coll_factor, rate1, rate2, weight, p_stick
 
+#if NPAH > 0
         pahloop: do pp = 1, dust_info%npah
             dust_start = pahbins_props(pp)%dust_index_interact
             if (dust_start <= 0) cycle
@@ -1505,6 +1520,7 @@ module dust_rates
                 dydt_dust(index_dust) = dydt_dust(index_dust) + rate2
             end do
         end do pahloop
+#endif
 
     end subroutine pah_freezing_rate
     

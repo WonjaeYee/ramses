@@ -166,7 +166,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   use hydro_parameters
   use const
 #ifdef CALIMA
-  use dust_commons, only: dust_tva, ndust
+  use dust_commons, only: dust_tva, ndust, use_w_drift_test, w_drift_test
   use dust_dynamics, only: cmpdt_dust_diffusion
 #endif
   implicit none
@@ -320,6 +320,13 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
       end do
    end do
    call cmpdt_dust_diffusion(rho_save,rho_dust_save,p_save,cs_save,dx,dt,ncell)
+   if (use_w_drift_test) then
+      do id=1,ndim
+         if (abs(w_drift_test(id)) > 0.0_dp) then
+            dt = min(dt, courant_factor * dx / abs(w_drift_test(id)))
+         end if
+      end do
+   end if
   end if
 #endif
 

@@ -1,5 +1,5 @@
 module dust_init
-    use amr_parameters, only: dp
+    use amr_parameters, only: dp, metal
     use hydro_parameters, only:ndust,ndchemtype,npah,nmetals
     use constants
     use dust_utils
@@ -82,24 +82,44 @@ module dust_init
         real(dp):: fpah_total
 
         check_params_dust = .true.
-#if NDUST!=4
-        if (myid==1)write(*,*)'ERROR: This only works for NDUST==4 :('
-        check_params_dust = .false.
-#endif
         !-------------------------------------------------
         ! Check we have metals ON for dust
         !-------------------------------------------------
         if(.not. metal)then
-            if(myid==1)write(*,*)'Error: dust requires metal=.true.'
-            check_params_dust = .false.
+            if(myid==1)then
+                write(*,*)'WARNING: metal=.false., gas-phase elements are not defined.'
+                write(*,*)'Disabling CALIMA gas-exchange processes (accretion, sputtering, SN/wind seeding & destruction)'
+            end if
+            dust_accretion = .false.
+            pah_accretion = .false.
+            dust_sputtering = .false.
+            pah_sputtering = .false.
+            dust_inSN = .false.
+            dust_inSNIa = .false.
+            dust_inSW = .false.
+            pah_AGBwinds = .false.
+            dust_SNdest = .false.
+            pah_sn_destruction = .false.
+            pah_acc_spu = .false.
         end if
 #ifdef RTZ 
         metals_for_dust=(N_OXYGEN_IONS>0).and.(N_MAGNESIUM_IONS>0).and.(N_CARBON_IONS>0).and.(N_IRON_IONS>0).and.(N_SILICON_IONS>0)
         if (.not. metals_for_dust) then
-            write(*,*) "ERROR: you are missing metals required to track dust composition"
-            write(*,*) "oxygen_ions,magnesium_ions,carbon_ions,iron_ions,silicon_ions"
-            write(*,*) N_OXYGEN_IONS,N_MAGNESIUM_IONS,N_CARBON_IONS,N_IRON_IONS,N_SILICON_IONS
-            check_params_dust = .false.
+            if (myid==1) then
+                write(*,*) "WARNING: missing metals required to track dust composition."
+                write(*,*) "Disabling CALIMA gas-exchange processes."
+            end if
+            dust_accretion = .false.
+            pah_accretion = .false.
+            dust_sputtering = .false.
+            pah_sputtering = .false.
+            dust_inSN = .false.
+            dust_inSNIa = .false.
+            dust_inSW = .false.
+            pah_AGBwinds = .false.
+            dust_SNdest = .false.
+            pah_sn_destruction = .false.
+            pah_acc_spu = .false.
         end if
 #endif
         !-------------------------------------------------
@@ -701,7 +721,9 @@ module dust_init
             if (allocated(dustbins_props(ii)%el_atomic_masses_amu)) deallocate(dustbins_props(ii)%el_atomic_masses_amu)
             if (allocated(dustbins_props(ii)%el_atomic_masses_g)) deallocate(dustbins_props(ii)%el_atomic_masses_g)
             if (allocated(dustbins_props(ii)%el_conv_factors)) deallocate(dustbins_props(ii)%el_conv_factors)
+#ifdef RTZ
             if (allocated(dustbins_props(ii)%el_nions)) deallocate(dustbins_props(ii)%el_nions)
+#endif
             if (allocated(dustbins_props(ii)%el_names)) deallocate(dustbins_props(ii)%el_names)
             if (allocated(dustbins_props(ii)%el_atomic_number)) deallocate(dustbins_props(ii)%el_atomic_number)
             allocate(dustbins_props(ii)%el_index(1:n_el), &
@@ -710,7 +732,9 @@ module dust_init
                      dustbins_props(ii)%el_atomic_masses_amu(1:n_el), &
                      dustbins_props(ii)%el_atomic_masses_g(1:n_el), &
                      dustbins_props(ii)%el_conv_factors(1:n_el), &
+#ifdef RTZ
                      dustbins_props(ii)%el_nions(1:n_el), &
+#endif
                      dustbins_props(ii)%el_names(1:n_el), &
                      dustbins_props(ii)%el_atomic_number(1:n_el))
             kk = 0
@@ -1041,9 +1065,9 @@ module dust_init
         ! 7. Other constants and parameters
 #if NPAH>0
         if (dust_pahs) then
-            call init_pah_sputtering_tables
-            call init_pah_dissociation_tables
-            call init_pah_peh_tables
+            if (pah_sputtering) call init_pah_sputtering_tables
+            if (pah_photolysis) call init_pah_dissociation_tables
+            if (pah_pe_heating) call init_pah_peh_tables
         end if
 #endif
 
@@ -1063,16 +1087,16 @@ module dust_init
         if (dust_sublimation) call init_dust_sublimation_tables
 
         ! 9. Read the dust collisional tables
-        call init_dust_collisional_tables
+        if (dust_coll_cooling) call init_dust_collisional_tables
 
         ! 10. Read the dust charging tables
-        call init_dust_charging_tables
+        if (dust_acc_coulomb.or.dust_sputtering_charge.or.dust_coll_charge.or.dust_pe_heating) call init_dust_charging_tables
 
         ! 11. Read the dust photoelectric heating tables
-        call init_dust_peh_tables
+        if (pah_pe_heating) call init_dust_peh_tables
 
         ! 12. Cache the BH80 collisional heating factors that only depend on the dust bins
-        call init_dust_coll_heating_BH80_cache
+        if (dust_coll_cooling) call init_dust_coll_heating_BH80_cache
 
 
         ! Select the ODE solver procedure pointer
@@ -1114,7 +1138,7 @@ module dust_init
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
-                dust_tva,&
+                dust_tva, use_w_drift_test, w_drift_test,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
                 ! PAH modelling options
