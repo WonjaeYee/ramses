@@ -1877,11 +1877,10 @@ module dust_radiation
                 if (H_coll_at_Tgas > P_abs) then
                     ! Collisional heating dominates the initial guess
                     call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
-                    ! print*, 'Rank ', myid, ': Collisional heating dominates for dust bin ', j, &
-                    !         ': H_coll at Tgas = ', H_coll_at_Tgas, ' erg/s > P_abs = ', P_abs, ' erg/s. Starting Newton iterations at Tdust = ', T0, ' K'
                 else if (abs(H_coll_at_Tgas) < 1d-4 * P_abs) then
                     ! Radiative heating is much larger than collisional, so we can just assume that
                     T_dust(j) = max(T0, Tmin)
+                    coll_heat(j) = H_coll_at_Tgas
                     cycle
                 end if
             end if
