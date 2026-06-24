@@ -77,6 +77,7 @@ module dust_commons
     character(LEN=30)::coagulation_model='Aoyama2017' ! Model for the coagulation dispersion velocity
     character(LEN=30)::dust_velocity_model='Ormel2007' ! Model for the relative velocity of grains
     character(LEN=30)::charging_model='Ibanez2019'     ! Model for the grain charge distribution
+    character(LEN=30)::ice_model='Hollenbach2009'     ! Model for ice formation on dust grains
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
 
     ! ==== PAH modelling options (read from nml) ====
@@ -90,6 +91,7 @@ module dust_commons
 
     ! ==== Rates and efficiency parameters (read from nml)====
     real(dp)::Sconstant=1.0d0   ! Sticking coefficient constant
+    real(dp)::max_accretion_rate=1d-7 ! Maximum accretion rate coefficient [s-1] to prevent stiff ODE integration
     real(dp),dimension(1:ndchemtype)::nh_coa=0.1d0            ! Gas density above which dust coagulation is allowed (H/cm3)
     real(dp),dimension(1:ndchemtype)::nhmax_acc=1d4           ! Max gas density for accretion subgrid model
     real(dp),dimension(1:ndchemtype)::nhmax_coa=1d6           ! Max gas density for coagulation subgrid model

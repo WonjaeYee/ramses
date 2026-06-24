@@ -545,7 +545,7 @@ contains
         end if
 
         ! Precompute/cache rate factors for this cell-update step
-        call compute_rate_caches(dinfo)
+        call compute_rate_caches(dinfo, nElement)
 
         ! 1. Compute the local RAT-D quantities if we run with dust_ratd
         if (dust_ratd) then

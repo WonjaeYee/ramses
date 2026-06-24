@@ -20,7 +20,7 @@ module dust_surface_chemistry
 
     real(dp),parameter :: Ns = 2D15 ! Fixed number of sites per cm2 on the surface of the grain
 
-    public :: grain_h2_formation_rate
+    public :: grain_h2_formation_rate,ice_sticking_coefficient
     contains
 
     function h2_sticking_coef(Tgas,Td)
@@ -186,4 +186,51 @@ module dust_surface_chemistry
         end if
         f_sh = max(f_sh,0d0)
     end subroutine compute_superhydrogenated_fraction
+
+    subroutine Hollenbach2009_icemodel(G0,nO,Tgas,S)
+        implicit none
+
+        real(dp),intent(in) :: G0,nO,Tgas
+        real(dp),intent(inout) :: S
+
+        real(dp) :: vth, N_mono
+
+        ! 1. Compute the number of monomers based on Eq. 22 in
+        ! Hollenbach et al. (2019) assuming that 50% of the mantle
+        ! is H20 ice and a desorption yield of 3d-3.
+        ! F0 = 1e8 photons/cm2/s
+        vth = 3624.65d0 * sqrt(Tgas)
+        N_mono = 2d0 * nO * vth / (max(G0,1d-5) * 3d5)
+
+        ! 2. Compute the effective sticking coefficient
+        ! assumming that the bare grain coefficient
+        ! is already coming from the original model
+        ! and the ice coefficient is set to S=0.1
+        S = 0.1d0 + (1.d0 - 0.1d0) * exp(-N_mono)
+    end subroutine Hollenbach2009_icemodel
+
+    function ice_sticking_coefficient(G0,nO,Tgas,Td)
+        implicit none
+        real(dp),intent(in) :: G0,nO,Tgas,Td
+        real(dp) :: ice_sticking_coefficient
+
+        if (Td >= 100d0) then
+            ! If grain is hotter than the sublimation of H2O ice
+            ! we assume that there is no mantle formation
+            ice_sticking_coefficient = 1d0
+            return
+        end if
+
+        ! 1. Select the ice model
+        select case (ice_model)
+        
+        case ('Hollenbach2009')
+            call Hollenbach2009_icemodel(G0,nO,Tgas,ice_sticking_coefficient)
+        case default
+            call Hollenbach2009_icemodel(G0,nO,Tgas,ice_sticking_coefficient)
+        end select
+
+        ! 2. Cap the sticking coefficient to a maximum of 1 and minimum of 0.1
+        ice_sticking_coefficient = max(0.1d0, min(ice_sticking_coefficient, 1.0d0))
+    end function ice_sticking_coefficient
 end module dust_surface_chemistry

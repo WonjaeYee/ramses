@@ -34,6 +34,7 @@ module dust_init
         write(*,*) 'dust_acc              = ',dust_accretion  ,',        dust_sput     = ',dust_sputtering
         write(*,*) 'dust_coa              = ',dust_coagulation,',        dust_sha      = ',dust_shattering
         write(*,*) 'dust_acc_coulomb      = ',dust_acc_coulomb,',        dust_ratd     = ',dust_ratd
+        write(*,*) 'max_accretion_rate    = ',max_accretion_rate
         write(*,*) 'dust_turbulent_model  = ',dust_turbulent_model,',        H2ondust      = ',H2ondust
         write(*,*) 'dust_shattering_SN      = ',dust_shattering_SN
         write(*,*) 'dust_sublimation      = ',dust_sublimation
@@ -469,7 +470,10 @@ module dust_init
                     dust_processes_list(ndust_processes)%name = 'accretion'
                     dust_processes_list(ndust_processes)%source = .true.
                     dust_processes_list(ndust_processes)%sink = .false.
-                    if (accretion_model.eq.'LeBourlot2012') then
+                    if (dust_acc_coulomb) then
+                        carry_gas_ions = .true.
+                        dust_processes_list(ndust_processes)%comp_rate => coulomb_accretion_rate
+                    else if (accretion_model.eq.'LeBourlot2012') then
                         dust_processes_list(ndust_processes)%comp_rate => LeBourlot2012_accretion_rate
                     else
                         dust_processes_list(ndust_processes)%comp_rate => LeBourlot2012_accretion_rate
@@ -1123,12 +1127,12 @@ module dust_init
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust modelling options
-                sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
+                sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
                 ! PAH modelling options
                 photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
                 cluster_evaporation_model,&
                 ! Efficiency parameters
-                Sconstant,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
+                Sconstant,max_accretion_rate,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
                 dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
                 Coulomb_enhance,tensile_strength,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
                 separate_refractive_index,slope_frag_func,errmax,countmax,GDinit,DTMinit,fpah_ini,smallr_dust,&
