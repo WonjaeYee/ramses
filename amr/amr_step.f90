@@ -128,7 +128,7 @@ recursive subroutine amr_step(ilevel,icount)
   ! Update sink cloud particle properties
   !-----------------
 #if NDIM==3
-                               call timer('sinks','start')
+                               call timer('sink - update_cloud','start')
   if(sink)call update_cloud(ilevel)
 #endif
   !-----------------
@@ -289,7 +289,7 @@ recursive subroutine amr_step(ilevel,icount)
 
         ! Compute Bondi-Hoyle accretion parameters
 #if NDIM==3
-                               call timer('sinks','start')
+                               call timer('sink - collect_acczone_avg','start')
         if(sink.and.hydro)call collect_acczone_avg(ilevel)
 #endif
      end if
@@ -369,23 +369,13 @@ recursive subroutine amr_step(ilevel,icount)
   if(hydro.and.star.and.eta_sn>0)call thermal_feedback(ilevel)
 #endif
 
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, before `grow_sink`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
   ! Density threshold or Bondi accretion onto sink particle
 #if NDIM==3
   if(sink.and.hydro)then
-                               call timer('sinks','start')
+                               call timer('sink - grow_sink','start')
      call grow_sink(ilevel,.false.)
   end if
 #endif
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, after `grow_sink`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
   !-----------
   ! Hydro step
   !-----------
@@ -395,21 +385,11 @@ recursive subroutine amr_step(ilevel,icount)
                                call timer('hydro - godunov','start')
      call godunov_fine(ilevel)
 
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, after `godunov_fine`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
      ! Reverse update boundaries
                                call timer('hydro - rev ghostzones','start')
      do ivar=1,nvar_all
         call make_virtual_reverse_dp(unew(1,ivar),ilevel)
      end do
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, after `make_virtual_reverse_dp`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
      ! MC Tracer
      ! Communicate fluxes accross boundaries
      if(MC_tracer)then
@@ -433,31 +413,16 @@ recursive subroutine amr_step(ilevel,icount)
         call add_gravity_source_terms(ilevel)
      end if
 
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, after `add_gravity_source_terms`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
      ! Add non conservative pdV terms to unew
      ! for thermal and/or non-thermal energies
      if(pressure_fix.OR.nener>0)then
         call add_pdv_source_terms(ilevel)
      endif
 
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, before `set_uold`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
      ! Set uold equal to unew
                                call timer('hydro - set uold','start')
      call set_uold(ilevel)
 
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'in `amr_step`, after `set_uold`'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!   write(*,*) 'unew(68849, 18:):', unew(68849, 18:)
-!  end if
      ! Add gravity source term with half time step and old force
      ! in order to complete the time step
                                call timer('poisson','start')
@@ -478,11 +443,6 @@ recursive subroutine amr_step(ilevel,icount)
 
   endif
 
- ! if(myid==9.and.ilevel==8) then
- !  write(*,*) 'from `amr_step`'
- !  write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
- ! end if
-
   !---------------------
   ! Do RT/Chemistry step
   !---------------------
@@ -494,8 +454,10 @@ recursive subroutine amr_step(ilevel,icount)
      ! Still need a chemistry call if RT is defined but not
      ! actually doing radiative transfer (i.e. rt==false):
                                call timer('cooling','start')
+#ifndef SKIP_RTZ_COOLING
      if(hydro .and. (neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos))call cooling_fine(ilevel)
      ! to temporarily disable RTZ cooling, comment line one above
+#endif
   endif
   ! Regular updates and book-keeping:
   if(ilevel==levelmin) then
@@ -513,8 +475,10 @@ recursive subroutine amr_step(ilevel,icount)
 #else
                                call timer('cooling','start')
   if((hydro).and.(.not.static_gas)) then
+#ifndef SKIP_RTZ_COOLING
     if(neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos)call cooling_fine(ilevel)
     ! to temporarily disable RTZ cooling, comment line one above
+#endif
   endif
 #endif
 
@@ -585,7 +549,7 @@ recursive subroutine amr_step(ilevel,icount)
 #endif
 
   if(sink)then
-                               call timer('sinks','start')
+                               call timer('sink - create_sink','start')
      !-------------------------------
      ! Update coarser level sink velocity
      !-------------------------------
@@ -698,8 +662,10 @@ subroutine rt_step(ilevel)
      call rt_set_uold(ilevel)
 
                                call timer('cooling','start')
+#ifndef SKIP_RTZ_COOLING
      if(neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos)call cooling_fine(ilevel)
      ! to temporarily disable RTZ cooling, comment line one above
+#endif
                                call timer('radiative transfer','start')
 
      do ivar=1,nrtvar
