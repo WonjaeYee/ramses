@@ -3315,7 +3315,7 @@ subroutine read_sink_params()
      call clean_stop
   end if
 
-  if (mass_sink_seed <= 0)then
+  if (create_sinks .and. mass_sink_seed <= 0)then
      if(myid==1)write(*,*)'Sink seed mass is not specified. Exiting.'
      call clean_stop
   end if
