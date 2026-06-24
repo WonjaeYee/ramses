@@ -750,15 +750,20 @@ module anninos_mod
             accepted = .false.
             h_new = h * 0.5_dp
         else
-            ! Compute relative error for step control (10% rule)
-            error_gas(:,:) = abs(y_gas_new(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), 1.0d-40)
-            error_dust(:) = abs(y_dust_new(:) - y_dust(:)) / max(abs(y_dust(:)), 1.0d-40)
-            max_error = maxval(error_gas(:,:))
-            max_error = max(max_error, maxval(error_dust(:)))
+            if (present(step_ok_present) .and. step_ok_present) then
+                accepted = .true.
+                h_new = h
+            else
+                ! Compute relative error for step control (10% rule)
+                error_gas(:,:) = abs(y_gas_new(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), 1.0d-40)
+                error_dust(:) = abs(y_dust_new(:) - y_dust(:)) / max(abs(y_dust(:)), 1.0d-40)
+                max_error = maxval(error_gas(:,:))
+                max_error = max(max_error, maxval(error_dust(:)))
 
-            accepted = (max_error <= errmax)
-            scale = 0.9d0 * (errmax / max(max_error, 1.0d-10))
-            h_new = h * min(2.0_dp, max(0.1_dp, scale))
+                accepted = (max_error <= errmax)
+                scale = 0.9d0 * (errmax / max(max_error, 1.0d-10))
+                h_new = h * min(2.0_dp, max(0.1_dp, scale))
+            end if
         end if
 
     end subroutine anninos_step
@@ -1188,11 +1193,11 @@ module ode_driver_mod
             ode_substeps_max  = max(ode_substeps_max, int(naccepted, kind=8))
         end if
 
-        if (debug_enabled) then
-            if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
-                print *, 'DEBUG integrate_dust_ode: negative final density detected.'
-                call clean_stop
-            end if
+        if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
+            print *, 'DEBUG integrate_dust_ode: negative final density detected.'
+            print *, 'y_gas_final:  ',y_gas_final(:,:)
+            print *, 'y_dust_final: ',y_dust_final(:)
+            call clean_stop
         end if
     end subroutine integrate_dust_ode
 

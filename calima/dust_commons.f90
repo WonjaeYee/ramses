@@ -91,6 +91,7 @@ module dust_commons
 
     ! ==== Rates and efficiency parameters (read from nml)====
     real(dp)::Sconstant=1.0d0   ! Sticking coefficient constant
+    real(dp)::max_accretion_rate=1d-7 ! Maximum accretion rate coefficient [s-1] to prevent stiff ODE integration
     real(dp),dimension(1:ndchemtype)::nh_coa=0.1d0            ! Gas density above which dust coagulation is allowed (H/cm3)
     real(dp),dimension(1:ndchemtype)::nhmax_acc=1d4           ! Max gas density for accretion subgrid model
     real(dp),dimension(1:ndchemtype)::nhmax_coa=1d6           ! Max gas density for coagulation subgrid model

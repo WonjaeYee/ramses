@@ -197,10 +197,10 @@ module dust_surface_chemistry
 
         ! 1. Compute the number of monomers based on Eq. 22 in
         ! Hollenbach et al. (2019) assuming that 50% of the mantle
-        ! is H20 ice and a desorption yield of 3e-3.
+        ! is H20 ice and a desorption yield of 3d-3.
         ! F0 = 1e8 photons/cm2/s
         vth = 3624.65d0 * sqrt(Tgas)
-        N_mono = 2d0 * nO * vth / (min(G0,1e-5) * 3e5)
+        N_mono = 2d0 * nO * vth / (max(G0,1d-5) * 3d5)
 
         ! 2. Compute the effective sticking coefficient
         ! assumming that the bare grain coefficient
@@ -214,7 +214,7 @@ module dust_surface_chemistry
         real(dp),intent(in) :: G0,nO,Tgas,Td
         real(dp) :: ice_sticking_coefficient
 
-        if (Td >= 150d0) then
+        if (Td >= 100d0) then
             ! If grain is hotter than the sublimation of H2O ice
             ! we assume that there is no mantle formation
             ice_sticking_coefficient = 1d0

@@ -1870,6 +1870,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call cpu_time(t_now)
          t_ion = t_ion + (t_now - t_last)
       end if
+      dnElement(:) = nElement_dep(:)
       dT2 = dT2-T2(icell) ; dXion(:,:) = dXion(:,:)-xion(:,:,icell)
       dnElement(:) = dnElement(:) - nElement(:,icell)
 #ifdef CO
