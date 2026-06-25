@@ -1612,7 +1612,7 @@ module dust_radiation
         integer :: iter
         integer :: max_iter=100
         integer :: iter_used
-        real(dp) :: H0, H1, dH_dT
+        real(dp) :: H0, H1, H2, dH_dT
         real(dp) :: dP_dT
         real(dp) :: f, fprime
         real(dp) :: T0, eps, T_new, dT
@@ -1628,13 +1628,13 @@ module dust_radiation
             dT = max(T0*eps,1e-6)
             call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
                                         Coulomb_factor,nH2,nCO,Tgas,T0+dT,&
-                                        dust_charge,H1)
+                                        dust_charge,H2)
 
             call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
                                         Coulomb_factor,nH2,nCO,Tgas,max(T0-dT,Tmin),&
-                                        dust_charge,H0)
-
-            dH_dT = (H1 - H0) / (2d0*dT)
+                                        dust_charge,H1)
+            H0 = coll_heat
+            dH_dT = (H2 - H1) / (2d0*dT)
         else
             H0 = 0d0
             dH_dT = 0d0
@@ -1877,13 +1877,12 @@ module dust_radiation
                 if (H_coll_at_Tgas > P_abs) then
                     ! Collisional heating dominates the initial guess
                     call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
-                    ! print*, 'Rank ', myid, ': Collisional heating dominates for dust bin ', j, &
-                    !         ': H_coll at Tgas = ', H_coll_at_Tgas, ' erg/s > P_abs = ', P_abs, ' erg/s. Starting Newton iterations at Tdust = ', T0, ' K'
                 else if (abs(H_coll_at_Tgas) < 1d-4 * P_abs) then
                     ! Radiative heating is much larger than collisional, so we can just assume that
                     T_dust(j) = max(T0, Tmin)
                     cycle
                 end if
+                coll_heat(j) = H_coll_at_Tgas
             end if
 
             call solve_Tdust_fast(j,P_abs,ne,nElement,xelem_ions,Coulomb_factor(j,:),&
@@ -2524,13 +2523,13 @@ module dust_photoelectric_heating
 
     end subroutine photoelectric_yield
 
-    subroutine compute_dust_peh_rate(i_dust,rho_dust,csa,l_a,&
-                                    nGroups,local_c,solid_angle,Np,E,Zdust,Zsigma,Tgas,ne,Pinj,Prec,debug_flag)
+    subroutine compute_dust_peh_rate(i_dust,csa,l_a,nGroups,local_c,&
+                                    &solid_angle,Np,E,Zdust,Zsigma,&
+                                    &Tgas,ne,Pinj,Prec,debug_flag)
         ! This subroutine computes the photoelectric heating rate
         ! and recombination cooling rate for a given dust species
         ! following the formalism of Weingartner & Draine (2001)
         ! i_dust   --> index of the dust species
-        ! rho_dust --> dust mass density [g/cm^3]
         ! csa      --> dust absorption cross section (already multiplied by c) [cm^3/s]
         ! l_a      --> dust photon attenuation length [cm]
         ! nGroups  --> number of radiation groups
@@ -2542,14 +2541,13 @@ module dust_photoelectric_heating
         ! ne       --> electron density in cm^-3
         ! Zdust    --> dust grain charge in units of e
         ! Zsigma   --> dust charge distribution sigma
-        ! Pinj     <--> photoelectric heating rate [erg/cm^3/s]
-        ! Prec     <--> photoelectric recombination cooling rate [erg/cm^3/s]
+        ! Pinj     <--> photoelectric heating rate [erg/s]
+        ! Prec     <--> photoelectric recombination cooling rate [erg/s]
         use cooling_module, only: kB
         use dust_charging, only: two_point_charge_mix, three_point_charge_mix
         implicit none
         ! Inputs
         integer, intent(in) :: i_dust
-        real(dp), intent(in) :: rho_dust
         integer, intent(in) :: nGroups
         real(dp), dimension(1:nGroups), intent(in) :: csa,l_a,Np,E,solid_angle
         real(dp), intent(in) :: Zdust,Zsigma,Tgas,ne,local_c
@@ -2564,7 +2562,7 @@ module dust_photoelectric_heating
         real(dp), dimension(1:3) :: Zmix,wmix
         real(dp) :: asize_cm,W,E_g,l_e,Emin,IPV,Emin_ej
         real(dp) :: E_avg,E_pdt,sigma_pdt
-        real(dp) :: Y,y2,pinj_mix_raw,pinj_charge_raw,prec_charge
+        real(dp) :: Y,y2,pinj_charge,prec_charge
         real(dp) :: w1,w2,w3,wlo,whi,Zcharge
         real(dp) :: rad_ani,ltilde,s_e,rec_pref
         real(dp) :: EA,Jtilde
@@ -2614,11 +2612,9 @@ module dust_photoelectric_heating
             pe_pref(i) = csa(i) * Np(i) * solid_angle(i)
             pdt_pref(i) = Np(i) * solid_angle(i) * local_c
         end do
-        rec_pref = 2.69463707d-10 * rho_dust /dustbins_props(i_dust)%mgrain * asize_cm**2d0 * &
-                   & sqrt(Tgas) * Tgas * ne
+        rec_pref = 2.69463707d-10 * asize_cm**2d0 * sqrt(Tgas) * Tgas * ne
 
         ! 3. Loop over representative charge states and mix contributions
-        pinj_mix_raw = 0.0d0
         do iq = 1, 3
             if (wmix(iq) .le. 0d0) cycle
             Zcharge = Zmix(iq)
@@ -2627,7 +2623,7 @@ module dust_photoelectric_heating
             IPV = ionisation_potential_valence(W,Zcharge,asize_cm)
             Emin_ej = min_photon_energy(IPV,Zcharge,asize_cm)
 
-            pinj_charge_raw = 0.0d0
+            pinj_charge = 0.0d0
             E_pdt = 1d40 ! Initialize to a large value
             if (Zcharge .lt. 0d0) then
                 E_pdt = photodetachment_energy(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
@@ -2647,15 +2643,15 @@ module dust_photoelectric_heating
                 E_avg = E_avg / y2
 
                 ! 3.C Compute the injected power from photoemission of valence electrons
-                pinj_charge_raw = pinj_charge_raw + Y * E_avg * pe_pref(i)
+                pinj_charge = pinj_charge + Y * E_avg * pe_pref(i)
                 if (dbg_flag) print*,'DEBUG: i_dust=',i_dust,'i=',i,' Zdust=',Zcharge,' w=',wmix(iq),' E=',E(i),' Y=',Y,' E_avg=',E_avg,' csa=',csa(i),' Np=',Np(i)*E(i)*eV2erg,' contrib=', &
                       & Y * E_avg * pe_pref(i) * eV2erg
                 ! 3.D Compute the photo-detachment contribution (for negatively charged grains)
                 if (E(i) .lt. E_pdt) cycle
                 sigma_pdt = photodetachment_cross_section(E(i),E_pdt,Zcharge)
-                pinj_charge_raw = pinj_charge_raw + sigma_pdt * (E(i) - E_pdt + Emin) * pdt_pref(i)
+                pinj_charge = pinj_charge + sigma_pdt * (E(i) - E_pdt + Emin) * pdt_pref(i)
             end do
-            pinj_mix_raw = pinj_mix_raw + wmix(iq) * pinj_charge_raw
+            Pinj = Pinj + wmix(iq) * pinj_charge
 
             ! 4. Compute the recombination cooling rate contribution of this charge
             prec_charge = 0.0d0
@@ -2673,39 +2669,33 @@ module dust_photoelectric_heating
             if (Zcharge .eq. zmin_mix) then
                 EA = electron_afinity(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
                 Jtilde = DS87_J(dble(zmin_mix),-1d0,asize_cm,Tgas)
-                pinj_mix_raw = pinj_mix_raw + wmix(iq) * rec_pref * Jtilde * EA * eV2erg
+                Pinj = Pinj + wmix(iq) * rec_pref * Jtilde * EA * eV2erg
             end if
         end do
-
-        ! 5. Convert to volumetric heating rate [erg/cm^3/s]
-        Pinj = Pinj + pinj_mix_raw * rho_dust / dustbins_props(i_dust)%mgrain * eV2erg
     end subroutine compute_dust_peh_rate
 
-    subroutine interpolate_dust_peh_rate(i_dust,rho_dust,G0,ne,Tgas,Pinj,Prec)
+    subroutine interpolate_dust_peh_rate(i_dust,G0,ne,Tgas,Pinj,Prec)
         ! This subroutine interpolates the dust photoelectric heating and 
         ! electron recombination cooling rates from the equilibrium tables
         ! computed in Rodriguez Montero et al. (2024) based on the modelling
         ! of Weingartner & Draine (2001)
         ! i_dust   --> index of the dust species
-        ! rho_dust --> dust mass density [g/cm^3]
         ! G0       --> radiation field in Habing units
         ! ne       --> electron number density [cm^-3]
         ! Tgas     --> gas temperature in K
-        ! Pinj     <-- photoelectric heating rate [erg/cm^3/s]
-        ! Prec     <-- photoelectric recombination cooling rate [erg/cm^3/s]
+        ! Pinj     <-- photoelectric heating rate [erg/s]
+        ! Prec     <-- photoelectric recombination cooling rate [erg/s]
         use amr_commons, only: myid
         implicit none
 
         ! Inputs
         integer, intent(in) :: i_dust
-        real(dp), intent(in) :: rho_dust
         real(dp), intent(in) :: G0,ne,Tgas
         ! Outputs
         real(dp), intent(out) :: Pinj,Prec
 
         ! Local
         real(dp) :: gamma,log_gamma,log_T,peh_rate,cool_rate
-        real(dp) :: ngrains
         integer :: idx_g, idx_T
 
         ! 1. Compute the ionisation parameter
@@ -2727,15 +2717,10 @@ module dust_photoelectric_heating
         idx_T = -1
 
         call dustbins_props(i_dust)%peh_tab%interpolate(log_gamma, log_T, peh_rate, idx_g, idx_T)
-        peh_rate = exp(peh_rate * ln10)
+        Pinj = exp(peh_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
 
         call dustbins_props(i_dust)%rec_tab%interpolate(log_gamma, log_T, cool_rate, idx_g, idx_T)
-        cool_rate = exp(cool_rate * ln10)
-
-        ! 3. Convert to volumetric rates
-        ngrains = rho_dust / dustbins_props(i_dust)%mgrain
-        Pinj = peh_rate  * ngrains * (G0 / 1.13d0) ! [erg/cm^3/s]
-        Prec = cool_rate * ngrains  ! [erg/cm^3/s]
+        Prec = exp(cool_rate * ln10) ! [erg/s]
     end subroutine interpolate_dust_peh_rate
     
 
@@ -3073,7 +3058,7 @@ module pah_photoelectric_heating
         if (nstates >= 4) fcharge_pahs(4) = f_2 / f_total
     end subroutine compute_pah_charge_equilibrium
 
-    subroutine compute_pah_peh_equilibrium(i_pah,rho_pah,csa_anion,csa_neutral,&
+    subroutine compute_pah_peh_equilibrium(i_pah,csa_anion,csa_neutral,&
                                           csa_cation,csa_dication,nGroups,&
                                           solid_angle,Np,E,local_c,Tgas,ne,fcharge_pahs,&
                                           Pabs_pah,Pinj_pah,Prad_pah,Prec_pah)
@@ -3082,7 +3067,6 @@ module pah_photoelectric_heating
         ! conditions. From this, it determines the absorbed power and the
         ! injected power into the gas by the photo-electrons.
         ! i_pah          --> index of the PAH molecule in the array
-        ! rho_pah        --> density of the PAH molecule in g/cm3
         ! csa_anion      --> absorption cross section for anion PAHs in cm2
         ! csa_neutral    --> absorption cross section for neutral PAHs in cm2
         ! csa_cation     --> absorption cross section for cation PAHs in cm2
@@ -3095,23 +3079,23 @@ module pah_photoelectric_heating
         ! ne             --> electron number density in cm-3
         ! fcharge_pahs   <-- allocatable/assumed-shape vector with the
         !                   fraction of PAH mass in each charge state
-        ! Pabs_pah       <-- absorbed power by the PAH molecules in erg/cm3/s
-        ! Pinj_pah       <-- injected power into the gas by the PAH molecules in erg/cm3/s
-        ! Prad_pah       <-- radiative cooling power of the PAH molecules into IR in erg/cm3/s
-        ! Prec_pah       <-- recombination cooling power of the PAH molecules in erg/cm3/s
+        ! Pabs_pah       <-- absorbed power by the PAH molecules in erg/s
+        ! Pinj_pah       <-- injected power into the gas by the PAH molecules in erg/s
+        ! Prad_pah       <-- radiative cooling power of the PAH molecules into IR in erg/s
+        ! Prec_pah       <-- recombination cooling power of the PAH molecules in erg/s
 
         use constants, only: kB
         implicit none
         integer, intent(in) :: i_pah,nGroups
-        real(dp), intent(in) :: rho_pah, local_c, Tgas, ne
+        real(dp), intent(in) :: local_c, Tgas, ne
         real(dp), dimension(1:nGroups), intent(in) :: Np, E, solid_angle
         real(dp), dimension(1:nGroups), intent(in) :: csa_anion, csa_neutral, csa_cation, csa_dication
         real(dp), dimension(:), intent(out) :: fcharge_pahs
-        real(dp), dimension(1:nGroups) :: Pabs_pah
-        real(dp) :: Pinj_pah, Prad_pah, Prec_pah
+        real(dp), dimension(1:nGroups), intent(inout) :: Pabs_pah
+        real(dp), intent(inout) :: Pinj_pah, Prad_pah, Prec_pah
 
         integer :: i, Nc, nstates
-        real(dp) :: a_pah, yield, F_pe, rad_ani, nmolecules
+        real(dp) :: a_pah, yield, F_pe, rad_ani
         real(dp) :: k_det, k_att, k_pe_0, k_pe_1, k_rec_1, k_rec_2
         real(dp) :: IP_anion, IP_neutral, IP_cation
         real(dp) :: f_anion, f_neutral, f_1, f_2, f_total
@@ -3125,7 +3109,6 @@ module pah_photoelectric_heating
         ! 1. Get the PAH molecule details from per-bin properties
         Nc = pahbins_props(i_pah)%nc
         a_pah = pahbins_props(i_pah)%apah
-        nmolecules = rho_pah / pahbins_props(i_pah)%mpah ! Number of molecules in the cell [#/cm3]
 
         ! 2. Compute the electron detachment rate for the anion for each group
         IP_anion = ionisation_potential(-1, a_pah)
@@ -3223,7 +3206,7 @@ module pah_photoelectric_heating
             Pabs_local(i) = Pabs_local(i) + power_absorbed(solid_angle(i)*csa_neutral(i), F_pe) * fcharge_pahs(2)
             Pabs_local(i) = Pabs_local(i) + power_absorbed(solid_angle(i)*csa_cation(i), F_pe) * f_cat
             Pabs_local(i) = Pabs_local(i) + power_absorbed(solid_angle(i)*csa_dication(i), F_pe) * f_dicat
-            Pabs_pah(i) = Pabs_pah(i) + Pabs_local(i) * nmolecules ! Convert to erg/cm3/s
+            Pabs_pah(i) = Pabs_pah(i) + Pabs_local(i) ! [erg/s]
         end do
 
         ! 11. Compute the injected power into the gas by photo-electrons
@@ -3237,7 +3220,7 @@ module pah_photoelectric_heating
             Pinj_local = Pinj_local + partition_coeff * power_injected(solid_angle(i)*yield_cation(i)*csa_cation(i),&
                                                                     IP_cation, E(i), Np(i)) * f_cat
         end do
-        Pinj_pah = Pinj_pah + Pinj_local * nmolecules ! Convert to erg/cm3/s
+        Pinj_pah = Pinj_pah + Pinj_local ! [erg/s]
 
         ! 12. Compute the radiative cooling power of the PAH molecule
         Prad_pah = Prad_pah + max(sum(Pabs_local) - Pinj_local,0d0)
@@ -3246,7 +3229,7 @@ module pah_photoelectric_heating
         Prec_local = k_att * fcharge_pahs(2) + &
                    k_rec_1 * f_cat + &
                    k_rec_2 * f_dicat
-        Prec_pah = Prec_pah + Prec_local * nmolecules * ne * (1.5d0 * kB * Tgas) ! Convert to erg/cm3/s
+        Prec_pah = Prec_pah + Prec_local * ne * (1.5d0 * kB * Tgas) ! Convert to erg/s
 
     end subroutine compute_pah_peh_equilibrium
 
@@ -3283,41 +3266,34 @@ module pah_photoelectric_heating
         if (f_total > 0d0) fcharge_pahs(:) = fcharge_pahs(:) / f_total
     end subroutine interpolate_pah_charge_equilibrium
 
-    subroutine interpolate_pah_peh_equilibrium(i_pah,rho_pah,G0,ne,Tgas,&
+    subroutine interpolate_pah_peh_equilibrium(i_pah,G0,ne,Tgas,&
                                                 fcharge_pahs,Pabs_pah,&
                                                 Pinj_pah,Prad_pah,Prec_pah)
 
         ! This subroutine interpolates the PAH photoelectric heating equilibrium
         ! conditions for a given PAH molecule based on the local G0, ne and Tgas.
         ! i_pah          --> index of the PAH molecule in the array
-        ! rho_pah        --> density of the PAH molecule in g/cm3
         ! G0             --> local G0 value (Habing units)
         ! ne             --> electron number density in cm-3
         ! Tgas           --> gas temperature in Kelvin
         ! fcharge_pahs   <-- allocatable/assumed-shape array with the fraction of PAH
         !                     mass in each charge state
-        ! Pabs_pah       <-- absorbed power by the PAH molecules in erg/cm3/s
-        ! Pinj_pah       <-- injected power into the gas by the PAH molecules
-        !                     in erg/cm3/s
-        ! Prad_pah       <-- radiative cooling power of the PAH molecules
-        !                     into IR in erg/cm3/s
-        ! Prec_pah       <-- recombination cooling power of the PAH molecules
-        !                     in erg/cm3/s
+        ! Pabs_pah       <-- absorbed power by the PAH [erg/s]
+        ! Pinj_pah       <-- injected power into the gas [erg/s]
+        ! Prad_pah       <-- radiative cooling power of the PAH [erg/s]
+        ! Prec_pah       <-- recombination cooling power of the PAH [erg/s]
         use amr_commons, only: myid
         use constants, only: kB
         implicit none
         integer, intent(in) :: i_pah
-        real(dp), intent(in) :: rho_pah, G0, ne, Tgas
+        real(dp), intent(in) :: G0, ne, Tgas
         real(dp), dimension(:), intent(out) :: fcharge_pahs
         real(dp), intent(out),optional :: Pabs_pah, Pinj_pah, Prad_pah, Prec_pah
 
         integer :: Nc, nstates, nstates_interp, istate, idx_gamma, idx_gamma_fcharge
         real(dp) :: eff,gamma,f_total
         real(dp) :: k_att, k_rec_1, k_rec_2
-        real(dp) :: nmolecules
         real(dp) :: f_cat, f_dicat
-
-        nmolecules = rho_pah / pahbins_props(i_pah)%mpah
 
         ! 1. Get the interpolated value for the PAH PE efficiency
         gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
@@ -3336,17 +3312,17 @@ module pah_photoelectric_heating
         ! Scale by the value of G0 and the number density of PAHs
         ! NOTE: Convert G0 to the Mathis ISRF by dividing by 1.13 (see Mathis et al. 1983)
         if (present(Pabs_pah)) then
-            Pabs_pah = exp(Pabs_pah * ln10) * nmolecules * (G0 / 1.13d0) ! [erg/cm3/s]
+            Pabs_pah = exp(Pabs_pah * ln10) * (G0 / 1.13d0) ! [erg/s]
         end if
         ! 3. Get the injected power into the gas by the PAH molecules
         if (present(Pinj_pah)) then
-            Pinj_pah = eff * Pabs_pah
+            Pinj_pah = eff * Pabs_pah ! [erg/s]
         end if
 
         ! 4. The radiative cooling power of the PAH molecules
         !    is just the absorbed power minus the injected power
         if (present(Prad_pah)) then
-            Prad_pah = max(Pabs_pah - Pinj_pah, 0d0)
+            Prad_pah = max(Pabs_pah - Pinj_pah, 0d0) ! [erg/s]
         end if
 
         ! 6. Get the interpolated value for the PAH charges
@@ -3404,7 +3380,7 @@ module pah_photoelectric_heating
             Prec_pah = k_att * fcharge_pahs(2) + &
                     k_rec_1 * f_cat + &
                     k_rec_2 * f_dicat
-            Prec_pah = Prec_pah * ne * nmolecules * (1.5d0 * kB * Tgas)! Convert to erg/cm3/s
+            Prec_pah = Prec_pah * ne * (1.5d0 * kB * Tgas)! [erg/s]
         end if
     end subroutine interpolate_pah_peh_equilibrium
     

@@ -186,13 +186,16 @@ contains
             if (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
                     if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
-                        call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),G0_total,ne,Tk,&
-                                                        &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
+                        call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
+                                                        &dinfo%Pinj_dust(ii),&
+                                                        &dinfo%Prec_dust(ii))
                     else
                         call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii))
-                        call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%G0_background,ne,Tk,&
+                        ! Consider the contribution from the UV background
+                        call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
                                                         &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
-                        call compute_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%csa_dust(ii,:),&
+                        ! Now consider the contribution from the local radiation field
+                        call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
                                                     dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
                                                     dinfo%local_solid_angle,Np(:),dinfo%group_eV(:),&
                                                     dinfo%Z_dust(ii),dinfo%Z_sigma(ii),Tk,ne,&
@@ -201,8 +204,9 @@ contains
                 end do
             elseif (dust_pe_heating) then
                 do ii = 1, dinfo%ndust
-                    call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),G0_total,ne,Tk,&
-                                                    &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
+                    call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
+                                                    &dinfo%Pinj_dust(ii),&
+                                                    &dinfo%Prec_dust(ii))
                 end do
             end if
 
@@ -216,7 +220,16 @@ contains
                                     dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:))
             end if
 
-            ! 5. Compute the H2 formation rate on dust grains
+            ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
+            do ii = 1, dinfo%ndust
+                dinfo%n_dust(ii) = dinfo%rho_dust(ii) / dustbins_props(ii)%mgrain
+                dinfo%Pcoll_dust(ii) = dinfo%Pcoll_dust(ii) * dinfo%n_dust(ii)
+                dinfo%Prec_dust(ii) = dinfo%Prec_dust(ii) * dinfo%n_dust(ii)
+                dinfo%Pinj_dust(ii) = dinfo%Pinj_dust(ii) * dinfo%n_dust(ii)
+                dinfo%Prad_dust(ii) = dinfo%Prad_dust(ii) * dinfo%n_dust(ii)
+            end do
+
+            ! 6. Compute the H2 formation rate on dust grains
             if (H2ondust) then
                 nHI = nElement(1) * xelem_ions(1,1)
                 dinfo%H2_formation_rate = grain_h2_formation_rate(nHI,nElement(1),Tk,dinfo%rho_dust(:),dinfo%T_dust(:))
@@ -224,12 +237,12 @@ contains
         end if
 
         if (dinfo%npah > 0) then
-            ! 6. Compute the PAH PEH model
+            ! 7. Compute the PAH PEH model
             if (pah_pe_heating .and. present(Np)) then
                 if (pah_pe_heating_isrf) then
                     ! We have rt, but we want to just use the ISRF-averaged model
                         do ii = 1, dinfo%npah
-                            call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),G0_total,&
+                            call interpolate_pah_peh_equilibrium(ii,G0_total,&
                                                                 ne,Tk,dinfo%fcharge_pah(:,ii),&
                                                                 dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                                 dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
@@ -238,12 +251,12 @@ contains
                     ! We want the PAH PEH also have rt, so we use the full model
                     do ii = 1, dinfo%npah
                         ! Consider the contribution from the UV background first
-                        call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%G0_background,&
+                        call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                             ne,Tk,dinfo%fcharge_pah(:,ii),&
                                                             dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(1+2*(ii-1),:),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
                                                             dinfo%csa_pah(1+2*(ii-1),:),&
                                                             dinfo%csa_pah(2+2*(ii-1),:),&
                                                             dinfo%csa_pah(2+2*(ii-1),:),&
@@ -257,7 +270,7 @@ contains
             else if (pah_pe_heating) then
                 ! We want PAH PEH but don't have rt
                 do ii = 1, dinfo%npah
-                    call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%G0_background,&
+                    call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                         ne,Tk,dinfo%fcharge_pah(:,ii),&
                                                         dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                         dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
@@ -281,6 +294,15 @@ contains
                        &dinfo%fcharge_pah(:,ii))
                 end do
             end if
+
+            ! 8. Now convert from erg/s to erg/s/cm3
+            do ii = 1, dinfo%npah
+                dinfo%n_pah(ii) = dinfo%rho_pah(ii) / pahbins_props(ii)%mpah
+                dinfo%Pabs_pah(ii,:) = dinfo%Pabs_pah(ii,:) * dinfo%n_pah(ii)
+                dinfo%Pinj_pah(ii) = dinfo%Pinj_pah(ii) * dinfo%n_pah(ii)
+                dinfo%Prad_pah(ii) = dinfo%Prad_pah(ii) * dinfo%n_pah(ii)
+                dinfo%Prec_pah(ii) = dinfo%Prec_pah(ii) * dinfo%n_pah(ii)
+            end do
         end if
     end subroutine compute_dust_precool
 
@@ -408,13 +430,16 @@ contains
             if (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
                     if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
-                        call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),G0_total,ne,Tk,&
-                                                        &Pinj_dust(ii),Prec_dust(ii))
+                        call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
+                                                        &Pinj_dust(ii),&
+                                                        &Prec_dust(ii))
                     else
                         call compute_dust_charge_sigma(ii,G0_total,Tk,ne,Z_sigma(ii))
-                        call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%G0_background,ne,Tk,&
+                        ! Consider the contribution from the UV background
+                        call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
                                                         &Pinj_dust(ii),Prec_dust(ii))
-                        call compute_dust_peh_rate(ii,dinfo%rho_dust(ii),dinfo%csa_dust(ii,:),&
+                        ! Now consider the contribution from the local radiation field
+                        call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
                                                     dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
                                                     dinfo%local_solid_angle(:),Np(:),&
                                                     dinfo%group_eV(:),Z_dust(ii),Z_sigma(ii),Tk,ne,&
@@ -423,8 +448,9 @@ contains
                 end do
             elseif (dust_pe_heating) then
                 do ii = 1, dinfo%ndust
-                    call interpolate_dust_peh_rate(ii,dinfo%rho_dust(ii),G0_total,ne,Tk,&
-                                                    &Pinj_dust(ii),Prec_dust(ii))
+                    call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
+                                                    &Pinj_dust(ii),&
+                                                    &Prec_dust(ii))
                 end do
             end if
 
@@ -438,11 +464,19 @@ contains
                                     T_dust(:),ne,nElement(:),xelem_ions(:,:),Coulomb_factor(:,:),nH2,nCO,Tk,Z_dust(:))
             end if
 
+            ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
+            do ii = 1, dinfo%ndust
+                Pcoll_dust(ii) = Pcoll_dust(ii) * dinfo%n_dust(ii)
+                Prec_dust(ii) = Prec_dust(ii) * dinfo%n_dust(ii)
+                Pinj_dust(ii) = Pinj_dust(ii) * dinfo%n_dust(ii)
+                Prad_dust(ii) = Prad_dust(ii) * dinfo%n_dust(ii)
+            end do
+
             total_rec_power = total_rec_power + sum(Prec_dust)
             total_inj_power = total_inj_power + sum(Pinj_dust)
             total_col_power = total_col_power + sum(Pcoll_dust)
 
-            ! 5. Compute the H2 formation rate on dust grains
+            ! 6. Compute the H2 formation rate on dust grains
             if (H2ondust) then
                 nHI = nElement(1) * xelem_ions(1,1)
                 H2_formation_rate = grain_h2_formation_rate(nHI,nElement(1),Tk,dinfo%rho_dust(:),T_dust(:))
@@ -450,12 +484,12 @@ contains
         end if
 
         if (dinfo%npah > 0) then
-            ! 5. Compute the PAH PEH model
+            ! 7. Compute the PAH PEH model
             if (pah_pe_heating .and. present(Np)) then
                 if (pah_pe_heating_isrf) then
                     ! We have rt, but we want to just use the ISRF-averaged model
                         do ii = 1, dinfo%npah
-                            call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),G0_total,&
+                            call interpolate_pah_peh_equilibrium(ii,G0_total,&
                                                                 ne,Tk,fcharge_pah(:,ii),&
                                                                 Pabs_pah(1,ii),Pinj_pah(ii),&
                                                                 Prad_pah(ii),Prec_pah(ii))
@@ -464,12 +498,12 @@ contains
                     ! We want the PAH PEH also have rt, so we use the full model
                     do ii = 1, dinfo%npah
                         ! Consider the contribution from the UV background first
-                        call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%G0_background,&
+                        call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                             ne,Tk,fcharge_pah(:,ii),&
                                                             Pabs_pah(1,ii),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%csa_pah(1+2*(ii-1),:),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
                                                             dinfo%csa_pah(1+2*(ii-1),:),&
                                                             dinfo%csa_pah(2+2*(ii-1),:),&
                                                             dinfo%csa_pah(2+2*(ii-1),:),&
@@ -483,7 +517,7 @@ contains
             else if (pah_pe_heating) then
                 ! We want PAH PEH but don't have rt
                 do ii = 1, dinfo%npah
-                    call interpolate_pah_peh_equilibrium(ii,dinfo%rho_pah(ii),dinfo%G0_background,&
+                    call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                         ne,Tk,fcharge_pah(:,ii),&
                                                         Pabs_pah(1,ii),Pinj_pah(ii),&
                                                         Prad_pah(ii),Prec_pah(ii))
@@ -507,6 +541,15 @@ contains
                        &fcharge_pah(:,ii))
                 end do
             end if
+
+            ! 8. Now convert from erg/s to erg/s/cm3
+            do ii = 1, dinfo%npah
+                Pabs_pah(ii,:) = Pabs_pah(ii,:) * dinfo%n_pah(ii)
+                Pinj_pah(ii) = Pinj_pah(ii) * dinfo%n_pah(ii)
+                Prad_pah(ii) = Prad_pah(ii) * dinfo%n_pah(ii)
+                Prec_pah(ii) = Prec_pah(ii) * dinfo%n_pah(ii)
+            end do
+
             total_rec_power = total_rec_power + sum(Prec_pah)
             total_inj_power = total_inj_power + sum(Pinj_pah)
         end if

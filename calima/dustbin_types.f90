@@ -58,7 +58,9 @@ module dustbin_types
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV
         real(dp),dimension(:),allocatable :: rho_dust ! Dust mass density
+        real(dp),dimension(:),allocatable :: n_dust ! Dust number density
         real(dp),dimension(:),allocatable :: rho_pah ! PAH mass density
+        real(dp),dimension(:),allocatable :: n_pah ! PAH number density
         real(dp),dimension(:),allocatable :: Z_dust ! Dust median charge
         real(dp),dimension(:),allocatable :: Z_sigma ! Dust charge distribution width
         real(dp),dimension(:,:),allocatable :: fcharge_pah ! PAH charge distribution function
@@ -424,6 +426,14 @@ contains
         allocate(this%rho_pah(1:this%npah))
         this%rho_pah = 0d0
 
+        if (allocated(this%n_dust)) deallocate(this%n_dust)
+        allocate(this%n_dust(1:this%ndust))
+        this%n_dust = 0d0
+
+        if (allocated(this%n_pah)) deallocate(this%n_pah)
+        allocate(this%n_pah(1:this%npah))
+        this%n_pah = 0d0
+
         if (allocated(this%Z_dust)) deallocate(this%Z_dust)
         allocate(this%Z_dust(1:this%ndust))
         this%Z_dust = 0d0
@@ -556,7 +566,9 @@ contains
         class(DustChemistryInfo), intent(inout) :: this
 
         if (allocated(this%rho_dust)) this%rho_dust = 0d0
+        if (allocated(this%n_dust)) this%n_dust = 0d0
         if (allocated(this%rho_pah)) this%rho_pah = 0d0
+        if (allocated(this%n_pah)) this%n_pah = 0d0
         if (allocated(this%Z_dust)) this%Z_dust = 0d0
         if (allocated(this%Z_sigma)) this%Z_sigma = 0d0
         if (allocated(this%fcharge_pah)) this%fcharge_pah = 0d0
