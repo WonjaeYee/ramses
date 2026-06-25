@@ -358,10 +358,10 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: jj, ii, ii1, ii2, kk, e_index, iion, nions_loc
+        integer :: jj, ii, ii1, ii2, kk, e_index
         integer :: n_el
         real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
-        real(dp) :: total_rate_type, sticking_ice, nO, sum_flux
+        real(dp) :: total_rate_type, sticking_ice,nO
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
@@ -401,7 +401,6 @@ module dust_rates
                 do ii = ii1, ii2
                     sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
                     rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
-                    rate = min(rate, max_accretion_rate)
                     ! 5. Get the maximum rate computed here, if requested.
                     if (present(kmax)) then
                         kmax = max(kmax, abs(rate))
@@ -414,18 +413,6 @@ module dust_rates
             do kk = 1, n_el
                 e_index = bin%el_index(kk)
                 dydt_gas(e_index,1) = dydt_gas(e_index,1) - total_rate_type * bin%el_mfractions(kk) ! [g cm-3 s-1]
-                if (carry_gas_ions) then
-                    nions_loc = n_elements
-#ifdef RTZ
-                    nions_loc = max(1, elements(e_index)%n_ions)
-#endif
-                    sum_flux = sum(max(0d0, y_gas(e_index, 2:nions_loc+1)))
-                    if (sum_flux > 1d-30) then
-                        do iion = 1, nions_loc
-                            dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - (total_rate_type * bin%el_mfractions(kk)) * max(0d0, y_gas(e_index, iion+1)) / sum_flux
-                        end do
-                    end if
-                end if
             end do
             end associate
         end do speciesloop
