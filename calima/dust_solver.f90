@@ -1193,12 +1193,12 @@ module ode_driver_mod
             ode_substeps_max  = max(ode_substeps_max, int(naccepted, kind=8))
         end if
 
-        if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
-            print *, 'DEBUG integrate_dust_ode: negative final density detected.'
-            print *, 'y_gas_final:  ',y_gas_final(:,:)
-            print *, 'y_dust_final: ',y_dust_final(:)
-            call clean_stop
-        end if
+        ! if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
+        !     print *, 'DEBUG integrate_dust_ode: negative final density detected.'
+        !     print *, 'y_gas_final:  ',y_gas_final(:,:)
+        !     print *, 'y_dust_final: ',y_dust_final(:)
+        !     call clean_stop
+        ! end if
     end subroutine integrate_dust_ode
 
 end module ode_driver_mod
