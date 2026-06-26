@@ -198,7 +198,6 @@ module dust_charging
         end if
 
         call dustbins_props(i_dust)%sigma_charg_tab%interpolate(lgamma, lT, Zsigma, idx_x, idx_y)
-
     end subroutine compute_dust_charge_sigma
 
     subroutine compute_dust_charge_dist(i_dust,G0,Tgas,ne,Z_avg,Zdust,fcharge,n_charge,idx_x,idx_y)
@@ -272,8 +271,7 @@ module dust_charging
         ! This is based on Eq. 6-7 in Weingartner & Draine (1999) which allows
         ! the computation of the Coulomb enhancement factor from the charge
         ! distribution (https://iopscience.iop.org/article/10.1086/307197)
-        ! Remember that this equation is in CGS, so the grain size should be
-        ! instead in cm, not in microns
+        ! Updated to safely support arbitrary array spacing (Delta Z != 1)
         use cooling_module, only: kB
         use constants, only: pi,e2instatC
         implicit none
@@ -284,74 +282,112 @@ module dust_charging
         real(dp), intent(in) :: Zion,agrain,Tgas
         real(dp), intent(inout) :: D_Coulomb
 
-        integer :: j, Zmin, j_zero, j_start, j_end
-        real(dp) :: Zg, Bfact_zero, inv_kT_a, C, exp_minus_C, term
+        integer :: j, j_zero, j_start, j_end
+        integer :: j_act_lo, j_act_hi
+        real(dp) :: Zg, Bfact_zero, inv_kT_a, C
+        real(dp) :: min_dist, current_dist
+        real(dp), parameter :: f_thresh = 1.0d-20  ! Threshold to safely bypass denormalized numbers
 
         D_Coulomb = 0d0
         if (Zion.ne.0d0) then
             if (n_charge .gt. 0) then
+                ! =========================================================
+                ! ACTIVE WINDOW TRIM: Locate the living slice of the Gaussian
+                ! =========================================================
+                j_act_lo = 1
+                do while (j_act_lo <= n_charge)
+                    if (fcharge(j_act_lo) >= f_thresh) exit
+                    j_act_lo = j_act_lo + 1
+                end do
+
+                j_act_hi = n_charge
+                do while (j_act_hi >= j_act_lo)
+                    if (fcharge(j_act_hi) >= f_thresh) exit
+                    j_act_hi = j_act_hi - 1
+                end do
+
+                ! If the entire array was empty or below threshold, return default neutral focusing
+                if (j_act_lo > j_act_hi) then
+                    D_Coulomb = 1d0
+                    return
+                end if
+
+                ! =========================================================
+                ! ROBUST NEUTRAL LOCATOR: Find array index closest to zero charge
+                ! =========================================================
+                j_zero = j_act_lo
+                min_dist = abs(Zdust(j_act_lo))
+                do j = j_act_lo + 1, j_act_hi
+                    current_dist = abs(Zdust(j))
+                    if (current_dist < min_dist) then
+                        min_dist = current_dist
+                        j_zero = j
+                    end if
+                end do
+
                 inv_kT_a = e2instatC / (kB*Tgas*agrain)
                 C = Zion * inv_kT_a
-                Zmin = nint(Zdust(1))
-                j_zero = 1 - Zmin
                 Bfact_zero = 1d0 + sqrt(pi * Zion**2 * inv_kT_a / 2d0)
                 
                 if (Zion .gt. 0d0) then
-                    ! Zg < 0 => Zg * Zion < 0
-                    j_start = 1
-                    j_end = min(n_charge, j_zero - 1)
-                    do j = j_start, j_end
-                        Zg = Zdust(j)
-                        D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
-                    end do
-                    
-                    ! Zg == 0
-                    if (j_zero .ge. 1 .and. j_zero .le. n_charge) then
-                        D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
-                    end if
-                    
-                    ! Zg > 0 => Zg * Zion > 0
-                    j_start = max(1, j_zero + 1)
-                    j_end = n_charge
+                    ! 1. Attractive Regime: Zg < 0 => Zg * Zion < 0
+                    j_start = j_act_lo
+                    j_end   = min(j_zero - 1, j_act_hi)
                     if (j_start .le. j_end) then
-                        exp_minus_C = exp(-C)
-                        term = exp(-Zdust(j_start) * C)
                         do j = j_start, j_end
-                            D_Coulomb = D_Coulomb + fcharge(j) * term
-                            term = term * exp_minus_C
+                            Zg = Zdust(j)
+                            D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
                         end do
                     end if
+                    
+                    ! 2. Neutral Grain: Zg == 0
+                    if (j_zero .ge. j_act_lo .and. j_zero .le. j_act_hi) then
+                        if (abs(Zdust(j_zero)) < 1d-5) then
+                            D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
+                        end if
+                    end if
+                    
+                    ! 3. Repulsive Regime: Zg > 0 => Zg * Zion > 0
+                    j_start = max(j_zero + 1, j_act_lo)
+                    j_end   = j_act_hi
+                    if (j_start .le. j_end) then
+                        do j = j_start, j_end
+                            D_Coulomb = D_Coulomb + fcharge(j) * exp(-Zdust(j) * C)
+                        end do
+                    end if
+                    
                 else
                     ! Zion < 0
-                    ! Zg < 0 => Zg * Zion > 0
-                    j_start = 1
-                    j_end = min(n_charge, j_zero - 1)
+                    ! 1. Repulsive Regime: Zg < 0 => Zg * Zion > 0
+                    j_start = j_act_lo
+                    j_end   = min(j_zero - 1, j_act_hi)
                     if (j_start .le. j_end) then
-                        exp_minus_C = exp(-C)
-                        term = exp(-Zdust(j_start) * C)
                         do j = j_start, j_end
-                            D_Coulomb = D_Coulomb + fcharge(j) * term
-                            term = term * exp_minus_C
+                            D_Coulomb = D_Coulomb + fcharge(j) * exp(-Zdust(j) * C)
                         end do
                     end if
                     
-                    ! Zg == 0
-                    if (j_zero .ge. 1 .and. j_zero .le. n_charge) then
-                        D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
+                    ! 2. Neutral Grain: Zg == 0
+                    if (j_zero .ge. j_act_lo .and. j_zero .le. j_act_hi) then
+                        if (abs(Zdust(j_zero)) < 1d-5) then
+                            D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
+                        end if
                     end if
                     
-                    ! Zg > 0 => Zg * Zion < 0
-                    j_start = max(1, j_zero + 1)
-                    j_end = n_charge
-                    do j = j_start, j_end
-                        Zg = Zdust(j)
-                        D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
-                    end do
+                    ! 3. Attractive Regime: Zg > 0 => Zg * Zion < 0
+                    j_start = max(j_zero + 1, j_act_lo)
+                    j_end   = j_act_hi
+                    if (j_start .le. j_end) then
+                        do j = j_start, j_end
+                            Zg = Zdust(j)
+                            D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
+                        end do
+                    end if
                 end if
             end if
             D_Coulomb = max(D_Coulomb,1d-10)
         else
-            ! In the case of neutral atom, there is no Coulomb focusing
+            ! Neutral impactor: No Coulomb focusing occurs
             D_Coulomb = 1d0
         end if
     end subroutine compute_Coulomb_focusing

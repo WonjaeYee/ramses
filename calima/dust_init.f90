@@ -1057,7 +1057,7 @@ module dust_init
             comp_sigma_turb = .true.
         end if
 
-        if (dust_acc_coulomb.or.dust_sputtering_charge.or.dust_coll_charge) then
+        if (dust_acc_coulomb.or.dust_sputtering_charge.or.dust_coll_charge.or.pah_freezing) then
             Coulomb_precompute = .true.
         end if
 
@@ -1105,7 +1105,6 @@ module dust_init
         if (dust_test) then
             call run_dust_solver_test()
         end if
-
     end subroutine init_CALIMA_dust
 
     subroutine read_CALIMA_params(nml_ok,nGroups)

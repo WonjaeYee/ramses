@@ -439,7 +439,7 @@ module dust_rates
         integer :: jj, ii, ii1, ii2, kk, e_index, iion, izion, nions_loc
         integer :: n_el
         real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
-        real(dp) :: sticking_ice, nO, sum_flux, depletion
+        real(dp) :: sticking_ice, nO, depletion
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
@@ -492,21 +492,13 @@ module dust_rates
 #ifdef RTZ
                         nions_loc = max(1, elements(e_index)%n_ions)
 #endif
-                        sum_flux = 0d0
                         do iion = 1, nions_loc
                             izion = iion - 1
-                            sum_flux = sum_flux + max(0d0, y_gas(e_index, iion+1)) * dust_info%Coulomb_factor(ii, izion)
+                            depletion = rate * bin%el_mfractions(kk) * &
+                                (max(0d0, y_gas(e_index, iion+1)) * dust_info%Coulomb_factor(ii, izion))
+                            dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
+                            dydt_gas(e_index, 1) = dydt_gas(e_index, 1) - depletion
                         end do
-
-                        if (sum_flux > 1d-30) then
-                            do iion = 1, nions_loc
-                                izion = iion - 1
-                                depletion = rate * bin%el_mfractions(kk) * &
-                                    (max(0d0, y_gas(e_index, iion+1)) * dust_info%Coulomb_factor(ii, izion)) / sum_flux
-                                dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
-                                dydt_gas(e_index, 1) = dydt_gas(e_index, 1) - depletion
-                            end do
-                        end if
                     end do
                 end do
             end associate

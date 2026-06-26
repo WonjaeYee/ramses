@@ -1615,7 +1615,7 @@ module dust_radiation
         real(dp) :: H0, H1, H2, dH_dT
         real(dp) :: dP_dT
         real(dp) :: f, fprime
-        real(dp) :: T0, eps, T_new, dT
+        real(dp) :: T0, eps, T_new, dT, true_dT_low
 
         T0 = T
         eps = 1d-2
@@ -1629,12 +1629,14 @@ module dust_radiation
             call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
                                         Coulomb_factor,nH2,nCO,Tgas,T0+dT,&
                                         dust_charge,H2)
-
             call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
                                         Coulomb_factor,nH2,nCO,Tgas,max(T0-dT,Tmin),&
                                         dust_charge,H1)
-            H0 = coll_heat
-            dH_dT = (H2 - H1) / (2d0*dT)
+            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
+                                        Coulomb_factor,nH2,nCO,Tgas,T0,&
+                                        dust_charge,H0)
+            true_dT_low = T0 - max(T0-dT, Tmin)
+            dH_dT = (H2 - H1) / (dT + true_dT_low)
         else
             H0 = 0d0
             dH_dT = 0d0
@@ -1649,6 +1651,7 @@ module dust_radiation
             f = P_abs + H0 + dH_dT*(T - T0) + recomb_heat - P_rad - pe_heat
             fprime = dH_dT - dP_dT
             if (f .eq. 0d0) then
+                if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
@@ -1658,12 +1661,16 @@ module dust_radiation
 
             if (T_new < Tmin) then
                 T = Tmin
+                call dust_emission_power(i_dust, T, P_rad)
+                if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
 
             if (abs(T_new - T)/T < 1d-3) then
                 T = T_new
+                call dust_emission_power(i_dust, T, P_rad)
+                if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(iter_used, .false.)
                 return
             end if
@@ -1864,16 +1871,15 @@ module dust_radiation
                     end do
                 end if
             endif
-
             ! --- Initial guess: radiative equilibrium ---
             call get_Tdust_radiative_eq(j, P_abs, Tmin, T0)
-
             ! --- Check collisional heating at Tgas ---
             ! If collisional heating dominates radiation, start closer to Tgas
             if (dust_coll_cooling) then
                 call compute_dust_coll_heating(j,ne,nElement,xelem_ions,&
                                             Coulomb_factor(j,:),nH2,nCO,Tgas,T0,&
                                             dust_charge(j),H_coll_at_Tgas)
+                coll_heat(j) = H_coll_at_Tgas
                 if (H_coll_at_Tgas > P_abs) then
                     ! Collisional heating dominates the initial guess
                     call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
@@ -1881,14 +1887,15 @@ module dust_radiation
                     ! Radiative heating is much larger than collisional, so we can just assume that
                     T_dust(j) = max(T0, Tmin)
                     cycle
-                end if
-                coll_heat(j) = H_coll_at_Tgas
+                end if                
+            else
+                ! If we are not using collisional cooling, we set the collisional heating to zero
+                coll_heat(j) = 0d0
             end if
 
             call solve_Tdust_fast(j,P_abs,ne,nElement,xelem_ions,Coulomb_factor(j,:),&
                                 nH2,nCO,Tgas,dust_charge(j),coll_heat(j),&
                                 recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin)
-
             T_dust(j) = max(T0, Tmin)
         end do
     end subroutine update_T_dust
