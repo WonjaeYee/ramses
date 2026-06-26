@@ -55,8 +55,9 @@ module dust_cooling
             agrain = dustbins_props(i)%asize_cm
             bh80_h2_prefactor(i) = sqrt(8d0*kB/(pi*2d0*mH)) * pi * agrain**2d0
             bh80_co_prefactor(i) = sqrt(8d0*kB/(pi*(mC_amu+mO_amu)*amu2g)) * pi * agrain**2d0
-            bh80_h2_accomm_zero(i) = 4d0 * mH * dustbins_props(i)%mgrain / (2d0*mH + dustbins_props(i)%mgrain)**2d0
-            bh80_h_accomm_zero(i) = 2d0 * mH * dustbins_props(i)%mgrain / (mH + dustbins_props(i)%mgrain)**2d0
+            ! BH83 accommodation coefficient: alpha_0 = 4*m_proj*m_grain/(m_proj+m_grain)^2
+            bh80_h2_accomm_zero(i) = 8d0 * mH * dustbins_props(i)%mgrain / (2d0*mH + dustbins_props(i)%mgrain)**2d0
+            bh80_h_accomm_zero(i) = 4d0 * mH * dustbins_props(i)%mgrain / (mH + dustbins_props(i)%mgrain)**2d0
 
             do iel = 1, n_elements
 #ifdef RTZ
@@ -86,11 +87,6 @@ module dust_cooling
 
         integer :: j,iel,nions_loc
         real(dp) :: accomm_factor,prefactor,accomm_factor_zero,xion
-        logical :: cache_hit
-        real(dp), save :: cached_sum_other = 0d0
-        real(dp), save :: cached_Tgas = -1d0
-        real(dp), save :: cached_nH = -1d0
-        integer, save :: cached_i_dust = -1
 
         if (.not. bh80_cache_ready) call init_dust_coll_heating_BH80_cache
 
@@ -99,37 +95,25 @@ module dust_cooling
 
         ! 2. Compute contribution from species whose accommodation factor is unity
         ! (everything except H2 and H neutral)
-        cache_hit = (i_dust == cached_i_dust .and. &
-                     Tgas == cached_Tgas .and. &
-                     nElement(1) == cached_nH)
-
-        if (cache_hit) then
-            Hcoll = cached_sum_other
-        else
-            Hcoll = 0d0
-            do iel = 1, n_elements
+        Hcoll = 0d0
+        do iel = 1, n_elements
 #ifdef RTZ
-                nions_loc = max(1, elements(iel)%n_ions)
+            nions_loc = max(1, elements(iel)%n_ions)
 #else
-                nions_loc = 1
+            nions_loc = 1
 #endif
-                if (nElement(iel) <= 1d-10) cycle
+            if (nElement(iel) <= 1d-10) cycle
 
-                do j = 1, nions_loc
-                    xion = xelem_ions(iel,j)
-                    if (xion <= 1d-10) cycle
+            do j = 1, nions_loc
+                xion = xelem_ions(iel,j)
+                if (xion <= 1d-10) cycle
 
-                    ! Skip H neutral here as it depends on Td
-                    if (iel == 1 .and. j == 1) cycle
+                ! Skip H neutral here as it depends on Td
+                if (iel == 1 .and. j == 1) cycle
 
-                    Hcoll = Hcoll + nElement(iel) * xion * bh80_species_prefactor(i_dust,iel)
-                end do
+                Hcoll = Hcoll + nElement(iel) * xion * bh80_species_prefactor(i_dust,iel)
             end do
-            cached_sum_other = Hcoll
-            cached_i_dust = i_dust
-            cached_Tgas = Tgas
-            cached_nH = nElement(1)
-        end if
+        end do
 
         ! 3. Add H2 contribution (depends on Td)
         accomm_factor_zero = bh80_h2_accomm_zero(i_dust)
@@ -176,18 +160,11 @@ module dust_cooling
         real(dp):: Hcoll_HM80
 
         real(dp) :: sum_rate, sum_element
-        logical :: cache_hit
         integer :: idx_T
-
-        real(dp), save :: cached_Tgas = -1d0
-        real(dp), save :: cached_dust_charge = -1e9
-        real(dp), save :: cached_ne = -1d0
-        integer, save :: cached_i_dust = -1
-        real(dp), save :: cached_sum_rate = 0d0
         
         call system_clock(c_start, c_rate)
 
-        ! Initialize print / local variables to avoid printing uninitialized garbage
+        ! Initialize local variables
         dT = Tgas - Td
         sum_rate = 0d0
         Hcoll_HM80 = 0d0
@@ -198,82 +175,65 @@ module dust_cooling
             Hcoll    = 0d0
             lT = log10(Tgas)
 
-            cache_hit = (i_dust == cached_i_dust .and. &
-                         Tgas == cached_Tgas .and. &
-                         dust_charge == cached_dust_charge .and. &
-                         ne == cached_ne)
+            sum_rate = 0d0
+            agrain = dustbins_props(i_dust)%asize_cm
 
-            if (cache_hit) then
-                sum_rate = cached_sum_rate
+            ! 1. Do first the contribution from electron collisions
+            nT = dustbins_props(i_dust)%collisional_tab(0)%npts(1)
+            nphi = dustbins_props(i_dust)%collisional_tab(0)%npts(2)
+            idx_T = -1
+            if (dust_coll_charge) then
+                phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(-1) ! [eV]
+                call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
+                cooling_rate = exp(cooling_rate * ln10)
+                sum_rate = sum_rate + Coulomb_factor(-1) * ne * cooling_rate
             else
-                sum_rate = 0d0
-                agrain = dustbins_props(i_dust)%asize_cm
-
-                ! 1. Do first the contribution from electron collisions
-                nT = dustbins_props(i_dust)%collisional_tab(0)%npts(1)
-                nphi = dustbins_props(i_dust)%collisional_tab(0)%npts(2)
-                idx_T = -1
-                if (dust_coll_charge) then
-                    phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(-1) ! [eV]
-                    call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
-                    cooling_rate = exp(cooling_rate * ln10)
-                    sum_rate = sum_rate + Coulomb_factor(-1) * ne * cooling_rate
-                else
-                    ! 1D interpolation: use stored phi=0 index
-                    call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, cooling_rate, idx_x=idx_T)
-                    cooling_rate = exp(cooling_rate * ln10)
-                    sum_rate = sum_rate + ne * cooling_rate
-                end if
- 
-                ! 2. Loop over all elements
-                species_loop: do iel = 1, n_elements
-                    
-                    ! Skip if tables not initialized or element abundance is negligible
-                    if (nElement(iel) <= 1d-10) cycle
-                    if (.not. dustbins_props(i_dust)%collisional_tab(iel)%initialised) cycle
-                    
-                    nT = dustbins_props(i_dust)%collisional_tab(iel)%npts(1)
-                    nphi = dustbins_props(i_dust)%collisional_tab(iel)%npts(2)
- 
-                    if (dust_coll_charge) then
-                        ! Add contributions for all charge states of this element
-                        nions_loc = n_elements
-#ifdef RTZ
-                        nions_loc = max(1, elements(iel)%n_ions)
-#endif
-                        sum_element = 0d0
-                        do j = 1, nions_loc
-                            xion = xelem_ions(iel, j)
-                            if (xion <= 1d-5) cycle
-                            phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(j-1) ! [eV]
-                            call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
-                            if (cooling_rate < -30d0) cycle
-                            sum_element = sum_element + Coulomb_factor(j-1) * xion * exp(cooling_rate * ln10)
-                        end do
-                        sum_rate = sum_rate + nElement(iel) * sum_element
-                    else
-                        ! No charge dependence: just add contribution from the total abundance of this element
-                        call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, cooling_rate, idx_x=idx_T)
-                        if (cooling_rate >= -30d0) then
-                            sum_rate = sum_rate + nElement(iel) * exp(cooling_rate * ln10)
-                        end if
-                    end if
-                
-                end do species_loop
-
-                ! Update cache
-                cached_i_dust = i_dust
-                cached_Tgas = Tgas
-                cached_dust_charge = dust_charge
-                cached_ne = ne
-                cached_sum_rate = sum_rate
+                ! 1D interpolation: use stored phi=0 index
+                call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, cooling_rate, idx_x=idx_T)
+                cooling_rate = exp(cooling_rate * ln10)
+                sum_rate = sum_rate + ne * cooling_rate
             end if
+ 
+            ! 2. Loop over all elements
+            species_loop: do iel = 1, n_elements
+                
+                ! Skip if tables not initialized or element abundance is negligible
+                if (nElement(iel) <= 1d-10) cycle
+                if (.not. dustbins_props(i_dust)%collisional_tab(iel)%initialised) cycle
+                
+                nT = dustbins_props(i_dust)%collisional_tab(iel)%npts(1)
+                nphi = dustbins_props(i_dust)%collisional_tab(iel)%npts(2)
+ 
+                if (dust_coll_charge) then
+                    ! Add contributions for all charge states of this element
+                    nions_loc = n_elements
+#ifdef RTZ
+                    nions_loc = max(1, elements(iel)%n_ions)
+#endif
+                    sum_element = 0d0
+                    do j = 1, nions_loc
+                        xion = xelem_ions(iel, j)
+                        if (xion <= 1d-5) cycle
+                        phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(j-1) ! [eV]
+                        call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
+                        if (cooling_rate < -30d0) cycle
+                        sum_element = sum_element + Coulomb_factor(j-1) * xion * exp(cooling_rate * ln10)
+                    end do
+                    sum_rate = sum_rate + nElement(iel) * sum_element
+                else
+                    ! No charge dependence: just add contribution from the total abundance of this element
+                    call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, cooling_rate, idx_x=idx_T)
+                    if (cooling_rate >= -30d0) then
+                        sum_rate = sum_rate + nElement(iel) * exp(cooling_rate * ln10)
+                    end if
+                end if
+            
+            end do species_loop
 
             Hcoll = sum_rate * dT
 
-            ! 3. Now compute the low-temperature soft-cube collisional heating from
-            ! Hollenbach and McKee (1980) for Tgas < 1e4 K
-            if (Tgas .lt. 1d5 .and. (dust_coll_lowT)) then
+            ! 3. Always blend with BH80 for smooth transition at low T
+            if (Tgas < 1d5) then
                 supp_factor = 1d0 - 1d0/(1d0+exp(-1d1*(log10(Tgas)-4d0)))
                 supp_factor_inv = 1d0 / (1d0 + exp(-1d1*(log10(Tgas) - 4d0)))
                 call compute_dust_coll_heating_BH80(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,Td,Hcoll_HM80)
@@ -295,11 +255,6 @@ module dust_cooling
             ! write(*,*) 'ne:',ne
             ! write(*,*) 'dust_charge:',dust_charge
             ! write(*,*) 'i_dust:',i_dust
-            ! write(*,*) 'cached_i_dust:',cached_i_dust
-            ! write(*,*) 'cached_Tgas:',cached_Tgas
-            ! write(*,*) 'cached_dust_charge:',cached_dust_charge
-            ! write(*,*) 'cached_ne:',cached_ne
-            ! write(*,*) 'cached_sum_rate:',cached_sum_rate
             ! call clean_stop
         else
             call compute_dust_coll_heating_BH80(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,Td,Hcoll)

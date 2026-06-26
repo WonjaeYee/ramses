@@ -170,10 +170,11 @@ contains
                 idx_T = -1
                 do ii = 1, dinfo%ndust
                     ! Compute the dust charge distribution (approx. Gaussian)
+                    Zvals = 0d0
+                    fcharge = 0d0
                     call compute_dust_charge_dist(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),Zvals,fcharge,n_charge,idx_g,idx_T)
-                    dinfo%Coulomb_factor(ii,0) = 1d0
+                    dinfo%Coulomb_factor(ii,:) = 1d0
                     do j = -1, dinfo%nion_charges
-                        if (j == 0) cycle
                         Zel = dble(j)
                         call compute_Coulomb_focusing(Tk,dustbins_props(ii)%asize_cm,&
                                                         fcharge,Zvals,n_charge,&
@@ -224,6 +225,7 @@ contains
             do ii = 1, dinfo%ndust
                 dinfo%n_dust(ii) = dinfo%rho_dust(ii) / dustbins_props(ii)%mgrain
                 dinfo%Pcoll_dust(ii) = dinfo%Pcoll_dust(ii) * dinfo%n_dust(ii)
+                ! print*,'ii,dinfo%Pcoll_dust(ii),dinfo%n_dust(ii): ',ii,dinfo%Pcoll_dust(ii),dinfo%n_dust(ii)
                 dinfo%Prec_dust(ii) = dinfo%Prec_dust(ii) * dinfo%n_dust(ii)
                 dinfo%Pinj_dust(ii) = dinfo%Pinj_dust(ii) * dinfo%n_dust(ii)
                 dinfo%Prad_dust(ii) = dinfo%Prad_dust(ii) * dinfo%n_dust(ii)
@@ -357,7 +359,7 @@ contains
         real(dp), dimension(1:dinfo%ndust,-1:dinfo%nion_charges) :: Coulomb_factor
         real(dp), dimension(1:dinfo%ndust):: Pinj_dust, Prec_dust, Pcoll_dust, Prad_dust
         real(dp), dimension(1:dinfo%npah) :: Pinj_pah, Prec_pah, Prad_pah
-        real(dp), dimension(1:dinfo%nGroups,1:dinfo%npah) :: Pabs_pah
+        real(dp), dimension(1:dinfo%npah,1:dinfo%nGroups) :: Pabs_pah
 
 
         if (dinfo%use_precomp) then
@@ -491,7 +493,7 @@ contains
                         do ii = 1, dinfo%npah
                             call interpolate_pah_peh_equilibrium(ii,G0_total,&
                                                                 ne,Tk,fcharge_pah(:,ii),&
-                                                                Pabs_pah(1,ii),Pinj_pah(ii),&
+                                                                Pabs_pah(ii,1),Pinj_pah(ii),&
                                                                 Prad_pah(ii),Prec_pah(ii))
                         end do
                 else
@@ -500,7 +502,7 @@ contains
                         ! Consider the contribution from the UV background first
                         call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                             ne,Tk,fcharge_pah(:,ii),&
-                                                            Pabs_pah(1,ii),Pinj_pah(ii),&
+                                                            Pabs_pah(ii,1),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                         ! And now the full model for the local radiation field
                         call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
@@ -510,7 +512,7 @@ contains
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
-                                                            Pabs_pah(:,ii),Pinj_pah(ii),&
+                                                            Pabs_pah(ii,:),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                     end do
                 end if
@@ -519,7 +521,7 @@ contains
                 do ii = 1, dinfo%npah
                     call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                         ne,Tk,fcharge_pah(:,ii),&
-                                                        Pabs_pah(1,ii),Pinj_pah(ii),&
+                                                        Pabs_pah(ii,1),Pinj_pah(ii),&
                                                         Prad_pah(ii),Prec_pah(ii))
                 end do
             else if (present(Np)) then
