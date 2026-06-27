@@ -36,6 +36,11 @@ subroutine init_hydro
      allocate(fluxes(1:ncell,1:twondim))
      fluxes(1:ncell,1:twondim)=0.0d0
   end if
+#if NVARNOADVECT>0
+  allocate(unoadvect(1:ncell,1:nvarnoadvect))
+  !TODO(code): we might want a different initial value per variable
+  unoadvect=noadvect_init
+#endif
   if(momentum_feedback>0)then
      allocate(pstarold(1:ncell))
      allocate(pstarnew(1:ncell))
@@ -82,6 +87,8 @@ subroutine init_hydro
      open(unit=ilun,file=fileloc,form='unformatted')
      read(ilun)ncpu2
      read(ilun)nvar2
+     ! Correct for non-advected quantities
+     nvar2 = nvar2 - nvarnoadvect_og
      if(strict_equilibrium>0)nvar2=nvar2-2
      read(ilun)ndim2
      read(ilun)nlevelmax2
@@ -248,6 +255,17 @@ subroutine init_hydro
                        endif
                     end do
                  endif
+#endif
+#if NVARNOADVECT>0
+                 ! TODO(code): HK note: not sure if this is compatible with the above code
+                 if (nvarnoadvect_og.gt.0) then
+                    do ivar=1,nvarnoadvect_og
+                       read(ilun)xx
+                       do i=1,ncache
+                          unoadvect(ind_grid(i)+iskip,ivar)=xx(i)
+                       end do
+                    end do
+                 end if
 #endif
                  ! Read equilibrium density and pressure profiles
                  if(strict_equilibrium>0)then

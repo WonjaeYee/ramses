@@ -70,6 +70,11 @@ recursive subroutine amr_step(ilevel,icount)
                  if(strict_equilibrium>0)call make_virtual_fine_dp(rho_eq(1),i)
                  if(strict_equilibrium>0)call make_virtual_fine_dp(p_eq(1),i)
                  if(simple_boundary)call make_boundary_hydro(i)
+#if NVARNOADVECT>0
+                 do ivar=1,nvarnoadvect
+                    call make_virtual_fine_dp(unoadvect(1,ivar),i)
+                 end do
+#endif
               end if
 #ifdef RT
               if(rt)then
@@ -286,6 +291,12 @@ recursive subroutine amr_step(ilevel,icount)
            call make_virtual_fine_dp(uold(1,ivar),ilevel)
         end do
         if(simple_boundary)call make_boundary_hydro(ilevel)
+#if NVARNOADVECT>0
+        do ivar=1,nvarnoadvect
+           call make_virtual_fine_dp(unoadvect(1,ivar),ilevel)
+        end do
+#endif
+
 
         ! Compute Bondi-Hoyle accretion parameters
 #if NDIM==3
@@ -514,6 +525,11 @@ recursive subroutine amr_step(ilevel,icount)
      if(strict_equilibrium>0)call make_virtual_fine_dp(rho_eq(1),ilevel)
      if(strict_equilibrium>0)call make_virtual_fine_dp(p_eq(1),ilevel)
      if(simple_boundary)call make_boundary_hydro(ilevel)
+#if NVARNOADVECT>0
+     do ivar=1,nvarnoadvect
+        call make_virtual_fine_dp(unoadvect(1,ivar),ilevel)
+     end do
+#endif
   endif
 
 #ifdef SOLVERmhd
