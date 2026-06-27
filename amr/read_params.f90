@@ -558,6 +558,9 @@ subroutine read_movie_params(namelist_unit,nml_ok)
    & ,theta_camera,phi_camera,dtheta_camera,dphi_camera,focal_camera,dist_camera,ddist_camera &
    & ,perspective_camera,smooth_frame,shader_frame,tstart_theta_camera,tstart_phi_camera &
    & ,tend_theta_camera,tend_phi_camera,method_frame,varmin_frame,varmax_frame
+#ifdef RTZ
+   namelist/movie_params/movie_lines_file
+#endif
 
    ! Go to the beginning of the file
    rewind(namelist_unit)
