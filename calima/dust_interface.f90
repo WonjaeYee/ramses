@@ -154,31 +154,25 @@ contains
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
         real(dp) :: Zel, nHI
-        real(dp),dimension(1:256) :: Zvals
-        real(dp),dimension(1:256) :: fcharge
         integer :: n_charge
 
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
+            idx_g = -1
+            idx_T = -1
             do ii = 1, dinfo%ndust
-                call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii))
+                call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),idx_g,idx_T)
+                call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii),idx_g,idx_T)
             end do
 
             ! 2. If needed, precompute the Coulomb factors
+            dinfo%Coulomb_factor = 1d0
             if (Coulomb_precompute) then
-                idx_g = -1
-                idx_T = -1
                 do ii = 1, dinfo%ndust
-                    ! Compute the dust charge distribution (approx. Gaussian)
-                    Zvals = 0d0
-                    fcharge = 0d0
-                    call compute_dust_charge_dist(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),Zvals,fcharge,n_charge,idx_g,idx_T)
-                    dinfo%Coulomb_factor(ii,:) = 1d0
                     do j = -1, dinfo%nion_charges
                         Zel = dble(j)
-                        call compute_Coulomb_focusing(Tk,dustbins_props(ii)%asize_cm,&
-                                                        fcharge,Zvals,n_charge,&
-                                                        Zel,dinfo%Coulomb_factor(ii,j))
+                        call compute_Coulomb_focusing(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),&
+                                                       &Zel,dinfo%Coulomb_factor(ii,j))
                     end do
                 end do
             end if
@@ -350,13 +344,9 @@ contains
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
-        real(dp) :: Zel, nHI
-        real(dp),dimension(1:256) :: Zvals
-        real(dp),dimension(1:256) :: fcharge
-        integer :: n_charge
-        real(dp), dimension(1:dinfo%ndust) :: Z_dust, T_dust, Z_sigma
+        real(dp) :: nHI
+        real(dp), dimension(1:dinfo%ndust) :: T_dust
         real(dp), dimension(1:dinfo%ncharge_pah_max,1:dinfo%npah) :: fcharge_pah
-        real(dp), dimension(1:dinfo%ndust,-1:dinfo%nion_charges) :: Coulomb_factor
         real(dp), dimension(1:dinfo%ndust):: Pinj_dust, Prec_dust, Pcoll_dust, Prad_dust
         real(dp), dimension(1:dinfo%npah) :: Pinj_pah, Prec_pah, Prad_pah
         real(dp), dimension(1:dinfo%npah,1:dinfo%nGroups) :: Pabs_pah
@@ -388,11 +378,8 @@ contains
         total_inj_power = 0d0
         total_col_power = 0d0
         H2_formation_rate = -1d0
-        Z_dust = 0d0
         T_dust = 0d0
-        Z_sigma = 0d0
         fcharge_pah = 0d0
-        Coulomb_factor = 1d0
         Pinj_dust = 0d0
         Prec_dust = 0d0
         Pcoll_dust = 0d0
@@ -403,32 +390,7 @@ contains
         Pabs_pah = 0d0
 
         if (dinfo%ndust > 0) then
-            ! 1. Compute the equilibrium dust charge
-            do ii = 1, dinfo%ndust
-                call compute_mean_dust_charge(ii,G0_total,Tk,ne,Z_dust(ii))
-            end do
-
-            ! 2. If needed, precompute the Coulomb factors
-            if (Coulomb_precompute) then
-                idx_g = -1
-                idx_T = -1
-                do ii = 1, dinfo%ndust
-                    ! Compute the dust charge distribution (approx. Gaussian)
-                    call compute_dust_charge_dist(ii,G0_total,Tk,ne,Z_dust(ii),Zvals,fcharge,n_charge,idx_g,idx_T)
-                    Coulomb_factor(ii,0) = 1d0
-                    do j = -1, dinfo%nion_charges
-                        if (j == 0) cycle
-                        Zel = dble(j)
-                        call compute_Coulomb_focusing(Tk,dustbins_props(ii)%asize_cm,&
-                                                        fcharge,Zvals,n_charge,Zel,&
-                                                        Coulomb_factor(ii,j))
-                    end do
-                end do
-            else
-                Coulomb_factor(:,:) = 1d0
-            end if
-
-            ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
+            ! 1. Compute the equilibrium dust photoelectric heating and recombination cooling rates
             if (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
                     if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
@@ -436,7 +398,7 @@ contains
                                                         &Pinj_dust(ii),&
                                                         &Prec_dust(ii))
                     else
-                        call compute_dust_charge_sigma(ii,G0_total,Tk,ne,Z_sigma(ii))
+                        call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii))
                         ! Consider the contribution from the UV background
                         call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
                                                         &Pinj_dust(ii),Prec_dust(ii))
@@ -444,7 +406,7 @@ contains
                         call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
                                                     dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
                                                     dinfo%local_solid_angle(:),Np(:),&
-                                                    dinfo%group_eV(:),Z_dust(ii),Z_sigma(ii),Tk,ne,&
+                                                    dinfo%group_eV(:),dinfo%Z_dust(ii),dinfo%Z_sigma(ii),Tk,ne,&
                                                     Pinj_dust(ii),Prec_dust(ii))
                     end if
                 end do
@@ -459,11 +421,11 @@ contains
             ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
             if (present(Np)) then
                 call update_T_dust(dinfo%G0_background,Pcoll_dust(:),Prec_dust(:),Pinj_dust(:),Prad_dust(:),&
-                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),Coulomb_factor(:,:),nH2,nCO,Tk,Z_dust(:),&
+                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
                                     Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:))
             else
                 call update_T_dust(dinfo%G0_background,Pcoll_dust(:),Prec_dust(:),Pinj_dust(:),Prad_dust(:),&
-                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),Coulomb_factor(:,:),nH2,nCO,Tk,Z_dust(:))
+                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:))
             end if
 
             ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
