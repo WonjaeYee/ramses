@@ -392,7 +392,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                write(*,*) rt_Tconst, loopcnt, xion(1,1,1), xion(1,2,1)
             end if
 #ifdef CALIMA
-            if (dust_log) call dust_log_tdust_solver_print_reset()
             if (ndust > 0) write(dust_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_dust(i,1:ndust), dust_helper%T_dust(1:ndust)
             if (npah > 0) write(pah_unit,'(*(ES15.6, ", "))') rt_Tconst, real(loopcnt,dp), rho_pah(i,1:npah)
 #endif
@@ -413,7 +412,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if (i_interp.eq.1) write(base_unit+100,'(*(A20, ", "))') 'rho', 'T', 'Tmu', 'mu', saved_cooling_rates_names
             write(base_unit+100,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), saved_cooling_rates
 #ifdef CALIMA
-            if (dust_log) call dust_log_tdust_solver_print_reset()
             if (ndust > 0) write(dust_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_dust(i,1:ndust), dust_helper%T_dust(1:ndust)
             if (npah > 0) write(pah_unit,'(*(ES15.6E3, ", "))') nH(i), TK_to_save(i), T2(i), mu_to_save(i), rho_pah(i,1:npah)
 #endif

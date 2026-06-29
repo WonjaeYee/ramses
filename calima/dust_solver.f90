@@ -1073,6 +1073,7 @@ module ode_driver_mod
         real(dp) :: y_gas_new(size(y_gas,1),size(y_gas,2)), y_dust_new(size(y_dust))
         logical :: accepted,break,firstcall
         logical :: debug_enabled
+        real(dp) :: mass_init, mass_final
 
         debug_enabled = dust_log
         if (present(debug_flag)) debug_enabled = debug_flag
@@ -1091,6 +1092,8 @@ module ode_driver_mod
         firstcall = .true.
         y_gas_temp(:,:) = y_gas(:,:)
         y_dust_temp(:) = y_dust(:)
+
+        mass_init = sum(y_gas(:,1)) + sum(y_dust(:))
 
         step_ok = .true.
 
@@ -1184,6 +1187,16 @@ module ode_driver_mod
         ! 6. Set the final solution
         y_gas_final(:,:) = y_gas_temp(:,:)
         y_dust_final(:) = y_dust_temp(:)
+
+        mass_final = sum(y_gas_final(:,1)) + sum(y_dust_final(:))
+        if (mass_init > 0d0) then
+            if (abs(mass_final - mass_init) / mass_init > 1d-10) then
+                print *, 'WARNING: integrate_dust_ode: mass not conserved!'
+                print *, '  Initial mass = ', mass_init
+                print *, '  Final mass   = ', mass_final
+                print *, '  Rel. diff    = ', abs(mass_final - mass_init)/mass_init
+            end if
+        end if
 
         ! 7. Update per-cell substep statistics (only when logging is active and step succeeded)
         if (dust_log .and. step_ok) then

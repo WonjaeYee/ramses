@@ -1076,6 +1076,9 @@ module dust_init
         ! 11. Read the dust photoelectric heating tables
         call init_dust_peh_tables
 
+        ! 11b. Read the dust IR emission tables
+        call init_dust_IR_emission_tables
+
         ! 12. Cache the BH80 collisional heating factors that only depend on the dust bins
         call init_dust_coll_heating_BH80_cache
 
@@ -2286,4 +2289,176 @@ module dust_init
             close(111)
         end do
     end subroutine init_pah_peh_tables
+
+    subroutine init_dust_IR_emission_tables
+        use amr_commons, only: myid
+        implicit none
+        logical :: ok, ok_all
+        integer :: nT, istat, j, ii, ndata, nbands, iband
+        character(len=20) :: dustlabel
+        character(len=256) :: filename
+        character(len=2048) :: line
+        character(len=64), dimension(200) :: band_names
+        real(dp) :: Td
+        real(dp), dimension(200) :: band_luminosities
+
+        ! 1. Check first that all files are in the expected place
+        ok_all = .true.
+        do ii = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            write(filename, '(A,A,A,A)') trim(dust_tables_dir), &
+                'band_luminosity_', trim(dustlabel), '.txt'
+            inquire(file=trim(filename), exist=ok)
+            ok_all = ok_all .and. ok
+        end do
+
+        if (.not. ok_all) then
+            if (myid .eq. 1) then
+                write(*, *) 'WARNING: Dust IR emission files not found in ', TRIM(dust_tables_dir)
+                write(*, *) 'Skipping IR emission tables initialization.'
+            end if
+            return
+        end if
+
+        ! 2. Read the file for each dust bin
+        do ii = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            write(filename, '(A,A,A,A)') trim(dust_tables_dir), &
+                'band_luminosity_', trim(dustlabel), '.txt'
+
+            ! 2.1 First pass: count the number of data rows (skip comments/blanks)
+            open(25, file=trim(filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(filename)
+                call clean_stop
+            end if
+            ndata = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (len_trim(line) == 0) cycle
+                if (line(1:1) == '#') cycle
+                ndata = ndata + 1
+            end do
+            close(25)
+
+            if (ndata < 2) then
+                write(*, *) 'Error: IR emission table has too few rows: ', trim(filename)
+                call clean_stop
+            end if
+            nT = ndata
+
+            ! 2.2 Read column names from the header line containing "T_dust" or "log10(T_dust)"
+            open(25, file=trim(filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(filename)
+                call clean_stop
+            end if
+            nbands = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (index(line, 'T_dust') > 0) then
+                    call parse_header_line(line, band_names, nbands)
+                    exit
+                end if
+            end do
+            close(25)
+
+            if (nbands == 0) then
+                write(*, *) 'Error parsing header line in: ', trim(filename)
+                call clean_stop
+            end if
+
+            ! 2.3 Allocate the IRemission_tab structure
+            if (allocated(dustbins_props(ii)%IRemission_tab)) then
+                deallocate(dustbins_props(ii)%IRemission_tab)
+            end if
+            allocate(dustbins_props(ii)%IRemission_tab(1:nbands))
+
+            do iband = 1, nbands
+                allocate(dustbins_props(ii)%IRemission_tab(iband)%npts(1:1))
+                dustbins_props(ii)%IRemission_tab(iband)%name = band_names(iband)
+                dustbins_props(ii)%IRemission_tab(iband)%ndim = 1
+                dustbins_props(ii)%IRemission_tab(iband)%npts(1) = nT
+                allocate(dustbins_props(ii)%IRemission_tab(iband)%tab1d(1:nT, 1:2))
+                dustbins_props(ii)%IRemission_tab(iband)%tab1d = 0d0
+            end do
+
+            ! 2.4 Second pass: read the temperature and luminosity values.
+            open(25, file=trim(filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(filename)
+                call clean_stop
+            end if
+            j = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (len_trim(line) == 0) cycle
+                if (line(1:1) == '#') cycle
+                
+                read(line, *, iostat=istat) Td, (band_luminosities(iband), iband=1, nbands)
+                if (istat /= 0) then
+                    write(*, *) 'Error parsing IR emission table row in ', trim(filename)
+                    call clean_stop
+                end if
+                j = j + 1
+                do iband = 1, nbands
+                    dustbins_props(ii)%IRemission_tab(iband)%tab1d(j, 1) = Td
+                    dustbins_props(ii)%IRemission_tab(iband)%tab1d(j, 2) = band_luminosities(iband)
+                end do
+            end do
+            close(25)
+
+            do iband = 1, nbands
+                call dustbins_props(ii)%IRemission_tab(iband)%init()
+            end do
+        end do
+    end subroutine init_dust_IR_emission_tables
+
+    subroutine parse_header_line(line, names, n)
+        implicit none
+        character(len=*), intent(in) :: line
+        character(len=64), dimension(:), intent(out) :: names
+        integer, intent(out) :: n
+        integer :: next_pos
+        character(len=2048) :: temp_line
+        character(len=64) :: word
+
+        n = 0
+        temp_line = adjustl(line)
+        
+        ! Skip '#'
+        if (temp_line(1:1) == '#') then
+            temp_line = adjustl(temp_line(2:))
+        end if
+        
+        ! Skip 'log10(T_dust)' or 'T_dust'
+        if (temp_line(1:13) == 'log10(T_dust)') then
+            temp_line = adjustl(temp_line(14:))
+        else if (temp_line(1:6) == 'T_dust') then
+            temp_line = adjustl(temp_line(7:))
+        end if
+        
+        do
+            temp_line = adjustl(temp_line)
+            if (len_trim(temp_line) == 0) exit
+            
+            next_pos = index(temp_line, ' ')
+            if (next_pos == 0) then
+                word = temp_line
+                temp_line = ''
+            else
+                word = temp_line(1:next_pos-1)
+                temp_line = temp_line(next_pos:)
+            end if
+            
+            n = n + 1
+            names(n) = trim(word)
+        end do
+    end subroutine parse_header_line
 end module dust_init
