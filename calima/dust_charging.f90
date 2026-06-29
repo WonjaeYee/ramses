@@ -302,7 +302,7 @@ module dust_charging
         end if
         
         ! 3. Make sure that the Coulomb factor does not become too small
-        D_coulomb = max(D_coulomb, 1d-10)
+        D_coulomb = max(D_coulomb, 1d-5)
     end subroutine compute_Coulomb_focusing
 
     subroutine compute_Coulomb_focusing_dist(Tgas,agrain,fcharge,Zdust,n_charge,Zion,D_Coulomb)

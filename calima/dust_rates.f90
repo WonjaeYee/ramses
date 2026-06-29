@@ -494,8 +494,7 @@ module dust_rates
 #endif
                         do iion = 1, nions_loc
                             izion = iion - 1
-                            depletion = rate * bin%el_mfractions(kk) * &
-                                (max(0d0, y_gas(e_index, iion+1)) * dust_info%Coulomb_factor(ii, izion))
+                            depletion = rate * bin%el_mfractions(kk) * y_gas(e_index, iion+1)
                             dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
                             dydt_gas(e_index, 1) = dydt_gas(e_index, 1) - depletion
                         end do
