@@ -1278,6 +1278,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          code = 10
          RETURN
       end if
+      ! Propagate changes in nElement_dep to dnElement
+      dnElement = nElement_dep
       if (ndust > 0) drho_dust(:) = dust_helper%rho_dust
       if (npah  > 0) drho_pah(:)  = dust_helper%rho_pah
 
@@ -1870,7 +1872,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call cpu_time(t_now)
          t_ion = t_ion + (t_now - t_last)
       end if
-      dnElement(:) = nElement_dep(:)
       dT2 = dT2-T2(icell) ; dXion(:,:) = dXion(:,:)-xion(:,:,icell)
       dnElement(:) = dnElement(:) - nElement(:,icell)
 #ifdef CO
