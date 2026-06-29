@@ -881,7 +881,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_advect) then
          do igroup=1,nGroups
             if (group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0) then 
-               total_G0 = total_G0 + (dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
+               total_G0 = total_G0 + (f_shd_CO * dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
             end if
          end do
       end if
@@ -1120,17 +1120,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
          saved_cooling_rates = 0.d0
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
@@ -1402,10 +1402,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             x_OI  = n_OI / nElement_dep(1)
 
             !! Creation !!
-            cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, x_OI)
+            cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, x_OI, dXion(1,1)*nElement_dep(1))
 
             !! Destruction !!
-            de_CO = beta_CO(total_G0*f_shd_CO, H2_cosmic_ray_ionization_rate)
+            de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
             if (de_CO * ddt(icell) < 1.d-6) then
