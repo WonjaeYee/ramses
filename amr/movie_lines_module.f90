@@ -1,283 +1,324 @@
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!! EMISSION LINE LUMINOSITY FUNCTIONS !!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!=============================================================================
+! EMISSION LINE LUMINOSITY FUNCTIONS
+!=============================================================================
 MODULE movie_lines_module
     use amr_commons, only: dp
     implicit none
 
     private
-    public :: get_halpha_lum, get_hbeta_lum, get_OIII_5007_lum, &
-            & get_OIII_4363_lum, get_OIII_4959_lum, get_OII_3726_lum, &
-            & get_OII_3728_lum, get_NII_6583_lum
+    public :: init_movie_lines, get_coll_line_lum, get_rec_line_lum
 
+    integer, parameter :: sp = kind(1.0) ! single precision
     real(dp):: clight  = 2.99792458d10          ![cm/s] light speed
     real(dp):: planck  = 6.626070040d-27        ![erg s] Planck's constant
 
+    integer, parameter :: N_VALS = 200
+    integer, parameter :: N_CHIANTI = 1000
+    integer, public :: n_coll_lines, n_rec_lines
+
+    ! Single precision log grids to save memory
+    real(sp), allocatable, public :: logT_grid(:), logne_grid(:)
+    real(sp), allocatable, public :: logT_chianti(:)
+    
+    ! 2D single precision log grids (nT, nNe, n_lines)
+    real(sp), allocatable, public :: coll_grids(:,:,:)
+    real(sp), allocatable, public :: rec_grids(:,:,:)
+    real(sp), allocatable, public :: rec_grids_col(:,:)
+
+    ! Collisional line indices
+    integer, parameter, public :: idx_coll_C3_1908 = 1
+    integer, parameter, public :: idx_coll_C3_1906 = 2
+    integer, parameter, public :: idx_coll_C4_1548 = 3
+    integer, parameter, public :: idx_coll_C4_1550 = 4
+    integer, parameter, public :: idx_coll_O1_6300 = 5
+    integer, parameter, public :: idx_coll_O1_6362 = 6
+    integer, parameter, public :: idx_coll_O2_3728 = 7
+    integer, parameter, public :: idx_coll_O2_3726 = 8
+    integer, parameter, public :: idx_coll_O2_7320 = 9
+    integer, parameter, public :: idx_coll_O2_7331 = 10
+    integer, parameter, public :: idx_coll_O2_7319 = 11
+    integer, parameter, public :: idx_coll_O2_7330 = 12
+    integer, parameter, public :: idx_coll_O3_4959 = 13
+    integer, parameter, public :: idx_coll_O3_5007 = 14
+    integer, parameter, public :: idx_coll_O3_4363 = 15
+    integer, parameter, public :: idx_coll_O3_1661 = 16
+    integer, parameter, public :: idx_coll_O3_1666 = 17
+    integer, parameter, public :: idx_coll_Ne3_3869 = 18
+    integer, parameter, public :: idx_coll_Ne3_3967 = 19
+    integer, parameter, public :: idx_coll_N2_6583 = 20
+    integer, parameter, public :: idx_coll_N2_6548 = 21
+    integer, parameter, public :: idx_coll_N2_5755 = 22
+    integer, parameter, public :: idx_coll_N3_1749 = 23
+    integer, parameter, public :: idx_coll_N3_1754 = 24
+    integer, parameter, public :: idx_coll_N3_1747 = 25
+    integer, parameter, public :: idx_coll_N3_1752 = 26
+    integer, parameter, public :: idx_coll_N3_1750 = 27
+    integer, parameter, public :: idx_coll_N4_1486 = 28
+    integer, parameter, public :: idx_coll_N4_1483 = 29
+    integer, parameter, public :: idx_coll_N5_1243 = 30
+    integer, parameter, public :: idx_coll_N5_1239 = 31
+    integer, parameter, public :: idx_coll_S2_6731 = 32
+    integer, parameter, public :: idx_coll_S2_6716 = 33
+    integer, parameter, public :: idx_coll_S2_4069 = 34
+    integer, parameter, public :: idx_coll_S2_4076 = 35
+
+    ! Recombination line indices
+    integer, parameter, public :: idx_rec_Lya = 1
+    integer, parameter, public :: idx_rec_Ha = 2
+    integer, parameter, public :: idx_rec_Hb = 3
+    integer, parameter, public :: idx_rec_Hg = 4
+    integer, parameter, public :: idx_rec_Hd = 5
+    integer, parameter, public :: idx_rec_He2_1640 = 6
+    integer, parameter, public :: idx_rec_He2_4686 = 7
+
+    type, public :: emission_line
+        character(len=20) :: name
+        integer :: atomic_number
+        integer :: ion_index
+        integer :: line_type ! 1 for collisional, 2 for recombination
+        integer :: grid_idx
+    end type
+    
+    integer, parameter, public :: total_lines = 42
+    type(emission_line), dimension(total_lines), public :: registered_lines
+
+
 CONTAINS
 
-FUNCTION get_halpha_lum(T,ne,nHII,nHI,vol) result(lum)
-    !
-    ! Returns the Halpha luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nHII --> ionized hydrogen density in cm^-3
-    !nHI  --> neutral hydrogen density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nHII,nHI,vol
-    real(dp)::lum
-    real(dp)::ener
-    real(dp)::rec_emis, col_emis
-    real(dp)::Z,a,b,c,d,et
-
-    ! Recombination H alpha emissivity erg cm^3 s^-1 from Pequignot+ 1991
-    ! Recombination formula from 
-    ! http://articles.adsabs.harvard.edu//full/1991A%26A...251..680P/0000684.000.html
-    ener = (planck * clight) / (6562.8d0 * 1d-8) 
-    Z = 1.d0
-    a = 2.708d0
-    b = -0.648d0
-    c = 1.315d0
-    d = 0.523d0
-    et = (1d-4) * T / (Z**2)
-    rec_emis = ener * 1d-13 * Z * (a * et**b) / (1.d0 + c * et**d)
-    rec_emis = rec_emis * ne * nHII * vol
-
-    ! Collisional emission calculated from harley's fitting formula
-    a = 5.01d-19
-    b = 8.13d4
-    c = 0.230d0
-    d = 0.938d0
-    col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-    col_emis = col_emis * ne * nHI * vol
-
-    lum = rec_emis + col_emis ! erg/s
-
-END FUNCTION get_halpha_lum
-        
-FUNCTION get_hbeta_lum(T,ne,nHII,nHI,vol) result(lum)
-    ! Returns the Hbeta luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nHII --> ionized hydrogen density in cm^-3
-    !nHI  --> neutral hydrogen density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nHII,nHI,vol
-    real(dp)::lum
-    real(dp)::ener
-    real(dp)::rec_emis, col_emis
-    real(dp)::Z,a,b,c,d,et
-
-    ! Recombination H alpha emissivity erg cm^3 s^-1 from Pequignot+ 1991
-    ! Recombination formula from 
-    ! http://articles.adsabs.harvard.edu//full/1991A%26A...251..680P/0000684.000.html
-    ener = (planck * clight) / (4861.4d0 * 1d-8) 
-    Z = 1.d0
-    a = 0.668d0
-    b = -0.507d0
-    c = 1.221d0
-    d = 0.653d0
-    et = (1d-4) * T / (Z**2)
-    rec_emis = ener * 1d-13 * Z * (a * et**b) / (1.d0 + c * et**d)
-    rec_emis = rec_emis * ne * nHII * vol
-
-    ! Collisional emission calculated from harley's fitting formula
-    a = 1.81d-19
-    b = 9.87d4
-    c = 0.237d0
-    d = 0.954d0
-    col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-    col_emis = col_emis * ne * nHI * vol
-
-    lum = rec_emis + col_emis ! erg/s
-
-END FUNCTION get_hbeta_lum
-        
-FUNCTION get_OIII_5007_lum(T,ne,nO3,vol) result(lum)
-    !
-    ! Returns the OIII_5007 luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nO3  --> OIII density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nO3,vol
-    real(dp)::lum
-    real(dp)::a,b,c,d,Tmin,Tmax,col_emis
-
-    ! Collisional emissivity
-    ! Based on Harley's fits to pyneb data
-    ! This is empirically good up to n_e = 1e5 
-    Tmin = 1325.7113655901096d0
-    Tmax = 10000000.0d0
-    lum = 0.d0
-    if (T.ge.Tmin.and.T.le.Tmax) then 
-        a = 8.54087422d-18
-        b = 2.36679211d+04
-        c = 5.03985699d-01
-        d = 9.69115359d-01
-        col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-        lum = col_emis * ne * nO3 * vol
+SUBROUTINE init_movie_lines(filename)
+    character(len=*), intent(in) :: filename
+    integer :: un, i
+    integer :: nv, nc, ncoll, nrec
+    
+    open(newunit=un, file=filename, status='old', access='stream', form='unformatted')
+    
+    read(un) nv, nc, ncoll, nrec
+    
+    if (nv /= N_VALS .or. nc /= N_CHIANTI) then
+        print *, "Error: Grid sizes in binary do not match parameters."
+        stop
     end if
-END FUNCTION get_OIII_5007_lum
-        
-FUNCTION get_OIII_4363_lum(T,ne,nO3,vol) result(lum)
-    ! Returns the OIII_4363 luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nO3  --> OIII density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nO3,vol
-    real(dp)::lum
-    real(dp)::a,b,c,d,Tmin,Tmax,col_emis
+    
+    n_coll_lines = ncoll
+    n_rec_lines = nrec
+    
+    allocate(logT_grid(N_VALS))
+    allocate(logne_grid(N_VALS))
+    allocate(logT_chianti(N_CHIANTI))
+    
+    allocate(coll_grids(N_VALS, N_VALS, n_coll_lines))
+    allocate(rec_grids(N_VALS, N_VALS, n_rec_lines))
+    allocate(rec_grids_col(N_CHIANTI, n_rec_lines))
+    
+    read(un) logT_grid
+    read(un) logne_grid
+    read(un) logT_chianti
+    
+    do i = 1, n_coll_lines
+        read(un) coll_grids(:,:,i)
+    end do
+    
+    do i = 1, n_rec_lines
+        read(un) rec_grids(:,:,i)
+        read(un) rec_grids_col(:,i)
+    end do
+    
+    close(un)
 
-    ! Collisional emissivity
-    ! Based on Harley's fits to pyneb data
-    ! We fit for the ratio of 4363/5007
-    lum = get_OIII_5007_lum(T,ne,nO3,vol) 
+    ! Collisional lines
+    registered_lines(1) = emission_line('C3_1908', 6, 3, 1, idx_coll_C3_1908)
+    registered_lines(2) = emission_line('C3_1906', 6, 3, 1, idx_coll_C3_1906)
+    registered_lines(3) = emission_line('C4_1548', 6, 4, 1, idx_coll_C4_1548)
+    registered_lines(4) = emission_line('C4_1550', 6, 4, 1, idx_coll_C4_1550)
+    registered_lines(5) = emission_line('O1_6300', 8, 1, 1, idx_coll_O1_6300)
+    registered_lines(6) = emission_line('O1_6362', 8, 1, 1, idx_coll_O1_6362)
+    registered_lines(7) = emission_line('O2_3728', 8, 2, 1, idx_coll_O2_3728)
+    registered_lines(8) = emission_line('O2_3726', 8, 2, 1, idx_coll_O2_3726)
+    registered_lines(9) = emission_line('O2_7320', 8, 2, 1, idx_coll_O2_7320)
+    registered_lines(10) = emission_line('O2_7331', 8, 2, 1, idx_coll_O2_7331)
+    registered_lines(11) = emission_line('O2_7319', 8, 2, 1, idx_coll_O2_7319)
+    registered_lines(12) = emission_line('O2_7330', 8, 2, 1, idx_coll_O2_7330)
+    registered_lines(13) = emission_line('O3_4959', 8, 3, 1, idx_coll_O3_4959)
+    registered_lines(14) = emission_line('O3_5007', 8, 3, 1, idx_coll_O3_5007)
+    registered_lines(15) = emission_line('O3_4363', 8, 3, 1, idx_coll_O3_4363)
+    registered_lines(16) = emission_line('O3_1661', 8, 3, 1, idx_coll_O3_1661)
+    registered_lines(17) = emission_line('O3_1666', 8, 3, 1, idx_coll_O3_1666)
+    registered_lines(18) = emission_line('Ne3_3869', 10, 3, 1, idx_coll_Ne3_3869)
+    registered_lines(19) = emission_line('Ne3_3967', 10, 3, 1, idx_coll_Ne3_3967)
+    registered_lines(20) = emission_line('N2_6583', 7, 2, 1, idx_coll_N2_6583)
+    registered_lines(21) = emission_line('N2_6548', 7, 2, 1, idx_coll_N2_6548)
+    registered_lines(22) = emission_line('N2_5755', 7, 2, 1, idx_coll_N2_5755)
+    registered_lines(23) = emission_line('N3_1749', 7, 3, 1, idx_coll_N3_1749)
+    registered_lines(24) = emission_line('N3_1754', 7, 3, 1, idx_coll_N3_1754)
+    registered_lines(25) = emission_line('N3_1747', 7, 3, 1, idx_coll_N3_1747)
+    registered_lines(26) = emission_line('N3_1752', 7, 3, 1, idx_coll_N3_1752)
+    registered_lines(27) = emission_line('N3_1750', 7, 3, 1, idx_coll_N3_1750)
+    registered_lines(28) = emission_line('N4_1486', 7, 4, 1, idx_coll_N4_1486)
+    registered_lines(29) = emission_line('N4_1483', 7, 4, 1, idx_coll_N4_1483)
+    registered_lines(30) = emission_line('N5_1243', 7, 5, 1, idx_coll_N5_1243)
+    registered_lines(31) = emission_line('N5_1239', 7, 5, 1, idx_coll_N5_1239)
+    registered_lines(32) = emission_line('S2_6731', 16, 2, 1, idx_coll_S2_6731)
+    registered_lines(33) = emission_line('S2_6716', 16, 2, 1, idx_coll_S2_6716)
+    registered_lines(34) = emission_line('S2_4069', 16, 2, 1, idx_coll_S2_4069)
+    registered_lines(35) = emission_line('S2_4076', 16, 2, 1, idx_coll_S2_4076)
+    
+    ! Recombination lines
+    registered_lines(36) = emission_line('Lya', 1, 2, 2, idx_rec_Lya)
+    registered_lines(37) = emission_line('Ha', 1, 2, 2, idx_rec_Ha)
+    registered_lines(38) = emission_line('Hb', 1, 2, 2, idx_rec_Hb)
+    registered_lines(39) = emission_line('Hg', 1, 2, 2, idx_rec_Hg)
+    registered_lines(40) = emission_line('Hd', 1, 2, 2, idx_rec_Hd)
+    registered_lines(41) = emission_line('He2_1640', 2, 3, 2, idx_rec_He2_1640)
+    registered_lines(42) = emission_line('He2_4686', 2, 3, 2, idx_rec_He2_4686)
 
-    Tmin = 2682.6957952797275d0
-    Tmax = 10000000.0d0
-    lum = 0.d0
-    if (T.ge.Tmin.and.T.le.Tmax) then 
-        a = 1.58694188d-01
-        b = 4.30073857d+04
-        c = -4.70853221d-04
-        d = 1.03287240d+00
-        col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-        lum = col_emis * lum
+    
+END SUBROUTINE init_movie_lines
+
+!=============================================================================
+! Bilinear interpolation for 2D table (mixed precision args)
+!=============================================================================
+FUNCTION interp2d(x, y, x_grid, y_grid, z_grid, nx, ny) result(val)
+    real(dp), intent(in) :: x, y
+    integer, intent(in) :: nx, ny
+    real(sp), intent(in) :: x_grid(nx), y_grid(ny)
+    real(sp), intent(in) :: z_grid(nx, ny)
+    real(dp) :: val
+    
+    integer :: ix, iy
+    real(dp) :: t, u, z_ij, z_ip1j, z_ijp1, z_ip1jp1
+    
+    ! Find x index (logT)
+    if (x <= real(x_grid(1), dp)) then
+        ix = 1
+        t = 0.0_dp
+    else if (x >= real(x_grid(nx), dp)) then
+        ix = nx - 1
+        t = 1.0_dp
+    else
+        ix = int((x - real(x_grid(1), dp)) / real(x_grid(nx) - x_grid(1), dp) * (nx - 1)) + 1
+        if (ix < 1) ix = 1
+        if (ix >= nx) ix = nx - 1
+        do while(real(x_grid(ix+1), dp) < x .and. ix < nx-1)
+            ix = ix + 1
+        end do
+        do while(real(x_grid(ix), dp) > x .and. ix > 1)
+            ix = ix - 1
+        end do
+        t = (x - real(x_grid(ix), dp)) / real(x_grid(ix+1) - x_grid(ix), dp)
     end if
-END FUNCTION get_OIII_4363_lum
-        
-FUNCTION get_OIII_4959_lum(T,ne,nO3,vol) result(lum)
-    !
-    ! Returns the OIII_4959 luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nO3  --> OIII density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nO3,vol
-    real(dp)::lum
-
-    ! Collisional emissivity
-    ! We pin the result to the 5007 fitting function
-    lum = get_OIII_5007_lum(T,ne,nO3,vol) / 2.98d0
-
-END FUNCTION get_OIII_4959_lum
-
-FUNCTION softplus(x,a,b,c)
-    implicit none
-    real(dp)::x,a,b,c
-    real(dp)::softplus
-    softplus = LOG(a + EXP(b*x - c))
-END FUNCTION softplus
-        
-FUNCTION softplus_neg(x,a,b,c) result(fun)
-    implicit none
-    real(dp), intent(in)::x,a,b,c
-    real(dp)::fun
-    fun = a - LOG(1.0 + EXP(b*x - c))
-END FUNCTION softplus_neg
-        
-FUNCTION get_OII_3726_lum(T,ne,nO2,vol) result(lum)
-    !
-    ! Returns the OII_3726 luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nO3  --> OII density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nO2,vol
-    real(dp)::lum
-    real(dp)::a,b,c,d,Tmin,Tmax,logne,col_emis
-
-    ! Collisional emissivity
-    ! Based on Harley's fits to pyneb data
-    ! This is empirically good up to n_e = 1e5 
-    Tmin = 1325.7113655901096d0
-    Tmax = 10000000.0d0
-    logne = LOG10(ne)
-    lum = 0.d0
-    if (T.ge.Tmin.and.T.le.Tmax) then 
-        a = 10.0d0**( softplus_neg(logne,-17.0923918d0,2.63282097d0,  10.44740535d0) )   
-        b = 30000.0d0 * softplus(logne,2.93457396d0,1.54750724d0, 5.90262693d0) 
-        c = 10.0d0**( softplus_neg(logne,-0.30407987d0,1.821353d0,  9.44135231d0) )
-        d = softplus(logne,2.6409534d0,0.92271611d0,5.83020548d0)
-        col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-        lum = col_emis * ne * nO2 * vol
+    
+    ! Find y index (logne)
+    if (y <= real(y_grid(1), dp)) then
+        iy = 1
+        u = 0.0_dp
+    else if (y >= real(y_grid(ny), dp)) then
+        iy = ny - 1
+        u = 1.0_dp
+    else
+        iy = int((y - real(y_grid(1), dp)) / real(y_grid(ny) - y_grid(1), dp) * (ny - 1)) + 1
+        if (iy < 1) iy = 1
+        if (iy >= ny) iy = ny - 1
+        do while(real(y_grid(iy+1), dp) < y .and. iy < ny-1)
+            iy = iy + 1
+        end do
+        do while(real(y_grid(iy), dp) > y .and. iy > 1)
+            iy = iy - 1
+        end do
+        u = (y - real(y_grid(iy), dp)) / real(y_grid(iy+1) - y_grid(iy), dp)
     end if
-END FUNCTION get_OII_3726_lum
+    
+    z_ij = real(z_grid(ix, iy), dp)
+    z_ip1j = real(z_grid(ix+1, iy), dp)
+    z_ijp1 = real(z_grid(ix, iy+1), dp)
+    z_ip1jp1 = real(z_grid(ix+1, iy+1), dp)
+    
+    val = (1.0_dp - t) * (1.0_dp - u) * z_ij &
+        + t * (1.0_dp - u) * z_ip1j &
+        + (1.0_dp - t) * u * z_ijp1 &
+        + t * u * z_ip1jp1
         
-FUNCTION get_OII_3728_lum(T,ne,nO2,vol) result(lum)
-    !
-    ! Returns the OII_3728 luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nO3  --> OII density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nO2,vol
-    real(dp)::lum
-    real(dp)::a,b,c,d,Tmin,Tmax,logne,col_emis
+END FUNCTION interp2d
 
-    ! Collisional emissivity
-    ! Based on Harley's fits to pyneb data
-    ! This is empirically good up to n_e = 1e5 
-    Tmin = 1325.7113655901096d0
-    Tmax = 10000000.0d0
-    logne = LOG10(ne)
-    lum = 0.d0
-    if (T.ge.Tmin.and.T.le.Tmax) then 
-        a = 10.0d0**( softplus_neg(logne,-16.91037079d0,2.01549352d0,6.24261369d0) )   
-        b = 30000.0d0 * softplus(logne,2.92460964d0,2.115382d0,7.5600845d0) 
-        c = 10.0d0**( softplus_neg(logne,-0.28833215d0,1.18957554d0,5.68403389d0) )
-        d = softplus(logne,2.63855695d0,1.06518539d0,6.06570019d0)
-        col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-        lum = col_emis * ne * nO2 * vol
+!=============================================================================
+! Linear interpolation for 1D table
+!=============================================================================
+FUNCTION interp1d(x, x_grid, y_grid, nx) result(val)
+    real(dp), intent(in) :: x
+    integer, intent(in) :: nx
+    real(sp), intent(in) :: x_grid(nx), y_grid(nx)
+    real(dp) :: val
+    
+    integer :: ix
+    real(dp) :: t
+    
+    if (x <= real(x_grid(1), dp)) then
+        ix = 1
+        t = 0.0_dp
+    else if (x >= real(x_grid(nx), dp)) then
+        ix = nx - 1
+        t = 1.0_dp
+    else
+        ix = int((x - real(x_grid(1), dp)) / real(x_grid(nx) - x_grid(1), dp) * (nx - 1)) + 1
+        if (ix < 1) ix = 1
+        if (ix >= nx) ix = nx - 1
+        do while(real(x_grid(ix+1), dp) < x .and. ix < nx-1)
+            ix = ix + 1
+        end do
+        do while(real(x_grid(ix), dp) > x .and. ix > 1)
+            ix = ix - 1
+        end do
+        t = (x - real(x_grid(ix), dp)) / real(x_grid(ix+1) - x_grid(ix), dp)
     end if
-END FUNCTION get_OII_3728_lum
-        
-FUNCTION get_NII_6583_lum(T,ne,nN2,vol) result(lum)
-    !
-    ! Returns the NII_6583 luminosity of a cell in erg/s
-    !
-    !T    --> Temperature in K
-    !ne   --> electron density in cm^-3
-    !nN2  --> NII density in cm^-3
-    !vol  --> cell volume in cm^3
-    implicit none
-    real(dp), intent(in)::T,ne,nN2,vol
-    real(dp)::lum
-    real(dp)::a,b,c,d,Tmin,Tmax,col_emis
+    
+    val = (1.0_dp - t) * real(y_grid(ix), dp) + t * real(y_grid(ix+1), dp)
+    
+END FUNCTION interp1d
 
-    ! Collisional emissivity
-    ! Based on Harley's fits to pyneb data
-    ! This is empirically good up to n_e = 1e5 
-    Tmin = 1048.1131341546852d0
-    Tmax = 10000000.0d0
-    lum = 0.d0
-    if (T.ge.Tmin.and.T.le.Tmax) then 
-        a = 5.93148982e-18    
-        b = 1.98682195e+04 
-        c = 4.92946876e-01 
-        d = 9.83930826e-01
-        col_emis = (a / T**c) * EXP(-1.d0 * b / T**d)
-        lum = col_emis * ne * nN2 * vol
+!=============================================================================
+! Get Collisional Line Luminosity
+!=============================================================================
+FUNCTION get_coll_line_lum(line_idx, T, ne, n_ion, vol) result(lum)
+    integer, intent(in) :: line_idx
+    real(dp), intent(in) :: T, ne, n_ion, vol
+    real(dp) :: lum
+    real(dp) :: logT_val, logne_val, col_emis_log
+    
+    if (line_idx < 1 .or. line_idx > n_coll_lines) then
+        lum = 0.0_dp
+        return
     end if
-END FUNCTION get_NII_6583_lum
+    
+    logT_val = LOG10(T)
+    logne_val = LOG10(ne)
+    
+    col_emis_log = interp2d(logT_val, logne_val, logT_grid, logne_grid, coll_grids(:,:,line_idx), N_VALS, N_VALS)
+    
+    lum = (10.0_dp**col_emis_log) * ne * n_ion * vol
+    
+END FUNCTION get_coll_line_lum
 
-end module movie_lines_module
+!=============================================================================
+! Get Recombination Line Luminosity
+!=============================================================================
+FUNCTION get_rec_line_lum(line_idx, T, ne, n_ion, n_neut, vol) result(lum)
+    integer, intent(in) :: line_idx
+    real(dp), intent(in) :: T, ne, n_ion, n_neut, vol
+    real(dp) :: lum
+    real(dp) :: logT_val, logne_val, rec_emis_log, col_emis_log
+    
+    if (line_idx < 1 .or. line_idx > n_rec_lines) then
+        lum = 0.0_dp
+        return
+    end if
+    
+    logT_val = LOG10(T)
+    logne_val = LOG10(ne)
+    
+    rec_emis_log = interp2d(logT_val, logne_val, logT_grid, logne_grid, rec_grids(:,:,line_idx), N_VALS, N_VALS)
+    col_emis_log = interp1d(logT_val, logT_chianti, rec_grids_col(:,line_idx), N_CHIANTI)
+    
+    lum = (10.0_dp**rec_emis_log * ne * n_ion * vol) + (10.0_dp**col_emis_log * ne * n_neut * vol)
+    
+END FUNCTION get_rec_line_lum
+
+END MODULE movie_lines_module
