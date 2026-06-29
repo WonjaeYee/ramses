@@ -242,11 +242,11 @@ FUNCTION beta_H2(T, nH, xHI, xH2, xHe, ne, nHI, nH2, nHeI) result(rate)
 
 END FUNCTION beta_H2
 
-FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, xO) result(rate)
+FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, xO, nH) result(rate)
   ! see glover 2012
   implicit none
 
-  real(dp), intent(in):: G0, xi_cr_H2, nCII, nH2, xO
+  real(dp), intent(in):: G0, xi_cr_H2, nCII, nH2, xO, nH
   real(dp):: rate
   real(dp):: k0, k1, gammaCHx_cr, gammaCHx, beta
 
@@ -257,7 +257,7 @@ FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, xO) result(rate)
   gammaCHx_cr = 8.88d-15 * (xi_cr_H2 / 1d-16) ! Cosmic rays
   gammaCHx = (1.41d-10 * G0) + gammaCHx_cr
 
-  beta = k1 * xO/(k1*xO + gammaCHx/(nH2 + 1d-40))
+  beta = k1 * xO/(k1*xO + gammaCHx/(nH + 1d-40))
   rate = k0 * nCII * nH2 * beta
 
   rate = MAX(rate,1.d-100)
