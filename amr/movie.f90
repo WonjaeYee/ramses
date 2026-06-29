@@ -109,6 +109,7 @@ subroutine output_frame()
   real(dp):: electron_density, temperature, mu
   real(dp):: m_bar, n_hat, vol
   integer:: counter, e_counter, iii, jjj
+  integer:: line_id, atomic_num, ion_idx
 #endif
 #ifdef CALIMA
   logical :: has_IR_movie_var
@@ -914,34 +915,24 @@ subroutine output_frame()
                                   ! Convert to T
                                   temperature = temperature * mu
 
-                                  if(movie_vars(kk).eq.i_mv_ha)then
+                                  if (movie_vars(kk) > 1000) then
                                      ok_frame=.true.
-                                     uvar = get_halpha_lum( temperature, electron_density, &
-                                                          & xion(1,2) * nElement(1), xion(1,1) * nElement(1), &
-                                                          & vol)
-                                  else if(movie_vars(kk).eq.i_mv_hb)then
-                                     ok_frame=.true.
-                                     uvar = get_hbeta_lum( temperature, electron_density, &
-                                                          & xion(1,2) * nElement(1), xion(1,1) * nElement(1), &
-                                                          & vol)
-                                  else if(movie_vars(kk).eq.i_mv_o3_5007)then
-                                     uvar = get_OIII_5007_lum( temperature, electron_density, &
-                                                             & xion(8,3) * nElement(8), vol)
-                                  else if(movie_vars(kk).eq.i_mv_o3_4959)then
-                                     uvar = get_OIII_4959_lum( temperature, electron_density, &
-                                                             & xion(8,3) * nElement(8), vol)
-                                  else if(movie_vars(kk).eq.i_mv_o3_4363)then
-                                     uvar = get_OIII_4363_lum( temperature, electron_density, &
-                                                             & xion(8,3) * nElement(8), vol)
-                                  else if(movie_vars(kk).eq.i_mv_o2_3726)then
-                                     uvar = get_OII_3726_lum( temperature, electron_density, &
-                                                             & xion(8,2) * nElement(8), vol)
-                                  else if(movie_vars(kk).eq.i_mv_o2_3728)then
-                                     uvar = get_OII_3728_lum( temperature, electron_density, &
-                                                             & xion(8,2) * nElement(8), vol)
-                                  else if(movie_vars(kk).eq.i_mv_n2_6583)then
-                                     uvar = get_NII_6583_lum( temperature, electron_density, &
-                                                             & xion(7,2) * nElement(7), vol)
+                                     line_id = movie_vars(kk) - 1000
+                                     atomic_num = registered_lines(line_id)%atomic_number
+                                     ion_idx = registered_lines(line_id)%ion_index
+                                     
+                                     if (registered_lines(line_id)%line_type == 1) then
+                                         ! Collisional
+                                         uvar = get_coll_line_lum(registered_lines(line_id)%grid_idx, temperature, electron_density, &
+                                                                & xion(atomic_num, ion_idx) * nElement(atomic_num), &
+                                                                & vol)
+                                     else
+                                         ! Recombination
+                                         uvar = get_rec_line_lum(registered_lines(line_id)%grid_idx, temperature, electron_density, &
+                                                               & xion(atomic_num, ion_idx) * nElement(atomic_num), &
+                                                               & xion(atomic_num, ion_idx-1) * nElement(atomic_num), &
+                                                               & vol)
+                                     end if
                                   endif
 #endif
                                   ! Frame update
@@ -1238,6 +1229,14 @@ subroutine set_movie_vars()
   integer::kk, ivar
 #ifdef CALIMA
   integer::j_band
+#ifdef RTZ
+  use movie_lines_module, only: total_lines, registered_lines
+#endif
+  implicit none
+  integer::kk, ivar
+#ifdef RTZ
+  integer::i
+  logical::line_matched
 #endif
   ! This routine sets up movie_vars to draw the correct
   ! variables
@@ -1334,40 +1333,6 @@ subroutine set_movie_vars()
         read( movie_vars_txt(kk)(3:4), '(i1)' ) ivar
         movie_var_number(kk) = ivar
 
-#ifdef RTZ
-     else if (movie_vars_txt(kk) .eq. 'Ha') then
-        if(i_mv_ha .eq. -1) i_mv_ha = kk
-        movie_vars(kk) = i_mv_ha
-
-     else if (movie_vars_txt(kk) .eq. 'Hb') then
-        if(i_mv_hb .eq. -1) i_mv_hb = kk
-        movie_vars(kk) = i_mv_hb
-
-     else if (movie_vars_txt(kk) .eq. 'O3_5007') then
-        if(i_mv_o3_5007 .eq. -1) i_mv_o3_5007 = kk
-        movie_vars(kk) = i_mv_o3_5007
-
-     else if (movie_vars_txt(kk) .eq. 'O3_4959') then
-        if(i_mv_o3_4959 .eq. -1) i_mv_o3_4959 = kk
-        movie_vars(kk) = i_mv_o3_4959
-
-     else if (movie_vars_txt(kk) .eq. 'O3_4363') then
-        if(i_mv_o3_4363 .eq. -1) i_mv_o3_4363 = kk
-        movie_vars(kk) = i_mv_o3_4363
-
-     else if (movie_vars_txt(kk) .eq. 'O2_3726') then
-        if(i_mv_o2_3726 .eq. -1) i_mv_o2_3726 = kk
-        movie_vars(kk) = i_mv_o2_3726
-
-     else if (movie_vars_txt(kk) .eq. 'O2_3728') then
-        if(i_mv_o2_3728 .eq. -1) i_mv_o2_3728 = kk
-        movie_vars(kk) = i_mv_o2_3728
-
-     else if (movie_vars_txt(kk) .eq. 'N2_6583') then
-        if(i_mv_n2_6583 .eq. -1) i_mv_n2_6583 = kk
-        movie_vars(kk) = i_mv_n2_6583
-#endif
-
 #ifdef CALIMA
      else if (ndust > 0) then
         ivar = 0
@@ -1384,6 +1349,21 @@ subroutine set_movie_vars()
             movie_vars(kk) = i_mv_IR
             movie_var_number(kk) = ivar
         endif
+#endif
+
+#ifdef RTZ
+     else
+        line_matched = .false.
+        do i=1, total_lines
+            if (trim(movie_vars_txt(kk)) == trim(registered_lines(i)%name)) then
+                movie_vars(kk) = 1000 + i
+                line_matched = .true.
+                exit
+            end if
+        end do
+        if (.not. line_matched) then
+            print *, "Unknown movie variable: ", trim(movie_vars_txt(kk))
+        end if
 #endif
      endif
 

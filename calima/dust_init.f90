@@ -1057,7 +1057,7 @@ module dust_init
             comp_sigma_turb = .true.
         end if
 
-        if (dust_acc_coulomb.or.dust_sputtering_charge.or.dust_coll_charge.or.pah_freezing) then
+        if (dust_acc_coulomb.or.pah_freezing) then
             Coulomb_precompute = .true.
         end if
 

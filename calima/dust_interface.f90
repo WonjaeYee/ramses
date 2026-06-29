@@ -153,7 +153,7 @@ contains
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
-        real(dp) :: Zel, nHI
+        real(dp) :: Zel, nHI, prevD
         integer :: n_charge
 
         if (dinfo%ndust > 0) then
@@ -169,10 +169,16 @@ contains
             dinfo%Coulomb_factor = 1d0
             if (Coulomb_precompute) then
                 do ii = 1, dinfo%ndust
+                    prevD = 1d0
                     do j = -1, dinfo%nion_charges
                         Zel = dble(j)
+                        if (prevD <= 1d-5 .and. dinfo%Z_dust(ii)*Zel > 0d0) then
+                            dinfo%Coulomb_factor(ii,j:dinfo%nion_charges) = 1d-10
+                            exit
+                        end if
                         call compute_Coulomb_focusing(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),&
                                                        &Zel,dinfo%Coulomb_factor(ii,j))
+                        prevD = dinfo%Coulomb_factor(ii,j)
                     end do
                 end do
             end if
