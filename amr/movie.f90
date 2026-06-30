@@ -19,7 +19,7 @@ subroutine output_frame()
   use file_module, ONLY: mkdir
 #ifdef CALIMA
   use constants, only: eV2erg
-  use dust_commons, only: ndust, dustbins_props, sigca_dust
+  use dust_commons, only: ndust, sigca_dust
   use dust_radiation, only: get_Tdust_radiative_eq, get_dust_band_luminosity
   use hydro_parameters, only: idust
 #endif
@@ -114,7 +114,7 @@ subroutine output_frame()
 #ifdef CALIMA
   logical :: has_IR_movie_var
   integer :: j_band
-  real(dp), dimension(:), allocatable :: T_dust_cell
+  real(dp), dimension(1:ndust) :: T_dust_cell
   real(dp) :: Tmin, P_abs, Np_val, mass_g
 #endif
 
@@ -355,10 +355,6 @@ subroutine output_frame()
     do kk = 1, n_movie_vars
        if (movie_vars(kk) .eq. i_mv_IR) has_IR_movie_var = .true.
     end do
-    if (ndust > 0) then
-       allocate(T_dust_cell(1:ndust))
-       T_dust_cell = 0.0_dp
-    end if
 #endif
 
     if(is_min)then
@@ -703,6 +699,7 @@ subroutine output_frame()
 #ifdef CALIMA
                                if (has_IR_movie_var) then
                                   Tmin = 2.725d0 * (1.d0/aexp)
+                                  T_dust_cell = Tmin
                                   do j_band = 1, ndust
                                      P_abs = 0.0d0
 #ifdef RT
@@ -1213,10 +1210,6 @@ subroutine output_frame()
     nh_frame = nh_temp
  enddo
  ! End loop over projections
-
-#ifdef CALIMA
-  if (allocated(T_dust_cell)) deallocate(T_dust_cell)
-#endif
 #endif
 end subroutine output_frame
 
@@ -1225,10 +1218,6 @@ subroutine set_movie_vars()
 #ifdef CALIMA
   use dust_commons, only: ndust, dustbins_props
 #endif
-  implicit none
-  integer::kk, ivar
-#ifdef CALIMA
-  integer::j_band
 #ifdef RTZ
   use movie_lines_module, only: total_lines, registered_lines
 #endif
@@ -1237,6 +1226,9 @@ subroutine set_movie_vars()
 #ifdef RTZ
   integer::i
   logical::line_matched
+#endif
+#ifdef CALIMA
+  integer::j_band
 #endif
   ! This routine sets up movie_vars to draw the correct
   ! variables
