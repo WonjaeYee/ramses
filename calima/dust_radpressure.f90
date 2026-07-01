@@ -4,7 +4,7 @@
 ! and individual dust/PAH bins directly in code units for the RTZ network.
 !=======================================================================
 module dust_radpressure_module
-    use amr_parameters, only: dp, ndim
+    use amr_parameters, only: dp, ndim, condinit_kind
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO
     use rt_parameters, only: nGroups, iGroups, group_egy, rt_pressBoost, &
@@ -18,7 +18,7 @@ module dust_radpressure_module
 #endif
     use dust_commons, only: dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
-    use rtz_cooling_module, only: getNe, getMu_RTZ
+    use rtz_module, only: getNe, getMu_RTZ
     use molecules_module, only: comp_Sd, comp_SH2
 
     implicit none
@@ -122,9 +122,9 @@ contains
 
 #ifdef CO
         nCO = cell_state(iCO) * scale_d / mCO
-        mu = getMu_RTZ(ne, nElement, xion, nCO)
+        mu = getMu_RTZ(ne, nElement, xion, isH2_rtz, nCO)
 #else
-        mu = getMu_RTZ(ne, nElement, xion)
+        mu = getMu_RTZ(ne, nElement, xion, isH2_rtz)
 #endif
         Tk = P_gas / rho_loc * scale_T2 * mu
 
@@ -344,6 +344,10 @@ contains
             end if
 
         end do
+
+        if (condinit_kind == 'dustyspress') then
+            gas_force_code(:) = 0d0
+        end if
 
     end subroutine compute_gas_dust_radpressure_force
 

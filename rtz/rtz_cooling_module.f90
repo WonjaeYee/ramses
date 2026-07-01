@@ -7,7 +7,7 @@
 ! and Harley Katz
 ! NOTE: T2=T/mu, Np = photon density, Fp = photon flux,
 module rtz_cooling_module
-   use amr_parameters, only: ndim, dp, nvector
+   use amr_parameters, only: ndim, dp, nvector, condinit_kind
    use rt_parameters
    use constants
    use rtz_module  
@@ -22,7 +22,7 @@ module rtz_cooling_module
    implicit none
 
    private   ! default
-   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust, getNe, getMu_RTZ
+   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
@@ -820,18 +820,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%G0_background = UV_background_G0
       dust_helper%local_sigma = sigma(icell)
       dust_helper%smallNp = smallNp
-      drho_dust(:) = rho_dust(icell,1:ndust)
-      dust_helper%rho_dust = rho_dust(icell,1:ndust)
-      dust_helper%csa_dust = sigca_dust
-      dust_helper%css_dust = sigcs_dust
-      dust_helper%csr_dust = sigcr_dust
-      if (dust_ratd) dust_helper%csrat_dust = sigcrat_dust
-      if (dust_pe_heating) dust_helper%l_a = att_len_dust
-      drho_pah(:) = rho_pah(icell,1:npah)
-      dust_helper%rho_pah = rho_pah(icell,1:npah)
-      dust_helper%csa_pah = sigca_pah
-      dust_helper%css_pah = sigcs_pah
-      dust_helper%csr_pah = sigcr_pah
+      if (ndust > 0) then
+         drho_dust(:) = rho_dust(icell,1:ndust)
+         dust_helper%rho_dust = rho_dust(icell,1:ndust)
+         dust_helper%csa_dust = sigca_dust
+         dust_helper%css_dust = sigcs_dust
+         dust_helper%csr_dust = sigcr_dust
+         if (dust_ratd) dust_helper%csrat_dust = sigcrat_dust
+         if (dust_pe_heating) dust_helper%l_a = att_len_dust
+      end if
+      if (npah > 0) then
+         drho_pah(:) = rho_pah(icell,1:npah)
+         dust_helper%rho_pah = rho_pah(icell,1:npah)
+         dust_helper%csa_pah = sigca_pah
+         dust_helper%css_pah = sigcs_pah
+         dust_helper%csr_pah = sigcr_pah
+      end if
 #endif
 
       f_shd = 1.d0
@@ -851,9 +855,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ne = getNe(dXion, nElement_dep(:))
       neInit = ne
 #ifdef CO
-      mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+      mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz, dCO)
 #else
-      mu = getMu_RTZ(ne, nElement_dep, dXion)
+      mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz)
 #endif
 #ifdef CALIMA
       dust_helper%local_mu = mu
@@ -952,24 +956,26 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! HKnote: OTSA is required with RTZ (for now)
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS
-         do igroup=1,nGroups       ! ----------------Ionization absorbtion
-            do i_current_Element=1,n_elements ! loop over elements
-               if (elements(i_current_Element)%atomic_number.gt.0) then
-                  do i_current_Ion=1,elements(i_current_Element)%n_ions-1 ! loop over ions
-                     phAbs(igroup) = phAbs(igroup) + nElement_dep(i_current_Element) * dXion(i_current_Element, i_current_Ion) * signc(igroup,i_current_Element,i_current_Ion)  ! s-1
-                  end do  ! end loop over ions
-               end if
-            end do ! end loop over elements
+         if (condinit_kind .ne. 'dustyspress') then
+            do igroup=1,nGroups       ! ----------------Ionization absorbtion
+               do i_current_Element=1,n_elements ! loop over elements
+                  if (elements(i_current_Element)%atomic_number.gt.0) then
+                     do i_current_Ion=1,elements(i_current_Element)%n_ions-1 ! loop over ions
+                        phAbs(igroup) = phAbs(igroup) + nElement_dep(i_current_Element) * dXion(i_current_Element, i_current_Ion) * signc(igroup,i_current_Element,i_current_Ion)  ! s-1
+                     end do  ! end loop over ions
+                  end if
+               end do ! end loop over elements
 
-            ! Deal with molecules separately
-            if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-               if (isLW(igroup).eq.1) then 
-                  phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
-               else
-                  phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
+               ! Deal with molecules separately
+               if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
+                  if (isLW(igroup).eq.1) then 
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
+                  else
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
+                  end if
                end if
-            end if
-         end do
+            end do
+         end if
 #ifndef CALIMA
          ! IR, optical and UV depletion by dust absorption: ----------------
          ! IR scattering/abs on dust (abs after T update)
@@ -1098,14 +1104,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
       end if
       if (rt_isIR) then
-         do ii = 1, ndust
-            dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
-                  group_egy_erg(iIR)
-         end do
-         do ii = 1, npah
-            dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
-                  group_egy_erg(iIR)
-         end do
+         if (ndust > 0) then
+            do ii = 1, ndust
+               dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
+                     group_egy_erg(iIR)
+            end do
+         end if
+         if (npah > 0) then
+            do ii = 1, npah
+               dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
+                     group_egy_erg(iIR)
+            end do
+         end if
       end if
 #else
                     & )
@@ -1380,9 +1390,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
          ! Update mu and T
 #ifdef CO
-         mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+         mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz, dCO)
 #else
-         mu = getMu_RTZ(ne, nElement_dep, dXion)
+         mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz)
 #endif
          TK = dT2 * mu  
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
@@ -1520,10 +1530,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Loop over all elements
       do iElement = 1,n_elements
          if (elements(iElement)%atomic_number > 0) then
-            if (nElement_dep(iElement)/nElement_dep(1).le.1e-10) then
+            if (nElement_dep(iElement)/nElement_dep(1).le.1e-10 .or. &
+               nElement_dep(iElement).eq.0d0) then
                cycle
             end if
-
             ! Get the atomic number
             atomic_number = elements(iElement)%atomic_number
 
@@ -1773,9 +1783,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Update mu and T --> only H and He (others don't matter)
                if (iElement.lt.3) then 
 #ifdef CO
-                  mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+                  mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz, dCO)
 #else
-                  mu = getMu_RTZ(ne, nElement_dep, dXion)
+                  mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz)
 #endif
                   TK = dT2 * mu  
                   if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
@@ -1854,9 +1864,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! UPDATE FINAL MU AND TEMPERATURE ************************************
 #ifdef CO
-      mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+      mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz, dCO)
 #else
-      mu = getMu_RTZ(ne, nElement_dep, dXion)
+      mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz)
 #endif
       if(rt_isTconst)then
          dT2 = rt_Tconst/mu
@@ -1909,165 +1919,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    END SUBROUTINE rtz_solve_cooling
 
-!************************************************************************
-   FUNCTION getNe(xion,nion) result(ne)
-      !Returns the electron number density by looping over all elements 
-      !and summing their contributions
-      implicit none
-
-      real(dp), intent(in)::xion(1:n_elements,1:n_elements)
-      real(dp), intent(in)::nion(1:n_elements)
-      real(dp)::ne
-      integer::iIons, iElement, n_ions
-
-      ne = 0.d0
-
-      !Loop over all elements
-      do iElement=1,n_elements
-         if (elements(iElement)%atomic_number .gt. 0) then
-            !Get the number of ions
-            n_ions = elements(iElement)%n_ions
-
-            !Loop over all ions 
-            !Start loop at 2, no electrons in the ground state
-            do iIons=2,n_ions
-               ne = ne + (nion(iElement) * xion(iElement,iIons) * real(iIons - 1, dp)) 
-            end do
-         end if
-      end do
-
-   END FUNCTION getNe
-
-   FUNCTION dust_to_gas_scale_RR14(log10_O_over_H) result(ratio)
-      ! This returns the dust-to-metal ratio relative to the local value
-      !------------------------------------
-      ! Zsolar: metallicity in solar units
-      ! D2Z_solar ~ D2Z / 0.3
-      !------------------------------------
-      ! based on Remy-Ruyer, Madden, Galliano et al. (2014)
-      ! https://arxiv.org/pdf/1312.3442.pdfR
-      ! Broken power law with X_{CO,Z} case (Table 1)
-      implicit none
-
-      real(dp),intent(in)::log10_O_over_H
-      real(dp)::ratio
-      real(dp)::a,alphaH,b,alphaL,xt,x,Xsun
-      real(dp)::G2D,G2D_sol,y
-
-      ! y = log (G/D)
-      ! x = 12 + log10(O/H)
-      ! Xsun = 8.69
-      ! 
-      ! y = a + alphaH * (Xsun - x) for x>xt
-      ! y = b + alphaL * (Xsun - x) for x<=xt
-      a      = 2.21d0
-      alphaH = 1.00d0 ! MW case
-      b      = 0.96d0 ! 0.68
-      alphaL = 3.10d0 ! 3.08 
-      xt     = 8.10d0 ! 7.96
-      Xsun   = 8.69d0
-      x = max(log10_O_over_H,5.d0) ! Mild extrapolation
-
-      if (log10_O_over_H>xt)then
-         y = a + alphaH * (Xsun - x)
-      else
-         y = b + alphaL * (Xsun - x)
-      endif
-
-      G2D = 10.d0**y
-      G2D_sol = 10.d0**a
-
-      ratio = max(min(G2D_sol / G2D, 1.d0), 0.d0)
-
-   END FUNCTION dust_to_gas_scale_RR14
-
-#ifdef CO
-   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions, nCO) result(mu)
-#else
-   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions) result(mu)
-#endif
-      implicit none
-      real(dp), intent(in):: ne
-      real(dp), intent(in):: element_number_densities(27)
-      real(dp), intent(in):: element_ion_fractions(27,27)
-#ifdef CO
-      real(dp), intent(in):: nCO
-#endif
-      real(dp):: mu
-      real(dp):: m_bar, n_hat
-
-      integer:: i, j
-
-      m_bar = 0.d0
-      n_hat = 0.d0
-
-      do i=1,n_elements
-         if (elements(i)%atomic_number.gt.0) then
-            do j=1,elements(i)%n_ions
-               m_bar = m_bar + (element_number_densities(i) * element_ion_fractions(i,j) * elements(i)%atomic_mass)
-               n_hat = n_hat + element_number_densities(i) * element_ion_fractions(i,j)
-            end do
-         end if
-      end do
-
-      ! Include electrons
-      n_hat = n_hat + ne
-
-      ! Include contribution from H2
-      if (isH2_rtz) then
-         m_bar = m_bar + (element_number_densities(1) * element_ion_fractions(1,3) * elements(1)%atomic_mass)
-         n_hat = n_hat + (0.5d0 * element_number_densities(1) * element_ion_fractions(1,3))
-      end if
-
-#ifdef CO
-      ! Include contribution from CO
-      m_bar = m_bar + nCO * (elements(6)%atomic_mass + elements(8)%atomic_mass)
-      n_hat = n_hat + nCO
-#endif
-
-      mu = m_bar / n_hat
-
-   END FUNCTION getMu_RTZ
-
-   FUNCTION get_rho_rtz(element_number_densities) result(rho)
-      use constants, only: amu2g
-      implicit none
-      real(dp), intent(in):: element_number_densities(27)
-      real(dp):: rho
-
-      integer:: i
-
-      rho = 0.d0
-
-      do i=1,n_elements
-         if (elements(i)%atomic_number.lt.1) then
-            cycle
-         end if
-         rho = rho + (element_number_densities(i) * elements(i)%atomic_mass) ! gives amu/cm^3
-      end do
-
-      rho = amu2g * rho ! gives g/cm^3
-   END FUNCTION get_rho_rtz
-
-   FUNCTION get_n_rtz(element_number_densities, ne) result(rho_n)
-      implicit none
-      real(dp), intent(in):: element_number_densities(27)
-      real(dp), intent(in):: ne
-      real(dp):: rho_n
-
-      integer:: i
-
-      rho_n = 0.d0
-
-      do i=1,n_elements
-         if (elements(i)%atomic_number.lt.1) then
-            cycle
-         end if
-         rho_n = rho_n + element_number_densities(i)  ! gives 1/cm^3
-      end do
-
-      rho_n = rho_n + ne
-   END FUNCTION get_n_rtz
 
 #ifdef RT
    SUBROUTINE reduce_flux(Fp, cNp)

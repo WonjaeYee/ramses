@@ -435,7 +435,9 @@ contains
         if (allocated(this%fcharge_pah)) deallocate(this%fcharge_pah)
         allocate(this%fcharge_pah(1:this%ncharge_pah_max,1:this%npah))
         this%fcharge_pah = 0d0
-        this%fcharge_pah(1,:) = 1d0 ! Assume all PAHs are neutral at beginning
+        if (this%npah > 0) then
+           this%fcharge_pah(1,:) = 1d0 ! Assume all PAHs are neutral at beginning
+        end if
 
         if (allocated(this%T_dust)) deallocate(this%T_dust)
         allocate(this%T_dust(1:this%ndust))

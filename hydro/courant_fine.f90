@@ -365,9 +365,8 @@ subroutine cmpdt_dust(uu,gg,ur,dx,dt,ncell,ilevel)
   use dust_commons, only: dust_tva, dust_radpressure, ndust, use_w_drift_test, w_drift_test, GD_solar
   use dust_dynamics, only: cmpdt_dust_diffusion, cmpdt_dust_dynamics
   use molecules_module, only: comp_Sd, comp_SH2
-  use rtz_module, only: elements, n_elements
+  use rtz_module, only: elements, n_elements, getNe, getMu_RTZ
   use rt_parameters, only: nGroups, iGroups, rt_c_cgs, group_egy, rtz_UV_background_G0, isH2_rtz, iIons, rt_advect, nrtvar
-  use rtz_cooling_module, only: getNe, getMu_RTZ
   implicit none
   integer::ncell,ilevel
   real(dp)::dx,dt
@@ -579,9 +578,9 @@ subroutine cmpdt_dust(uu,gg,ur,dx,dt,ncell,ilevel)
          ! Gas temperature in K
 #ifdef CO
          nCO = uu(k,iCO) * scale_d / mCO
-         mu = getMu_RTZ(ne(k),nElement(k,:),xion(k,:,:),nCO)
+         mu = getMu_RTZ(ne(k),nElement(k,:),xion(k,:,:),isH2_rtz,nCO)
 #else
-         mu = getMu_RTZ(ne(k),nElement(k,:),xion(k,:,:))
+         mu = getMu_RTZ(ne(k),nElement(k,:),xion(k,:,:),isH2_rtz)
 #endif
          Tk(k) = p_save(k)/rho_save(k)*scale_T2*mu
       end do

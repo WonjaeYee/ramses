@@ -516,14 +516,16 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
          call clean_stop
       end if
       ! PAH densities in g/cm^3
-      do i=1,nleaf
-         rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
-      end do
-      if (any(rho_pah(:,:).lt.0d0)) then
-         write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
-         write(*,*) 'Dust density: ', rho_dust(i,:)
-         write(*,*) 'PAH density: ', rho_pah(i,:)
-         call clean_stop
+      if (npah > 0) then
+         do i=1,nleaf
+            rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+         end do
+         if (any(rho_pah(:,:).lt.0d0)) then
+            write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
+            write(*,*) 'Dust density: ', rho_dust(i,:)
+            write(*,*) 'PAH density: ', rho_pah(i,:)
+            call clean_stop
+         end if
       end if
 #endif
 
@@ -801,9 +803,11 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       do i=1,nleaf
          uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
       end do
-      do i=1,nleaf
-         uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
-      end do
+      if (npah > 0) then
+         do i=1,nleaf
+            uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
+         end do
+      end if
 #endif
 #ifdef RT
      if(neq_chem) then

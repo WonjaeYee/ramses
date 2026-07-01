@@ -40,6 +40,9 @@ subroutine condinit(x,u,dx,nn)
   case('dustydiffuse')
      call dustydiffuse_condinit(x, q, dx, nn)
 
+  case('dustyspress')
+     call dustyspress_condinit(x, q, dx, nn)
+
   ! Add here, if you wish, some user-defined initial conditions
   ! ........
 
@@ -178,3 +181,45 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
   end do
 
 end subroutine dustydiffuse_condinit
+
+
+!================================================================
+!================================================================
+!================================================================
+!================================================================
+subroutine dustyspress_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use constants
+
+  implicit none
+  integer ::nn                            ! Number of cells
+  real(dp)::dx                            ! Cell size
+  real(dp),dimension(1:nvector,1:nvar)::q ! Primitive variables
+  real(dp),dimension(1:nvector,1:ndim)::x ! Cell center position.
+  !================================================================
+  ! This routine generates the initial conditions for the DustySpress
+  ! test case.
+  !================================================================
+  integer::i,ivar
+  real(dp)::dist,eps_val
+
+  ! Call built-in initial condition generator to set background gas properties
+  call region_condinit(x,q,dx,nn)
+
+  do i=1,nn
+     ! Distance from x0 = 2.0 pc.
+     ! Note: x is in code units, and since boxlen is 10.0 and units_length is 1 pc,
+     ! x is directly in parsecs.
+     dist = x(i,1) - 2.0d0
+     if (dist > 0.5d0*boxlen) dist = dist - boxlen
+     if (dist < -0.5d0*boxlen) dist = dist + boxlen
+
+     ! eps(x) = 1e-5 + 0.01 * exp(-(x-x0)^2/sigma^2) with sigma = 0.2
+     eps_val = 1e-5_dp + 0.01_dp * exp(-(dist**2)/(0.2d0**2))
+     do ivar=1,ndust
+        q(i,idust+ivar-1) = eps_val
+     end do
+  end do
+
+end subroutine dustyspress_condinit

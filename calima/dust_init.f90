@@ -1099,7 +1099,7 @@ module dust_init
         if (dust_coll_cooling) call init_dust_collisional_tables
 
         ! 10. Read the dust charging tables
-        if (dust_acc_coulomb.or.dust_sputtering_charge.or.dust_coll_charge.or.dust_pe_heating) call init_dust_charging_tables
+        call init_dust_charging_tables
 
         ! 11. Read the dust photoelectric heating tables
         if (pah_pe_heating) call init_dust_peh_tables
@@ -1147,7 +1147,7 @@ module dust_init
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
-                dust_tva, use_w_drift_test, w_drift_test,&
+                dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
                 ! PAH modelling options
