@@ -22,7 +22,7 @@ module rtz_cooling_module
    implicit none
 
    private   ! default
-   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust
+   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust, getNe, getMu_RTZ
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]

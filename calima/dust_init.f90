@@ -144,6 +144,15 @@ module dust_init
             end if
         end if
 
+        !-------------------------------------------------
+        ! Check everything is correct to do dust dynamics
+        !-------------------------------------------------
+#ifndef RT
+        if (dust_radpressure) then
+            if(myid==1)write(*,*)'Error: dust_radpressure can only be used with RT'
+            check_params_dust=.false.
+        end if
+#endif
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)

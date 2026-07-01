@@ -73,8 +73,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use rt_cooling_module, only: rt_solve_cooling,iIR,rt_isIRtrap &
        ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc
 #endif
+#else
+   use cooling_module, only: X, T2_min_fix,solve_cooling
 #endif
-  use cooling_module, only: X, T2_min_fix,solve_cooling
   use constants, only: a_r, Myr2sec, mH, rhoc, twopi
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb
@@ -659,12 +660,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                               ,dx_SS_H2, err_idx &
 #ifdef CALIMA
                               ,sigma=sigma &
-#if NDUST>0
                               ,rho_dust=rho_dust &
-#endif
-#if NPAH>0
                               ,rho_pah=rho_pah &
-#endif
 #endif
                               )
       end if

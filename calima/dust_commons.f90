@@ -63,8 +63,9 @@ module dust_commons
 
     ! ==== Dust dynamics (read from nml) ====
     logical ::dust_tva=.false.                   ! Activate the dust dynamics using the Terminal Velocity Approximation (TVA)
+    logical ::dust_radpressure=.false.           ! Activate the dust dynamics using the radiation pressure force
     logical ::use_w_drift_test=.false.           ! Override the drift velocity with a constant value for testing
-    real(dp),dimension(1:3)::w_drift_test=0.0_dp  ! Constant drift velocity for each dimension (X, Y, Z)
+    real(dp),dimension(1:3)::w_drift_test=0.0_dp ! Constant drift velocity for each dimension (X, Y, Z)
     
 
     ! ==== Dust modelling options (read from nml) ====
