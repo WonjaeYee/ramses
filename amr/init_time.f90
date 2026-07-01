@@ -9,6 +9,7 @@ subroutine init_time
 #ifdef RT
 #ifdef RTZ
   use rtz_cooling_module
+  use movie_lines_module, only: init_movie_lines
   use cosmic_ray_ionization_module, only: initialize_cr_rates
   use photoionization_UVB_module, only: load_UVB_data, update_UVB
   use charge_exchange_module, only: load_ct_rates
@@ -19,10 +20,6 @@ subroutine init_time
 #else
   use rt_cooling_module
 #endif
-#endif
-#ifdef CALIMA
-  use rt_parameters, only: nGroups
-  use dust_init, only: init_CALIMA_dust
 #endif
   use mpi_mod
   implicit none
@@ -358,19 +355,16 @@ subroutine init_time
   ! Initialize the metal yields
   call initialize_SN_yields()
 
+  ! Initialize movie lines grids if provided
+  if (trim(movie_lines_file) /= '') then
+     call init_movie_lines(trim(movie_lines_file))
+  endif
+
   ! Initialize rt
   call update_rt_c
 
 #endif
 
-#endif
-
-#ifdef CALIMA
-#if defined(RT) || defined(RTZ)
-  call init_CALIMA_dust(nGroups)
-#else
-  call init_CALIMA_dust(1)
-#endif
 #endif
 
 end subroutine init_time

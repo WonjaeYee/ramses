@@ -22,9 +22,19 @@ module dust_init
 
         write(*,*) '>>> DUST PARAMETERS ======================================'
         write(*,*) '   idust      = ',idust,',   ndust    = ',ndust,',   ndchemtype = ',ndchemtype
+        if (dust_solver_type == 1) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK4)'
+        else if (dust_solver_type == 2) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Anninos)'
+        else if (dust_solver_type == 3) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK54)'
+        else
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Unknown)'
+        end if
         write(*,*) 'dust_acc              = ',dust_accretion  ,',        dust_sput     = ',dust_sputtering
         write(*,*) 'dust_coa              = ',dust_coagulation,',        dust_sha      = ',dust_shattering
         write(*,*) 'dust_acc_coulomb      = ',dust_acc_coulomb,',        dust_ratd     = ',dust_ratd
+        write(*,*) 'max_accretion_rate    = ',max_accretion_rate
         write(*,*) 'dust_turbulent_model  = ',dust_turbulent_model,',        H2ondust      = ',H2ondust
         write(*,*) 'dust_shattering_SN      = ',dust_shattering_SN
         write(*,*) 'dust_sublimation      = ',dust_sublimation
@@ -460,7 +470,10 @@ module dust_init
                     dust_processes_list(ndust_processes)%name = 'accretion'
                     dust_processes_list(ndust_processes)%source = .true.
                     dust_processes_list(ndust_processes)%sink = .false.
-                    if (accretion_model.eq.'LeBourlot2012') then
+                    if (dust_acc_coulomb) then
+                        carry_gas_ions = .true.
+                        dust_processes_list(ndust_processes)%comp_rate => coulomb_accretion_rate
+                    else if (accretion_model.eq.'LeBourlot2012') then
                         dust_processes_list(ndust_processes)%comp_rate => LeBourlot2012_accretion_rate
                     else
                         dust_processes_list(ndust_processes)%comp_rate => LeBourlot2012_accretion_rate
@@ -625,15 +638,20 @@ module dust_init
         use amr_commons, only:myid
         use dust_photoelectric_heating, only: most_negative_allowed_charge
         use dust_optics, only:getRATCrosssection
+        use rk4_mod, only: rk4_step
+        use anninos_mod, only: anninos_step
+        use rk54_mod, only: rk54_step
+        use ode_interface_mod, only: dust_solver_step
         implicit none
         integer, intent(in) :: nGroups
         logical :: check_for_pahs
-        integer :: ii,jj,kk,kk_loc,n_el,nd_ctype,id_start,id_end,ichemtype
+        integer :: ii,jj,kk,kk_loc,n_el,nd_ctype,id_start,id_end,ichemtype,i
         integer :: jbin,kbin,idest
         integer :: idust_pah_interact
         real(dp) :: mf_max,mf_min,prefactor,chi_total,frac_tot,mcoag
         real(dp) :: R
         integer :: iend_chemtype
+        external :: run_dust_solver_test
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
         if (sum(dustbins_per_chemtype) /= ndust) then
@@ -719,7 +737,7 @@ module dust_init
                     end if
                     dustbins_props(ii)%el_mfractions(kk) = elements(jj)%atomic_mass * dust_composition(ichemtype,jj)
                     dustbins_props(ii)%el_atomic_masses_amu(kk) = elements(jj)%atomic_mass
-                    dustbins_props(ii)%el_atomic_masses_g(kk) = elements(jj)%atomic_mass * amu2g
+                    dustbins_props(ii)%el_atomic_masses_g(kk) = elements(jj)%atomic_mass_g
                     dustbins_props(ii)%el_nions(kk) = elements(jj)%n_ions
                     dustbins_props(ii)%el_names(kk) = elements(jj)%symbol
 #else
@@ -842,6 +860,7 @@ module dust_init
 #else
             dust_helper%el_atomic_mass_g(jj) = el_atomic_masses_amu(jj) * amu2g
 #endif
+            dust_helper%inv_atomic_mass(jj) = 1.0_dp / max(dust_helper%el_atomic_mass_g(jj), tiny(1.0_dp))
         end do
 
         ! 3. Add the RAT-D parameters
@@ -1038,7 +1057,7 @@ module dust_init
             comp_sigma_turb = .true.
         end if
 
-        if (dust_acc_coulomb.or.dust_sputtering_charge.or.dust_coll_charge) then
+        if (dust_acc_coulomb.or.pah_freezing) then
             Coulomb_precompute = .true.
         end if
 
@@ -1057,15 +1076,98 @@ module dust_init
         ! 11. Read the dust photoelectric heating tables
         call init_dust_peh_tables
 
+        ! 11b. Read the dust IR emission tables
+        call init_dust_IR_emission_tables
+
         ! 12. Cache the BH80 collisional heating factors that only depend on the dust bins
         call init_dust_coll_heating_BH80_cache
+
+
+        ! Select the ODE solver procedure pointer
+        if (dust_solver_type == 1) then
+            dust_solver_step => rk4_step
+            solver_substepped = .true.
+        else if (dust_solver_type == 2) then
+            dust_solver_step => anninos_step
+            solver_substepped = .false.
+        else if (dust_solver_type == 3) then
+            dust_solver_step => rk54_step
+            solver_substepped = .true.
+        else
+            if (myid == 1) then
+                write(*,*) 'ERROR: Invalid dust_solver_type = ', dust_solver_type
+            end if
+            call clean_stop()
+        end if
 
         ! 13. Print the CALIMA dust properties for the user
         if (myid == 1) then
             call print_dust_parameters
         end if
 
+        if (dust_test) then
+            call run_dust_solver_test()
+        end if
     end subroutine init_CALIMA_dust
+
+    subroutine read_CALIMA_params(nml_ok,nGroups)
+        use amr_commons, only:myid
+        implicit none
+        logical, intent(inout) :: nml_ok
+        integer, intent(in) :: nGroups
+
+        logical :: check_dust
+
+        namelist/calima_params/&
+                ! Dust physics flags
+                dust_log,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+                dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,&
+                dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
+                dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
+                dust_sublimation,dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
+                ! PAH physics flags
+                pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
+                pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
+                ! Dust modelling options
+                sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
+                ! PAH modelling options
+                photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
+                cluster_evaporation_model,&
+                ! Efficiency parameters
+                Sconstant,max_accretion_rate,nh_coa,nhmax_acc,nhmax_coa,nhmax_sha,&
+                dust_SNdest_eff,dust_SNsha_eff,dust_SNII_cond_eff,dust_SNIa_cond_eff,dust_AGB_cond_eff,&
+                Coulomb_enhance,tensile_strength,Youngs_modulus,Poisson_ratio,surf_energy,work_function,band_gap,e_escape_length,&
+                separate_refractive_index,slope_frag_func,errmax,countmax,GDinit,DTMinit,fpah_ini,smallr_dust,&
+                ! Dust grain and PAHs bin properties
+                dust_composition,dustbins_per_chemtype,&
+                asize,sgrain,amin,amax,fmass_ej,&
+                pah_nc,pah_nc_min,pah_nc_max,spah,pah_SNdest_eff,fpah_inwind,pah_nc,pah_ncharge_states,&
+                pah_is_cluster, &
+                ! ISM depletion factors
+                fDust_depletions,fCDust_inPAH,GD_solar,DTM_solar,fdustmass_ini,fpahmass_ini,&
+                ! Radiation parameters
+                fixed_rad_ani,fixed_lambda_mean,&
+                ! External dust files
+                dust_tables_dir
+
+        ! Initialise as fine
+        nml_ok = .true.
+
+        ! 1. Read namelist file
+        rewind(1)
+        read(1,NML=calima_params,END=301)
+301     continue ! No harm if no CALIMA namelist
+
+        ! 2. Check that the parameters are consistent and set any internal variables
+        check_dust = check_params_dust(myid)
+        if(.not.check_dust) then
+            nml_ok = .false.
+            return
+        end if
+
+        ! 3. If everything is fine, we initialise CALIMA dust parameters and tables
+        call init_CALIMA_dust(nGroups)
+    end subroutine read_CALIMA_params
 
     subroutine cmp_lim_elem(dust_index,n_el,el_density,lim_index)
         implicit none
@@ -1095,7 +1197,7 @@ module dust_init
         implicit none
 
         logical :: ok, ok_all
-        integer :: nT, nphi, istat, i, j, ii, Zi, nmax, iphi0
+        integer :: nT, nphi, istat, i, j, ii, Zi, nmax, iphi0, n
         character(len=20) :: dustlabel
         character(len=7) :: Zi_str
         character(len=128) :: collisional_filename
@@ -1150,6 +1252,11 @@ module dust_init
                     call clean_stop
                 end if
 
+                ! Skip header lines
+                do n = 1, 6
+                    read(25, *)
+                end do
+
                 ! Read the number of temperature points and number of phi values
                 read(25, *) nT, nphi
 
@@ -1158,6 +1265,7 @@ module dust_init
                     deallocate(dustbins_props(ii)%collisional_tab(i)%npts)
                 end if
                 allocate(dustbins_props(ii)%collisional_tab(i)%npts(1:2))
+                dustbins_props(ii)%collisional_tab(i)%name = 'dust_collisional_'//trim(dustlabel)//'_Z_'//trim(Zi_str)
                 dustbins_props(ii)%collisional_tab(i)%ndim = 2
                 dustbins_props(ii)%collisional_tab(i)%npts(1) = nT
                 dustbins_props(ii)%collisional_tab(i)%npts(2) = nphi
@@ -1197,9 +1305,7 @@ module dust_init
                 end do
                 dustbins_props(ii)%collisional_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
-                ! Mark table as initialized
-                call finalize_dust_table(dustbins_props(ii)%collisional_tab(i))
-                dustbins_props(ii)%collisional_tab(i)%initialised = .true.
+                call dustbins_props(ii)%collisional_tab(i)%init()
 
                 close(25)
 
@@ -1225,6 +1331,11 @@ module dust_init
                 write(*,*) '  File:', trim(collisional_filename), ' iostat=', istat
                 stop 1
             end if
+
+            ! Skip header lines
+            do n = 1, 6
+                read(25, *)
+            end do
 
             read(25, *, iostat=istat) nT, nphi
             if (istat /= 0) then
@@ -1278,8 +1389,8 @@ module dust_init
             end do
 
             dustbins_props(ii)%collisional_tab(0)%tab1d(1:nT, 1) = T_grid(1:nT)
-            call finalize_dust_table(dustbins_props(ii)%collisional_tab(0))
-            dustbins_props(ii)%collisional_tab(0)%initialised = .true.
+
+            call dustbins_props(ii)%collisional_tab(0)%init()
             close(25)
             if (allocated(phi_grid)) deallocate(phi_grid)
             if (allocated(T_grid)) deallocate(T_grid)
@@ -1302,7 +1413,7 @@ module dust_init
         implicit none
 
         logical :: ok, ok_all
-        integer :: nT, nphi, istat, i, j, ii, Zi, nmax, iphi0
+        integer :: nT, nphi, istat, i, j, ii, Zi, nmax, iphi0, n
         character(len=20) :: dustlabel
         character(len=7) :: Zi_str
         character(len=128) :: sputtering_filename
@@ -1357,6 +1468,11 @@ module dust_init
                     call clean_stop
                 end if
 
+                ! Skip header lines
+                do n = 1, 6
+                    read(25, *)
+                end do
+
                 ! Read the number of temperature points and number of phi values
                 read(25, *) nT, nphi
 
@@ -1365,6 +1481,7 @@ module dust_init
                     deallocate(dustbins_props(ii)%sputtering_tab(i)%npts)
                 end if
                 allocate(dustbins_props(ii)%sputtering_tab(i)%npts(1:2))
+                dustbins_props(ii)%sputtering_tab(i)%name = 'sputtering_'//trim(dustlabel)//'_Z_'//trim(Zi_str)
                 dustbins_props(ii)%sputtering_tab(i)%ndim = 2
                 dustbins_props(ii)%sputtering_tab(i)%npts(1) = nT
                 dustbins_props(ii)%sputtering_tab(i)%npts(2) = nphi
@@ -1404,10 +1521,9 @@ module dust_init
                 end do
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
-                close(25)
-                call finalize_dust_table(dustbins_props(ii)%sputtering_tab(i))
-                dustbins_props(ii)%sputtering_tab(i)%initialised = .true.
+                call dustbins_props(ii)%sputtering_tab(i)%init()
 
+                close(25)
                 deallocate(phi_grid, T_grid)
             end do
         end do
@@ -1488,13 +1604,9 @@ module dust_init
                 deallocate(dustbins_props(ii)%sublimation_tab%npts)
             end if
             allocate(dustbins_props(ii)%sublimation_tab%npts(1:1))
+            dustbins_props(ii)%sublimation_tab%name = 'sublimation_rate_'//trim(dustlabel)
             dustbins_props(ii)%sublimation_tab%ndim = 1
             dustbins_props(ii)%sublimation_tab%npts(1) = nT
-            if (allocated(dustbins_props(ii)%sublimation_tab%ipos_zero)) then
-                deallocate(dustbins_props(ii)%sublimation_tab%ipos_zero)
-            end if
-            allocate(dustbins_props(ii)%sublimation_tab%ipos_zero(1:1))
-            dustbins_props(ii)%sublimation_tab%ipos_zero(:) = 1
             if (allocated(dustbins_props(ii)%sublimation_tab%tab1d)) then
                 deallocate(dustbins_props(ii)%sublimation_tab%tab1d)
             end if
@@ -1521,20 +1633,13 @@ module dust_init
                     call clean_stop
                 end if
                 j = j + 1
-                if (Td > 0d0) then
-                    dustbins_props(ii)%sublimation_tab%tab1d(j, 1) = log10(Td)
-                else
-                    dustbins_props(ii)%sublimation_tab%tab1d(j, 1) = log_floor
-                end if
-                if (eps > 0d0) then
-                    dustbins_props(ii)%sublimation_tab%tab1d(j, 2) = max(log10(eps), log_floor)
-                else
-                    dustbins_props(ii)%sublimation_tab%tab1d(j, 2) = log_floor
-                end if
+                dustbins_props(ii)%sublimation_tab%tab1d(j, 1) = log10(Td)
+                dustbins_props(ii)%sublimation_tab%tab1d(j, 2) = eps
             end do
             close(25)
-            call finalize_dust_table(dustbins_props(ii)%sublimation_tab)
-            dustbins_props(ii)%sublimation_tab%initialised = .true.
+
+            call dustbins_props(ii)%sublimation_tab%init()
+            dustbins_props(ii)%T_sublimation_min = 10d0**dustbins_props(ii)%sublimation_tab%tab1d(1, 1)
         end do
 
     end subroutine init_dust_sublimation_tables
@@ -1616,6 +1721,7 @@ module dust_init
 
             if (allocated(dustbins_props(ii)%mean_charg_tab%npts)) deallocate(dustbins_props(ii)%mean_charg_tab%npts)
             allocate(dustbins_props(ii)%mean_charg_tab%npts(1:2))
+            dustbins_props(ii)%mean_charg_tab%name = 'mean_charge_'//trim(dustlabel)
             dustbins_props(ii)%mean_charg_tab%ndim = 2
             dustbins_props(ii)%mean_charg_tab%npts(1) = ngamma
             dustbins_props(ii)%mean_charg_tab%npts(2) = nT
@@ -1627,6 +1733,7 @@ module dust_init
 
             if (allocated(dustbins_props(ii)%sigma_charg_tab%npts)) deallocate(dustbins_props(ii)%sigma_charg_tab%npts)
             allocate(dustbins_props(ii)%sigma_charg_tab%npts(1:2))
+            dustbins_props(ii)%sigma_charg_tab%name = 'sigma_charge_'//trim(dustlabel)
             dustbins_props(ii)%sigma_charg_tab%ndim = 2
             dustbins_props(ii)%sigma_charg_tab%npts(1) = ngamma
             dustbins_props(ii)%sigma_charg_tab%npts(2) = nT
@@ -1673,17 +1780,14 @@ module dust_init
 
             dustbins_props(ii)%mean_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
             dustbins_props(ii)%mean_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            call finalize_dust_table(dustbins_props(ii)%mean_charg_tab)
-            dustbins_props(ii)%mean_charg_tab%initialised = .true.
+            call dustbins_props(ii)%mean_charg_tab%init()
 
             dustbins_props(ii)%sigma_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
             dustbins_props(ii)%sigma_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            call finalize_dust_table(dustbins_props(ii)%sigma_charg_tab)
-            dustbins_props(ii)%sigma_charg_tab%initialised = .true.
+            call dustbins_props(ii)%sigma_charg_tab%init()
 
             close(26)
             close(27)
-
             deallocate(gamma_grid,T_grid)
         end do
 
@@ -1759,6 +1863,7 @@ module dust_init
             end if
             if (allocated(dustbins_props(i)%peh_tab%npts)) deallocate(dustbins_props(i)%peh_tab%npts)
             allocate(dustbins_props(i)%peh_tab%npts(1:2))
+            dustbins_props(i)%peh_tab%name = 'dust_rates_peh_'//trim(dustlabel)
             dustbins_props(i)%peh_tab%ndim = 2
             dustbins_props(i)%peh_tab%npts(1) = ngamma
             dustbins_props(i)%peh_tab%npts(2) = nT
@@ -1774,6 +1879,7 @@ module dust_init
 
             if (allocated(dustbins_props(i)%rec_tab%npts)) deallocate(dustbins_props(i)%rec_tab%npts)
             allocate(dustbins_props(i)%rec_tab%npts(1:2))
+            dustbins_props(i)%rec_tab%name = 'dust_rates_rec_'//trim(dustlabel)
             dustbins_props(i)%rec_tab%ndim = 2
             dustbins_props(i)%rec_tab%npts(1) = ngamma
             dustbins_props(i)%rec_tab%npts(2) = nT
@@ -1824,10 +1930,9 @@ module dust_init
 
             close(28)
             close(29)
-            call finalize_dust_table(dustbins_props(i)%peh_tab)
-            dustbins_props(i)%peh_tab%initialised = .true.
-            call finalize_dust_table(dustbins_props(i)%rec_tab)
-            dustbins_props(i)%rec_tab%initialised = .true.
+
+            call dustbins_props(i)%peh_tab%init()
+            call dustbins_props(i)%rec_tab%init()
 
             deallocate(gamma_grid, T_grid)
         end do
@@ -1857,7 +1962,7 @@ module dust_init
         implicit none
 
         logical :: file_exists
-        integer :: nT, istat, i, ipahbin, iel, Zi
+        integer :: nT, istat, i, ipahbin, iel, Zi, n
         character(len=256) :: pah_filename
         real(dp), allocatable :: T_grid(:), rate_grid(:)
         character(len=8) :: Z_str, ipah_str
@@ -1870,6 +1975,7 @@ module dust_init
 
             ! Reset all PAH sputtering tables for this PAH bin.
             do iel = 0, n_elements
+                pahbins_props(ipahbin)%sputtering_tab(iel)%name = 'pah_sputtering_pahbin_'//trim(adjustl(ipah_str))//'_Z_'//trim(adjustl(Z_str))
                 pahbins_props(ipahbin)%sputtering_tab(iel)%initialised = .false.
                 pahbins_props(ipahbin)%sputtering_tab(iel)%ndim = 0
             end do
@@ -1884,6 +1990,9 @@ module dust_init
             if (file_exists) then
                 open(10, file=trim(pah_filename), status='old', action='read', iostat=istat)
                 if (istat == 0) then
+                    do n = 1, 6
+                        read(10, *)
+                    end do
                     read(10, *) nT
 
                     if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%npts)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%npts)
@@ -1894,7 +2003,6 @@ module dust_init
                     if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d)
                     allocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 1:2))
                     pahbins_props(ipahbin)%sputtering_tab(0)%tab1d = 0d0
-                    if (allocated(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d)) deallocate(pahbins_props(ipahbin)%sputtering_tab(0)%tab2d)
 
                     if (allocated(T_grid)) deallocate(T_grid)
                     if (allocated(rate_grid)) deallocate(rate_grid)
@@ -1910,8 +2018,9 @@ module dust_init
                         read(10, *) rate_grid(i)
                     end do
                     pahbins_props(ipahbin)%sputtering_tab(0)%tab1d(1:nT, 2) = rate_grid(1:nT)
-                    call finalize_dust_table(pahbins_props(ipahbin)%sputtering_tab(0))
-                    pahbins_props(ipahbin)%sputtering_tab(0)%initialised = .true.
+
+                    call pahbins_props(ipahbin)%sputtering_tab(0)%init()
+
                     close(10)
                     deallocate(T_grid, rate_grid)
                 else
@@ -1940,6 +2049,9 @@ module dust_init
                     cycle
                 end if
 
+                do n = 1, 6
+                    read(10, *)
+                end do
                 ! Read the number of temperature points
                 read(10, *) nT
 
@@ -1956,9 +2068,6 @@ module dust_init
                 end if
                 allocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 1:2))
                 pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d = 0d0
-                if (allocated(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d)) then
-                    deallocate(pahbins_props(ipahbin)%sputtering_tab(iel)%tab2d)
-                end if
 
                 ! Allocate temporary arrays for temperature and rate grids
                 if (allocated(T_grid)) deallocate(T_grid)
@@ -1977,8 +2086,8 @@ module dust_init
                     read(10, *) rate_grid(i)
                 end do
                 pahbins_props(ipahbin)%sputtering_tab(iel)%tab1d(1:nT, 2) = rate_grid(1:nT)
-                call finalize_dust_table(pahbins_props(ipahbin)%sputtering_tab(iel))
-                pahbins_props(ipahbin)%sputtering_tab(iel)%initialised = .true.
+
+                call pahbins_props(ipahbin)%sputtering_tab(iel)%init()
 
                 close(10)
 
@@ -2006,7 +2115,7 @@ module dust_init
         implicit none
 
         logical :: ok_pah
-        integer :: n_G0,n_nH,istat
+        integer :: n_G0,n_nH,istat,n
         integer :: i,j,ipahbin,nmax
         character(len=7) :: i_str
         character(len=128) :: f_diss_filename
@@ -2034,12 +2143,18 @@ module dust_init
                 call clean_stop
             end if
 
+            ! Ignore the first 6 lines (comment)
+            do n = 1, 6
+                read(111,*)
+            end do
+
             ! Read the matrix structure
             read(111,*) n_G0, n_nH
             nmax = max(n_G0,n_nH)
 
             if (allocated(pahbins_props(ipahbin)%dissociation_tab%npts)) deallocate(pahbins_props(ipahbin)%dissociation_tab%npts)
             allocate(pahbins_props(ipahbin)%dissociation_tab%npts(1:2))
+            pahbins_props(ipahbin)%dissociation_tab%name = 'pah_dissociation_pahbin_'//trim(adjustl(i_str))
             pahbins_props(ipahbin)%dissociation_tab%ndim = 2
             pahbins_props(ipahbin)%dissociation_tab%npts(1) = n_G0
             pahbins_props(ipahbin)%dissociation_tab%npts(2) = n_nH
@@ -2065,8 +2180,8 @@ module dust_init
                     read(111, *) pahbins_props(ipahbin)%dissociation_tab%tab2d(i, j, 1)
                 end do
             end do
-            call finalize_dust_table(pahbins_props(ipahbin)%dissociation_tab)
-            pahbins_props(ipahbin)%dissociation_tab%initialised = .true.
+
+            call pahbins_props(ipahbin)%dissociation_tab%init()
             close(111)
         end do
     end subroutine init_pah_dissociation_tables
@@ -2079,8 +2194,8 @@ module dust_init
         implicit none
 
         logical :: ok_pah
-        integer :: n_gamma,istat
-        integer :: i,j,istate,nstates_interp
+        integer :: n_gamma,istat,n
+        integer :: i,j,istate
         real(dp) :: gamma_i, eff_i, pabs_i, f_anion_i, f_neutral_i, f_cation_i, f_dication_i
         character(len=7) :: i_str
         character(len=128) :: f_peh_filename
@@ -2111,49 +2226,41 @@ module dust_init
                 call clean_stop
             end if
 
-            ! Ignore the first line (comment)
-            read(111,*)
+            ! Ignore the first 6 lines (comment)
+            do n = 1, 6
+                read(111,*)
+            end do
 
             ! Read the number of gamma points
             read(111,*) n_gamma
 
 
-
             ! Fill PAH per-bin PEH tables used by interpolation routines
             if (allocated(pahbins_props(i)%peh_eff_tab%npts)) deallocate(pahbins_props(i)%peh_eff_tab%npts)
             allocate(pahbins_props(i)%peh_eff_tab%npts(1:1))
+            pahbins_props(i)%peh_eff_tab%name = 'pah_photoelectric_heating_pahbin_'//trim(adjustl(i_str))
             pahbins_props(i)%peh_eff_tab%ndim = 1
             pahbins_props(i)%peh_eff_tab%npts(1) = n_gamma
             if (allocated(pahbins_props(i)%peh_eff_tab%tab1d)) deallocate(pahbins_props(i)%peh_eff_tab%tab1d)
-            allocate(pahbins_props(i)%peh_eff_tab%tab1d(1:n_gamma,1:1))
-            if (allocated(pahbins_props(i)%peh_eff_tab%tab2d)) deallocate(pahbins_props(i)%peh_eff_tab%tab2d)
-            allocate(pahbins_props(i)%peh_eff_tab%tab2d(1:n_gamma,1:1,1:1))
-            pahbins_props(i)%peh_eff_tab%initialised = .true.
+            allocate(pahbins_props(i)%peh_eff_tab%tab1d(1:n_gamma,1:2))
 
             if (allocated(pahbins_props(i)%peh_pabs_tab%npts)) deallocate(pahbins_props(i)%peh_pabs_tab%npts)
             allocate(pahbins_props(i)%peh_pabs_tab%npts(1:1))
+            pahbins_props(i)%peh_pabs_tab%name = 'pah_photoelectric_absorption_pahbin_'//trim(adjustl(i_str))
             pahbins_props(i)%peh_pabs_tab%ndim = 1
             pahbins_props(i)%peh_pabs_tab%npts(1) = n_gamma
             if (allocated(pahbins_props(i)%peh_pabs_tab%tab1d)) deallocate(pahbins_props(i)%peh_pabs_tab%tab1d)
-            allocate(pahbins_props(i)%peh_pabs_tab%tab1d(1:n_gamma,1:1))
-            if (allocated(pahbins_props(i)%peh_pabs_tab%tab2d)) deallocate(pahbins_props(i)%peh_pabs_tab%tab2d)
-            allocate(pahbins_props(i)%peh_pabs_tab%tab2d(1:n_gamma,1:1,1:1))
-            pahbins_props(i)%peh_pabs_tab%initialised = .true.
+            allocate(pahbins_props(i)%peh_pabs_tab%tab1d(1:n_gamma,1:2))
 
             if (allocated(pahbins_props(i)%fcharge_tab)) deallocate(pahbins_props(i)%fcharge_tab)
             allocate(pahbins_props(i)%fcharge_tab(1:pahbins_props(i)%ncharge_states))
-            nstates_interp = min(pahbins_props(i)%ncharge_states,4)
             do istate = 1, pahbins_props(i)%ncharge_states
                 if (allocated(pahbins_props(i)%fcharge_tab(istate)%npts)) deallocate(pahbins_props(i)%fcharge_tab(istate)%npts)
                 allocate(pahbins_props(i)%fcharge_tab(istate)%npts(1:1))
                 pahbins_props(i)%fcharge_tab(istate)%ndim = 1
                 pahbins_props(i)%fcharge_tab(istate)%npts(1) = n_gamma
                 if (allocated(pahbins_props(i)%fcharge_tab(istate)%tab1d)) deallocate(pahbins_props(i)%fcharge_tab(istate)%tab1d)
-                allocate(pahbins_props(i)%fcharge_tab(istate)%tab1d(1:n_gamma,1:1))
-                if (allocated(pahbins_props(i)%fcharge_tab(istate)%tab2d)) deallocate(pahbins_props(i)%fcharge_tab(istate)%tab2d)
-                allocate(pahbins_props(i)%fcharge_tab(istate)%tab2d(1:n_gamma,1:1,1:1))
-                pahbins_props(i)%fcharge_tab(istate)%tab2d(1:n_gamma,1,1) = 0d0
-                pahbins_props(i)%fcharge_tab(istate)%initialised = (istate <= nstates_interp)
+                allocate(pahbins_props(i)%fcharge_tab(istate)%tab1d(1:n_gamma,1:2))
             end do
 
             ! Read table data directly into per-bin tables (and keep legacy arrays synced)
@@ -2161,25 +2268,197 @@ module dust_init
                 read(111,*) gamma_i, eff_i, pabs_i, f_anion_i, f_neutral_i, f_cation_i, f_dication_i
 
                 pahbins_props(i)%peh_eff_tab%tab1d(j,1) = gamma_i
-                pahbins_props(i)%peh_eff_tab%tab2d(j,1,1) = eff_i
+                pahbins_props(i)%peh_eff_tab%tab1d(j,2) = eff_i
                 pahbins_props(i)%peh_pabs_tab%tab1d(j,1) = gamma_i
-                pahbins_props(i)%peh_pabs_tab%tab2d(j,1,1) = pabs_i
+                pahbins_props(i)%peh_pabs_tab%tab1d(j,2) = pabs_i
 
                 do istate = 1, pahbins_props(i)%ncharge_states
                     pahbins_props(i)%fcharge_tab(istate)%tab1d(j,1) = gamma_i
                 end do
-                if (nstates_interp >= 1) pahbins_props(i)%fcharge_tab(1)%tab2d(j,1,1) = f_anion_i
-                if (nstates_interp >= 2) pahbins_props(i)%fcharge_tab(2)%tab2d(j,1,1) = f_neutral_i
-                if (nstates_interp >= 3) pahbins_props(i)%fcharge_tab(3)%tab2d(j,1,1) = f_cation_i
-                if (nstates_interp >= 4) pahbins_props(i)%fcharge_tab(4)%tab2d(j,1,1) = f_dication_i
-            end do
-            call finalize_dust_table(pahbins_props(i)%peh_eff_tab)
-            call finalize_dust_table(pahbins_props(i)%peh_pabs_tab)
-            do istate = 1, nstates_interp
-                call finalize_dust_table(pahbins_props(i)%fcharge_tab(istate))
+                pahbins_props(i)%fcharge_tab(1)%tab1d(j,2) = f_anion_i
+                pahbins_props(i)%fcharge_tab(2)%tab1d(j,2) = f_neutral_i
+                pahbins_props(i)%fcharge_tab(3)%tab1d(j,2) = f_cation_i
+                pahbins_props(i)%fcharge_tab(4)%tab1d(j,2) = f_dication_i
             end do
 
+            call pahbins_props(i)%peh_eff_tab%init()
+            call pahbins_props(i)%peh_pabs_tab%init()
+            do istate = 1, pahbins_props(i)%ncharge_states
+                call pahbins_props(i)%fcharge_tab(istate)%init()
+            end do
             close(111)
         end do
     end subroutine init_pah_peh_tables
+
+    subroutine init_dust_IR_emission_tables
+        use amr_commons, only: myid
+        implicit none
+        logical :: ok, ok_all
+        integer :: nT, istat, j, ii, ndata, nbands, iband
+        character(len=20) :: dustlabel
+        character(len=256) :: filename
+        character(len=2048) :: line
+        character(len=64), dimension(200) :: band_names
+        real(dp) :: Td
+        real(dp), dimension(200) :: band_luminosities
+
+        ! 1. Check first that all files are in the expected place
+        ok_all = .true.
+        do ii = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            write(filename, '(A,A,A,A)') trim(dust_tables_dir), &
+                'band_luminosity_', trim(dustlabel), '.txt'
+            inquire(file=trim(filename), exist=ok)
+            ok_all = ok_all .and. ok
+        end do
+
+        if (.not. ok_all) then
+            if (myid .eq. 1) then
+                write(*, *) 'WARNING: Dust IR emission files not found in ', TRIM(dust_tables_dir)
+                write(*, *) 'Skipping IR emission tables initialization.'
+            end if
+            return
+        end if
+
+        ! 2. Read the file for each dust bin
+        do ii = 1, ndust
+            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            write(filename, '(A,A,A,A)') trim(dust_tables_dir), &
+                'band_luminosity_', trim(dustlabel), '.txt'
+
+            ! 2.1 First pass: count the number of data rows (skip comments/blanks)
+            open(25, file=trim(filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(filename)
+                call clean_stop
+            end if
+            ndata = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (len_trim(line) == 0) cycle
+                if (line(1:1) == '#') cycle
+                ndata = ndata + 1
+            end do
+            close(25)
+
+            if (ndata < 2) then
+                write(*, *) 'Error: IR emission table has too few rows: ', trim(filename)
+                call clean_stop
+            end if
+            nT = ndata
+
+            ! 2.2 Read column names from the header line containing "T_dust" or "log10(T_dust)"
+            open(25, file=trim(filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(filename)
+                call clean_stop
+            end if
+            nbands = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (index(line, 'T_dust') > 0) then
+                    call parse_header_line(line, band_names, nbands)
+                    exit
+                end if
+            end do
+            close(25)
+
+            if (nbands == 0) then
+                write(*, *) 'Error parsing header line in: ', trim(filename)
+                call clean_stop
+            end if
+
+            ! 2.3 Allocate the IRemission_tab structure
+            if (allocated(dustbins_props(ii)%IRemission_tab)) then
+                deallocate(dustbins_props(ii)%IRemission_tab)
+            end if
+            allocate(dustbins_props(ii)%IRemission_tab(1:nbands))
+
+            do iband = 1, nbands
+                allocate(dustbins_props(ii)%IRemission_tab(iband)%npts(1:1))
+                dustbins_props(ii)%IRemission_tab(iband)%name = band_names(iband)
+                dustbins_props(ii)%IRemission_tab(iband)%ndim = 1
+                dustbins_props(ii)%IRemission_tab(iband)%npts(1) = nT
+                allocate(dustbins_props(ii)%IRemission_tab(iband)%tab1d(1:nT, 1:2))
+                dustbins_props(ii)%IRemission_tab(iband)%tab1d = 0d0
+            end do
+
+            ! 2.4 Second pass: read the temperature and luminosity values.
+            open(25, file=trim(filename), status='old', action='read', iostat=istat)
+            if (istat /= 0) then
+                write(*, *) 'Error opening file: ', trim(filename)
+                call clean_stop
+            end if
+            j = 0
+            do
+                read(25, '(A)', iostat=istat) line
+                if (istat /= 0) exit
+                line = adjustl(line)
+                if (len_trim(line) == 0) cycle
+                if (line(1:1) == '#') cycle
+                
+                read(line, *, iostat=istat) Td, (band_luminosities(iband), iband=1, nbands)
+                if (istat /= 0) then
+                    write(*, *) 'Error parsing IR emission table row in ', trim(filename)
+                    call clean_stop
+                end if
+                j = j + 1
+                do iband = 1, nbands
+                    dustbins_props(ii)%IRemission_tab(iband)%tab1d(j, 1) = Td
+                    dustbins_props(ii)%IRemission_tab(iband)%tab1d(j, 2) = band_luminosities(iband)
+                end do
+            end do
+            close(25)
+
+            do iband = 1, nbands
+                call dustbins_props(ii)%IRemission_tab(iband)%init()
+            end do
+        end do
+    end subroutine init_dust_IR_emission_tables
+
+    subroutine parse_header_line(line, names, n)
+        implicit none
+        character(len=*), intent(in) :: line
+        character(len=64), dimension(:), intent(out) :: names
+        integer, intent(out) :: n
+        integer :: next_pos
+        character(len=2048) :: temp_line
+        character(len=64) :: word
+
+        n = 0
+        temp_line = adjustl(line)
+        
+        ! Skip '#'
+        if (temp_line(1:1) == '#') then
+            temp_line = adjustl(temp_line(2:))
+        end if
+        
+        ! Skip 'log10(T_dust)' or 'T_dust'
+        if (temp_line(1:13) == 'log10(T_dust)') then
+            temp_line = adjustl(temp_line(14:))
+        else if (temp_line(1:6) == 'T_dust') then
+            temp_line = adjustl(temp_line(7:))
+        end if
+        
+        do
+            temp_line = adjustl(temp_line)
+            if (len_trim(temp_line) == 0) exit
+            
+            next_pos = index(temp_line, ' ')
+            if (next_pos == 0) then
+                word = temp_line
+                temp_line = ''
+            else
+                word = temp_line(1:next_pos-1)
+                temp_line = temp_line(next_pos:)
+            end if
+            
+            n = n + 1
+            names(n) = trim(word)
+        end do
+    end subroutine parse_header_line
 end module dust_init

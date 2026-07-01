@@ -8,6 +8,12 @@ subroutine read_params
 #ifdef INDIVIDUAL_SINK_STARS
   use use_mist
 #endif
+#ifdef CALIMA
+#ifdef RT
+   use rt_parameters, only: nGroups
+#endif
+   use dust_init, only: read_CALIMA_params
+#endif
   implicit none
   !--------------------------------------------------
   ! Local variables
@@ -146,6 +152,10 @@ subroutine read_params
 
   call read_hydro_params(nml_ok)
   if(myid==1) write(*,*) 'after read_hydro_params(nml_ok):', nml_ok
+#ifdef CALIMA
+  call read_CALIMA_params(nml_ok,nGroups)
+  if(myid==1) write(*,*) 'after read_CALIMA_params(nml_ok):', nml_ok
+#endif
 #ifdef RT
   call read_rt_params(nml_ok)
   if(myid==1) write(*,*) 'after read_rt_params(nml_ok):', nml_ok
@@ -548,6 +558,9 @@ subroutine read_movie_params(namelist_unit,nml_ok)
    & ,theta_camera,phi_camera,dtheta_camera,dphi_camera,focal_camera,dist_camera,ddist_camera &
    & ,perspective_camera,smooth_frame,shader_frame,tstart_theta_camera,tstart_phi_camera &
    & ,tend_theta_camera,tend_phi_camera,method_frame,varmin_frame,varmax_frame
+#ifdef RTZ
+   namelist/movie_params/movie_lines_file
+#endif
 
    ! Go to the beginning of the file
    rewind(namelist_unit)

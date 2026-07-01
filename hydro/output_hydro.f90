@@ -153,7 +153,7 @@ subroutine backup_hydro(filename, filename_desc)
                  if (metal .and. ivar.ge.imetal .and. ivar.lt.iIons) then
 #ifdef RTZ
                     counter = -1
-                    field_name = 'metallicity'
+                    field_name = ''
                     do i_elements = 1,n_elements
                        if (elements(i_elements)%atomic_number.gt.0) then 
                           counter = counter + 1

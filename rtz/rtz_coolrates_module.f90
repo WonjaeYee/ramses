@@ -2054,7 +2054,7 @@ FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
 END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
-                     nCO, G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
+                     nCO, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
                      saved_cooling_rates, saved_cooling_rates_names)
     ! Main cooling driver
     ! 
@@ -2075,7 +2075,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     use dust_interface, only: compute_dust_coolrates
 #endif
     implicit none
-    real(dp), intent(in):: T, ne, aexp, G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, nCO
+    real(dp), intent(in):: T, ne, aexp, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, nCO
     real(dp), intent(in):: element_number_densities(27)
     real(dp), intent(in):: element_ion_fractions(27,27)
     real(dp), dimension(nGroups), intent(in):: dNp
@@ -2383,7 +2383,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     saved_cooling_rates(save_cooling_counter) = uvb_photoheat; saved_cooling_rates_names(save_cooling_counter) = 'heat_UVB'; save_cooling_counter = save_cooling_counter + 1
 
     ! Photoheating from the G0 FUV background
-    uvb_photoheat_G0 = photoheating_UVB_G0(G0, element_number_densities,element_ion_fractions)
+    uvb_photoheat_G0 = photoheating_UVB_G0(UVB_G0, element_number_densities,element_ion_fractions)
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = uvb_photoheat_G0; saved_cooling_rates_names(save_cooling_counter) = 'heat_G0'; save_cooling_counter = save_cooling_counter + 1

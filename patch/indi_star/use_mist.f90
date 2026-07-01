@@ -47,6 +47,11 @@ module use_mist
     !! Main array of sample data from MIST.
     !! Order of axes: (properties, age, mass, vvc, afe, feh)
 
+    integer::num_t
+    ! Number of points on the age axis.
+    integer::num_i,num_c
+    ! Number of instantaneous properties and chemical ejecta.
+
     ! integer,allocatable,dimension(:,:)::idx_table
     !! Table to store parameter indices
     ! ... probably become problem if list of sink is dynamic
@@ -91,7 +96,7 @@ subroutine load_sample
         open(unit=unit_open, file=trim(mist_sample), status='old', action='read', form='unformatted')
         
         ! Dimension of the main array
-        read(unit_open) ! now I don't read
+        read(unit_open) ! now I don't read `sample_dim`; dimension is fixed to be 6
 
         ! Shape of the main array
         ! allocate(sample_shape(1:sample_dim))
@@ -130,13 +135,18 @@ subroutine load_sample
         read(unit_open) prop_rad_scale
         
         ! Main array
-        ! we cannot do a fancy way, like sample(sample_shape), since sample_shape is an allocatable array :/
+        ! we cannot do a fancy way, like sample(sample_shape) :/
         allocate(sample(1:sample_shape(1),1:sample_shape(2),1:sample_shape(3),1:sample_shape(4),1:sample_shape(5),1:sample_shape(6)))
         read(unit_open) sample
 
         close(unit_open)
-        
-        ! temporaily set to print always
+
+        num_t = sample_shape(2)
+        num_i = prop_nums(1) ! instantaneous properties
+        num_c = prop_nums(2) ! chemical ejecta
+
+        ! temporarily set to print always
+        ! if (verbose) then
         if ((myid==1)) then
             write(*,*) 'MIST sample is loaded'
             write(*,*) '           given shape info:', sample_shape
@@ -153,16 +163,24 @@ subroutine load_sample
             write(*,*) '   radiation bin edges [eV]:', prop_rad_bins
             write(*,*) '    photon counts scaled by: 10^', prop_rad_scale
 
-            write(*,*) 'here are example photon counts:'
-            write(*,*) sample(prop_nums(1)+prop_nums(2)+1, :, 1, 1, 1, 1)
-            write(*,*) sample(prop_nums(1)+prop_nums(2)+prop_nums(3), :, sample_shape(3),sample_shape(4),sample_shape(5),sample_shape(6))
+            write(*,*) 'here are example photon counts'
+            write(*, '("- for feh=", F5.2, ", afe=", F5.2, ", vvc=", F3.2, ", mass=", F7.2)') axis_z(1), axis_a(1), axis_v(1), axis_m(1)
+            write(*,*) sample(prop_nums(1)+prop_nums(2)+1:sample_shape(1), 1, 1, 1, 1, 1)
+            write(*,*) sample(prop_nums(1)+prop_nums(2)+1:sample_shape(1), sample_shape(2), 1, 1, 1, 1)
+            write(*, '("- for feh=", F5.2, ", afe=", F5.2, ", vvc=", F3.2, ", mass=", F7.2)') axis_z(sample_shape(6)), axis_a(sample_shape(5)), axis_v(sample_shape(4)), axis_m(sample_shape(3))
+            write(*,*) sample(prop_nums(1)+prop_nums(2)+1:sample_shape(1), 1, sample_shape(3),sample_shape(4),sample_shape(5),sample_shape(6))
+            write(*,*) sample(prop_nums(1)+prop_nums(2)+1:sample_shape(1), sample_shape(2), sample_shape(3),sample_shape(4),sample_shape(5),sample_shape(6))
         end if
+        ! end if
     else
+        ! temporarily set to print always
+        ! if (verbose) then
         if ((myid==1)) then
             write(*,*) 'Cannot find a sampled MIST data from a given path:'
             write(*,*) mist_sample
-            write(*,*) 'check your input for `mist_sample`.'
+            write(*,*) 'check your input for `mist_sample` under `&indi_star`.'
         end if
+        ! end if
     end if
 
 end subroutine load_sample
@@ -273,10 +291,6 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
     !! Stellar properties to be returned
     !! (instantaneous, ejected chemicals, emitted photons).
 
-    integer::num_t
-    ! Number of points on the age axis.
-    integer::num_i,num_c
-    ! Number of instantaneous properties and chemical ejecta.
     integer::idx_z,idx_a,idx_v,idx_m,idx_t_now,idx_t_pre
     ! Indices of sample point nearest to the given parameters.
     real(rp)::use_t_now,use_t_pre
@@ -294,14 +308,12 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
     ! Properties to be returned
 
     ! for checking, print message
+    ! if (verbose) then
     ! write(*,*)'This is `get_stellar_properties`'
     ! write(*,*)'  inputs are:', z, v, m, t_now, t_pre
+    ! end if
 
-    num_t = sample_shape(2)
-    num_i = prop_nums(1) ! instantaneous properties
-    num_c = prop_nums(2) ! chemical ejecta
-
-    ! Find nearest point on the sample grid (feh, vvc, mass)
+    ! Find nearest point on the sample grid (feh, afe, vvc, mass)
     idx_z = get_nearest_index(val=z, arr=axis_z)
     idx_a = get_nearest_index(val=a, arr=axis_a)
     idx_v = get_nearest_index(val=v, arr=axis_v)
@@ -313,8 +325,8 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
         ! use_t_now = -infinity
         ! idx_real = -infinity
         ! floor(idx_real) = some huge number :/
-        use_t_now = merge(log10(t_now), -10.0_rp, t_now>1)
-        use_t_pre = merge(log10(t_pre), -10.0_rp, t_pre>1)
+        use_t_now = merge(log10(t_now), -10.0_rp, t_now>1.0_rp)
+        use_t_pre = merge(log10(t_pre), -10.0_rp, t_pre>1.0_rp)
     else if (axes_t_scale == 1) then
         use_t_now = t_now
         use_t_pre = t_pre
@@ -324,7 +336,7 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
     idx_t_now = get_age_index(t=use_t_now, t1=t12(1), t2=t12(2), num=num_t)
     idx_t_pre = get_age_index(t=use_t_pre, t1=t12(1), t2=t12(2), num=num_t)
 
-    ! if (myid==1) then
+    ! if (myid==1 .and. verbose) then
     !     write(*,*) 'this is get_stellar_properties'
     !     write(*,*) ' z, idx_z:', z, idx_z
     !     write(*,*) ' a, idx_a:', a, idx_a
@@ -373,7 +385,7 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
     arr0(1) = arr0(1) * (m / axis_m(idx_m))
 
     ! wind momentum and chemical ejecta
-    arr0(num_i:num_i+num_c) = arr0(num_i:num_i+num_c) * (m / axis_m(idx_m))
+    arr0(num_i+1:num_i+num_c) = arr0(num_i+1:num_i+num_c) * (m / axis_m(idx_m))
 
     ! photon counts ... only mass-luminosity relation? or also effective temperature??
     ! -> no modification for now...
@@ -400,11 +412,11 @@ function get_stellar_lifetime(z, a, v, m) result(t)
     !! Mass, in unit of solar mass.
 
     real(dp)::t
-    !! Lifetime of the star with the given z, v, and m, in unit of Myr
+    !! Lifetime of the star with the given z, a, v, and m, in unit of Myr
 
     integer::idx_m,idx_v,idx_a,idx_z
 
-    ! Find nearest point on the sample grid (feh, vvc, mass)
+    ! Find nearest point on the sample grid (feh, afe, vvc, mass)
     idx_z = get_nearest_index(val=z, arr=axis_z)
     idx_a = get_nearest_index(val=a, arr=axis_a)
     idx_v = get_nearest_index(val=v, arr=axis_v)

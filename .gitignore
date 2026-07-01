@@ -32,6 +32,8 @@ __pycache__
 *.tex
 *.pdf
 *.log
+*.png
+*.list
 # IDEs files
 .vscode
 Makefile

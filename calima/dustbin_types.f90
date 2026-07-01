@@ -1,20 +1,31 @@
 module dustbin_types
     use amr_parameters, only:dp
     use hydro_parameters, only:n_elements
+    use dust_utils, only: interpolate1D_eqw, interpolate1D_noeqw, &
+                          interpolate2D_eqw, interpolate2D_noeqw, &
+                          interpolate3D_eqw, interpolate3D_noeqw
 
     implicit none
 
     ! ==== Dust table derived type ====
     type DustTable
+        character(len=64) :: name='noname' ! Name of the dust table
         logical :: initialised = .false. ! Flag indicating whether table has been initialised
+        logical :: eqw = .false. ! Flag indicating whether the table is equally spaced
         integer :: ndim = 0 ! Number of dimension of the dust table (1 for thermal sputtering, 2 for collisional tables, etc)
         integer, dimension(:), allocatable :: ipos_zero ! Position of the zero value along each dimension (for interpolation purposes)
         integer, dimension(:), allocatable :: npts ! Number of points along each dimension
         real(dp), dimension(:,:), allocatable :: tab1d ! 1D table values
         real(dp), dimension(:,:,:), allocatable :: tab2d ! 2D table values
         real(dp), dimension(:,:,:,:), allocatable :: tab3d ! 3D table values
-        real(dp), dimension(:,:), allocatable :: tab1d_log ! Log10 of 1D table values
-        real(dp), dimension(:,:,:), allocatable :: tab2d_log ! Log10 of 2D table values
+        real(dp), dimension(:), allocatable :: dx ! Grid spacing along each dimension
+        real(dp), dimension(:), allocatable :: inv_dx ! Inverse grid spacing along each dimension
+    contains
+        procedure, private :: interpolate_1d
+        procedure, private :: interpolate_2d
+        procedure, private :: interpolate_3d
+        generic :: interpolate => interpolate_1d, interpolate_2d, interpolate_3d
+        procedure :: init => initialise_dust_table
     end type DustTable
 
     ! ==== Dust Chemistry Info ====
@@ -36,15 +47,20 @@ module dustbin_types
         real(dp) :: local_rho = 0d0 ! Local total cell mass density (in g/cm3)
         real(dp) :: local_Jeans = 0d0 ! Local Jeans length (in cm)
         real(dp) :: local_dx = 0d0 ! Local cell size (in cm)
+        real(dp) :: local_vol = 0d0 ! Local cell volume (in cm^3)
         real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
         real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
         real(dp) :: local_nCO = 0d0 ! Local CO density (in cm-3)
+        real(dp) :: smallNp = 0d0 ! Threshold for small photon number density below which we consider the radiation field to be negligible for processes like photoelectric heating and radiation pressure
         real(dp),dimension(1:n_elements)  :: el_atomic_mass_g ! Element atomic mass [g]
+        real(dp),dimension(1:n_elements)  :: inv_atomic_mass ! Inverse element atomic mass [1/g]
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV
         real(dp),dimension(:),allocatable :: rho_dust ! Dust mass density
+        real(dp),dimension(:),allocatable :: n_dust ! Dust number density
         real(dp),dimension(:),allocatable :: rho_pah ! PAH mass density
+        real(dp),dimension(:),allocatable :: n_pah ! PAH number density
         real(dp),dimension(:),allocatable :: Z_dust ! Dust median charge
         real(dp),dimension(:),allocatable :: Z_sigma ! Dust charge distribution width
         real(dp),dimension(:,:),allocatable :: fcharge_pah ! PAH charge distribution function
@@ -142,6 +158,7 @@ module dustbin_types
         real(dp) :: nhmax_sha               ! Max gas density for shattering subgrid model
         real(dp) :: SNdest_eff              ! SN dust destruction efficiency
         real(dp) :: Coulomb_enhance         ! Coulomb enhancement factor for ion accretion
+        real(dp) :: T_sublimation_min = 0d0 ! Minimum sublimation temperature in Kelvin
         real(dp) :: Pabs_isrf               ! Mathis ISRF-averaged absorption rate (in erg/s)
         real(dp) :: Psc_isrf                ! Mathis ISRF-averaged scattering rate (in erg/s)
         real(dp) :: Prp_isrf                ! Mathis ISRF-averaged radiation pressure rate (in erg/s)
@@ -176,6 +193,7 @@ module dustbin_types
         type(DustTable) :: Tdust_tab ! Dust temperature table
         type(DustTable) :: Planck_power_tab ! Planck power tables for dust temperature calculation
         type(DustTable) :: Planckderiv_tab  ! Derivative of the Planck power tables for dust temperature calculation
+        type(DustTable),dimension(:),allocatable :: IRemission_tab ! Infrared band emission tables
     end type DustBin
 
     ! ==== PAH bin derived type ====
@@ -212,27 +230,161 @@ module dustbin_types
         type(DustTable),dimension(0:n_elements) :: sputtering_tab ! PAH tables for each element
         type(DustTable) :: peh_eff_tab, peh_pabs_tab ! Photoelectric efficiency and absorption cross-section tables for PAHs
         type(DustTable),dimension(:),allocatable :: fcharge_tab ! Charging states distribution tables for PAHs
-        type(DustTable) :: cs_abs_tab, cs_scat_tab, cs_ext_tab ! Absorption, scattering and extinction cross-section tables for PAHs
+        type(DustTable) :: cs_abs_tab_n, cs_scat_tab_n, cs_ext_tab_n ! Absorption, scattering and extinction cross-section tables for neutral PAHs
+        type(DustTable) :: cs_abs_tab_i, cs_scat_tab_i, cs_ext_tab_i ! Absorption, scattering and extinction cross-section tables for ionised PAHs
         type(DustTable) :: dissociation_tab ! PAH dissociation tables
     end type PAHBin
 
-    public :: finalize_dust_table
-
 contains
 
-    subroutine finalize_dust_table(table)
-        type(DustTable), intent(inout) :: table
-        if (allocated(table%tab1d)) then
-            if (allocated(table%tab1d_log)) deallocate(table%tab1d_log)
-            allocate(table%tab1d_log(size(table%tab1d,1), size(table%tab1d,2)))
-            table%tab1d_log = log10(max(table%tab1d, 1d-99))
+    subroutine interpolate_1d(this, xi, val, idx_x)
+        class(DustTable), intent(in) :: this
+        real(dp), intent(in) :: xi
+        real(dp), intent(out) :: val
+        integer, intent(inout), optional :: idx_x
+
+        integer :: n1
+        n1 = this%npts(1)
+
+        select case (this%ndim)
+        case (1)
+            if (this%eqw) then
+                call interpolate1D_eqw(this%tab1d(1:n1, 1), this%tab1d(1:n1, 2), n1, &
+                                       this%inv_dx(1), xi, val, idx_x)
+            else
+                call interpolate1D_noeqw(this%tab1d(1:n1, 1), this%tab1d(1:n1, 2), n1, &
+                                         xi, val, idx_x)
+            end if
+        case (2)
+            ! 2D table sliced at the zero value of the 2nd dimension (e.g. phi = 0)
+            if (this%eqw) then
+                call interpolate1D_eqw(this%tab1d(1:n1, 1), this%tab2d(1:n1, this%ipos_zero(2), 1), n1, &
+                                       this%inv_dx(1), xi, val, idx_x)
+            else
+                call interpolate1D_noeqw(this%tab1d(1:n1, 1), this%tab2d(1:n1, this%ipos_zero(2), 1), n1, &
+                                         xi, val, idx_x)
+            end if
+        case (3)
+            ! 3D table sliced at the zero values of the 2nd & 3rd dimensions
+            if (this%eqw) then
+                call interpolate1D_eqw(this%tab1d(1:n1, 1), this%tab3d(1:n1, this%ipos_zero(2), this%ipos_zero(3), 1), n1, &
+                                       this%inv_dx(1), xi, val, idx_x)
+            else
+                call interpolate1D_noeqw(this%tab1d(1:n1, 1), this%tab3d(1:n1, this%ipos_zero(2), this%ipos_zero(3), 1), n1, &
+                                         xi, val, idx_x)
+            end if
+        end select
+    end subroutine interpolate_1d
+
+    subroutine interpolate_2d(this, xi, yi, val, idx_x, idx_y)
+        class(DustTable), intent(in) :: this
+        real(dp), intent(in) :: xi, yi
+        real(dp), intent(out) :: val
+        integer, intent(inout), optional :: idx_x, idx_y
+
+        integer :: n1, n2
+        n1 = this%npts(1)
+        n2 = this%npts(2)
+
+        select case (this%ndim)
+        case (2)
+            if (this%eqw) then
+                call interpolate2D_eqw(this%tab1d(1:n1, 1), this%tab1d(1:n2, 2), &
+                                       this%tab2d(:, :, 1), n1, n2, &
+                                       this%inv_dx(1), this%inv_dx(2), xi, yi, &
+                                       val, idx_x, idx_y)
+            else
+                call interpolate2D_noeqw(this%tab1d(1:n1, 1), this%tab1d(1:n2, 2), &
+                                         this%tab2d(:, :, 1), n1, n2, xi, yi, &
+                                         val, idx_x, idx_y)
+            end if
+        case (3)
+            ! 3D table sliced at the zero value of the 3rd dimension
+            if (this%eqw) then
+                call interpolate2D_eqw(this%tab1d(1:n1, 1), this%tab1d(1:n2, 2), &
+                                       this%tab3d(:, :, this%ipos_zero(3), 1), n1, n2, &
+                                       this%inv_dx(1), this%inv_dx(2), xi, yi, &
+                                       val, idx_x, idx_y)
+            else
+                call interpolate2D_noeqw(this%tab1d(1:n1, 1), this%tab1d(1:n2, 2), &
+                                         this%tab3d(:, :, this%ipos_zero(3), 1), n1, n2, xi, yi, &
+                                         val, idx_x, idx_y)
+            end if
+        end select
+    end subroutine interpolate_2d
+
+    subroutine interpolate_3d(this, xi, yi, zi, val, idx_x, idx_y, idx_z)
+        implicit none
+        class(DustTable), intent(in) :: this
+        real(dp), intent(in) :: xi, yi, zi
+        real(dp), intent(out) :: val
+        integer, intent(inout), optional :: idx_x, idx_y, idx_z
+
+        integer :: n1, n2, n3
+        n1 = this%npts(1)
+        n2 = this%npts(2)
+        n3 = this%npts(3)
+
+        if (this%eqw) then
+            call interpolate3D_eqw(this%tab1d(1:n1, 1), this%tab1d(1:n2, 2), this%tab1d(1:n3, 3), &
+                                     this%tab3d(:, :, :, 1), n1, n2, n3, &
+                                     this%inv_dx(1), this%inv_dx(2), this%inv_dx(3), &
+                                     xi, yi, zi, val, idx_x, idx_y, idx_z)
+        else
+            call interpolate3D_noeqw(this%tab1d(1:n1, 1), this%tab1d(1:n2, 2), this%tab1d(1:n3, 3), &
+                                     this%tab3d(:, :, :, 1), n1, n2, n3, &
+                                     xi, yi, zi, val, idx_x, idx_y, idx_z)
         end if
-        if (allocated(table%tab2d)) then
-            if (allocated(table%tab2d_log)) deallocate(table%tab2d_log)
-            allocate(table%tab2d_log(size(table%tab2d,1), size(table%tab2d,2), size(table%tab2d,3)))
-            table%tab2d_log = log10(max(table%tab2d, 1d-99))
+    end subroutine interpolate_3d
+
+    subroutine initialise_dust_table(this)
+        implicit none
+        class(DustTable), intent(inout) :: this
+        integer :: d, i
+        real(dp) :: dx_first, dx_curr, diff, thresh
+
+        ! 1. Allocate the dx and inv_dx arrays
+        allocate(this%dx(1:this%ndim))
+        allocate(this%inv_dx(1:this%ndim))
+        
+        ! 2. Compute the grid spacings
+        do d = 1, this%ndim
+            this%dx(d) = (this%tab1d(this%npts(d), d) - this%tab1d(1, d)) / dble(this%npts(d) - 1)
+            if (this%dx(d) .eq. 0d0) then
+                write(*,*) 'Error: table%dx(d) is zero for ',trim(this%name)
+                call clean_stop
+            end if
+            this%inv_dx(d) = 1d0 / this%dx(d)
+        end do
+
+        ! 3. Check for equal spacing
+        this%eqw = .true.
+        do d = 1, this%ndim
+            if (this%npts(d) < 2) cycle
+            dx_first = this%tab1d(2, d) - this%tab1d(1, d)
+            if (dx_first == 0d0) then
+                write(*,*) 'ERROR: Grid ', this%name, ' has zero spacing between first two elements!'
+                call clean_stop
+            end if
+            do i = 2, this%npts(d) - 1
+                dx_curr = this%tab1d(i+1, d) - this%tab1d(i, d)
+                diff = abs(dx_curr - this%dx(d))
+                thresh = 1d-4 * abs(this%dx(d)) + 1d-7
+                if (diff > thresh) then
+                    this%eqw = .false.
+                    exit
+                end if
+            end do
+        end do
+        if (.not. this%eqw) then
+            write(*,*) 'WARNING: Grid ', this%name, ' is not equally spaced!'
+            write(*,*) 'Expected spacing: ', this%dx(1)
+            write(*,*) 'Found spacing between element 1 and 2: ', this%tab1d(2,1) - this%tab1d(1,1)
         end if
-    end subroutine finalize_dust_table
+
+        ! 4. Set the table as initialised
+        this%initialised = .true.
+    end subroutine initialise_dust_table
 
     subroutine init_dust_chemistry_info(this, ndust, npah, nGroups, ncharge_pah_max, nion_charges)
         ! Initializes the DustChemistryInfo derived type by allocating arrays and setting default values.
@@ -262,8 +414,10 @@ contains
         this%local_rho = 0d0
         this%local_Jeans = 0d0
         this%local_dx = 0d0
+        this%local_vol = 0d0
         this%local_ne = 0d0
         this%local_nCO = 0d0
+        this%smallNp = 0d0
 
         if (allocated(this%rho_dust)) deallocate(this%rho_dust)
         allocate(this%rho_dust(1:this%ndust))
@@ -272,6 +426,14 @@ contains
         if (allocated(this%rho_pah)) deallocate(this%rho_pah)
         allocate(this%rho_pah(1:this%npah))
         this%rho_pah = 0d0
+
+        if (allocated(this%n_dust)) deallocate(this%n_dust)
+        allocate(this%n_dust(1:this%ndust))
+        this%n_dust = 0d0
+
+        if (allocated(this%n_pah)) deallocate(this%n_pah)
+        allocate(this%n_pah(1:this%npah))
+        this%n_pah = 0d0
 
         if (allocated(this%Z_dust)) deallocate(this%Z_dust)
         allocate(this%Z_dust(1:this%ndust))
@@ -405,7 +567,9 @@ contains
         class(DustChemistryInfo), intent(inout) :: this
 
         if (allocated(this%rho_dust)) this%rho_dust = 0d0
+        if (allocated(this%n_dust)) this%n_dust = 0d0
         if (allocated(this%rho_pah)) this%rho_pah = 0d0
+        if (allocated(this%n_pah)) this%n_pah = 0d0
         if (allocated(this%Z_dust)) this%Z_dust = 0d0
         if (allocated(this%Z_sigma)) this%Z_sigma = 0d0
         if (allocated(this%fcharge_pah)) this%fcharge_pah = 0d0
