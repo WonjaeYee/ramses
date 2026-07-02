@@ -19,7 +19,10 @@ recursive subroutine amr_step(ilevel,icount)
 #endif
 #ifdef CALIMA
   use dust_commons, only: dust_log,print_dust_log,dust_tva,dust_radpressure
-  use dust_dynamics, only: dust_diffusion_fine,dust_push_fine
+  use dust_dynamics, only: dust_diffusion_fine
+#ifdef RT
+  use dust_dynamics, only: dust_push_fine
+#endif
 #endif
   use mpi_mod
   implicit none
@@ -402,11 +405,15 @@ recursive subroutine amr_step(ilevel,icount)
      ! CALIMA DYNAMICS
      if (dust_tva .and. ndust>0) then
                                call timer('hydro - dust','start')
+#ifdef RT
          if (dust_radpressure) then
             call dust_push_fine(ilevel)
          else
             call dust_diffusion_fine(ilevel)
          end if
+#else
+         call dust_diffusion_fine(ilevel)
+#endif
       end if
 #endif
 

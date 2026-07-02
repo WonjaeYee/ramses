@@ -1,0 +1,80 @@
+This is the RAMSES parameter file for the DustyGauss advection test.
+
+&RUN_PARAMS
+hydro=.true.
+rt=.false.
+static=.false.
+/
+
+&AMR_PARAMS
+levelmin=7
+levelmax=7
+ngridmax=2000
+nparttot=1 
+nexpand=1
+boxlen=10.0
+/
+
+&BOUNDARY_PARAMS
+nboundary=0
+/
+
+&INIT_PARAMS
+condinit_kind='dustyspress'
+nregion=1
+region_type(1)='square'
+x_center=5.0
+length_x=10.0
+d_region=1.0
+u_region=0.81302
+p_region=0.02987
+var_region(1,:)=0.0
+/
+
+&OUTPUT_PARAMS
+noutput=4
+tout = 1.0, 2.0, 4.0, 6.0
+tend = 6.0
+/
+
+&HYDRO_PARAMS
+gamma=1.4
+courant_factor=0.8
+slope_type=1
+riemann='hllc'
+data_dir = '/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/'
+/
+
+&COOLING_PARAMS
+metal = .false.
+cooling = .false.
+/
+
+&UNITS_PARAMS
+units_length = 3.08567758149137d18 ! 1 pc in cm
+units_density = 1e-24 ! 1e-24 g/cm3
+units_time = 3.1556926d13 ! 1 Myr in s
+/
+
+&REFINE_PARAMS
+err_grad_d=0.05
+err_grad_u=0.05
+err_grad_p=0.05
+interpol_var=0
+interpol_type=2
+/
+
+&CALIMA_PARAMS
+dust_tva=.true.
+dust_radpressure=.false.
+use_w_drift_test=.true.
+w_drift_test=0.0,0.0,0.0
+dust_composition(1,6) = 1d0
+dustbins_per_chemtype=1
+asize=0.1d0
+sgrain=2.2d0
+amin = 3d-2
+amax = 1.0d0
+charging_model='RM2026'
+dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
+/

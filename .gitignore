@@ -33,6 +33,8 @@ __pycache__
 *.pdf
 *.log
 *.list
+*.png
+ramses_dust_test1d
 # IDEs files
 .vscode
 Makefile

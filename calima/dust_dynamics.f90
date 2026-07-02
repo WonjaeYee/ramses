@@ -380,137 +380,6 @@ module dust_dynamics
         end do
     end subroutine cmpdt_dust_diffusion
 
-    subroutine cmpdt_dust_dynamics(rho, nElement, xion, rho_dust, rho_pah, P, cs, &
-        cell_rt_state, dx, dt, ncell, ilevel, Tk, ne, G0, f_shd)
-        ! This subroutine computes the maximum allowed time step for dust diffusion and drift.
-        
-        use rt_parameters, only: nrtvar
-        use hydro_parameters, only: ndust, npah, courant_factor, smallr
-        use rtz_module, only: n_elements
-        use dust_radpressure_module, only: compute_gas_dust_radpressure_force
-
-        implicit none
-
-        ! Input variables
-        real(dp),dimension(1:nvector),intent(in) :: rho, P, cs
-        real(dp),dimension(1:n_elements,1:nvector),intent(in) :: nElement
-        real(dp),dimension(1:n_elements,1:n_elements,1:nvector),intent(in) :: xion
-        real(dp),dimension(1:nvector,1:ndust),intent(in) :: rho_dust
-        real(dp),dimension(1:nvector,1:npah),intent(in) :: rho_pah
-        real(dp),dimension(1:nvector,1:nrtvar),intent(in) :: cell_rt_state
-        real(dp),intent(in) :: dx
-        real(dp),intent(inout) :: dt
-        integer,intent(in) :: ncell
-        integer,intent(in) :: ilevel
-        real(dp),dimension(1:nvector),intent(in) :: Tk, ne, G0, f_shd
-
-        ! Local variables
-        integer :: jbin, k, idim
-        real(dp) :: eps_tot, eps_i, rho_g_loc, t_s_loc, D_i
-        real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
-        real(dp) :: dtcell
-        real(dp) :: rho_loc, cs_loc, P_loc
-        real(dp), dimension(1:ndim) :: gas_force_code
-        real(dp), dimension(1:ndim, max(1, ndust)) :: dust_force_code
-        real(dp), dimension(1:ndim, max(1, npah)) :: pah_force_code
-        real(dp), dimension(1:ndim) :: w_drift
-        real(dp) :: w_drift_mag, a_rad_dust, a_rad_gas
-        real(dp), dimension(max(1, ndust)) :: agrain_code_arr, sgrain_code_arr
-
-        ! 1. Get the current code units
-        call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
-
-        ! Precompute grain size and material density scaling for all bins
-        if (ndust > 0) then
-            do jbin = 1, ndust
-                agrain_code_arr(jbin) = dustbins_props(jbin)%asize_cm / scale_l
-                sgrain_code_arr(jbin) = dustbins_props(jbin)%sgrain / scale_d
-            end do
-        end if
-
-        ! 2. Loop over cells
-        do k = 1, ncell
-            if (condinit_kind .eq. 'dustydiffuse') then
-                rho_loc = 1.0_dp
-                cs_loc = 1.0_dp
-            else
-                rho_loc = rho(k)
-                cs_loc = cs(k)
-            end if
-
-            ! 3. Sum up all bin fractions to find the remaining gas background fraction
-            eps_tot = 0.0_dp
-            if (ndust > 0) then
-                do jbin = 1, ndust
-                    eps_tot = eps_tot + (rho_dust(k, jbin) / rho_loc)
-                end do
-            end if
-
-            if (condinit_kind .eq. 'dustydiffuse') then
-                P_loc = (1.0_dp - eps_tot) * rho_loc
-            else
-                P_loc = P(k)
-            end if
-
-            eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
-            
-            ! 4. Find the intrinsic gas density: rho_g = (1 - eps_tot) * rho_mixture
-            rho_g_loc = max((1.0_dp - eps_tot) * rho_loc, smallr)
-
-            ! 5. Calculate radiation pressure forces for this cell
-            call compute_gas_dust_radpressure_force(cell_rt_state(k, :), ilevel, &
-                gas_force_code, dust_force_code, pah_force_code, &
-                nElement(:, k), xion(:, :, k), rho_dust(k, :), rho_pah(k, :), &
-                Tk(k), ne(k), G0(k), f_shd(k))
-
-            ! 6. Gas-dust diffusion and drift velocity dt
-            if (ndust > 0) then
-                do jbin = 1, ndust
-                    eps_i = rho_dust(k, jbin) / rho_loc
-
-                    if (condinit_kind == 'dustydiffuse') then
-                        t_s_loc = 0.1_dp
-                    else
-                        t_s_loc = (sgrain_code_arr(jbin) * agrain_code_arr(jbin)) / max(rho_g_loc * cs_loc, smallr)
-                    end if
-
-                    if (condinit_kind == 'dustydiffuse') then
-                        D_i = eps_i * (1.0_dp - eps_tot) * 0.1_dp
-                    else
-                        D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P_loc / rho_g_loc)
-                    end if
-
-                    if (D_i > 0.0_dp) then
-                        dtcell = courant_factor * (dx**2) / (2.0_dp * D_i)
-                        dt = min(dt, dtcell)
-                    end if
-
-                    ! 7. Radiation pressure differential drift velocity dt
-                    if (rho_dust(k, jbin) > smallr) then
-                        do idim = 1, ndim
-                            ! Safely compute individual phase accelerations
-                            ! (Force density / mass density)
-                            a_rad_dust = dust_force_code(idim, jbin) / rho_dust(k, jbin)
-                            a_rad_gas  = gas_force_code(idim) / rho_g_loc
-                            
-                            ! Calculate differential drift in the barycentric frame
-                            w_drift(idim) = (1.0_dp - eps_tot) * t_s_loc * (a_rad_dust - a_rad_gas)
-                        end do
-                        
-                        w_drift_mag = sqrt(sum(w_drift**2))
-                        
-                        if (w_drift_mag > 1.0e-10_dp) then
-                            ! dt <= dx / |w_drift|
-                            dtcell = courant_factor * dx / w_drift_mag
-                            dt = min(dt, dtcell)
-                        end if
-                    end if
-                end do
-            end if
-
-        end do
-    end subroutine cmpdt_dust_dynamics
-
     subroutine dust_upwind_correct1(ind_grid,ncache,ilevel)
         use amr_commons
         use hydro_commons
@@ -994,6 +863,138 @@ module dust_dynamics
 222 format('   Entering dust diffusion for level ',i2)
 
     end subroutine dust_diffusion_fine
+#ifdef RT
+
+    subroutine cmpdt_dust_dynamics(rho, nElement, xion, rho_dust, rho_pah, P, cs, &
+        cell_rt_state, dx, dt, ncell, ilevel, Tk, ne, G0, f_shd)
+        ! This subroutine computes the maximum allowed time step for dust diffusion and drift.
+        
+        use rt_parameters, only: nrtvar
+        use hydro_parameters, only: ndust, npah, courant_factor, smallr
+        use rtz_module, only: n_elements
+        use dust_radpressure_module, only: compute_gas_dust_radpressure_force
+
+        implicit none
+
+        ! Input variables
+        real(dp),dimension(1:nvector),intent(in) :: rho, P, cs
+        real(dp),dimension(1:n_elements,1:nvector),intent(in) :: nElement
+        real(dp),dimension(1:n_elements,1:n_elements,1:nvector),intent(in) :: xion
+        real(dp),dimension(1:nvector,1:ndust),intent(in) :: rho_dust
+        real(dp),dimension(1:nvector,1:npah),intent(in) :: rho_pah
+        real(dp),dimension(1:nvector,1:nrtvar),intent(in) :: cell_rt_state
+        real(dp),intent(in) :: dx
+        real(dp),intent(inout) :: dt
+        integer,intent(in) :: ncell
+        integer,intent(in) :: ilevel
+        real(dp),dimension(1:nvector),intent(in) :: Tk, ne, G0, f_shd
+
+        ! Local variables
+        integer :: jbin, k, idim
+        real(dp) :: eps_tot, eps_i, rho_g_loc, t_s_loc, D_i
+        real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
+        real(dp) :: dtcell
+        real(dp) :: rho_loc, cs_loc, P_loc
+        real(dp), dimension(1:ndim) :: gas_force_code
+        real(dp), dimension(1:ndim, max(1, ndust)) :: dust_force_code
+        real(dp), dimension(1:ndim, max(1, npah)) :: pah_force_code
+        real(dp), dimension(1:ndim) :: w_drift
+        real(dp) :: w_drift_mag, a_rad_dust, a_rad_gas
+        real(dp), dimension(max(1, ndust)) :: agrain_code_arr, sgrain_code_arr
+
+        ! 1. Get the current code units
+        call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
+
+        ! Precompute grain size and material density scaling for all bins
+        if (ndust > 0) then
+            do jbin = 1, ndust
+                agrain_code_arr(jbin) = dustbins_props(jbin)%asize_cm / scale_l
+                sgrain_code_arr(jbin) = dustbins_props(jbin)%sgrain / scale_d
+            end do
+        end if
+
+        ! 2. Loop over cells
+        do k = 1, ncell
+            if (condinit_kind .eq. 'dustydiffuse') then
+                rho_loc = 1.0_dp
+                cs_loc = 1.0_dp
+            else
+                rho_loc = rho(k)
+                cs_loc = cs(k)
+            end if
+
+            ! 3. Sum up all bin fractions to find the remaining gas background fraction
+            eps_tot = 0.0_dp
+            if (ndust > 0) then
+                do jbin = 1, ndust
+                    eps_tot = eps_tot + (rho_dust(k, jbin) / rho_loc)
+                end do
+            end if
+
+            if (condinit_kind .eq. 'dustydiffuse') then
+                P_loc = (1.0_dp - eps_tot) * rho_loc
+            else
+                P_loc = P(k)
+            end if
+
+            eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
+            
+            ! 4. Find the intrinsic gas density: rho_g = (1 - eps_tot) * rho_mixture
+            rho_g_loc = max((1.0_dp - eps_tot) * rho_loc, smallr)
+
+            ! 5. Calculate radiation pressure forces for this cell
+            call compute_gas_dust_radpressure_force(cell_rt_state(k, :), ilevel, &
+                gas_force_code, dust_force_code, pah_force_code, &
+                nElement(:, k), xion(:, :, k), rho_dust(k, :), rho_pah(k, :), &
+                Tk(k), ne(k), G0(k), f_shd(k))
+
+            ! 6. Gas-dust diffusion and drift velocity dt
+            if (ndust > 0) then
+                do jbin = 1, ndust
+                    eps_i = rho_dust(k, jbin) / rho_loc
+
+                    if (condinit_kind == 'dustydiffuse') then
+                        t_s_loc = 0.1_dp
+                    else
+                        t_s_loc = (sgrain_code_arr(jbin) * agrain_code_arr(jbin)) / max(rho_g_loc * cs_loc, smallr)
+                    end if
+
+                    if (condinit_kind == 'dustydiffuse') then
+                        D_i = eps_i * (1.0_dp - eps_tot) * 0.1_dp
+                    else
+                        D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P_loc / rho_g_loc)
+                    end if
+
+                    if (D_i > 0.0_dp) then
+                        dtcell = courant_factor * (dx**2) / (2.0_dp * D_i)
+                        dt = min(dt, dtcell)
+                    end if
+
+                    ! 7. Radiation pressure differential drift velocity dt
+                    if (rho_dust(k, jbin) > smallr) then
+                        do idim = 1, ndim
+                            ! Safely compute individual phase accelerations
+                            ! (Force density / mass density)
+                            a_rad_dust = dust_force_code(idim, jbin) / rho_dust(k, jbin)
+                            a_rad_gas  = gas_force_code(idim) / rho_g_loc
+                            
+                            ! Calculate differential drift in the barycentric frame
+                            w_drift(idim) = (1.0_dp - eps_tot) * t_s_loc * (a_rad_dust - a_rad_gas)
+                        end do
+                        
+                        w_drift_mag = sqrt(sum(w_drift**2))
+                        
+                        if (w_drift_mag > 1.0e-10_dp) then
+                            ! dt <= dx / |w_drift|
+                            dtcell = courant_factor * dx / w_drift_mag
+                            dt = min(dt, dtcell)
+                        end if
+                    end if
+                end do
+            end if
+
+        end do
+    end subroutine cmpdt_dust_dynamics
     
     subroutine dust_push_fine(ilevel)
         use amr_commons
@@ -1489,7 +1490,7 @@ module dust_dynamics
                         if (condinit_kind == 'dustydiffuse') then
                             t_s_face = 0.1_dp
                         else
-                            t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / max((one - eps_tot_L) * rho_face * c_s_face, smallr) 
+                            t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / max((one - eps_tot_face) * rho_face * c_s_face, smallr) 
                         end if
 
                         ! 1. Calculate Interface Radiation Differential Acceleration (DUST minus GAS)
@@ -1558,5 +1559,6 @@ module dust_dynamics
 
         end do
     end subroutine calculate_drag_rad_fluxes
+#endif
 
 end module dust_dynamics
