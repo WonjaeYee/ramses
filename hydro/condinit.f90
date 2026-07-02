@@ -216,7 +216,7 @@ subroutine dustyspress_condinit(x,q,dx,nn)
      if (dist < -0.5d0*boxlen) dist = dist + boxlen
 
      ! eps(x) = 1e-5 + 0.01 * exp(-(x-x0)^2/sigma^2) with sigma = 0.2
-     eps_val = 1e-5_dp + 0.01_dp * exp(-(dist**2)/(0.2d0**2))
+     eps_val = 1d-8 + 1d-4 * exp(-(dist**2)/(2d0 * 0.4d0**2))
      do ivar=1,ndust
         q(i,idust+ivar-1) = eps_val
      end do

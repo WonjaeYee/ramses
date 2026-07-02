@@ -7,8 +7,8 @@ static=.true.
 /
 
 &AMR_PARAMS
-levelmin=6
-levelmax=10
+levelmin=7
+levelmax=7
 ngridmax=2000
 nparttot=1 
 nexpand=1
@@ -16,7 +16,10 @@ boxlen=10.0
 /
 
 &BOUNDARY_PARAMS
-nboundary=0
+nboundary=2
+ibound_min=-1,+1
+ibound_max=-1,+1
+bound_type= 2, 2
 /
 
 &INIT_PARAMS
@@ -27,14 +30,14 @@ x_center=5.0
 length_x=10.0
 d_region=1.0
 u_region=0.0
-p_region=1.0
-var_region(1,1)=1.0
+p_region=0.02987
 var_region(1,:)=0.0
 /
 
 &OUTPUT_PARAMS
 noutput=5
-tout=0.1,0.2,0.3,0.4,0.5
+tout = 1.0,2.0,4.0,6.0             ! 4 outputs spaced by exactly 0.74 Myr
+tend = 6.0!2.96                               ! Hard stop before hitting the right boundary
 /
 
 &HYDRO_PARAMS
@@ -55,21 +58,21 @@ err_grad_u=0.05
 err_grad_p=0.05
 interpol_var=0
 interpol_type=2
-err_grad_var(1)=0.05
+err_grad_var(12)=0.1
 /
 
 &UNITS_PARAMS
 units_length = 3.08567758149137d18 ! 1 pc in cm
-units_density = 1e-23 ! 1e-23 g/cm3
+units_density = 1e-24 ! 1e-24 g/cm3
 units_time = 3.1556926d13 ! 1 Myr in s
 /
 
 &RT_PARAMS
 rt_flux_scheme='glf'
-rt_c_fraction=0.01
+rt_c_fraction=0.001
 rt_otsa=.true.			! no OTSA
 rt_is_init_xion=.false.
-rt_Tconst=100.d0
+rt_Tconst=3.46384d0
 !----------- RTZ params -----------!
 rtz_cooling=.true.
 rtz_include_collisional_ionization=.true.
@@ -83,23 +86,26 @@ isCO_rtz=.true.
 rtz_UV_background_G0=1.d0
 rtz_primary_cosmic_ray_ionization_rate=1.d-16
 rtz_max_cool_timestep=1.d20
-!rt_nsource = 1
-!rt_source_type(1) = 'square'
-!rt_exp_source(1) = 10.0
-!rt_src_x_center(1) = 0.0
-!rt_src_length_x(1) = 0.625
-!rt_u_source(1) = 0d0
-!rt_n_source(1) = 0d0
-!rt_src_group(1) = 1
+!----------- RT Sources -----------!
+rt_nsource = 1
+rt_source_type(1) = 'square'
+rt_exp_source(1) = 10.0
+rt_src_x_center(1) = 0.0
+rt_src_length_x(1) = 0.625
+rt_u_source(1) = 1.0
+rt_n_source(1) = 1.0d6
+rt_src_group(1) = 1
 /
 
 &RT_GROUPS
-group_egy     = 10.0
+group_egy     = 8.0
+groupL0       = 5.0
+groupL1       = 10.0
 /
 
 &CALIMA_PARAMS
-dust_tva=.false.
-dust_radpressure=.false.
+dust_tva=.true.
+dust_radpressure=.true.
 use_w_drift_test=.false.
 dust_composition(1,6) = 1d0
 dustbins_per_chemtype=1

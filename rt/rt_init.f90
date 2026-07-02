@@ -69,6 +69,7 @@ SUBROUTINE rt_init
   if(rt .and. rt_nsource .gt. 0) rt_advect=.true.
   if(rt .and. rt_nregion .gt. 0) rt_advect=.true.
   if(rt .and. rt_AGN ) rt_advect=.true.
+  if(rt .and. nboundary .gt. 0) rt_advect=.true.
   ! UV propagation is checked in set_model
   ! Star feedback is checked in amr_step
 
@@ -183,7 +184,21 @@ SUBROUTINE read_rt_params(nml_ok)
   ! Read namelist file
   rewind(1)
   read(1,NML=rt_params,END=101)
-101 continue                                   ! No harm if no rt namelist
+ 101 continue                                   ! No harm if no rt namelist
+
+  ! Copy rt boundary variables to rt_boundary_var
+  do iCount=1,MAXBOUND
+     rt_boundary_var(iCount,1)=rt_n_bound(iCount)
+#if NDIM>0
+     if (nrtvar >= 2) rt_boundary_var(iCount,2)=rt_u_bound(iCount)
+#endif
+#if NDIM>1
+     if (nrtvar >= 3) rt_boundary_var(iCount,3)=rt_v_bound(iCount)
+#endif
+#if NDIM>2
+     if (nrtvar >= 4) rt_boundary_var(iCount,4)=rt_w_bound(iCount)
+#endif
+  end do
 
   if(nGroups.le.0) rt=.false. ! No sense  doing rt if there are no photons
   if(.not. rt .and. .not. rt_star) sedprops_update=-1

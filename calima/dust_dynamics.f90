@@ -1312,6 +1312,7 @@ module dust_dynamics
         use amr_parameters
         use hydro_parameters
         use const
+        use amr_commons, only: nstep
         implicit none
 
         ! ========================================================================
@@ -1346,11 +1347,13 @@ module dust_dynamics
         real(dp) :: eps_L, eps_R, eps_gdnv, e_int_L, e_int_R, e_int_gdnv, flux_mass_bin
         real(dp) :: eken, eps_tot_cell, eps_tot_L, eps_tot_R, eps_tot_face, rho_gas_cell
         real(dp) :: a_rad_diff
+        real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
 
         ! Initialize output flux arrays
         dflux = 0.0_dp
         eflux = 0.0_dp
         mflux = 0.0_dp
+        call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
 
         ! Establish safe bounds for cell-centered loops inside the stencil buffer limits
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)

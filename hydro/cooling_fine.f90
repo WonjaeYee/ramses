@@ -135,6 +135,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp),dimension(1:nvector) :: sigma
   real(dp),dimension(1:nvector,1:ndust) :: rho_dust
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
+  integer :: jbin
 #endif
 
    integer::err_idx
@@ -507,25 +508,29 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       endif
       ! Dust densities in g/cm^3
       do i=1,nleaf
+         do jbin=1,ndust
+            if (uold(ind_leaf(i),idust+jbin-1) .lt. -1d-10) then
+               write(*,*) 'Significant negative dust density in cell ', ind_leaf(i)
+               write(*,*) 'Code value: ', uold(ind_leaf(i),idust+jbin-1)
+               call clean_stop
+            end if
+            uold(ind_leaf(i),idust+jbin-1) = max(uold(ind_leaf(i),idust+jbin-1), 0.0d0)
+         end do
          rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
       end do
-      if (any(rho_dust(:,:).lt.0d0)) then
-         write(*,*) 'Negative dust density in cell ', ind_leaf(i)
-         write(*,*) 'Dust density: ', rho_dust(i,:)
-         write(*,*) 'PAH density : ', rho_pah(i,:)
-         call clean_stop
-      end if
       ! PAH densities in g/cm^3
       if (npah > 0) then
          do i=1,nleaf
+            do jbin=1,npah
+               if (uold(ind_leaf(i),ipah+jbin-1) .lt. -1d-10) then
+                  write(*,*) 'Significant negative PAH density in cell ', ind_leaf(i)
+                  write(*,*) 'Code value: ', uold(ind_leaf(i),ipah+jbin-1)
+                  call clean_stop
+               end if
+               uold(ind_leaf(i),ipah+jbin-1) = max(uold(ind_leaf(i),ipah+jbin-1), 0.0d0)
+            end do
             rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
          end do
-         if (any(rho_pah(:,:).lt.0d0)) then
-            write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
-            write(*,*) 'Dust density: ', rho_dust(i,:)
-            write(*,*) 'PAH density: ', rho_pah(i,:)
-            call clean_stop
-         end if
       end if
 #endif
 

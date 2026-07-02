@@ -924,7 +924,6 @@ module dust_optics
             group_css_pah = 0.d0
             group_csr_pah = 0.d0
         end if
-
         ! Loop over groups
         do ip = 1, nGroups
             ! Skip non-SED groups (where L0 <= 0 or L1 <= 0 or L0 >= L1)

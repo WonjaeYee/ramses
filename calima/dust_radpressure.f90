@@ -9,7 +9,8 @@ module dust_radpressure_module
     use constants, only: c_cgs, eV2erg, mCO
     use rt_parameters, only: nGroups, iGroups, group_egy, rt_pressBoost, &
                             rt_isoPress, rt_isIR, iIR, rt_c, group_csn, &
-                            isH2_rtz, iIons, isLW, rtz_UV_background_G0, rt_advect, rt_c_cgs
+                            isH2_rtz, iIons, isLW, rtz_UV_background_G0, rt_advect, rt_c_cgs, &
+                            rt_n_source
     use rtz_module, only: elements, n_elements
     use hydro_parameters, only: ndust, npah, idust, ipah, imetal, smallr, smallc, gamma, &
                                 neul, nener, gamma_rad, nhydro
@@ -190,6 +191,7 @@ contains
 
         ! Local variables
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
+        real(dp) :: scale_Np, scale_Fp
         real(dp) :: scale_E, rt_c_code
         integer :: igroup, idim, iNp, ii, jj
         real(dp) :: fluxMag_code, Np_code
@@ -211,7 +213,8 @@ contains
 
         ! 2. Get scaling factors
         call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
-        scale_E = scale_d * (scale_l**5) / (scale_t**2)
+        call rt_units(scale_Np, scale_Fp)
+        scale_E = scale_d * (scale_l**2) / (scale_t**2)
 
         rt_c_code = rt_c(ilevel)
 
@@ -280,9 +283,16 @@ contains
         ! 5. Calculate radiation pressure forces directly in code units
         do igroup = 1, nGroups
             iNp = iGroups(igroup)
-            Np_code = cell_rt_state(iNp)
-            Fp_code = cell_rt_state(iNp+1 : iNp+ndim)
-            fluxMag_code = sqrt(sum(Fp_code**2))
+            if (condinit_kind == 'dustyspress') then
+                Fp_code = 0d0
+                if (ndim >= 1) Fp_code(1) = rt_n_source(igroup) / scale_Fp
+                Np_code = rt_n_source(igroup) / rt_c_code / scale_Np
+                fluxMag_code = sqrt(sum(Fp_code**2))
+            else
+                Np_code = cell_rt_state(iNp)
+                Fp_code = cell_rt_state(iNp+1 : iNp+ndim)
+                fluxMag_code = sqrt(sum(Fp_code**2))
+            end if
 
             ! --- Gas Force ---
             mom_fact_gas = opacity_gas_code(igroup) * group_egy_code(igroup)
