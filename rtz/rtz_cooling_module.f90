@@ -741,7 +741,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
       real(dp):: n_C_og, n_O_og, n_CII, n_H2, n_OI, nCII_new, nCO_new, nOI_new
-      real(dp):: tot_C, tot_O, x_OI
+      real(dp):: tot_C, tot_O
 #endif
       real(dp),dimension(1:27,10):: saved_rates
       real(dp),dimension(1:27,1:10,1:NGROUPS)::auger_yields
@@ -1399,10 +1399,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             n_CII = nElement_dep(6) * dXion(6,2)
             n_OI  = nElement_dep(8) * dXion(8,1)
             n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
-            x_OI  = n_OI / nElement_dep(1)
 
             !! Creation !!
-            cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, x_OI, dXion(1,1)*nElement_dep(1))
+            cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
 
             !! Destruction !!
             de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate)
