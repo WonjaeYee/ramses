@@ -1509,8 +1509,12 @@ module dust_dynamics
                         if (use_w_drift_test) then
                             u_drift = w_drift_test(idim)
                         else
-                            u_drift  = t_s_face * (grad_P / rho_face) + &
-                                        & (one - eps_tot_face) * t_s_face * a_rad_diff
+                            if (condinit_kind == 'dustyspress') then
+                                u_drift = (one - eps_tot_face) * t_s_face * a_rad_diff
+                            else
+                                u_drift  = t_s_face * (grad_P / rho_face) + &
+                                            & (one - eps_tot_face) * t_s_face * a_rad_diff
+                            end if
                         end if
                         
                         ! Hancock Reconstructions: Predict time-centered (\Delta t / 2) boundary values
@@ -1556,8 +1560,8 @@ module dust_dynamics
 
                 end do
             end do; end do; end do
-
         end do
+        
     end subroutine calculate_drag_rad_fluxes
 #endif
 

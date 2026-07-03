@@ -13,7 +13,7 @@ def run_simulation():
     """Run the simulation once using the parameter file."""
     print("--- Running DustySpress simulation ---")
     subprocess.run(
-        ["mpirun", "-np", "8", "./ramses_dust_test1d", "dustyspress.nml"],
+        ["./ramses_dust_test1d", "dustyspress.nml"],
         check=True
     )
 
