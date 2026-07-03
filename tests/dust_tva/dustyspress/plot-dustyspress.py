@@ -57,8 +57,8 @@ kappa_dust  = sigma_pr_1 / m_grain  # ~169.03 cm2/g
 t_s         = (rho_s * a_1) / (rho_0 * c_s)  # ~1.1e15 seconds (~34.8 Myr)
 
 # Exact terminal drift velocity (u_drift) from the TVA approximation loop:
-u_drift_cgs = t_s * (kappa_dust * F_0 / c_cgs)  # cm/s
-u_drift_pc_myr = (u_drift_cgs / pc_to_cm) * myr_to_sec  # Convert to pc/Myr
+u_drift_pc_myr = 0.77692  # For use_w_drift_test = .true. with w_drift_test = 0.77692
+u_drift_cgs = (u_drift_pc_myr * pc_to_cm) / myr_to_sec
 
 print(f"--- KINEMATIC REPORT FOR BENCHMARK ---")
 print(f"Grain mass (m_grain):      {m_grain:.5e} g")

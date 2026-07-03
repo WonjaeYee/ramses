@@ -863,6 +863,7 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
   use amr_parameters
   use hydro_parameters
   use const
+  use dust_commons, only: dust_tva, ndust
   implicit none
 
   integer ::ngrid
@@ -929,14 +930,19 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
               eint = MAX(uin(l,i,j,k,neul)*oneoverrho-eken-erad,smalle)
               q(l,i,j,k,neul) = (gamma-one)*q(l,i,j,k,1)*eint
 #else
-              eps_total = 0.0d0
-              do id = 1, ndust
-                 eps_total = eps_total + uin(l,i,j,k,idust+id-1)/q(l,i,j,k,1)
-              end do
-              eps_total = min(max(eps_total, 0.0_dp), 0.999_dp)
-              rho_gas = q(l,i,j,k,1)*(1.0d0-eps_total)
-              eint = MAX((uin(l,i,j,k,neul)*oneoverrho-eken-erad)*q(l,i,j,k,1)/max(rho_gas,smallr),smalle)
-              q(l,i,j,k,neul) = (gamma-one)*rho_gas*eint
+              if (dust_tva .and. ndust>0) then
+                 eps_total = 0.0d0
+                 do id = 1, ndust
+                    eps_total = eps_total + uin(l,i,j,k,idust+id-1)/q(l,i,j,k,1)
+                 end do
+                 eps_total = min(max(eps_total, 0.0_dp), 0.999_dp)
+                 rho_gas = q(l,i,j,k,1)*(1.0d0-eps_total)
+                 eint = MAX((uin(l,i,j,k,neul)*oneoverrho-eken-erad)*q(l,i,j,k,1)/max(rho_gas,smallr),smalle)
+                 q(l,i,j,k,neul) = (gamma-one)*rho_gas*eint
+              else
+                 eint = MAX(uin(l,i,j,k,neul)*oneoverrho-eken-erad,smalle)
+                 q(l,i,j,k,neul) = (gamma-one)*q(l,i,j,k,1)*eint
+              end if
 #endif
 
               ! Compute sound speed
@@ -949,7 +955,11 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
 #ifndef CALIMA
               c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
 #else
-              c(l,i,j,k)=sqrt(c(l,i,j,k)/max(rho_gas,smallr))
+              if (dust_tva .and. ndust>0) then
+                 c(l,i,j,k)=sqrt(c(l,i,j,k)/max(rho_gas,smallr))
+              else
+                 c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
+              end if
 #endif
 
               ! Gravity predictor step

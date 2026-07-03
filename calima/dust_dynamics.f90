@@ -1419,27 +1419,39 @@ module dust_dynamics
             ! TODO: Implement other slope limiters (e.g. Superbee, Van Leer) for
             ! completeness.
             slope_dim = 0.0_dp
-            do jbin = 1, ndust
-                do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
-                    if (idim == 1) then
-                        dlft = eps(l,i,j,k,jbin) - eps(l,i-1,j,k,jbin) 
-                        drgt = eps(l,i+1,j,k,jbin) - eps(l,i,j,k,jbin) 
-                    else if (idim == 2) then
-                        dlft = eps(l,i,j,k,jbin) - eps(l,i,j-1,k,jbin)
-                        drgt = eps(l,i,j+1,k,jbin) - eps(l,i,j,k,jbin)
-                    else
-                        dlft = eps(l,i,j,k,jbin) - eps(l,i,j,k-1,jbin)
-                        drgt = eps(l,i,j,k+1,jbin) - eps(l,i,j,k,jbin)
-                    end if
-                    dcen = half * (dlft + drgt)
-                    
-                    if (dlft * drgt <= 0.0_dp) then 
-                        slope_dim(l,i,j,k,jbin) = 0.0_dp 
-                    else
-                        slope_dim(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(abs(dlft), abs(drgt)) 
-                    end if
-                end do; end do; end do; end do
-            end do
+            if (slope_type > 0) then
+                do jbin = 1, ndust
+                    do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                        if (idim == 1) then
+                            dlft = eps(l,i,j,k,jbin) - eps(l,i-1,j,k,jbin) 
+                            drgt = eps(l,i+1,j,k,jbin) - eps(l,i,j,k,jbin) 
+                        else if (idim == 2) then
+                            dlft = eps(l,i,j,k,jbin) - eps(l,i,j-1,k,jbin)
+                            drgt = eps(l,i,j+1,k,jbin) - eps(l,i,j,k,jbin)
+                        else
+                            dlft = eps(l,i,j,k,jbin) - eps(l,i,j,k-1,jbin)
+                            drgt = eps(l,i,j,k+1,jbin) - eps(l,i,j,k,jbin)
+                        end if
+                        dcen = half * (dlft + drgt)
+                        
+                        if (dlft * drgt <= 0.0_dp) then 
+                            slope_dim(l,i,j,k,jbin) = 0.0_dp 
+                        else
+                            if (slope_type == 1) then
+                                ! MinMod limiter
+                                slope_dim(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(abs(dlft), abs(drgt)) 
+                            else if (slope_type == 2) then
+                                ! MC (Monotonized Central) limiter
+                                slope_dim(l,i,j,k,jbin) = sign(1.0_dp, dcen) * &
+                                    min(2.0_dp * abs(dlft), 2.0_dp * abs(drgt), abs(dcen))
+                            else
+                                ! Fallback to MinMod
+                                slope_dim(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(abs(dlft), abs(drgt)) 
+                            end if
+                        end if
+                    end do; end do; end do; end do
+                end do
+            end if
 
 
             ! ====================================================================

@@ -258,13 +258,17 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
 #else
-     eps_total=0.0d0
-     do id = 1,ndust
-        eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
-     end do
-     eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-     rho_gas = rho_save(k)*(1.0d0-eps_total)
-     uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
+     if (dust_tva .and. ndust>0) then
+        eps_total=0.0d0
+        do id = 1,ndust
+           eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+        end do
+        eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+        rho_gas = rho_save(k)*(1.0d0-eps_total)
+        uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
+     else
+        uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
+     end if
 #endif
      p_save(k) = uu(k,neul)          ! Cache gas thermal pressure
   end do
@@ -291,16 +295,20 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
 #else
-      eps_total=0.0d0
-      do id = 1,ndust
-         eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
-      end do
-      eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-      rho_gas = rho_save(k)*(1.0d0-eps_total)
-      if (condinit_kind == 'dustydiffuse') then
-         uu(k,neul) = 1.0d0
+      if (dust_tva .and. ndust>0) then
+         eps_total=0.0d0
+         do id = 1,ndust
+            eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+         end do
+         eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+         rho_gas = rho_save(k)*(1.0d0-eps_total)
+         if (condinit_kind == 'dustydiffuse') then
+            uu(k,neul) = 1.0d0
+         else
+            uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+         end if
       else
-         uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+         uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
       end if
 #endif
      cs_save(k) = uu(k,neul)         ! Cache mixture sound speed
@@ -441,13 +449,17 @@ subroutine cmpdt_dust(uu,gg,ur,dx,dt,ncell,ilevel)
 
   ! Compute pressure
   do k = 1, ncell
-     eps_total=0.0d0
-     do id = 1,ndust
-        eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
-     end do
-     eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-     rho_gas = rho_save(k)*(1.0d0-eps_total)
-     uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
+     if (dust_tva .and. ndust>0) then
+        eps_total=0.0d0
+        do id = 1,ndust
+           eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+        end do
+        eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+        rho_gas = rho_save(k)*(1.0d0-eps_total)
+        uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
+     else
+        uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
+     end if
      p_save(k) = uu(k,neul)          ! Cache gas thermal pressure
   end do
 #if NENER>0
@@ -470,16 +482,20 @@ subroutine cmpdt_dust(uu,gg,ur,dx,dt,ncell,ilevel)
   end do
 #endif
   do k = 1, ncell
-      eps_total=0.0d0
-      do id = 1,ndust
-         eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
-      end do
-      eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-      rho_gas = rho_save(k)*(1.0d0-eps_total)
-      if (condinit_kind == 'dustydiffuse') then
-         uu(k,neul) = 1.0d0
+      if (dust_tva .and. ndust>0) then
+         eps_total=0.0d0
+         do id = 1,ndust
+            eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+         end do
+         eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+         rho_gas = rho_save(k)*(1.0d0-eps_total)
+         if (condinit_kind == 'dustydiffuse') then
+            uu(k,neul) = 1.0d0
+         else
+            uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+         end if
       else
-         uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+         uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
       end if
      cs_save(k) = uu(k,neul)         ! Cache mixture sound speed
   end do

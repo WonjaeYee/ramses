@@ -25,9 +25,9 @@ nregion=1
 region_type(1)='square'
 x_center=5.0
 length_x=10.0
-d_region=0.0204537956
+d_region=0.204537956
 u_region=0.77692
-p_region=1.4609854
+p_region=0.14609854
 var_region(1,:)=0.0
 /
 
@@ -40,7 +40,7 @@ tend = 6.0
 &HYDRO_PARAMS
 gamma=1.4
 courant_factor=0.8
-slope_type=1
+slope_type=2
 riemann='hllc'
 data_dir = '/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/'
 /

@@ -23,7 +23,7 @@ run_simulation()
 # =====================================================================
 # 1. PHYSICAL CONSTANTS & ENVIRONMENTAL ASSUMPTIONS
 # =====================================================================
-u_drift_pc_myr = 0.81302  # Advection velocity in pc/Myr (matching the namelist u_region)
+u_drift_pc_myr = 0.77692  # Advection velocity in pc/Myr (matching the namelist u_region)
 boxlen      = 10.0                 # 10 pc domain
 x0          = 2.0                  # Initial shell center (pc)
 sigma_shell = 0.4                  # Initial characteristic width (pc)

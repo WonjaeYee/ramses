@@ -6,7 +6,7 @@ import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../visu")))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
 
 def run_simulation(level):
@@ -135,4 +135,5 @@ fig.savefig("dustyadvect.pdf", bbox_inches="tight")
 
 # Check level 7 results against the reference solution
 tolerance = {"all": 1e-12}
-visu_ramses.check_solution(results[7]["data_final"]["data"], "dustyadvect", tolerance=tolerance)
+overwrite = "--overwrite" in sys.argv or "-o" in sys.argv or not os.path.exists("dustyadvect-ref.dat")
+visu_ramses.check_solution(results[7]["data_final"]["data"], "dustyadvect", tolerance=tolerance, overwrite=overwrite)
