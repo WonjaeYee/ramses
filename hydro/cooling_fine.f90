@@ -512,6 +512,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
             if (uold(ind_leaf(i),idust+jbin-1) .lt. -1d-10) then
                write(*,*) 'Significant negative dust density in cell ', ind_leaf(i)
                write(*,*) 'Code value: ', uold(ind_leaf(i),idust+jbin-1)
+               write(*,*) 'uold(ind_leaf(i),idust:idust-1+ndust): ',uold(ind_leaf(i),idust:idust-1+ndust)
                call clean_stop
             end if
             uold(ind_leaf(i),idust+jbin-1) = max(uold(ind_leaf(i),idust+jbin-1), 0.0d0)

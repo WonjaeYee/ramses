@@ -43,6 +43,9 @@ subroutine condinit(x,u,dx,nn)
   case('dustyspress')
      call dustyspress_condinit(x, q, dx, nn)
 
+  case('dustygauss')
+     call dustygauss_condinit(x, q, dx, nn)
+
   ! Add here, if you wish, some user-defined initial conditions
   ! ........
 
@@ -223,3 +226,38 @@ subroutine dustyspress_condinit(x,q,dx,nn)
   end do
 
 end subroutine dustyspress_condinit
+
+
+!================================================================
+!================================================================
+!================================================================
+!================================================================
+subroutine dustygauss_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use constants
+
+  implicit none
+  integer ::nn                            ! Number of cells
+  real(dp)::dx                            ! Cell size
+  real(dp),dimension(1:nvector,1:nvar)::q ! Primitive variables
+  real(dp),dimension(1:nvector,1:ndim)::x ! Cell center position.
+  integer::i,ivar
+  real(dp)::dist,eps_val
+
+  ! Call built-in initial condition generator to set background gas properties
+  call region_condinit(x,q,dx,nn)
+
+  do i=1,nn
+     ! Distance from L/2
+     dist = x(i,1) - 0.5d0*boxlen
+     if (dist > 0.5d0*boxlen) dist = dist - boxlen
+     if (dist < -0.5d0*boxlen) dist = dist + boxlen
+
+     ! f(x) = 0.01 + 0.1 * exp(-((x-L/2)/(L/4))^2)
+     eps_val = 0.01d0 + 0.1d0 * exp(- (dist / (0.25d0*boxlen))**2)
+     do ivar=1,ndust
+        q(i,idust+ivar-1) = eps_val
+     end do
+  end do
+end subroutine dustygauss_condinit

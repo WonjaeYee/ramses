@@ -1,39 +1,43 @@
-This is the RAMSES parameter file for the DustyAdvect test.
+This is the RAMSES parameter file for Sod's shock tube test.
 
 &RUN_PARAMS
 hydro=.true.
-static=.true.
+nsubcycle=3*1,2
 /
 
 &AMR_PARAMS
-levelmin=7
-levelmax=7
-ngridmax=200
-nparttot=1 
+levelmin=4
+levelmax=10
+ngridmax=2000
+nparttot=1 ! This parameter is useless because pic is false but the test should pass anyway.
 nexpand=1
 boxlen=1.0
 /
 
 &BOUNDARY_PARAMS
-nboundary=0
+nboundary=2
+ibound_min=-1,+1
+ibound_max=-1,+1
+bound_type= 1, 1
 /
 
 &INIT_PARAMS
+condinit_kind='dustyshock'
 nregion=2
 region_type(1)='square'
 region_type(2)='square'
-x_center=0.5,0.5
-length_x=1.0,0.5
-d_region=1.0,1.0
+x_center=0.25,0.75
+length_x=0.5,0.5
+d_region=1.0,0.125
 u_region=0.0,0.0
-p_region=1.0,1.0
-var_region(1,1)=0.01d0
-var_region(2,1)=0.1d0
+p_region=1.0,0.1
+var_region(1,1)=0.5d0
+var_region(2,1)=0.5d0
 /
 
 &OUTPUT_PARAMS
 noutput=1
-tout=1.0
+tout=0.245
 /
 
 &HYDRO_PARAMS
@@ -49,12 +53,12 @@ err_grad_u=0.05
 err_grad_p=0.05
 interpol_var=0
 interpol_type=2
+err_grad_var(1)=0.05
 /
 
 &CALIMA_PARAMS
 dust_tva=.true.
-use_w_drift_test=.true.
-w_drift_test=1.0,0.0,0.0
+drag_coefficient=1000
 dust_composition(1,6) = 1d0
 dustbins_per_chemtype=1
 asize=0.1d0 ! Grain size bin centre [microns]

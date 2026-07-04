@@ -9,6 +9,10 @@ subroutine newdt_fine(ilevel)
 #if USE_TURB==1
   use turb_commons
 #endif
+#ifdef CALIMA
+  use dust_commons,   only: dust_tva, ndust
+  use dust_dynamics,  only: get_dust_courant_dt
+#endif
   use constants, ONLY: pi
   use mpi_mod
   implicit none
@@ -103,7 +107,14 @@ subroutine newdt_fine(ilevel)
   if(rt_advect)then
      call get_rt_courant_dt(dt_rt, ilevel)
      dtnew(ilevel) = 0.99999d0 * MIN(dtnew(ilevel), dt_rt * rt_nsubcycle)
+#ifdef CALIMA
+     if(static)then
+        if(hydro)call courant_fine(ilevel)
+        RETURN
+     endif
+#else
      if(static) RETURN
+#endif
   endif
 #endif
 
@@ -173,6 +184,19 @@ subroutine newdt_fine(ilevel)
   end if
 
   if(hydro)call courant_fine(ilevel)
+
+#ifdef CALIMA
+  ! Enforce the dust-drift CFL constraint using the true face pressure gradient.
+  ! This mirrors the pattern of get_rt_courant_dt: the subroutine accesses uold
+  ! directly, builds the full AMR stencil, computes TVA drift speeds at every
+  ! face, MPI-reduces to the global minimum, and updates dtnew(ilevel) itself.
+  if (dust_tva .and. ndust > 0) call get_dust_courant_dt(ilevel)
+
+  ! Force to use a very small timestep of 1e-8 for dustygauss convergence tests
+  if (condinit_kind == 'dustygauss') then
+     dtnew(ilevel) = 1.0d-8
+  end if
+#endif
 
 111 format('   Entering newdt_fine for level ',I2)
 

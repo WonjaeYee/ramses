@@ -289,96 +289,332 @@ module dust_dynamics
         end if
     end subroutine dust_shock_destruction
 
-    subroutine cmpdt_dust_diffusion(rho,rho_dust,P,cs,dx,dt,ncell)
-        ! This subroutine computes the maximum time step for the dust diffusion
-        ! for each cell. This is then used to update the time step for the dust diffusion
-        ! in the main time loop.
-        ! rho -> total mixture density (gas + dust) [code density]
-        ! rho_dust -> dust mass density [code density]
-        ! P -> total mixture pressure (gas + dust) [code pressure]
-        ! cs -> sound speed of the mixture [code velocity]
-        ! dx -> cell width [code length]
-        ! dt <-> time step [code time]
-        ! ncell -> number of cells
-        
-        use amr_parameters, only: condinit_kind
-        use hydro_parameters, only: courant_factor,smallr
+    subroutine get_dust_courant_dt(ilevel)
+        ! ====================================================================
+        ! Compute the dust-drift CFL timestep constraint by accessing uold
+        ! directly and evaluating the true face pressure gradient.
+        !
+        ! The subroutine reuses the full AMR stencil-building infrastructure
+        ! from dust_upwind_correct1 and mirrors the primitive-extraction step
+        ! from calculate_pure_drag_fluxes so that the CFL bound is tight and
+        ! consistent with the numerical scheme being stabilised.
+        !
+        ! Two constraints are enforced at every internal face:
+        !   (1) Advection (hyperbolic) CFL:
+        !         dt <= courant_factor * dx / |w_drift_face|
+        !       where w_drift_face is the TVA drift velocity evaluated using
+        !       the true face pressure gradient (P_R - P_L)/dx.
+        !   (2) Parabolic (diffusion) CFL:
+        !         dt <= courant_factor * dx^2 / (2 * D_i)
+        !       where D_i = eps_i * (1-eps_tot) * t_s * P_face / rho_g_face.
+        !
+        ! MPI reduces to the global minimum and updates dtnew(ilevel).
+        ! ====================================================================
+        use amr_commons
+        use const
+        use hydro_commons
+        use hydro_parameters, only: courant_factor, smallr, smallc, gamma, neul
+        use mpi_mod
         implicit none
-        ! Input variables
-        real(dp),dimension(1:nvector),intent(in) :: rho,P,cs
-        real(dp),dimension(1:nvector,1:ndust),intent(in) :: rho_dust
-        real(dp),intent(in) :: dx
-        real(dp),intent(inout) :: dt
-        integer,intent(in) :: ncell
+        integer, intent(in) :: ilevel
 
-        ! Local variables
-        integer ::jbin,k
-        real(dp)::eps_tot, eps_i, rho_g_loc, t_s_loc, D_i
-        real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
-        real(dp)::agrain_code,sgrain_code,dtcell
-        real(dp)::rho_loc, P_loc, cs_loc
+        ! ----------------------------------------------------------------
+        ! Stencil workspace (same dimensions / SAVE as dust_upwind_correct1)
+        ! ----------------------------------------------------------------
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nvar_all), save :: uloc
 
-        ! 1. Get the current code units
-        call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+        integer, dimension(1:nvector), save :: ind_grid, ind_cell, ind_father
+        integer, dimension(1:nvector), save :: igrid_nbor, ind_exist, ind_nexist, ind_buffer
+        integer, dimension(1:nvector, 1:threetondim) :: nbors_father_cells
+        integer, dimension(1:nvector, 0:twondim)     :: ibuffer_father
+        real(dp), dimension(1:nvector, 0:twondim, 1:nvar_all) :: u1
+        real(dp), dimension(1:nvector, 1:twotondim,  1:nvar_all) :: u2
 
-        ! 2. Loop over cells
-        do k = 1, ncell
-            if (condinit_kind .eq. 'dustydiffuse') then
-                rho_loc = 1.0_dp
-                cs_loc = 1.0_dp
-            else
-                rho_loc = rho(k)
-                cs_loc = cs(k)
-            end if
+        ! ----------------------------------------------------------------
+        ! Cell-centred primitive fields (same structure as calc_pure_drag)
+        ! ----------------------------------------------------------------
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2),          save :: Pg, rho_mix, c_s, eps_tot_arr
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), save :: eps_arr
 
-            ! 3. Sum up all bin fractions to find the remaining gas background fraction
-            eps_tot = 0.0_dp
-            do jbin = 1, ndust
-                eps_tot = eps_tot + (rho_dust(k,jbin) / rho_loc)
-            end do
+        ! ----------------------------------------------------------------
+        ! Loop indices, scalars
+        ! ----------------------------------------------------------------
+        integer  :: i, j, k, l, jbin, idim, ivar, ind_son, iskip
+        integer  :: ncache, ngrid, igrid, nexist, nbuffer, ind_father_idx
+        integer  :: i0, j0, k0, i1, j1, k1, i2, j2, k2, i3, j3, k3
+        integer  :: i1min, i1max, j1min, j1max, k1min, k1max
+        integer  :: i2min, i2max, j2min, j2max, k2min, k2max
+        integer  :: i3min, i3max, j3min, j3max, k3min, k3max
+        integer  :: ilo, ihi, jlo, jhi, klo, khi
 
-            if (condinit_kind .eq. 'dustydiffuse') then
-                P_loc = (1.0_dp - eps_tot) * rho_loc
-            else
-                P_loc = P(k)
-            end if
+        real(dp) :: dx, scale, dt_loc, dt_all, dtcell
+        real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
+        real(dp), dimension(1:ndust) :: agrain_code, sgrain_code, t_s_face_arr
 
-            eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
-            
-            ! 4. Find the intrinsic gas density: rho_g = (1 - eps_tot) * rho_mixture
-            rho_g_loc = max((1.0_dp - eps_tot) * rho_loc, smallr)
+        ! Face-centred quantities
+        real(dp) :: Pg_L, Pg_R, Pg_face
+        real(dp) :: rho_L, rho_R, rho_face, rho_g_face
+        real(dp) :: eps_tot_L, eps_tot_R, eps_tot_face
+        real(dp) :: eps_face_bin, c_s_face
+        real(dp) :: grad_P, t_s_face, avg_ts_face, u_drift, D_i
+        real(dp) :: eken, rho_gas_cell
 
-            ! 5. Loop over dust bins
-            do jbin = 1, ndust
-                eps_i = rho_dust(k,jbin) / rho_loc
+#ifndef WITHOUTMPI
+        integer  :: info
+#endif
 
-                ! 6. Convert the grain size and grain material density from cgs to code units
-                agrain_code = dustbins_props(jbin)%asize_cm/scale_l
-                sgrain_code = dustbins_props(jbin)%sgrain/scale_d
+        if (numbtot(1,ilevel) == 0) return
 
-                ! 7. Epstein drag regime stopping time: t_s = (rho_solid * a) / (rho_g * c_s)
-                if (condinit_kind == 'dustydiffuse') then
-                    t_s_loc = 0.1_dp
-                else
-                    t_s_loc = (sgrain_code * agrain_code) / max(rho_g_loc * cs_loc, smallr)
-                end if
+        call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
 
-                ! 8. Laibe & Price / Lebreuilly et al. 2019 Diffusion Coefficient:
-                ! D_i = eps_i * (1 - eps_total) * t_s * (P_g / rho_g)
-                if (condinit_kind == 'dustydiffuse') then
-                    D_i = eps_i * (1.0_dp - eps_tot) * 0.1_dp
-                else
-                    D_i = eps_i * (1.0_dp - eps_tot) * t_s_loc * (P_loc / rho_g_loc)
-                end if
-
-                ! Parabolic restriction check: dt <= dx^2 / (2 * D_i)
-                if (D_i > 0.0_dp) then
-                    dtcell = courant_factor * (dx**2) / (2.0_dp * D_i)
-                    dt = min(dt, dtcell)
-                end if
-            end do
+        do i = 1, ndust
+            agrain_code(i) = dustbins_props(i)%asize_cm / scale_l
+            sgrain_code(i) = dustbins_props(i)%sgrain   / scale_d
         end do
-    end subroutine cmpdt_dust_diffusion
+
+        scale  = boxlen / dble(icoarse_max - icoarse_min + 1)
+        dx     = 0.5d0**ilevel * scale
+        dt_loc = dtnew(ilevel)      ! upper bound: current level timestep
+
+        ! ----------------------------------------------------------------
+        ! PART A: Simple analytic CFL for the drift-test mode
+        ! ----------------------------------------------------------------
+        if (use_w_drift_test) then
+            do i = 1, ndim
+                if (abs(w_drift_test(i)) > 0.0_dp) &
+                    dt_loc = min(dt_loc, courant_factor * dx / abs(w_drift_test(i)))
+            end do
+        end if
+
+        ! ----------------------------------------------------------------
+        ! PART B: Stencil-based CFL using the true face pressure gradient
+        ! ----------------------------------------------------------------
+        if (.not. use_w_drift_test) then
+            ! Index bounds — identical to dust_upwind_correct1
+            i1min=0; i1max=0; i2min=0; i2max=0; i3min=1; i3max=1
+            j1min=0; j1max=0; j2min=0; j2max=0; j3min=1; j3max=1
+            k1min=0; k1max=0; k2min=0; k2max=0; k3min=1; k3max=1
+            if (ndim>0) then; i1max=2; i2max=1; i3max=2; end if
+            if (ndim>1) then; j1max=2; j2max=1; j3max=2; end if
+            if (ndim>2) then; k1max=2; k2max=1; k3max=2; end if
+
+            ilo = min(1,iu1+1); ihi = max(1,iu2-1)
+            jlo = min(1,ju1+1); jhi = max(1,ju2-1)
+            klo = min(1,ku1+1); khi = max(1,ku2-1)
+
+            ncache = active(ilevel)%ngrid
+            do igrid = 1, ncache, nvector
+                ngrid = min(nvector, ncache - igrid + 1)
+                do i = 1, ngrid
+                    ind_grid(i) = active(ilevel)%igrid(igrid+i-1)
+                end do
+
+                ! Get the father cells for this batch of grids
+                do i = 1, ngrid
+                    ind_cell(i) = father(ind_grid(i))
+                end do
+                call get3cubefather(ind_cell, nbors_father_cells, ngrid, ilevel)
+
+                ! ============================================================
+                ! Fill uloc stencil — identical to dust_upwind_correct1
+                ! ============================================================
+                do k1=k1min,k1max; do j1=j1min,j1max; do i1=i1min,i1max
+                    nbuffer=0; nexist=0
+                    ind_father_idx = 1+i1+3*j1+9*k1
+                    do i = 1, ngrid
+                        igrid_nbor(i) = son(nbors_father_cells(i, ind_father_idx))
+                        if (igrid_nbor(i) > 0) then
+                            nexist = nexist+1; ind_exist(nexist) = i
+                        else
+                            nbuffer = nbuffer+1; ind_nexist(nbuffer) = i
+                            ind_buffer(nbuffer) = nbors_father_cells(i, ind_father_idx)
+                        end if
+                    end do
+
+                    if (nbuffer > 0) then
+                        call getnborfather(ind_buffer, ibuffer_father, nbuffer, ilevel)
+                        do j=0,twondim; do ivar=1,nvar_all; do i=1,nbuffer
+                            u1(i,j,ivar) = uold(ibuffer_father(i,j), ivar)
+                        end do; end do; end do
+                        call interpol_hydro(u1, u2, nbuffer)
+                    end if
+
+                    do k2=k2min,k2max; do j2=j2min,j2max; do i2=i2min,i2max
+                        ind_son = 1+i2+2*j2+4*k2
+                        iskip   = ncoarse + (ind_son-1)*ngridmax
+                        do i=1,nexist; ind_cell(i) = iskip + igrid_nbor(ind_exist(i)); end do
+                        i3=1; j3=1; k3=1
+                        if (ndim>0) i3 = 1+2*(i1-1)+i2
+                        if (ndim>1) j3 = 1+2*(j1-1)+j2
+                        if (ndim>2) k3 = 1+2*(k1-1)+k2
+                        do ivar=1,nvar_all
+                            do i=1,nexist;  uloc(ind_exist(i), i3,j3,k3,ivar) = uold(ind_cell(i),ivar); end do
+                            do i=1,nbuffer; uloc(ind_nexist(i),i3,j3,k3,ivar) = u2(i,ind_son,ivar);     end do
+                        end do
+                    end do; end do; end do
+                end do; end do; end do
+
+                ! ============================================================
+                ! STEP 1: Cell-centred primitive extraction
+                !         (mirrors calculate_pure_drag_fluxes STEP 1)
+                ! ============================================================
+                do k=ku1,ku2; do j=ju1,ju2; do i=iu1,iu2; do l=1,ngrid
+                    if (condinit_kind == 'dustydiffuse') then
+                        rho_mix(l,i,j,k) = 1.0_dp
+                    else
+                        rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr)
+                    end if
+                    eps_tot_arr(l,i,j,k) = 0.0_dp
+                    do jbin = 1, ndust
+                        eps_arr(l,i,j,k,jbin) = uloc(l,i,j,k,idust+jbin-1) / rho_mix(l,i,j,k)
+                        eps_tot_arr(l,i,j,k)  = eps_tot_arr(l,i,j,k) + eps_arr(l,i,j,k,jbin)
+                    end do
+                    eps_tot_arr(l,i,j,k) = min(max(eps_tot_arr(l,i,j,k), 0.0_dp), 1.0_dp-smallr)
+                    rho_gas_cell = rho_mix(l,i,j,k) * (1.0_dp - eps_tot_arr(l,i,j,k))
+
+                    eken = 0.0_dp
+                    do idim = 1, ndim
+                        eken = eken + uloc(l,i,j,k,idim+1)**2
+                    end do
+                    eken = half * eken / rho_mix(l,i,j,k)**2
+
+                    if (condinit_kind == 'dustydiffuse') then
+                        Pg(l,i,j,k)  = (1.0_dp - eps_tot_arr(l,i,j,k)) * rho_mix(l,i,j,k)
+                        c_s(l,i,j,k) = 1.0_dp
+                    else
+                        Pg(l,i,j,k)  = max((gamma-1.0_dp) * rho_gas_cell * &
+                            max(uloc(l,i,j,k,neul)/rho_mix(l,i,j,k) - eken, &
+                                smallc**2/gamma/(gamma-1.0_dp)), &
+                            smallr * smallc**2)
+                        c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / max(rho_gas_cell, smallr))
+                    end if
+                end do; end do; end do; end do
+
+                ! ============================================================
+                ! STEP 2: Face CFL from true pressure gradient
+                !
+                ! For each face (i-1/2, j, k) in dimension idim we compute:
+                !   grad_P  = (Pg_R - Pg_L) / dx   [true face gradient]
+                !   avg_ts  = sum_k eps_k * t_s_k   [TVA mass-weighted ts]
+                !   w_g     = avg_ts / rho_g * |grad_P|     [gas drift speed]
+                !   w_dk    = |t_sk - avg_ts| / rho * |grad_P| [dust drift]
+                ! and enforce dt <= courant_factor * dx / max(w_g, w_dk).
+                ! Also enforce the parabolic D_i constraint as a backstop.
+                ! ============================================================
+                do idim = 1, ndim
+                    do k = ifind_klo(idim,klo,kf1), ifind_khi(idim,khi,kf2)
+                    do j = ifind_jlo(idim,jlo,jf1), ifind_jhi(idim,jhi,jf2)
+                    do i = ifind_ilo(idim,ilo,if1), ifind_ihi(idim,ihi,if2)
+                        do l = 1, ngrid
+
+                            ! --- Gather left/right cell quantities at this face ---
+                            if (idim == 1) then
+                                Pg_L      = Pg(l,i-1,j,k);       Pg_R      = Pg(l,i,j,k)
+                                rho_L     = rho_mix(l,i-1,j,k);  rho_R     = rho_mix(l,i,j,k)
+                                eps_tot_L = eps_tot_arr(l,i-1,j,k); eps_tot_R = eps_tot_arr(l,i,j,k)
+                                c_s_face  = half * (c_s(l,i-1,j,k) + c_s(l,i,j,k))
+                            else if (idim == 2) then
+                                Pg_L      = Pg(l,i,j-1,k);       Pg_R      = Pg(l,i,j,k)
+                                rho_L     = rho_mix(l,i,j-1,k);  rho_R     = rho_mix(l,i,j,k)
+                                eps_tot_L = eps_tot_arr(l,i,j-1,k); eps_tot_R = eps_tot_arr(l,i,j,k)
+                                c_s_face  = half * (c_s(l,i,j-1,k) + c_s(l,i,j,k))
+                            else
+                                Pg_L      = Pg(l,i,j,k-1);       Pg_R      = Pg(l,i,j,k)
+                                rho_L     = rho_mix(l,i,j,k-1);  rho_R     = rho_mix(l,i,j,k)
+                                eps_tot_L = eps_tot_arr(l,i,j,k-1); eps_tot_R = eps_tot_arr(l,i,j,k)
+                                c_s_face  = half * (c_s(l,i,j,k-1) + c_s(l,i,j,k))
+                            end if
+
+                            ! True face pressure gradient (key improvement over cs^2/dx estimate)
+                            grad_P       = (Pg_R - Pg_L) / dx
+                            Pg_face      = half * (Pg_L + Pg_R)
+                            rho_face     = half * (rho_L + rho_R)
+                            eps_tot_face = half * (eps_tot_L + eps_tot_R)
+                            eps_tot_face = min(max(eps_tot_face, 0.0_dp), 1.0_dp - smallr)
+                            rho_g_face   = max(rho_face * (1.0_dp - eps_tot_face), smallr)
+
+                            ! --- TVA stopping times and mass-weighted average ---
+                            avg_ts_face = 0.0_dp
+                            do jbin = 1, ndust
+                                if (idim == 1) then
+                                    eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else if (idim == 2) then
+                                    eps_face_bin = half * (eps_arr(l,i,j-1,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else
+                                    eps_face_bin = half * (eps_arr(l,i,j,k-1,jbin) + eps_arr(l,i,j,k,jbin))
+                                end if
+                                eps_face_bin = max(eps_face_bin, 0.0_dp)
+
+                                ! Intrinsic stopping time (same formula as calculate_pure_drag_fluxes)
+                                if (condinit_kind == 'dustydiffuse') then
+                                    t_s_face = 0.1_dp
+                                else if (condinit_kind == 'dustyshock') then
+                                    ! t_s_k = rho_dk / K = eps_k * rho / K
+                                    t_s_face = eps_face_bin * rho_face / drag_coefficient(jbin)
+                                else
+                                    ! Epstein: t_s = (rho_solid * a) / (rho_g * cs)
+                                    t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / &
+                                        max(rho_g_face * c_s_face, smallr)
+                                end if
+
+                                t_s_face_arr(jbin) = t_s_face
+                                avg_ts_face = avg_ts_face + eps_face_bin * t_s_face
+                            end do
+
+                            ! --- Gas CFL: w_g = avg_ts / rho_g * |grad_P| ---
+                            u_drift = avg_ts_face / rho_g_face * abs(grad_P)
+                            if (u_drift > 0.0_dp) then
+                                dtcell = courant_factor * dx / u_drift
+                                dt_loc = min(dt_loc, dtcell)
+                            end if
+
+                            ! --- Per-bin CFL and diffusion backstop ---
+                            do jbin = 1, ndust
+                                if (idim == 1) then
+                                    eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else if (idim == 2) then
+                                    eps_face_bin = half * (eps_arr(l,i,j-1,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else
+                                    eps_face_bin = half * (eps_arr(l,i,j,k-1,jbin) + eps_arr(l,i,j,k,jbin))
+                                end if
+                                eps_face_bin = max(eps_face_bin, 0.0_dp)
+                                t_s_face = t_s_face_arr(jbin)
+
+                                ! Dust-bin drift: w_dk = |t_sk - avg_ts| / rho * |grad_P|
+                                u_drift = abs(t_s_face - avg_ts_face) / max(rho_face, smallr) * abs(grad_P)
+                                if (u_drift > 0.0_dp) then
+                                    dtcell = courant_factor * dx / u_drift
+                                    dt_loc = min(dt_loc, dtcell)
+                                end if
+
+                                ! Parabolic (diffusion) backstop: dt <= dx^2 / (2 * D_i)
+                                ! D_i = eps_i * (1 - eps_tot) * t_s * P_face / rho_g_face
+                                D_i = eps_face_bin * (1.0_dp - eps_tot_face) * t_s_face * &
+                                    Pg_face / max(rho_g_face, smallr)
+                                if (D_i > 0.0_dp) then
+                                    dtcell = courant_factor * dx**2 / (2.0_dp * D_i)
+                                    dt_loc = min(dt_loc, dtcell)
+                                end if
+                            end do
+
+                        end do  ! l
+                    end do; end do; end do  ! i, j, k
+                end do  ! idim
+
+            end do  ! igrid (batch loop)
+        end if
+        ! ----------------------------------------------------------------
+        ! MPI global reduction and update dtnew(ilevel)
+        ! ----------------------------------------------------------------
+        dt_all = dt_loc
+#ifndef WITHOUTMPI
+        call MPI_ALLREDUCE(dt_loc, dt_all, 1, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_WORLD, info)
+#endif
+        dtnew(ilevel) = min(dtnew(ilevel), dt_all)
+
+    end subroutine get_dust_courant_dt
+
+
 
     subroutine dust_upwind_correct1(ind_grid,ncache,ilevel)
         use amr_commons
@@ -625,12 +861,11 @@ module dust_dynamics
         integer, intent(in) :: ngrid
         real(dp), intent(in) :: dx, dt
 
-        ! Stencil array dimensions bound dynamically by the active refinement level blocks
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nvar), intent(in)  :: uloc
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndust, 1:ndim), intent(out) :: dflux
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: eflux
-        ! Grain properties (sizes and material densities) [code units]
-        real(dp), dimension(1:ndust), intent(in)   :: agrain_code, sgrain_code
+        
+        real(dp), dimension(1:ndust), intent(in) :: agrain_code, sgrain_code
 
         ! ========================================================================
         ! 2. LOCAL WORKSPACE FIELDS
@@ -638,61 +873,59 @@ module dust_dynamics
         integer  :: l, i, j, k, jbin, idim
         integer  :: ilo, ihi, jlo, jhi, klo, khi
         
-        ! Cell-centered primitive caches across the localized block
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: eps, slope_dim
+        ! Cell-Centered Base Primitives
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: eps
         
-        ! Face interface working variables
-        real(dp) :: dlft, drgt, dcen, grad_P, rho_face, c_s_face, t_s_face, u_drift
-        real(dp) :: eps_L, eps_R, eps_gdnv, e_int_L, e_int_R, e_int_gdnv, flux_mass_bin
-        real(dp) :: eken, eps_tot_cell, eps_tot_L, eps_tot_R, rho_gas_cell
+        ! Arrays strictly matching Lebreuilly 2019 formulation
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: rhod_cell, w_d_cell
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: slope_rhod, slope_wd, rhod_pred
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, slope_wg, wg_pred
+        
+        real(dp) :: eken, rho_gas_cell, grad_P_cell
+        real(dp) :: dlft, drgt, dcen, theta
+        real(dp) :: rhod_state_L, rhod_state_R, w_state_L, w_state_R, w_face
+        real(dp) :: wg_state_L, wg_state_R, wg_face, Pg_upwind, H_gdnv
+        
+        real(dp), dimension(1:ndust) :: t_s_intrinsic
+        real(dp) :: avg_ts_cell
 
-        ! Initialize output flux arrays
         dflux = 0.0_dp
         eflux = 0.0_dp
 
-        ! Establish safe bounds for cell-centered loops inside the stencil buffer limits
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
 
         ! ========================================================================
-        ! STEP 1: PRIMITIVE VARIABLE & GAS DENSITY EXTRACTION (CELL-CENTERED)
+        ! STEP 1: BASE PRIMITIVE EXTRACTION
         ! ========================================================================
-        ! We compute the intrinsic gas-phase properties by stripping away the dust mass
-        ! fractions ahead of time, ensuring pressure and sound speed match Lebreuilly 2019.
         do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
-            ! Bulk mixture density: \rho = \rho_g + \sum \rho_dust
             if (condinit_kind == 'dustydiffuse') then
                 rho_mix(l,i,j,k) = 1.0_dp
             else
                 rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr) 
             end if 
             
-            ! Extract total dust fraction to solve for underlying gas content
-            eps_tot_cell = 0.0_dp
+            eps_tot(l,i,j,k) = 0.0_dp
             do jbin = 1, ndust
                 eps(l,i,j,k,jbin) = uloc(l,i,j,k,idust+jbin-1) / rho_mix(l,i,j,k) 
-                eps_tot_cell = eps_tot_cell + eps(l,i,j,k,jbin)
+                eps_tot(l,i,j,k) = eps_tot(l,i,j,k) + eps(l,i,j,k,jbin)
             end do
-            eps_tot_cell = MIN(MAX(eps_tot_cell, zero), 1.0_dp - smallr)
+            eps_tot(l,i,j,k) = MIN(MAX(eps_tot(l,i,j,k), zero), 1.0_dp - smallr)
             
-            ! True Gas Density: \rho_g = \rho * (1 - \epsilon_tot)
-            rho_gas_cell = rho_mix(l,i,j,k) * (one - eps_tot_cell)
+            rho_gas_cell = rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k))
             
-            ! Specific kinetic energy of the bulk mixture frame
             eken = 0.0_dp
             do idim = 1, ndim
                 eken = eken + uloc(l,i,j,k,idim+1)**2
             end do
             eken = half * eken / rho_mix(l,i,j,k)**2
             
-            ! Specific internal energy (belongs exclusively to the thermal gas phase)
             eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken, smallc**2/gamma/(gamma-one))
             
-            ! Gas Thermal Pressure: P_g = (\gamma - 1) * \rho_g * e_int
             if (condinit_kind == 'dustydiffuse') then
-                Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot_cell) * rho_mix(l,i,j,k)
+                Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
                 c_s(l,i,j,k) = 1.0_dp
             else
                 Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_gas_cell * eint_cell(l,i,j,k), smallr*smallc**2)
@@ -702,135 +935,224 @@ module dust_dynamics
 
 
         ! ========================================================================
-        ! MAIN DIRECTION SWEEP LOOP (idim = 1: X-sweep, 2: Y-sweep, 3: Z-sweep)
+        ! MAIN DIRECTION SWEEP LOOP
         ! ========================================================================
         do idim = 1, ndim
 
             ! ====================================================================
-            ! STEP 2: MUSCL SPATIAL RECONSTRUCTION (SLOPE LIMITING FOR ACTIVE DIRECTION)
+            ! STEP 2: CELL-CENTERED KINEMATICS (Lebreuilly 2019)
             ! ====================================================================
-            ! Evaluate localized spatial slopes along the current active direction sweep (idim)
-            ! using a standard MinMod TVD limiter constraint to preserve monotonicity.
-            ! TODO: Implement other slope limiters (e.g. Superbee, Van Leer) for
-            ! completeness.
-            slope_dim = 0.0_dp
-            do jbin = 1, ndust
-                do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
-                    if (idim == 1) then
-                        dlft = eps(l,i,j,k,jbin) - eps(l,i-1,j,k,jbin) 
-                        drgt = eps(l,i+1,j,k,jbin) - eps(l,i,j,k,jbin) 
-                    else if (idim == 2) then
-                        dlft = eps(l,i,j,k,jbin) - eps(l,i,j-1,k,jbin)
-                        drgt = eps(l,i,j+1,k,jbin) - eps(l,i,j,k,jbin)
+            ! ====================================================================
+            ! STEP 2: CELL-CENTERED KINEMATICS (Lebreuilly 2019)
+            ! ====================================================================
+            do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
+                ! 2a. Cell-Centered Pressure Gradients (using one-sided differences at stencil boundaries)
+                if (idim == 1) then
+                    if (i == iu1) then
+                        grad_P_cell = (Pg(l,i+1,j,k) - Pg(l,i,j,k)) / dx
+                    else if (i == iu2) then
+                        grad_P_cell = (Pg(l,i,j,k) - Pg(l,i-1,j,k)) / dx
                     else
-                        dlft = eps(l,i,j,k,jbin) - eps(l,i,j,k-1,jbin)
-                        drgt = eps(l,i,j,k+1,jbin) - eps(l,i,j,k,jbin)
+                        grad_P_cell = (Pg(l,i+1,j,k) - Pg(l,i-1,j,k)) / (2.0_dp * dx)
+                    end if
+                else if (idim == 2) then
+                    if (j == ju1) then
+                        grad_P_cell = (Pg(l,i,j+1,k) - Pg(l,i,j,k)) / dx
+                    else if (j == ju2) then
+                        grad_P_cell = (Pg(l,i,j,k) - Pg(l,i,j-1,k)) / dx
+                    else
+                        grad_P_cell = (Pg(l,i,j+1,k) - Pg(l,i,j-1,k)) / (2.0_dp * dx)
+                    end if
+                else
+                    if (k == ku1) then
+                        grad_P_cell = (Pg(l,i,j,k+1) - Pg(l,i,j,k)) / dx
+                    else if (k == ku2) then
+                        grad_P_cell = (Pg(l,i,j,k) - Pg(l,i,j,k-1)) / dx
+                    else
+                        grad_P_cell = (Pg(l,i,j,k+1) - Pg(l,i,j,k-1)) / (2.0_dp * dx)
+                    end if
+                end if
+
+                ! 2b. Cell-Centered Intrinsic Stopping Times
+                avg_ts_cell = 0.0_dp
+                do jbin = 1, ndust
+                    rhod_cell(l,i,j,k,jbin) = rho_mix(l,i,j,k) * eps(l,i,j,k,jbin)
+
+                    if (condinit_kind == 'dustydiffuse') then
+                        t_s_intrinsic(jbin) = 0.1_dp
+                    else if (condinit_kind == 'dustyshock') then
+                        t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(jbin)
+                    else
+                        t_s_intrinsic(jbin) = (sgrain_code(jbin) * agrain_code(jbin)) / &
+                                            max((one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k) * c_s(l,i,j,k), smallr) 
+                    end if
+                    avg_ts_cell = avg_ts_cell + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin)
+                end do
+
+                ! 2c. Cell-Centered Drift Velocities
+                if (use_w_drift_test) then
+                    do jbin = 1, ndust
+                        w_d_cell(l,i,j,k,jbin) = w_drift_test(idim)
+                    end do
+                    w_g_cell(l,i,j,k) = - (eps_tot(l,i,j,k) / max(one - eps_tot(l,i,j,k), smallr)) * w_drift_test(idim)
+                else
+                    w_g_cell(l,i,j,k) = -avg_ts_cell * grad_P_cell / max(rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k)), smallr)
+                    do jbin = 1, ndust
+                        w_d_cell(l,i,j,k,jbin) = (t_s_intrinsic(jbin) - avg_ts_cell) * grad_P_cell / rho_mix(l,i,j,k)
+                    end do
+                end if
+            end do; end do; end do; end do
+
+            ! ====================================================================
+            ! STEP 3: TVD SPATIAL SLOPES 
+            ! ====================================================================
+            slope_rhod = 0.0_dp; slope_wd = 0.0_dp; slope_wg = 0.0_dp
+            
+            if (slope_type > 0) then
+                if (slope_type == 2) then
+                    theta = 2.0_dp
+                else
+                    theta = 1.0_dp
+                end if
+                
+                do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                    ! --- Gas Drift Slope ---
+                    if (idim == 1) then
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i-1,j,k)
+                        drgt = w_g_cell(l,i+1,j,k) - w_g_cell(l,i,j,k)
+                    else if (idim == 2) then
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i,j-1,k)
+                        drgt = w_g_cell(l,i,j+1,k) - w_g_cell(l,i,j,k)
+                    else
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i,j,k-1)
+                        drgt = w_g_cell(l,i,j,k+1) - w_g_cell(l,i,j,k)
                     end if
                     dcen = half * (dlft + drgt)
-                    
-                    if (dlft * drgt <= 0.0_dp) then 
-                        slope_dim(l,i,j,k,jbin) = 0.0_dp 
-                    else
-                        slope_dim(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(abs(dlft), abs(drgt)) 
+                    if (dlft * drgt <= zero) then; slope_wg(l,i,j,k) = zero
+                    else; slope_wg(l,i,j,k) = sign(one, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
                     end if
+
+                    ! --- Dust Density & Drift Slopes ---
+                    do jbin = 1, ndust
+                        ! Rho_d Slope
+                        if (idim == 1) then
+                            dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i-1,j,k,jbin) 
+                            drgt = rhod_cell(l,i+1,j,k,jbin) - rhod_cell(l,i,j,k,jbin) 
+                        else if (idim == 2) then
+                            dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j-1,k,jbin)
+                            drgt = rhod_cell(l,i,j+1,k,jbin) - rhod_cell(l,i,j,k,jbin)
+                        else
+                            dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
+                            drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
+                        end if
+                        dcen = half * (dlft + drgt)
+                        if (dlft * drgt <= 0.0_dp) then; slope_rhod(l,i,j,k,jbin) = 0.0_dp
+                        else; slope_rhod(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+                        end if
+
+                        ! Velocity Slope (Delta w_sigma)
+                        if (idim == 1) then
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i-1,j,k,jbin) 
+                            drgt = w_d_cell(l,i+1,j,k,jbin) - w_d_cell(l,i,j,k,jbin) 
+                        else if (idim == 2) then
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j-1,k,jbin)
+                            drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
+                        else
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j,k-1,jbin)
+                            drgt = w_d_cell(l,i,j,k+1,jbin) - w_d_cell(l,i,j,k,jbin)
+                        end if
+                        dcen = half * (dlft + drgt)
+                        if (dlft * drgt <= 0.0_dp) then; slope_wd(l,i,j,k,jbin) = 0.0_dp
+                        else; slope_wd(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+                        end if
+                    end do
                 end do; end do; end do; end do
-            end do
+            end if
 
 
             ! ====================================================================
-            ! STEP 3: PREDICTOR STEP & RIEMANN UPWINDING AT INTERFACES
+            ! STEP 4: POINT 1 - TEMPORAL PREDICTOR (INCLUDING COMPRESSIBILITY)
             ! ====================================================================
-            ! Adjust index bounds to process face boundaries exactly along the active sweep line.
+            do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                ! Predictor for Dust Density (w * grad_rho + rho * grad_w)
+                do jbin = 1, ndust
+                    rhod_pred(l,i,j,k,jbin) = rhod_cell(l,i,j,k,jbin) - 0.5_dp * (dt / dx) * &
+                        (w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin) + rhod_cell(l,i,j,k,jbin) * slope_wd(l,i,j,k,jbin))
+                    rhod_pred(l,i,j,k,jbin) = MAX(rhod_pred(l,i,j,k,jbin), 0.0_dp)
+                end do
+            end do; end do; end do; end do
+
+            ! ====================================================================
+            ! STEP 5: POINTS 2, 3 & 4 - INTERFACE RECONSTRUCTION & UPWIND FLUX
+            ! ====================================================================
             do k = ifind_klo(idim, klo, kf1), ifind_khi(idim, khi, kf2)
             do j = ifind_jlo(idim, jlo, jf1), ifind_jhi(idim, jhi, jf2)
             do i = ifind_ilo(idim, ilo, if1), ifind_ihi(idim, ihi, if2)
                 do l = 1, ngrid
                     
-                    ! 1. Compute gas pressure gradient normal to the interface
+                    ! --- A. GAS ENTHALPY FLUX ---
+                    ! Reconstruct L and R states for the gas drift at the face
                     if (idim == 1) then
-                        grad_P = (Pg(l,i,j,k) - Pg(l,i-1,j,k)) / dx 
-                        rho_face = half * (rho_mix(l,i-1,j,k) + rho_mix(l,i,j,k)) 
-                        c_s_face = half * (c_s(l,i-1,j,k) + c_s(l,i,j,k)) 
-                        eps_tot_L = sum(eps(l,i-1,j,k,:)) 
-                        eps_tot_R = sum(eps(l,i,j,k,:)) 
+                        wg_state_L = w_g_cell(l,i-1,j,k) + half * slope_wg(l,i-1,j,k)
+                        wg_state_R = w_g_cell(l,i,j,k)   - half * slope_wg(l,i,j,k)
                     else if (idim == 2) then
-                        grad_P = (Pg(l,i,j,k) - Pg(l,i,j-1,k)) / dx
-                        rho_face = half * (rho_mix(l,i,j-1,k) + rho_mix(l,i,j,k))
-                        c_s_face = half * (c_s(l,i,j-1,k) + c_s(l,i,j,k))
-                        eps_tot_L = sum(eps(l,i,j-1,k,:))
-                        eps_tot_R = sum(eps(l,i,j,k,:))
+                        wg_state_L = w_g_cell(l,i,j-1,k) + half * slope_wg(l,i,j-1,k)
+                        wg_state_R = w_g_cell(l,i,j,k)   - half * slope_wg(l,i,j,k)
                     else
-                        grad_P = (Pg(l,i,j,k) - Pg(l,i,j,k-1)) / dx
-                        rho_face = half * (rho_mix(l,i,j,k-1) + rho_mix(l,i,j,k))
-                        c_s_face = half * (c_s(l,i,j,k-1) + c_s(l,i,j,k))
-                        eps_tot_L = sum(eps(l,i,j,k-1,:))
-                        eps_tot_R = sum(eps(l,i,j,k,:))
+                        wg_state_L = w_g_cell(l,i,j,k-1) + half * slope_wg(l,i,j,k-1)
+                        wg_state_R = w_g_cell(l,i,j,k)   - half * slope_wg(l,i,j,k)
                     end if
-
-                    ! Interface internal energies (to be upwinded for the secondary energy flux update)
-                    if (idim == 1) then
-                        e_int_L = eint_cell(l,i-1,j,k); e_int_R = eint_cell(l,i,j,k)
-                    else if (idim == 2) then
-                        e_int_L = eint_cell(l,i,j-1,k); e_int_R = eint_cell(l,i,j,k)
+                    
+                    ! Point 3: Unique Averaged Face Velocity
+                    wg_face = 0.5_dp * (wg_state_L + wg_state_R)
+                    
+                    ! Upwind Thermal Pressure based on face velocity
+                    if (wg_face >= 0.0_dp) then
+                        if (idim == 1) then; Pg_upwind = Pg(l,i-1,j,k)
+                        else if (idim == 2) then; Pg_upwind = Pg(l,i,j-1,k)
+                        else; Pg_upwind = Pg(l,i,j,k-1)
+                        end if
                     else
-                        e_int_L = eint_cell(l,i,j,k-1); e_int_R = eint_cell(l,i,j,k)
+                        Pg_upwind = Pg(l,i,j,k)
                     end if
+                    
+                    H_gdnv = (gamma / (gamma - 1.0_dp)) * Pg_upwind
+                    eflux(l,i,j,k,idim) = wg_face * H_gdnv * (dt / dx)
 
-                    ! 2. Multi-bin Loop for Predictor and Riemann Flux evaluation
+
+                    ! --- B. DUST MASS FLUX ---
                     do jbin = 1, ndust
-                        ! Epstein drag regime stopping time at the face interface:
-                        ! t_s = (\rho_solid * a) / (\rho_g * c_s) where \rho_g = (1 - \epsilon_tot) * \rho
-                        if (condinit_kind == 'dustydiffuse') then
-                            t_s_face = 0.1_dp
-                        else
-                            t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / max((one - eps_tot_L) * rho_face * c_s_face, smallr) 
-                        end if
-                        
-                        ! Lebreuilly et al. (2019) Differential Drift Velocity:
-                        ! w_drift = (1 - \epsilon_tot) * t_s * (\nabla P_g / \rho)
-                        if (use_w_drift_test) then
-                            u_drift = w_drift_test(idim)
-                        else
-                            u_drift  = (one - half * (eps_tot_L + eps_tot_R)) * t_s_face * grad_P / rho_face 
-                        end if
-                        
-                        ! Hancock Reconstructions: Predict time-centered (\Delta t / 2) boundary values
+                        ! Point 2: Interpolate rho_d and w to the interfaces
                         if (idim == 1) then
-                            eps_L = eps(l,i-1,j,k,jbin) + half * slope_dim(l,i-1,j,k,jbin) - &
-                                    (0.5_dp * dt / dx) * u_drift * slope_dim(l,i-1,j,k,jbin) 
-                            eps_R = eps(l,i,j,k,jbin)   - half * slope_dim(l,i,j,k,jbin)   - &
-                                    (0.5_dp * dt / dx) * u_drift * slope_dim(l,i,j,k,jbin) 
+                            rhod_state_L = rhod_pred(l,i-1,j,k,jbin) + half * slope_rhod(l,i-1,j,k,jbin)
+                            rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i-1,j,k,jbin)  + half * slope_wd(l,i-1,j,k,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin)    - half * slope_wd(l,i,j,k,jbin)
                         else if (idim == 2) then
-                            eps_L = eps(l,i,j-1,k,jbin) + half * slope_dim(l,i,j-1,k,jbin) - &
-                                    (0.5_dp * dt / dx) * u_drift * slope_dim(l,i,j-1,k,jbin)
-                            eps_R = eps(l,i,j,k,jbin)   - half * slope_dim(l,i,j,k,jbin)   - &
-                                    (0.5_dp * dt / dx) * u_drift * slope_dim(l,i,j,k,jbin)
+                            rhod_state_L = rhod_pred(l,i,j-1,k,jbin) + half * slope_rhod(l,i,j-1,k,jbin)
+                            rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i,j-1,k,jbin)  + half * slope_wd(l,i,j-1,k,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin)    - half * slope_wd(l,i,j,k,jbin)
                         else
-                            eps_L = eps(l,i,j,k-1,jbin) + half * slope_dim(l,i,j,k-1,jbin) - &
-                                    (0.5_dp * dt / dx) * u_drift * slope_dim(l,i,j,k-1,jbin)
-                            eps_R = eps(l,i,j,k,jbin)   - half * slope_dim(l,i,j,k,jbin)   - &
-                                    (0.5_dp * dt / dx) * u_drift * slope_dim(l,i,j,k,jbin)
+                            rhod_state_L = rhod_pred(l,i,j,k-1,jbin) + half * slope_rhod(l,i,j,k-1,jbin)
+                            rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i,j,k-1,jbin)  + half * slope_wd(l,i,j,k-1,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin)    - half * slope_wd(l,i,j,k,jbin)
                         end if
 
-                        ! Hyperbolic Upwind Riemann Selector based on sign of drift speed:
-                        if (u_drift >= 0.0_dp) then 
-                            eps_gdnv   = eps_L 
-                            e_int_gdnv = e_int_L   ! Energy upwinding follows mass transport path
+                        ! Safety clamp
+                        rhod_state_L = MAX(rhod_state_L, 0.0_dp)
+                        rhod_state_R = MAX(rhod_state_R, 0.0_dp)
+
+                        ! Point 3: Unique Averaged Face Velocity
+                        w_face = 0.5_dp * (w_state_L + w_state_R)
+
+                        ! Point 4: Upwind Method for Flux Estimation
+                        if (w_face >= 0.0_dp) then 
+                            dflux(l,i,j,k,jbin,idim) = w_face * rhod_state_L * (dt / dx)
                         else
-                            eps_gdnv   = eps_R 
-                            e_int_gdnv = e_int_R
+                            dflux(l,i,j,k,jbin,idim) = w_face * rhod_state_R * (dt / dx)
                         end if
-                        
-                        ! ================================================================
-                        ! STEP 4: CORRECTOR FLUX ASSEMBLY
-                        ! ================================================================
-                        ! Formulate conservative transport mass flux scaled by volume limits:
-                        flux_mass_bin = u_drift * rho_face * eps_gdnv * (dt / dx) 
-                        dflux(l,i,j,k,jbin,idim) = flux_mass_bin 
-                        
-                        ! Simultaneously stack the energy component of F_Delta into the eflux accumulator:
-                        ! Flux_energy = Flux_mass * internal_energy (using internal energy instead of dust density)
-                        eflux(l,i,j,k,idim) = eflux(l,i,j,k,idim) + flux_mass_bin * e_int_gdnv
                     end do
 
                 end do
@@ -1563,11 +1885,11 @@ module dust_dynamics
                         flux_mass_bin = u_drift * rho_face * eps_gdnv * (dt / dx) 
                         dflux(l,i,j,k,jbin,idim) = flux_mass_bin
 
-                        ! Momentum flux (back-reaction of dirft on the mixture)
+                        ! Momentum flux (back-reaction of drift on the mixture)
                         mflux(l,i,j,k,idim) = mflux(l,i,j,k,idim) + flux_mass_bin * u_drift * (1.0_dp - eps_tot_face)
                         
                         eflux(l,i,j,k,idim) = eflux(l,i,j,k,idim) + flux_mass_bin * e_int_gdnv &
-                                            + (half * mflux(l,i,j,k,idim) * u_drift)
+                                            + half * (flux_mass_bin * u_drift * (1.0_dp - eps_tot_face)) * u_drift
                     end do
 
                 end do

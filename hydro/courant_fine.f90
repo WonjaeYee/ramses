@@ -188,8 +188,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   use hydro_parameters
   use const
 #ifdef CALIMA
-  use dust_commons, only: dust_tva, ndust, use_w_drift_test, w_drift_test
-  use dust_dynamics, only: cmpdt_dust_diffusion
+  use dust_commons, only: dust_tva, ndust
 #endif
   implicit none
   integer::ncell
@@ -203,11 +202,8 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   integer::irad
 #endif
 
-  ! Local scratch arrays to safely cache variables before they are overwritten
-  real(dp),dimension(1:nvector)::rho_save, p_save, cs_save
 #ifdef CALIMA
   real(dp)::eps_total, rho_gas
-  real(dp),dimension(1:nvector,1:ndust)::rho_dust_save
   integer :: id
 #endif
 
@@ -216,7 +212,6 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   ! Convert to primitive variables
   do k = 1,ncell
      uu(k,1)=max(uu(k,1),smallr)
-     rho_save(k)=uu(k,1)             ! Cache mixture density
   end do
   ! Velocity
   do idim = 1,ndim
@@ -254,6 +249,9 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   end if
 
   ! Compute pressure
+  ! NOTE: uu(k,1) still holds the original mixture density here (not yet
+  !       overwritten by the gravity-ratio step below), so it can safely
+  !       be used in place of the removed rho_save cache.
   do k = 1, ncell
 #ifndef CALIMA
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
@@ -261,16 +259,15 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
      if (dust_tva .and. ndust>0) then
         eps_total=0.0d0
         do id = 1,ndust
-           eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+           eps_total=eps_total+uu(k,idust+id-1)/uu(k,1)
         end do
         eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-        rho_gas = rho_save(k)*(1.0d0-eps_total)
+        rho_gas = uu(k,1)*(1.0d0-eps_total)
         uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
      else
         uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
      end if
 #endif
-     p_save(k) = uu(k,neul)          ! Cache gas thermal pressure
   end do
 #if NENER>0
   do irad = 1,nener
@@ -298,10 +295,10 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
       if (dust_tva .and. ndust>0) then
          eps_total=0.0d0
          do id = 1,ndust
-            eps_total=eps_total+uu(k,idust+id-1)/rho_save(k)
+            eps_total=eps_total+uu(k,idust+id-1)/uu(k,1)
          end do
          eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
-         rho_gas = rho_save(k)*(1.0d0-eps_total)
+         rho_gas = uu(k,1)*(1.0d0-eps_total)
          if (condinit_kind == 'dustydiffuse') then
             uu(k,neul) = 1.0d0
          else
@@ -311,7 +308,6 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
          uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
       end if
 #endif
-     cs_save(k) = uu(k,neul)         ! Cache mixture sound speed
   end do
 
   ! Compute wave speed
@@ -345,19 +341,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
      dt = min(dt,dtcell)
   end do
 
-#ifdef CALIMA
-  if (dust_tva .and. ndust>0) then
-   ! CALIMA MODIFICATION: Explicit Parabolic Diffusion Timestep Constraint
-   call cmpdt_dust_diffusion(rho_save,rho_dust_save,p_save,cs_save,dx,dt,ncell)
-   if (use_w_drift_test) then
-      do id=1,ndim
-         if (abs(w_drift_test(id)) > 0.0_dp) then
-            dt = min(dt, courant_factor * dx / abs(w_drift_test(id)))
-         end if
-      end do
-   end if
-  end if
-#endif
+  ! Dust TVA CFL is now enforced by get_dust_courant_dt, called from newdt_fine.f90.
 
 end subroutine cmpdt
 !###########################################################
@@ -370,8 +354,8 @@ subroutine cmpdt_dust(uu,gg,ur,dx,dt,ncell,ilevel)
   use hydro_parameters
   use const
   use constants, only: eV2erg, mCO
-  use dust_commons, only: dust_tva, dust_radpressure, ndust, use_w_drift_test, w_drift_test, GD_solar
-  use dust_dynamics, only: cmpdt_dust_diffusion, cmpdt_dust_dynamics
+  use dust_commons, only: dust_tva, dust_radpressure, ndust, GD_solar
+  use dust_dynamics, only: cmpdt_dust_dynamics
   use molecules_module, only: comp_Sd, comp_SH2
   use rtz_module, only: elements, n_elements, getNe, getMu_RTZ
   use rt_parameters, only: nGroups, iGroups, rt_c_cgs, group_egy, rtz_UV_background_G0, isH2_rtz, iIons, rt_advect, nrtvar
@@ -615,16 +599,7 @@ subroutine cmpdt_dust(uu,gg,ur,dx,dt,ncell,ilevel)
 
       call cmpdt_dust_dynamics(rho_save,nElement,xion,rho_dust_save,rho_pah_save,&
                                &p_save,cs_save,ur,dx,dt,ncell,ilevel,Tk,ne,G0,f_shd)
-   else
-      ! CALIMA MODIFICATION: Explicit Parabolic Diffusion Timestep Constraint
-      call cmpdt_dust_diffusion(rho_save,rho_dust_save,p_save,cs_save,dx,dt,ncell)
-      if (use_w_drift_test) then
-         do id=1,ndim
-            if (abs(w_drift_test(id)) > 0.0_dp) then
-               dt = min(dt, courant_factor * dx / abs(w_drift_test(id)))
-            end if
-         end do
-      end if
+      ! Dust TVA CFL (non-radpressure path) now handled by get_dust_courant_dt.
    end if
 end subroutine cmpdt_dust
 #endif

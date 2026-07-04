@@ -1147,7 +1147,7 @@ module dust_init
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
-                dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,&
+                dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,drag_coefficient,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,&
                 ! PAH modelling options
