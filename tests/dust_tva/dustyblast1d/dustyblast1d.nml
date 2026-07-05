@@ -25,19 +25,19 @@ bound_type= 1, 1
 condinit_kind='dustyshock'
 nregion=2
 region_type(1)='square'
-region_type(2)='square'
-x_center=0.25,0.75
-length_x=0.5,0.5
-d_region=1.0,0.125
+region_type(2)='point'
+x_center=0.5,0.0
+length_x=1.0,1.0
+d_region=1.0,0.0
 u_region=0.0,0.0
-p_region=1.0,0.1
-var_region(1,1)=0.5d0
-var_region(2,1)=0.5d0
+p_region=1d-5,0.6
+var_region(1,1)=0.01d0
+var_region(2,1)=0.01d0
 /
 
 &OUTPUT_PARAMS
 noutput=1
-tout=0.245
+tout=0.4
 /
 
 &HYDRO_PARAMS
@@ -58,7 +58,7 @@ err_grad_var(1)=0.05
 
 &CALIMA_PARAMS
 dust_tva=.true.
-drag_coefficient=10000
+drag_coefficient=100
 dust_composition(1,6) = 1d0
 dustbins_per_chemtype=1
 asize=0.1d0 ! Grain size bin centre [microns]

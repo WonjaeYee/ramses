@@ -551,6 +551,8 @@ module dust_dynamics
                                 else if (condinit_kind == 'dustyshock') then
                                     ! t_s_k = rho_dk / K = eps_k * rho / K
                                     t_s_face = eps_face_bin * rho_face / drag_coefficient(jbin)
+                                else if (condinit_kind == 'dustyblast1d') then
+                                    t_s_face = 6d-3
                                 else
                                     ! Epstein: t_s = (rho_solid * a) / (rho_g * cs)
                                     t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / &
@@ -982,6 +984,8 @@ module dust_dynamics
                         t_s_intrinsic(jbin) = 0.1_dp
                     else if (condinit_kind == 'dustyshock') then
                         t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(jbin)
+                    else if (condinit_kind == 'dustyblast1d') then
+                        t_s_intrinsic(jbin) = 6d-3
                     else
                         t_s_intrinsic(jbin) = (sgrain_code(jbin) * agrain_code(jbin)) / &
                                             max((one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k) * c_s(l,i,j,k), smallr) 
@@ -1141,14 +1145,14 @@ module dust_dynamics
                         end if
 
                         ! Safety clamp
-                        rhod_state_L = MAX(rhod_state_L, 0.0_dp)
-                        rhod_state_R = MAX(rhod_state_R, 0.0_dp)
+                        rhod_state_L = MAX(rhod_state_L, zero)
+                        rhod_state_R = MAX(rhod_state_R, zero)
 
                         ! Point 3: Unique Averaged Face Velocity
-                        w_face = 0.5_dp * (w_state_L + w_state_R)
+                        w_face = half * (w_state_L + w_state_R)
 
                         ! Point 4: Upwind Method for Flux Estimation
-                        if (w_face >= 0.0_dp) then 
+                        if (w_face >= zero) then 
                             dflux(l,i,j,k,jbin,idim) = w_face * rhod_state_L * (dt / dx)
                         else
                             dflux(l,i,j,k,jbin,idim) = w_face * rhod_state_R * (dt / dx)
