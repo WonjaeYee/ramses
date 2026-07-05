@@ -56,18 +56,22 @@ module dust_rates
         end if
     end subroutine ensure_rate_caches
 
-    subroutine compute_rate_caches(dust_info)
+    subroutine compute_rate_caches(dust_info, nElement)
         ! Compute and cache relative velocities, sticking probabilities, and shattered
         ! fragment distributions for all grain pairs to avoid redundant computations inside
         ! the ODE solver RHS evaluations.
         ! dust_info --> DustChemistryInfo type with the current cell's physical properties.
         use dust_dynamics, only: grain_relative_velocity
         class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: nElement(:)
         integer :: ii, kk, jj, pp, C_index, ii1, ii2, kk_loc, dust_start, dust_end
         real(dp) :: temp_sigma, temp_L
-        real(dp) :: v_rel, v_coag, enhan_factor, p_stick
+        real(dp) :: v_rel, v_coag, p_stick
         real(dp) :: reduced_mass, v_stick_thresh
         logical :: interact_pah_flag
+        
+        real(dp) :: nO, vth, N_mono, f_ice_ii, enhan_factor_pair
+        real(dp), dimension(1:max(1, dust_info%ndust)) :: enhan_factor
         
         call ensure_rate_caches(dust_info)
         
@@ -79,16 +83,28 @@ module dust_rates
             temp_L = dust_info%local_dx
         end if
 
+        if (poppe_ice_enhancement) then
+            if (size(nElement) >= 8) then
+                nO = nElement(8)
+            else
+                nO = 0d0
+            end if
+            vth = 3624.65d0 * sqrt(dust_info%local_Tk)
+            N_mono = 2d0 * nO * vth / (max(dust_info%local_G0, 1d-5) * 3d5)
+            do ii = 1, dust_info%ndust
+                if (dust_info%T_dust(ii) >= 100d0) then
+                    f_ice_ii = 0d0
+                else
+                    f_ice_ii = 1d0 - exp(-N_mono)
+                end if
+                enhan_factor(ii) = 1d0 + 3d0 * f_ice_ii
+            end do
+        end if
+
         ! 1. Cache dust-dust relative velocities and sticking probabilities
         do jj = 1, ndchemtype
             ii1 = istart_chemtype(jj)
             ii2 = ii1 + dustbins_per_chemtype(jj) - 1
-            
-            ! Ice enhancement factor for coagulation
-            if (poppe_ice_enhancement) then
-                enhan_factor = (1d0-sigmoid_function(4d0,log10(dustbins_props(ii1)%nhmax_acc),log10(dust_info%local_nH))) + &
-                                sigmoid_function(4d0,log10(dustbins_props(ii1)%nhmax_acc),log10(dust_info%local_nH)) * 4d0
-            end if
 
             do ii = ii1, ii2
                 do kk = ii, ii2
@@ -109,7 +125,8 @@ module dust_rates
                         if (kk_loc <= size(dustbins_props(ii)%vthresh_coag)) then
                             v_coag = dustbins_props(ii)%vthresh_coag(kk_loc)
                             if (poppe_ice_enhancement) then
-                                v_coag = enhan_factor * v_coag
+                                enhan_factor_pair = 0.5d0 * (enhan_factor(ii) + enhan_factor(kk))
+                                v_coag = enhan_factor_pair * v_coag
                             end if
                             p_stick = sticking_probability_from_velocity(v_rel, v_coag)
                         else
@@ -189,6 +206,7 @@ module dust_rates
         real(dp), dimension(:), intent(out) :: chi_frag_pah_out
 
         integer :: pp_local, ll_local, ii1, ii2, nearest_idx
+        integer :: global_ii1, global_ii2, ll_global
         real(dp) :: E_imp, phi, m_ej, m_remnant, m_max, m_min
         real(dp) :: prefactor, m_tot, denom, logdist, min_logdist
         logical :: remnant_assigned
@@ -197,6 +215,9 @@ module dust_rates
 
         ii1 = lbound(chi_frag_out, 1)
         ii2 = ubound(chi_frag_out, 1)
+
+        global_ii1 = istart_chemtype(dustbins_props(id1)%interact_group)
+        global_ii2 = global_ii1 + dustbins_per_chemtype(dustbins_props(id1)%interact_group) - 1
 
         v_rel_out = cached_v_rel_dust_dust(id1, id2)
 
@@ -234,9 +255,8 @@ module dust_rates
                     chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             else
-#endif
-                if (m_min < dustbins_props(ii1)%mgrain_min) then
-                    chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                if (m_min < dustbins_props(global_ii1)%mgrain_min) then
+                    chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
 #if NPAH > 0
             end if
@@ -258,11 +278,12 @@ module dust_rates
 
         if (prefactor > 0d0) then
             do ll_local = ii1, ii2
-                if ((m_min.ge.dustbins_props(ll_local)%mgrain_max).or.(m_max<dustbins_props(ll_local)%mgrain_min)) then
+                ll_global = ll_local + global_ii1 - ii1
+                if ((m_min.ge.dustbins_props(ll_global)%mgrain_max).or.(m_max<dustbins_props(ll_global)%mgrain_min)) then
                     chi_frag_out(ll_local) = 0d0
                 else
-                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_local)%mgrain_max,m_max)**slope_frag_func - &
-                                                max(dustbins_props(ll_local)%mgrain_min,m_min)**slope_frag_func)
+                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_global)%mgrain_max,m_max)**slope_frag_func - &
+                                                max(dustbins_props(ll_global)%mgrain_min,m_min)**slope_frag_func)
                 end if
             end do
         end if
@@ -280,9 +301,9 @@ module dust_rates
             end if
 
             if (.not. remnant_assigned) then
-                if ((ii1 <= id1) .and. (id1 <= ii2)) then
+                if ((global_ii1 <= id1) .and. (id1 <= global_ii2)) then
                     if ((dustbins_props(id1)%mgrain_min <= m_remnant) .and. (m_remnant <= dustbins_props(id1)%mgrain_max)) then
-                        chi_frag_out(id1) = chi_frag_out(id1) + m_remnant
+                        chi_frag_out(id1 - global_ii1 + ii1) = chi_frag_out(id1 - global_ii1 + ii1) + m_remnant
                         remnant_assigned = .true.
                     end if
                 end if
@@ -290,7 +311,8 @@ module dust_rates
 
             if (.not. remnant_assigned) then
                 do ll_local = ii1, ii2
-                    if ((dustbins_props(ll_local)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_local)%mgrain_max)) then
+                    ll_global = ll_local + global_ii1 - ii1
+                    if ((dustbins_props(ll_global)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_global)%mgrain_max)) then
                         chi_frag_out(ll_local) = chi_frag_out(ll_local) + m_remnant
                         remnant_assigned = .true.
                         exit
@@ -300,9 +322,10 @@ module dust_rates
 
             if (.not. remnant_assigned) then
                 nearest_idx = ii1
-                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ii1)%mgrain))
+                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(global_ii1)%mgrain))
                 do ll_local = ii1 + 1, ii2
-                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_local)%mgrain))
+                    ll_global = ll_local + global_ii1 - ii1
+                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_global)%mgrain))
                     if (logdist < min_logdist) then
                         min_logdist = logdist
                         nearest_idx = ll_local
@@ -333,7 +356,7 @@ module dust_rates
         ! dydt_gas  <--> 2D array with the time derivative of the gas phase abundances [g cm-3 s-1]
         ! dydt_dust <--> 1D array with the time derivative of the dust phase abundances [g cm-3 s-1]
         ! kmax      --> Maximum allowed rate for the process (optional output)
-        
+        use dust_surface_chemistry, only: ice_sticking_coefficient
         implicit none
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
@@ -345,14 +368,15 @@ module dust_rates
         integer :: jj, ii, ii1, ii2, kk, e_index
         integer :: n_el
         real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
-        real(dp) :: tacc_max, sfunc, tacc_log
-        real(dp),dimension(1:ndust) :: correction_factors
-        real(dp) :: diff_rate, diff_rho, diff_nH, diff_T
-        real(dp) :: total_rate_type
+        real(dp) :: total_rate_type, sticking_ice,nO
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
-        tacc_max = 5d0
+#ifdef RTZ
+        nO = y_gas(8,1) / elements(8)%atomic_mass_g
+#else
+        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+#endif
 
         speciesloop: do jj = 1, ndchemtype
             ! 1. Loop over the dust chemical species.
@@ -361,7 +385,6 @@ module dust_rates
 
             associate(bin => dustbins_props(ii1))
                 n_el = bin%nelements
-                sfunc = sigmoid_function(tacc_max,bin%nhmax_acc,dust_info%local_nH)
 
                 if (n_el == 1) then
                     ! 2. A single-element chemistry type has a limiter.
@@ -383,16 +406,8 @@ module dust_rates
                 ! 4. Apply the same limiting rate to every dust bin in the chemical type.
                 total_rate_type = 0d0
                 do ii = ii1, ii2
-                    rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor ! [s-1]
-                    ! TODO: Code a nCO based icing to figure this out
-                    ! Apply the same nhmax_acc smoothing used in compute_t_accretion,
-                    ! but in rate form via the equivalent smoothed timescale.
-                    if (rate > 0d0 .and. sfunc > 0d0) then
-                        tacc_log = log10(1d0 / (rate * Myr2sec))
-                        tacc_log = (1d0 - sfunc) * tacc_log + sfunc * tacc_max
-                        rate = 1d0 / (exp(tacc_log * ln10) * Myr2sec)
-                    end if
-
+                    sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
+                    rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
                     ! 5. Get the maximum rate computed here, if requested.
                     if (present(kmax)) then
                         kmax = max(kmax, abs(rate))
@@ -409,6 +424,92 @@ module dust_rates
             end associate
         end do speciesloop
     end subroutine LeBourlot2012_accretion_rate
+
+    subroutine coulomb_accretion_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
+        ! Compute the accretion rate of dust grains in the unrestricted case, incorporating the effect of 
+        ! grain charge interaction with ions. We use the sticking coefficient from Le Bourlot et al. (2012)
+        ! dust_info --> DustChemistryInfo type with all the necessary information to compute the accretion rate.
+        ! y_gas     --> 2D array with the gas phase abundances [g cm-3]
+        ! y_dust    --> 1D array with the dust phase abundances [g cm-3]
+        ! dydt_gas  <--> 2D array with the time derivative of the gas phase abundances [g cm-3 s-1]
+        ! dydt_dust <--> 1D array with the time derivative of the dust phase abundances [g cm-3 s-1]
+        ! kmax      --> Maximum allowed rate for the process (optional output)
+        use dust_surface_chemistry, only: ice_sticking_coefficient
+        implicit none
+        ! ---- Input/Output variables ----
+        class(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout), optional :: kmax
+
+        ! ---- Local variables ----
+        integer :: jj, ii, ii1, ii2, kk, e_index, iion, izion, nions_loc
+        integer :: n_el
+        real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
+        real(dp) :: sticking_ice, nO, depletion
+
+        Tk_loc = dust_info%local_Tk
+        prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
+#ifdef RTZ
+        nO = y_gas(8,1) / elements(8)%atomic_mass_g
+#else
+        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+#endif
+
+        speciesloop: do jj = 1, ndchemtype
+            ! 1. Loop over the dust chemical species.
+            ii1 = istart_chemtype(jj) 
+            ii2 = ii1 + dustbins_per_chemtype(jj) - 1
+
+            associate(bin => dustbins_props(ii1))
+                n_el = bin%nelements
+
+                if (n_el == 1) then
+                    ! 2. A single-element chemistry type has a limiter.
+                    e_index = bin%el_index(1)
+                    limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
+                else
+                    ! 3. Find the limiting element in a single pass, without a temporary array.
+                    e_index = bin%el_index(1)
+                    limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
+                    do kk = 2, n_el
+                        e_index = bin%el_index(kk)
+                        pseudo_rate = y_gas(e_index,1) / (bin%el_mfractions(kk) * sqrt(bin%el_atomic_masses_g(kk)))
+                        if (pseudo_rate < limit_rate) then
+                            limit_rate = pseudo_rate
+                        end if
+                    end do
+                end if
+
+                do ii = ii1, ii2
+                    ! 4. Compute accretion rate for this dust bin
+                    sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
+                    rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
+                    rate = min(rate, max_accretion_rate)
+                    if (present(kmax)) then
+                        kmax = max(kmax, abs(rate))
+                    end if
+                    rate = rate * y_dust(ii+dust_info%npah) ! [g cm-3 s-1]
+                    dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate  ! [g cm-3 s-1]
+
+                    ! 5. Update gas phase elements and their ions
+                    do kk = 1, n_el
+                        e_index = bin%el_index(kk)
+                        nions_loc = n_elements
+#ifdef RTZ
+                        nions_loc = max(1, elements(e_index)%n_ions)
+#endif
+                        do iion = 1, nions_loc
+                            izion = iion - 1
+                            depletion = rate * bin%el_mfractions(kk) * y_gas(e_index, iion+1)
+                            dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
+                            dydt_gas(e_index, 1) = dydt_gas(e_index, 1) - depletion
+                        end do
+                    end do
+                end do
+            end associate
+        end do speciesloop
+    end subroutine coulomb_accretion_rate
 
     subroutine Aoyama2017_coagulation_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
         ! Compute the coagulation rate of dust grains following Aoyama et al. (2017).
@@ -1019,6 +1120,7 @@ module dust_rates
         real(dp), dimension(:), intent(out) :: chi_frag_pah_out
 
         integer :: pp_local, ll_local, ii1, ii2, nearest_idx
+        integer :: global_ii1, global_ii2, ll_global
         real(dp) :: E_imp, phi, m_ej, m_remnant, m_max, m_min
         real(dp) :: prefactor, m_tot, denom, logdist, min_logdist
         logical :: remnant_assigned
@@ -1027,6 +1129,9 @@ module dust_rates
         ! Infer ii1 and ii2 from the bounds of the output arrays
         ii1 = lbound(chi_frag_out, 1)
         ii2 = ubound(chi_frag_out, 1)
+
+        global_ii1 = istart_chemtype(dustbins_props(id1)%interact_group)
+        global_ii2 = global_ii1 + dustbins_per_chemtype(dustbins_props(id1)%interact_group) - 1
 
         ! 1. Compute the relative velocity of two grains
         v_rel_out = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
@@ -1074,9 +1179,8 @@ module dust_rates
                     chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
                 end if
             else
-#endif
-                if (m_min < dustbins_props(ii1)%mgrain_min) then
-                    chi_frag_dest_out = prefactor * (min(dustbins_props(ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                if (m_min < dustbins_props(global_ii1)%mgrain_min) then
+                    chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
 #if NPAH > 0
             end if
@@ -1100,11 +1204,12 @@ module dust_rates
         ! 7. Ejecta contribution in dust bins of the chemical type (can include id1/id2 bins)
         if (prefactor > 0d0) then
             do ll_local = ii1, ii2
-                if ((m_min.ge.dustbins_props(ll_local)%mgrain_max).or.(m_max<dustbins_props(ll_local)%mgrain_min)) then
+                ll_global = ll_local + global_ii1 - ii1
+                if ((m_min.ge.dustbins_props(ll_global)%mgrain_max).or.(m_max<dustbins_props(ll_global)%mgrain_min)) then
                     chi_frag_out(ll_local) = 0d0
                 else
-                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_local)%mgrain_max,m_max)**slope_frag_func - &
-                                                max(dustbins_props(ll_local)%mgrain_min,m_min)**slope_frag_func)
+                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_global)%mgrain_max,m_max)**slope_frag_func - &
+                                                max(dustbins_props(ll_global)%mgrain_min,m_min)**slope_frag_func)
                 end if
             end do
         end if
@@ -1124,10 +1229,9 @@ module dust_rates
             end if
 
             if (.not. remnant_assigned) then
-                ! First try the impact bin explicitly to avoid systematic down-binning.
-                if ((ii1 <= id1) .and. (id1 <= ii2)) then
+                if ((global_ii1 <= id1) .and. (id1 <= global_ii2)) then
                     if ((dustbins_props(id1)%mgrain_min <= m_remnant) .and. (m_remnant <= dustbins_props(id1)%mgrain_max)) then
-                        chi_frag_out(id1) = chi_frag_out(id1) + m_remnant
+                        chi_frag_out(id1 - global_ii1 + ii1) = chi_frag_out(id1 - global_ii1 + ii1) + m_remnant
                         remnant_assigned = .true.
                     end if
                 end if
@@ -1135,7 +1239,8 @@ module dust_rates
 
             if (.not. remnant_assigned) then
                 do ll_local = ii1, ii2
-                    if ((dustbins_props(ll_local)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_local)%mgrain_max)) then
+                    ll_global = ll_local + global_ii1 - ii1
+                    if ((dustbins_props(ll_global)%mgrain_min.le.m_remnant).and.(m_remnant<dustbins_props(ll_global)%mgrain_max)) then
                         chi_frag_out(ll_local) = chi_frag_out(ll_local) + m_remnant
                         remnant_assigned = .true.
                         exit
@@ -1144,11 +1249,11 @@ module dust_rates
             end if
 
             if (.not. remnant_assigned) then
-                ! If remnant is outside formal bin bounds, put it in the nearest dust bin by mass.
                 nearest_idx = ii1
-                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ii1)%mgrain))
+                min_logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(global_ii1)%mgrain))
                 do ll_local = ii1 + 1, ii2
-                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_local)%mgrain))
+                    ll_global = ll_local + global_ii1 - ii1
+                    logdist = abs(log(max(m_remnant,tiny(m_remnant)) / dustbins_props(ll_global)%mgrain))
                     if (logdist < min_logdist) then
                         min_logdist = logdist
                         nearest_idx = ll_local

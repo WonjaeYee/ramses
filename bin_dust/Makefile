@@ -323,7 +323,7 @@ ifeq ($(CALIMA),1)
    endif
    MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_cooling.o \
                dust_dynamics.o dust_photophysics.o dust_seeding.o dust_surface_chemistry.o \
-               dust_rates.o dust_solver.o dust_interface.o dust_init.o
+               dust_rates.o dust_solver.o dust_interface.o dust_init.o dust_test.o
 endif
 ifeq ($(RT),1)
    MODOBJ += rt_parameters.o rt_hydro_commons.o coolrates_module.o \
@@ -338,7 +338,7 @@ ifeq ($(RTZ),1)
              collisional_ionization_module.o recombination_module.o \
              cosmic_ray_ionization_module.o photoionization_UVB_module.o \
              dust_recombination_module.o molecules_module.o charge_exchange_module.o \
-             rtz_coolrates_module.o rtz_cooling_module.o
+             rtz_coolrates_module.o rtz_cooling_module.o movie_lines_module.o
 endif
 ifeq ($(USE_TURB),1)
    MODOBJ += turb_parameters.o turb_commons.o
@@ -353,7 +353,7 @@ AMROBJ = read_params.o init_amr.o init_time.o init_refine.o tracer_utils.o adapt
          amr_step.o update_time.o timer.o output_amr.o flag_utils.o \
          physical_boundaries.o virtual_boundaries.o refine_utils.o \
          nbors_utils.o hilbert.o load_balance.o title.o sort.o cooling_fine.o \
-         eos.o units.o light_cone.o movie_lines_module.o movie.o memory.o end.o
+         eos.o units.o light_cone.o movie.o memory.o end.o
 # Particle-Mesh objects
 PMOBJ = init_part.o output_part.o rho_fine.o synchro_fine.o move_fine.o \
         newdt_fine.o particle_tree.o add_list.o remove_list.o star_formation.o \

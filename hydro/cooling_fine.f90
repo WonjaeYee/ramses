@@ -407,6 +407,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef RTZ
         counter = 0
         e_counter = 0
+        nElement = 0d0
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
