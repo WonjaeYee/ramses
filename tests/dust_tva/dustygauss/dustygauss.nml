@@ -3,7 +3,7 @@ This is the RAMSES parameter file for the DustyGauss advection test.
 &RUN_PARAMS
 hydro=.true.
 rt=.false.
-static=.false.
+static=.true.
 /
 
 &AMR_PARAMS
@@ -26,7 +26,7 @@ region_type(1)='square'
 x_center=5.0
 length_x=10.0
 d_region=0.204537956
-u_region=0.77692
+u_region=0.0
 p_region=0.14609854
 var_region(1,:)=0.0
 /
@@ -40,7 +40,7 @@ tend = 6.0
 &HYDRO_PARAMS
 gamma=1.4
 courant_factor=0.8
-slope_type=2
+slope_type=6
 riemann='hllc'
 data_dir = '/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/'
 /
@@ -68,7 +68,7 @@ interpol_type=2
 dust_tva=.true.
 dust_radpressure=.false.
 use_w_drift_test=.true.
-w_drift_test=0.0,0.0,0.0
+w_drift_test=0.77692,0.0,0.0
 dust_composition(1,6) = 1d0
 dustbins_per_chemtype=1
 asize=0.1d0

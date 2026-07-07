@@ -30,8 +30,7 @@ sigma_shell = 0.4                  # Initial characteristic width (pc)
 eps_base    = 1.0e-8               # Ambient dust background
 delta_eps   = 1.0e-4                 # Shell injection amplitude
 
-# Setting the 4 desired snapshot targets matching our tend calculation
-output_times = np.array([1.0, 2.0, 4.0, 6.0])  # in Myr
+# Setting the 4 desired snapshot targets
 x_eval = np.linspace(0.0, boxlen, 300)
 
 # Initial Gaussian Profile function
@@ -56,22 +55,23 @@ try:
 except Exception as e:
     print(f"Error loading initial snapshot: {e}")
 
-# Loop and calculate spatial shifts for each specified output time
+# Loop and calculate spatial shifts for each snapshot
 colors = ['#d7191c', '#fdae61', '#abdda4', '#2b83ba']
-for i, t in enumerate(output_times):
-    # Pure hyperbolic advection shift: x_shifted = x0 + u_drift * t
-    x_shifted = x0 + (u_drift_pc_myr * t)
-    
-    # Evaluate shifted analytical distribution profile
-    eps_analytic = eps_base + delta_eps * np.exp(-((x_eval - x_shifted)**2) / (2.0 * sigma_shell**2))
-    
-    ax.plot(x_eval, eps_analytic, '-', color=colors[i], linewidth=2.0, alpha=0.5,
-             label=f't = {t:.2f} Myr (Analytic)')
-             
-    # Load and plot matching numerical snapshot (Snapshot 2 is t=1.0, 3 is t=2.0, etc.)
+for i in range(4):
     snap_idx = i + 2
     try:
         snap = visu_ramses.load_snapshot(snap_idx)
+        t = snap["info"]["time"]  # Read actual time from snapshot info
+        
+        # Pure hyperbolic advection shift: x_shifted = x0 + u_drift * t
+        x_shifted = x0 + (u_drift_pc_myr * t)
+        
+        # Evaluate shifted analytical distribution profile
+        eps_analytic = eps_base + delta_eps * np.exp(-((x_eval - x_shifted)**2) / (2.0 * sigma_shell**2))
+        
+        ax.plot(x_eval, eps_analytic, '-', color=colors[i], linewidth=2.0, alpha=0.5,
+                 label=f't = {t:.2f} Myr (Analytic)')
+                 
         order = snap["data"]["x"].argsort()
         x_num = snap["data"]["x"][order]
         f_dust_num = snap["data"]["DustBin_01"][order]

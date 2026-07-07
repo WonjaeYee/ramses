@@ -43,7 +43,7 @@ tend = 6.0!2.96                               ! Hard stop before hitting the rig
 &HYDRO_PARAMS
 gamma=1.4
 courant_factor=0.8
-slope_type=2
+slope_type=6
 riemann='hllc'
 data_dir = '/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/'
 /
@@ -107,8 +107,8 @@ groupL1       = 10.0
 &CALIMA_PARAMS
 dust_tva=.true.
 dust_radpressure=.true.
-use_w_drift_test=.false.
-!w_drift_test=0.77692,0.0,0.0
+use_w_drift_test=.true.
+w_drift_test=0.77692,0.0,0.0
 dust_composition(1,6) = 1d0
 dustbins_per_chemtype=1
 asize=0.1d0

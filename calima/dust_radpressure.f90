@@ -93,11 +93,13 @@ contains
               eps_tot = eps_tot + (rho_dust(jbin) / rho_loc)
            end do
         end if
+#if NPAH>0
         if (npah > 0) then
            do jbin = 1, npah
               rho_pah(jbin) = cell_state(ipah+jbin-1)
            end do
         end if
+#endif
         eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
         rho_gas = max((1.0_dp - eps_tot) * rho_loc, smallr)
 
@@ -158,6 +160,7 @@ contains
            end do
         end if
 
+#if NPAH>0
         if (npah > 0) then
            do jbin = 1, npah
               if (rho_pah(jbin) > 0d0) then
@@ -167,6 +170,7 @@ contains
               end if
            end do
         end if
+#endif
 
     end subroutine compute_gas_dust_radpressure_acc
 
@@ -259,6 +263,7 @@ contains
             end do
         end if
 
+#if NPAH>0
         if (npah > 0) then
             do ii = 1, npah
                 ! Calculate PAH charge equilibrium fraction
@@ -273,6 +278,7 @@ contains
                 end do
             end do
         end if
+#endif
 
         ! Calculate group energies in ergs and convert to code units
         group_egy_erg = group_egy * eV2erg
@@ -333,6 +339,7 @@ contains
             end if
 
             ! --- PAH Bin Forces ---
+#if NPAH>0
             if (npah > 0) then
                 do ii = 1, npah
                     mom_fact_pah = opacity_pah_code(ii, igroup) * group_egy_code(igroup)
@@ -352,6 +359,7 @@ contains
                     end do
                 end do
             end if
+#endif
 
         end do
 

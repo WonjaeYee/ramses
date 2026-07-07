@@ -201,14 +201,14 @@ def run_l2_simulation(level, slope):
         stderr=subprocess.DEVNULL
     )
     
-    # if os.path.exists(temp_nml):
-    #     os.remove(temp_nml)
+    if os.path.exists(temp_nml):
+        os.remove(temp_nml)
 
 l2_levels = [4, 5, 6, 7, 8]
-l2_errors = {0: [], 1: [], 2: []}
+l2_errors = {0: [], 1: [], 2: [], 6: []}
 l2_profiles = {}
 
-for slope in [0, 1, 2]:
+for slope in [0, 1, 2, 6]:
     for level in l2_levels:
         run_l2_simulation(level, slope)
         data_final = visu_ramses.load_snapshot(2)
@@ -245,6 +245,7 @@ dx_values = [1.0 / 2**lvl for lvl in l2_levels]
 ax2.loglog(dx_values, l2_errors[0], "o--", color="#d9534f", linewidth=1.5, label="First Order (slope_type=0)")
 ax2.loglog(dx_values, l2_errors[1], "s-", color="#077b8a", linewidth=1.5, label="MinMod (slope_type=1)")
 ax2.loglog(dx_values, l2_errors[2], "D-", color="#8e44ad", linewidth=1.5, label="MC Limiter (slope_type=2)")
+ax2.loglog(dx_values, l2_errors[6], "P-", color="#5c3c92", linewidth=1.5, label="Unstable (slope_type=6)")
 
 # Reference slopes
 ax2.loglog(dx_values, l2_errors[0][0] * (np.array(dx_values)/dx_values[0])**1, ":", color="gray", label="1st Order Slope")

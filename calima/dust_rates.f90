@@ -258,7 +258,10 @@ module dust_rates
                 if (m_min < dustbins_props(global_ii1)%mgrain_min) then
                     chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
-#if NPAH > 0
+            end if
+#else
+            if (m_min < dustbins_props(global_ii1)%mgrain_min) then
+                chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
             end if
 #endif
         end if
@@ -1182,7 +1185,10 @@ module dust_rates
                 if (m_min < dustbins_props(global_ii1)%mgrain_min) then
                     chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
                 end if
-#if NPAH > 0
+            end if
+#else
+            if (m_min < dustbins_props(global_ii1)%mgrain_min) then
+                chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
             end if
 #endif
         end if
