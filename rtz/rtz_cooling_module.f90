@@ -289,7 +289,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !!! USE FOR EQM TESTS WITH COOLING AT CONSTANT RHO
             ! Interpolate over density
             nElement(1:n_elements,1:ncell)  = 0.d0  ! Initialize to zero
-            nElement(1,1:ncell)  = 10.d0**(((8.d0 - (-3.d0)) * (real(i_interp,dp) - 1.d0)/(300.d0-1.d0)) + (-3.d0))   
+            nElement(1,1:ncell)  = 10.d0**(((10.d0 - (-3.d0)) * (real(i_interp,dp) - 1.d0)/(300.d0-1.d0)) + (-3.d0))   
             nElement(2,1:ncell)  = nElement(1,1:ncell) * 8.51d-02 ! Helium
             nElement(6,1:ncell)  = nElement(1,1:ncell) * 2.69d-04 * z_ave ! Carbon
             nElement(7,1:ncell)  = nElement(1,1:ncell) * 6.76d-05 * z_ave ! Nitrogen
@@ -733,7 +733,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: UV_background_G0
       integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
       integer:: i_current_Ion
-      real(dp):: Zsolar, total_G0
+      real(dp):: Zsolar, total_G0, advected_G0
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
@@ -746,6 +746,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp)::loc_auger_prob
       integer::i_a
       real(dp) :: t_now
+      logical :: update_COspecies=.false.
       !-----------------------------------------------------------------------
       !-----------------------------------------------------------------------
       ! Variables specific to CALIMA
@@ -876,13 +877,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
 #ifdef RT
       ! Update total G0 --> TODO(code) this isn't quite right we sould be checking bounds
+      advected_G0 = 0.0d0
       if (rt_advect) then
          do igroup=1,nGroups
             if (group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0) then 
-               total_G0 = total_G0 + (f_shd_CO * dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
+               advected_G0 = advected_G0 + (dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
             end if
-         end do
+         end do  
       end if
+      total_G0 = advected_G0 + UV_background_G0
 #endif
 
 
@@ -1118,19 +1121,19 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
          saved_cooling_rates = 0.d0
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
-                           ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+                           ss_factor, f_shd, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
+         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
-                           ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
+                           ss_factor, f_shd, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
-                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
+                           ss_factor, f_shd,dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
@@ -1280,6 +1283,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dnElement = nElement_dep
       if (ndust > 0) drho_dust(:) = dust_helper%rho_dust
       if (npah  > 0) drho_pah(:)  = dust_helper%rho_pah
+      ! Get the new free electron fraction
+      ne = getNe(dXion, nElement_dep(:))
+      ! Get the new mean molecular weight
+#ifdef CO
+      mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
+      mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
 
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
@@ -1388,12 +1399,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
       end if
 
+      if ((nElement_dep(6) + nCO(icell))/nElement_dep(1).gt.1d-10 .or. &
+         (nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then
+        update_COspecies = .true.
+      else
+        update_COspecies = .false.
+      end if
 #ifdef CO
       cr_CO = 0.d0
       de_CO = 0.d0
       dUU = 0.d0
       if (isCO_rtz) then
-         if ((nElement_dep(6) + nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then 
+         if (update_COspecies) then 
             n_C_og = n_CII + nCO(icell)
             n_O_og = n_OI + nCO(icell)
             n_CII = nElement_dep(6) * dXion(6,2)
@@ -1425,42 +1442,42 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! Clip delta_CO to enforce physical bounds
             delta_CO = max(min(delta_CO, max_delta_CO), min_delta_CO)
 
-         ! Apply updates
-         nCO_new  = nCO(icell) + delta_CO
-         nCII_new = n_CII - delta_CO
-         nOI_new  = n_OI  - delta_CO
+            ! Apply updates
+            nCO_new  = nCO(icell) + delta_CO
+            nCII_new = n_CII - delta_CO
+            nOI_new  = n_OI  - delta_CO
          
-         ! if (sum(dXion(6,1:7)) < 1.0d0) then
-         !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-         ! end if
-
+            ! if (sum(dXion(6,1:7)) < 1.0d0) then
+            !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+            ! end if
+         
             if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
                write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
                write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
             end if
 
-         ! Now update the ion fractions for C and O
-         ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
-         tot_C = nElement_dep(6) - n_CII
-         tot_C = tot_C + nCII_new
-         do iIon = 1, elements(6)%n_ions
-            if (iIon.ne.2) then 
-               dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-            else
-               dXion(6,iIon) = nCII_new / tot_C
-            end if
-         end do
+            ! Now update the ion fractions for C and O
+            ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
+            tot_C = nElement_dep(6) - n_CII
+            tot_C = tot_C + nCII_new
+            do iIon = 1, elements(6)%n_ions
+               if (iIon.ne.2) then 
+                  dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
+               else
+                  dXion(6,iIon) = nCII_new / tot_C
+               end if
+            end do
 
-         ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
-         tot_O = nElement_dep(8) - n_OI
-         tot_O = tot_O + nOI_new
-         do iIon = 1, elements(8)%n_ions
-            if (iIon.ne.1) then 
-               dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
-            else
-               dXion(8,iIon) = nOI_new / tot_O
-            end if
-         end do
+            ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
+            tot_O = nElement_dep(8) - n_OI
+            tot_O = tot_O + nOI_new
+            do iIon = 1, elements(8)%n_ions
+               if (iIon.ne.1) then 
+                  dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
+               else
+                  dXion(8,iIon) = nOI_new / tot_O
+               end if
+            end do
 
             if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
                write(*,*) 'nCO_new:', nCO_new
@@ -1520,7 +1537,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Loop over all elements
       do iElement = 1,n_elements
          if (elements(iElement)%atomic_number > 0) then
-            if (nElement_dep(iElement)/nElement_dep(1).le.1e-10) then
+            if (iElement /= 6 .and. iElement /= 8) then
+               if (nElement_dep(iElement)/nElement_dep(1) .lt. 1d-10) then
+                  cycle
+               end if
+            else if (.not. update_COspecies) then
                cycle
             end if
 
