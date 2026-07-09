@@ -203,11 +203,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    ! temporal index to check problem
    integer::err_idx
-   real(dp):: print_neInit, print_ne, print_nElement_dep(n_elements)
-
-   print_neInit = 0d0
-   print_ne = 0d0
-   print_nElement_dep=0d0
+   integer,parameter::loopcnt_limit=100000
+   
+   ! if it is not initialized, it is accumulated for all cells(?)
+   loopCodes = 0
 
 #ifdef RT
    call rtz_updateRTGroups_CoolConstants(ilevel)
@@ -529,95 +528,21 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
-         if (loopcnt.gt.100000) then
+         if (loopcnt.gt.loopcnt_limit) then
             write(*,*)ilevel,rt_c_cgs(ilevel)
-            write(*,*) "Too high loopcnt",loopcnt
+            write(*,*) "Too high loopcnt:", loopcnt
             write(*,*) 'This is raised in `rtz_solve_cooling`'
             write(*,*) '   tleft:', tLeft
             write(*,*) '     ddt:', ddt
             write(*,*) '  dt_rec:', dt_rec, new_line('')
-            write(*,*) 'code:', code
 #ifdef CALIMA
-            write(*,*) '   dust_T    :', dust_helper%T_dust(1:ndust)
-            write(*,*) '   dust_Z    :', dust_helper%Z_dust(1:ndust)
-            write(*,*) '   Pinj_dust :', dust_helper%Pinj_dust(1:ndust)
-            write(*,*) '   Prad_dust :', dust_helper%Prad_dust(1:ndust)
-            write(*,*) '   Prec_dust :', dust_helper%Prec_dust(1:ndust)
-            write(*,*) '   Pcoll_dust:', dust_helper%Pcoll_dust(1:ndust)
+            write(*,*) 'dust_T    :', dust_helper%T_dust(1:ndust)
+            write(*,*) 'dust_Z    :', dust_helper%Z_dust(1:ndust)
+            write(*,*) 'Pinj_dust :', dust_helper%Pinj_dust(1:ndust)
+            write(*,*) 'Prad_dust :', dust_helper%Prad_dust(1:ndust)
+            write(*,*) 'Prec_dust :', dust_helper%Prec_dust(1:ndust)
+            write(*,*) 'Pcoll_dust:', dust_helper%Pcoll_dust(1:ndust)
 #endif
-            if (code==1) then
-               write(*,*) ' - from photon density Np update'
-               write(*,*) '      Np:', Np(:, i)
-               write(*,*) '     dNp:', dNp(:)
-               ! write(*,*) '  recRad:', recRad(:)
-               write(*,*) '   dNpdt:', dNpdt(:, i)
-               ! write(*,*) '   phAbs:', phAbs(:)
-            else if (code==2) then
-               write(*,*) ' - from photon flux Fp update'
-               write(*,*) '     Fp:', Fp(:, :, i)
-               write(*,*) '    dFp:', dFp(:, :)
-               write(*,*) '  dFpdt:', dFpdt(:, :, i)
-               ! write(*,*) '  phAbs:', phAbs(:)
-               ! write(*,*) '   phSc:', phSc(:)
-            else if (code==3) then
-               write(*,*) ' - from temperature T2 update'
-               write(*,*) '      T2:', T2(i)
-               write(*,*) '     dT2:', dT2
-               ! write(*,*) '    rate:', rate
-               ! write(*,*) '   dRate:', dRate
-               ! write(*,*) '   Crate:', Crate
-               ! write(*,*) '   dCdT2:', dCdT2
-               ! write(*,*) '  X_nHkb:', X_nHkb
-            else if (code==4) then
-               write(*,*) ' - from photon density Np update (if rt_isIR)'
-               write(*,*) '                   Np:', Np(iIR, i)
-               write(*,*) '                  dNp:', dNp(iIR)
-               ! write(*,*) '                 dE_T:', dE_T
-               write(*,*) '  one_over_egy_IR_erg:', one_over_egy_IR_erg
-            else if (code==5) then
-               write(*,*) ' - from temperature T2 update (if rt_isIR)'
-               write(*,*) '    T2:', T2(i)
-               write(*,*) '   dT2:', dT2
-               ! write(*,*) '    mu:', mu
-               ! write(*,*) '  dE_T:', dE_T
-            else if (code==6) then
-               write(*,*) ' - from H2 update'
-               write(*,*) '     xion:', xion(1,3,i)
-               write(*,*) '    dXion:', dXion(1,3)
-               ! write(*,*) '  xH2_loc:', xH2_loc
-               ! write(*,*) '    cr_H2:', cr_H2
-               ! write(*,*) '    de_H2:', de_H2
-            else if (code==7) then
-               write(*,*) ' - from CO update'
-               write(*,*) '       nCO:', nCO(i)
-               ! write(*,*) '   nCO_new:', nCO_new
-               ! write(*,*) '  delta_CO:', delta_CO
-               ! write(*,*) '     cr_CO:', cr_CO
-               ! write(*,*) '     de_CO:', de_CO
-            else if (code==8) then
-               write(*,*) ' - from ionization fraction xion update'
-               write(*,*) '  iElement:', iElement
-               write(*,*) '      iIon:', iIon
-               write(*,*) '      xion:', xion(iElement, iIon, i)
-               write(*,*) '     dXion:', dXion(iElement, iIon)
-               ! write(*,*) '        cr:', cr
-               ! write(*,*) '        de:', de
-            else if (code==9) then
-               write(*,*) ' - from electron ne update'
-               write(*,*) '      iElement:', iElement
-               write(*,*) '          iIon:', iIon
-               write(*,*) '        neInit:', print_neInit
-               write(*,*) '            ne:', print_ne
-               write(*,*) '          xion:', xion(:, :, i)
-               write(*,*) '         dXion:', dXion(:, :)
-               write(*,*) '  nElement_dep:', print_nElement_dep(:)
-#ifdef CALIMA
-            else if (code==10) then
-               write(*,*) ' - from dust update'
-               write(*,*) '     rho_dust:', rho_dust(i,1:ndust)
-               write(*,*) '     drho_dust :', drho_dust(1:ndust)
-#endif
-            end if
             write(*,*) 'loopCodes:', loopCodes
             err_idx = i
             return ! to check other quantities, return instead of stop
@@ -776,11 +701,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dust_to_gas_mass_ratio_over_mw = dust_to_gas_scale_RR14(Zsolar)
          Zsolar = Zsolar - 8.69d0
          do iElement=1,n_elements
-            if (iElement .eq. 6 .or. iElement .eq. 8) then
-               nElement_dep(iElement) = (nElement(iElement,icell) + nCO(icell)) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw)) - nCO(icell)
-            else
+! we don't need to distinguish C and O from other elements...?
+!            if (iElement .eq. 6 .or. iElement .eq. 8) then
+!               nElement_dep(iElement) = (nElement(iElement,icell) + nCO(icell)) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw)) - nCO(icell)
+!            else
                nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw))
-            end if
+!            end if
          end do
       end if
 #else
@@ -881,7 +807,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_advect) then
          do igroup=1,nGroups
             if (group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0) then 
-               total_G0 = total_G0 + (f_shd_CO * dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
+               total_G0 = total_G0 + (dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
             end if
          end do
       end if
@@ -1001,7 +927,24 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   call cpu_time(t_now)
                   t_rad = t_rad + (t_now - t_last)
                end if
-               code=1 ;   RETURN                        ! ddt(icell) too big
+               code=1
+
+               ! print some before return
+               if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                  write(*,*) 'This is raised in `rtz_cool_step`'
+                  write(*,*) 'icell:', icell
+                  write(*,*) ' code:', code
+                  write(*,*) '-> from photon density `Np` update'
+
+                  write(*,*) '    Np:', Np(:, i)
+                  write(*,*) '   dNp:', dNp(:)
+                  write(*,*) 'recRad:', recRad(:)
+                  write(*,*) ' dNpdt:', dNpdt(:, i)
+                  write(*,*) ' phAbs:', phAbs(:)
+                  ! write(*,*) ':', 
+               end if
+               
+               RETURN                        ! ddt(icell) too big
             endif
 
             do idim=1,ndim
@@ -1024,7 +967,24 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      call cpu_time(t_now)
                      t_rad = t_rad + (t_now - t_last)
                   end if
-                  code=2 ;   RETURN                     ! ddt(icell) too big
+                  code=2
+
+                  ! print some before return
+                  if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                     write(*,*) 'This is raised in `rtz_cool_step`'
+                     write(*,*) 'icell:', icell
+                     write(*,*) ' code:', code
+                     write(*,*) '-> from photon flux `Fp` update'
+                     
+                     write(*,*) '   Fp:', Fp(:, :, i)
+                     write(*,*) '  dFp:', dFp(:, :)
+                     write(*,*) 'dFpdt:', dFpdt(:, :, i)
+                     write(*,*) 'phAbs:', phAbs(:)
+                     write(*,*) ' phSc:', phSc(:)
+                     ! write(*,*) ':', 
+                  end if
+                  
+                  RETURN                     ! ddt(icell) too big
                endif
             end do
 
@@ -1120,17 +1080,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
          saved_cooling_rates = 0.d0
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
@@ -1181,7 +1141,26 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                call cpu_time(t_now)
                t_cool = t_cool + (t_now - t_last)
             end if
-            code=3 ; RETURN
+            code=3
+
+            ! print some before return
+            if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+               write(*,*) 'This is raised in `rtz_cool_step`'
+               write(*,*) 'icell:', icell
+               write(*,*) ' code:', code
+               write(*,*) '-> from temperature `T2` update'
+               
+               write(*,*) '    T2:', T2(i)
+               write(*,*) '   dT2:', dT2
+               write(*,*) '  rate:', rate
+               write(*,*) ' dRate:', dRate
+               write(*,*) ' Crate:', Crate
+               write(*,*) ' dCdT2:', dCdT2
+               write(*,*) 'X_nHkb:', X_nHkb
+               ! write(*,*) ':', 
+            end if
+            
+            RETURN
          endif
          TK=dT2*mu
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
@@ -1214,7 +1193,23 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   call cpu_time(t_now)
                   t_cool = t_cool + (t_now - t_last)
                end if
-               code=4 ;   RETURN
+               code=4
+
+               ! print some before return
+               if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                  write(*,*) 'This is raised in `rtz_cool_step`'
+                  write(*,*) 'icell:', icell
+                  write(*,*) ' code:', code
+                  write(*,*) '-> from photon density `Np` update (when rt_isIR)'
+                  
+                  write(*,*) '                 Np:', Np(iIR, i)
+                  write(*,*) '                dNp:', dNp(iIR)
+                  write(*,*) '               dE_T:', dE_T
+                  write(*,*) 'one_over_egy_IR_erg:', one_over_egy_IR_erg
+                  ! write(*,*) ':', 
+               end if
+               
+               RETURN
             endif
 
             dUU   = ABS(dT2-T2(icell)) / (T2(icell)+T_MIN) * one_over_T_FRAC
@@ -1226,7 +1221,23 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   call cpu_time(t_now)
                   t_cool = t_cool + (t_now - t_last)
                end if
-               code=5 ; RETURN
+               code=5
+
+               ! print some before return
+               if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                  write(*,*) 'This is raised in `rtz_cool_step`'
+                  write(*,*) 'icell:', icell
+                  write(*,*) ' code:', code
+                  write(*,*) '-> from temperature `T2` update (if rt_isIR)'
+                  
+                  write(*,*) '  T2:', T2(i)
+                  write(*,*) ' dT2:', dT2
+                  write(*,*) '  mu:', mu
+                  write(*,*) 'dE_T:', dE_T
+                  ! write(*,*) ':', 
+               end if
+               
+               RETURN
             endif
             TK=dT2*mu
             if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
@@ -1276,6 +1287,19 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             t_dust = t_dust + (t_now - t_last)
          end if
          code = 10
+
+         ! print some before return
+         if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+            write(*,*) 'This is raised in `rtz_cool_step`'
+            write(*,*) 'icell:', icell
+            write(*,*) ' code:', code
+            write(*,*) '-> from dust update'
+            
+            write(*,*) 'rho_dust:', rho_dust(i,1:ndust)
+            write(*,*) 'drho_dust :', drho_dust(1:ndust)
+            ! write(*,*) ':', 
+         end if
+         
          RETURN
       end if
       if (ndust > 0) drho_dust(:) = dust_helper%rho_dust
@@ -1374,6 +1398,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   t_mol = t_mol + (t_now - t_last)
                end if
                code=6 !TODO(code) update this code for each ion
+
+               ! print some before return
+               if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                  write(*,*) 'This is raised in `rtz_cool_step`'
+                  write(*,*) 'icell:', icell
+                  write(*,*) ' code:', code
+                  write(*,*) '-> from H2 update'
+                  
+                  write(*,*) '   xion:', xion(1,3,i)
+                  write(*,*) '  dXion:', dXion(1,3)
+                  write(*,*) 'xH2_loc:', xH2_loc
+                  write(*,*) '  cr_H2:', cr_H2
+                  write(*,*) '  de_H2:', de_H2
+                  ! write(*,*) ':', 
+               end if
+               
                RETURN
             end if
          end if
@@ -1404,7 +1444,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
 
             !! Destruction !!
-            de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate)
+            de_CO = beta_CO(total_G0*f_shd_CO, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
             if (de_CO * ddt(icell) < 1.d-6) then
@@ -1429,13 +1469,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          nCII_new = n_CII - delta_CO
          nOI_new  = n_OI  - delta_CO
          
-         ! if (sum(dXion(6,1:7)) < 1.0d0) then
-         !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-         ! end if
-
-            if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
-               write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
-               write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+            if (loopcnt==loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
+               write(*,*) "for Carbon"
+               write(*,*) 'dXion:', dXion(6,1:7)
+               write(*,*) 'sum(dXion):', sum(dXion(6,1:7))
             end if
 
          ! Now update the ion fractions for C and O
@@ -1461,18 +1498,36 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             end if
          end do
 
-            if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
-               write(*,*) 'nCO_new:', nCO_new
-               write(*,*) 'nCO    :', nCO(icell)
-               write(*,*) 'xion(6,1:elements(6)%n_ions,icell):', xion(6,1:elements(6)%n_ions,icell)
-               write(*,*) '     dXion(6,1:elements(6)%n_ions):', dXion(6,1:elements(6)%n_ions)
-               write(*,*) '          tot_C:', tot_C
-               write(*,*) 'nElement_dep(6):', nElement_dep(6)
-               write(*,*) 'sum(dXion(6,1:elements(6)%n_ions)):', sum(dXion(6,1:elements(6)%n_ions))
-               write(*,*) 'n_CII   :', n_CII
-               write(*,*) 'nCII_new:', nCII_new
-               write(*,*) 'delta_CO:', delta_CO
-               write(*,*) 'loopCodes:',loopCodes
+            if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
+            ! if (nElement_dep(6)<0.0) then
+               write(*,*) "     loopcnt:", loopcnt
+               write(*,*) '         nCO:', nCO(icell)
+               write(*,*) '     nCO_new:', nCO_new
+               write(*,*) '    delta_CO:', delta_CO
+
+               write(*,*) ' dust_to_gas:', dust_to_gas_mass_ratio_over_mw
+
+               write(*,*) "for Carbon"
+               write(*,*) "    nElement:", nElement(6, icell)
+               write(*,*) 'nElement_dep:', nElement_dep(6)
+               write(*,*) '        xion:', xion(6,1:elements(6)%n_ions,icell)
+               write(*,*) '       dXion:', dXion(6,1:elements(6)%n_ions)
+               write(*,*) '  sum(dXion):', sum(dXion(6,1:elements(6)%n_ions))
+               write(*,*) '       tot_C:', tot_C
+               write(*,*) '       n_CII:', n_CII
+               write(*,*) '    nCII_new:', nCII_new
+               
+               write(*,*) "for Oxygen"
+               write(*,*) "    nElement:", nElement(8, icell)
+               write(*,*) 'nElement_dep:', nElement_dep(8)
+               write(*,*) '        xion:', xion(8,1:elements(8)%n_ions,icell)
+               write(*,*) '       dXion:', dXion(8,1:elements(8)%n_ions)
+               write(*,*) '  sum(dXion):', sum(dXion(8,1:elements(8)%n_ions))
+               write(*,*) '       tot_O:', tot_O
+               write(*,*) '        n_OI:', n_OI
+               write(*,*) '     nOI_new:', nOI_new
+
+               write(*,*) '   loopCodes:',loopCodes
             end if
 
             ! Check for convergence
@@ -1489,6 +1544,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      t_mol = t_mol + (t_now - t_last)
                   end if
                   code=7 !TODO(code) update this code for each ion
+
+                  ! print some before return
+                  if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                     write(*,*) 'This is raised in `rtz_cool_step`'
+                     write(*,*) 'icell:', icell
+                     write(*,*) ' code:', code
+                     write(*,*) '-> from CO update'
+                     
+                     write(*,*) '     nCO:', nCO(i)
+                     write(*,*) ' nCO_new:', nCO_new
+                     write(*,*) 'delta_CO:', delta_CO
+                     write(*,*) '   cr_CO:', cr_CO
+                     write(*,*) '   de_CO:', de_CO
+                     ! write(*,*) ':', 
+                  end if
+                  
                   RETURN
                end if
             end if
@@ -1794,6 +1865,23 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                         t_ion = t_ion + (t_now - t_last)
                      end if
                      code=8 !TODO(code) update this code for each ion
+
+                     ! print some before return
+                     if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                        write(*,*) 'This is raised in `rtz_cool_step`'
+                        write(*,*) 'icell:', icell
+                        write(*,*) ' code:', code
+                        write(*,*) '-> from ion fraction `xion` update'
+                        
+                        write(*,*) 'iElement:', iElement
+                        write(*,*) '    iIon:', iIon
+                        write(*,*) '    xion:', xion(iElement, iIon, i)
+                        write(*,*) '   dXion:', dXion(iElement, iIon)
+                        write(*,*) '      cr:', cr
+                        write(*,*) '      de:', de
+                        ! write(*,*) ':', 
+                     end if
+                     
                      RETURN
                   end if
                end if
@@ -1806,14 +1894,29 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      !write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
-                     print_neInit = neInit
-                     print_ne = ne
-                     print_nElement_dep = nElement_dep
                      if (rtz_equilibrium_test.gt.0) then
                         call cpu_time(t_now)
                         t_ion = t_ion + (t_now - t_last)
                      end if
                      code=9
+
+                     ! print some before return
+                     if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                        write(*,*) 'This is raised in `rtz_cool_step`'
+                        write(*,*) 'icell:', icell
+                        write(*,*) ' code:', code
+                        write(*,*) '-> from electron `ne` update'
+
+                        write(*,*) '    iElement:', iElement
+                        write(*,*) '        iIon:', iIon
+                        write(*,*) '      neInit:', neInit
+                        write(*,*) '          ne:', ne
+                        write(*,*) '        xion:', xion(:, :, i)
+                        write(*,*) '       dXion:', dXion(:, :)
+                        write(*,*) 'nElement_dep:', nElement_dep(:)
+                        ! write(*,*) ':', 
+                     end if
+                     
                      RETURN
                   end if
                end if

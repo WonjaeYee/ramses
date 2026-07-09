@@ -667,24 +667,31 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
                               )
       end if
-! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'
-           write(*,*) '            myid:', myid
-           write(*,*) '          ilevel:', ilevel
-           write(*,*) '        ind_leaf:', ind_leaf(err_idx)
-           write(*,*) '              nH:', nH(err_idx)
-           write(*,*) '              T2:', T2(err_idx)
-           write(*,*) '         density:', uold(ind_leaf(err_idx),1)
-           write(*,*) '          energy:', uold(ind_leaf(err_idx),neul)
-           write(*,*) '   uold*scale_T2:', uold(ind_leaf(err_idx),neul)*scale_T2
-           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx),iIons:iIons+53) ! /uold(ind_leaf(err_idx),1)
-           write(*,*) 'chemicals (xion):', uold(ind_leaf(err_idx),iIons:iIons+53)/uold(ind_leaf(err_idx),1)
-           write(*,*) 'for comparison, adjacent cells'
-           !write(*,*) 'uold:', uold(ind_leaf(err_idx)-1, neul)
-           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
-           !write(*,*) 'uold:', uold(ind_leaf(err_idx)+1, neul)
-           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:iIons+53)
+           write(*,*) '  myid:', myid
+           write(*,*) 'ilevel:', ilevel
+           ! write(*,*) 'ind_leaf:', ind_leaf(err_idx)
+           
+           write(*,*) 'error cell, before the update'
+           write(*,*) '  uold:', uold(ind_leaf(err_idx),:)
+           write(*,*) 'rtuold:', rtuold(ind_leaf(err_idx),:)
+           
+           write(*,*) 'in physical units'
+           write(*,*) '     d:', uold(ind_leaf(err_idx),1)*scale_d
+           write(*,*) '     v:', uold(ind_leaf(err_idx),2:1+ndim)/uold(ind_leaf(err_idx),1)*scale_v
+           write(*,*) '     e:', uold(ind_leaf(err_idx),2+ndim)/uold(ind_leaf(err_idx),1)*scale_v**2
+           write(*,*) '    T2:', T2(err_idx)
+           ! write(*,*) '   uold*scale_T2:', uold(ind_leaf(err_idx),neul)*scale_T2
+           write(*,*) '  chem:', uold(ind_leaf(err_idx),imetal:imetal+e_counter-1)/uold(ind_leaf(err_idx),1)
+           write(*,*) '    H2:', uold(ind_leaf(err_idx),iIons+counter-1)/uold(ind_leaf(err_idx),1)
+           write(*,*) '    CO:', uold(ind_leaf(err_idx),iCO)/uold(ind_leaf(err_idx),1)
+           write(*,*) '  ions:', uold(ind_leaf(err_idx),iIons:iIons+counter-2)/uold(ind_leaf(err_idx),1)
+           ! write(*,*) 'for comparison, adjacent cells'
+           ! write(*,*) 'uold:', uold(ind_leaf(err_idx)-1, neul)
+           ! write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
+           ! write(*,*) 'uold:', uold(ind_leaf(err_idx)+1, neul)
+           ! write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:iIons+53)
 #ifdef CALIMA
 #if NDUST>0
            write(*,*) 'rho_dust:', rho_dust(err_idx,:)
@@ -692,8 +699,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #if NPAH>0
            write(*,*) 'rho_pah:', rho_pah(err_idx,:)
 #endif
-#endif
-           stop
+#endif     
+           call clean_stop
         end if
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
