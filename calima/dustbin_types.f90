@@ -193,6 +193,7 @@ module dustbin_types
         type(DustTable) :: Tdust_tab ! Dust temperature table
         type(DustTable) :: Planck_power_tab ! Planck power tables for dust temperature calculation
         type(DustTable) :: Planckderiv_tab  ! Derivative of the Planck power tables for dust temperature calculation
+        type(DustTable),dimension(:),allocatable :: IRemission_tab ! Infrared band emission tables
     end type DustBin
 
     ! ==== PAH bin derived type ====

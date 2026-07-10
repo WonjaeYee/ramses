@@ -17,6 +17,12 @@ subroutine output_frame()
   use constants, only: pi, c_cgs, L_sun, M_sun, yr2sec
   use mpi_mod
   use file_module, ONLY: mkdir
+#ifdef CALIMA
+  use constants, only: eV2erg
+  use dust_commons, only: ndust, sigca_dust
+  use dust_radiation, only: get_Tdust_radiative_eq, get_dust_band_luminosity
+  use hydro_parameters, only: idust
+#endif
   implicit none
 #if NDIM > 1
 #ifndef WITHOUTMPI
@@ -104,6 +110,12 @@ subroutine output_frame()
   real(dp):: m_bar, n_hat, vol
   integer:: counter, e_counter, iii, jjj
   integer:: line_id, atomic_num, ion_idx
+#endif
+#ifdef CALIMA
+  logical :: has_IR_movie_var
+  integer :: j_band
+  real(dp), dimension(1:ndust) :: T_dust_cell
+  real(dp) :: Tmin, P_abs, Np_val, mass_g
 #endif
 
  nh_temp = nh_frame
@@ -337,6 +349,13 @@ subroutine output_frame()
        stop
 #endif
     endif
+
+#ifdef CALIMA
+    has_IR_movie_var = .false.
+    do kk = 1, n_movie_vars
+       if (movie_vars(kk) .eq. i_mv_IR) has_IR_movie_var = .true.
+    end do
+#endif
 
     if(is_min)then
        data_frame(:,:,:) = 1e-3*huge(0.0)
@@ -677,6 +696,23 @@ subroutine output_frame()
                                ! Update weights map
                                if(is_mean) weights(ii,jj) = weights(ii,jj)+weight
 
+#ifdef CALIMA
+                               if (has_IR_movie_var) then
+                                  Tmin = 2.725d0 * (1.d0/aexp)
+                                  T_dust_cell = Tmin
+                                  do j_band = 1, ndust
+                                     P_abs = 0.0d0
+#ifdef RT
+                                     do irad = 1, nGroups
+                                        Np_val = rtuold(ind_cell(i), 1 + (irad-1)*(ndim+1))
+                                        P_abs = P_abs + Np_val * group_egy(irad) * sigca_dust(j_band, irad) * eV2erg
+                                     end do
+#endif
+                                     call get_Tdust_radiative_eq(j_band, P_abs, Tmin, T_dust_cell(j_band))
+                                  end do
+                               end if
+#endif
+
                                do kk=1,n_movie_vars
                                   ok_frame=.false.
                                   ! Temperature map case
@@ -785,6 +821,18 @@ subroutine output_frame()
                                         uvar=rtuold(ind_cell(i),1+(ivar-1)*(ndim+1))*rt_c(ilevel)
                                      endif
                                   endif ! if(rt)
+#ifdef CALIMA
+                                  if(movie_vars(kk).eq.i_mv_IR)then
+                                     ok_frame=.true.
+                                     ivar = movie_var_number(kk)
+                                     uvar = 0.0d0
+                                     vol = (dx_loc * scale_l)**3.d0
+                                     do j_band = 1, ndust
+                                        mass_g = uold(ind_cell(i), idust + j_band - 1) * scale_d * vol
+                                        uvar = uvar + get_dust_band_luminosity(j_band, T_dust_cell(j_band), mass_g, ivar)
+                                     end do
+                                  endif
+#endif
 #endif
 #ifdef RTZ
 
@@ -1162,12 +1210,14 @@ subroutine output_frame()
     nh_frame = nh_temp
  enddo
  ! End loop over projections
-
 #endif
 end subroutine output_frame
 
 subroutine set_movie_vars()
   use amr_commons
+#ifdef CALIMA
+  use dust_commons, only: ndust, dustbins_props
+#endif
 #ifdef RTZ
   use movie_lines_module, only: total_lines, registered_lines
 #endif
@@ -1176,6 +1226,9 @@ subroutine set_movie_vars()
 #ifdef RTZ
   integer::i
   logical::line_matched
+#endif
+#ifdef CALIMA
+  integer::j_band
 #endif
   ! This routine sets up movie_vars to draw the correct
   ! variables
@@ -1272,6 +1325,24 @@ subroutine set_movie_vars()
         read( movie_vars_txt(kk)(3:4), '(i1)' ) ivar
         movie_var_number(kk) = ivar
 
+#ifdef CALIMA
+     else if (ndust > 0) then
+        ivar = 0
+        if (allocated(dustbins_props(1)%IRemission_tab)) then
+            do j_band = 1, size(dustbins_props(1)%IRemission_tab)
+                if (trim(movie_vars_txt(kk)) == trim(dustbins_props(1)%IRemission_tab(j_band)%name)) then
+                    ivar = j_band
+                    exit
+                end if
+            end do
+        end if
+        if (ivar > 0) then
+            if (i_mv_IR .eq. -1) i_mv_IR = kk
+            movie_vars(kk) = i_mv_IR
+            movie_var_number(kk) = ivar
+        endif
+#endif
+
 #ifdef RTZ
      else
         line_matched = .false.
@@ -1287,7 +1358,6 @@ subroutine set_movie_vars()
         end if
 #endif
      endif
-
 
   end do
 
