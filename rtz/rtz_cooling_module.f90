@@ -204,9 +204,20 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    ! temporal index to check problem
    integer::err_idx
    integer,parameter::loopcnt_limit=100000
+
+   ! print not only the loopCodes but also details
+   integer::loopCode_idx1,loopCode_idx2
+   integer*8,dimension(1:nGroups):: loopCodes1
+   integer*8,dimension(1:nGroups,1:ndim):: loopCodes2
+   integer*8,dimension(1:n_elements,1:7):: loopCodes8,loopCodes9
    
    ! if it is not initialized, it is accumulated for all cells(?)
    loopCodes = 0
+
+   loopCodes1 = 0
+   loopCodes2 = 0
+   loopCodes8 = 0
+   loopCodes9 = 0
 
 #ifdef RT
    call rtz_updateRTGroups_CoolConstants(ilevel)
@@ -530,9 +541,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,*)ilevel,rt_c_cgs(ilevel)
             write(*,*) "Too high loopcnt:", loopcnt
             write(*,*) 'This is raised in `rtz_solve_cooling`'
-            write(*,*) '   tleft:', tLeft
-            write(*,*) '     ddt:', ddt
-            write(*,*) '  dt_rec:', dt_rec, new_line('')
+            write(*,*) '     tleft:', tLeft
+            write(*,*) '       ddt:', ddt
+            write(*,*) '    dt_rec:', dt_rec, new_line('')
 #ifdef CALIMA
             write(*,*) 'dust_T    :', dust_helper%T_dust(1:ndust)
             write(*,*) 'dust_Z    :', dust_helper%Z_dust(1:ndust)
@@ -541,7 +552,24 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,*) 'Prec_dust :', dust_helper%Prec_dust(1:ndust)
             write(*,*) 'Pcoll_dust:', dust_helper%Pcoll_dust(1:ndust)
 #endif
-            write(*,*) 'loopCodes:', loopCodes
+            write(*,"(A11, *(X, I6))") ' loopCodes:', loopCodes
+            write(*,"(A11, *(X, I6))") 'loopCodes1:', loopCodes1
+            write(*,"(A11)") 'loopCodes2:'
+            do loopCode_idx1=1,nGroups
+               write(*,"(*(X, I6))") loopCodes2(loopCode_idx1, 1:ndim)
+            end do
+            write(*,"(A11)") 'loopCodes8:'
+            do loopCode_idx1=1,n_elements
+               if (elements(loopCode_idx1)%atomic_number > 0) then
+                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes8(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+               end if
+            end do
+            write(*,"(A11)") 'loopCodes9:'
+            do loopCode_idx1=1,n_elements
+               if (elements(loopCode_idx1)%atomic_number > 0) then
+                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes9(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+               end if
+            end do
             err_idx = i
             return ! to check other quantities, return instead of stop
          end if
@@ -549,11 +577,20 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          do ia=1,nAct                             ! Loop over the active cells
             i = indAct(ia)                        !                 Cell index
             call rtz_cool_step(i)
+            loopCodes(code+1) = loopCodes(code+1)+1 ! to also print code=0 case
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
                nAct_next=nAct_next+1 ; indAct(nAct_next) = i
-               loopCodes(code) = loopCodes(code)+1
+               if (code == 1) then
+                  loopCodes1(loopCode_idx1) = loopCodes1(loopCode_idx1) + 1
+               else if (code == 2) then
+                  loopCodes2(loopCode_idx1,loopCode_idx2) = loopCodes2(loopCode_idx1,loopCode_idx2) + 1
+               else if (code == 8) then
+                  loopCodes8(loopCode_idx1,loopCode_idx2) = loopCodes8(loopCode_idx1,loopCode_idx2) + 1
+               else if (code == 9) then
+                  loopCodes9(loopCode_idx1,loopCode_idx2) = loopCodes9(loopCode_idx1,loopCode_idx2) + 1
+               end if
                cycle
             endif
             ! Update the cell state (advance the time by ddt):
@@ -930,6 +967,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                end if
                code=1
 
+               loopCode_idx1=igroup
+
                ! print some before return
                if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
                   write(*,*) 'This is raised in `rtz_cool_step`'
@@ -969,6 +1008,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      t_rad = t_rad + (t_now - t_last)
                   end if
                   code=2
+
+                  loopCode_idx1=igroup
+                  loopCode_idx2=idim
 
                   ! print some before return
                   if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -1408,7 +1450,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   call cpu_time(t_now)
                   t_mol = t_mol + (t_now - t_last)
                end if
-               code=6 !TODO(code) update this code for each ion
+               code=6
 
                ! print some before return
                if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -1543,7 +1585,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                write(*,*) '        n_OI:', n_OI
                write(*,*) '     nOI_new:', nOI_new
 
-               write(*,*) '   loopCodes:',loopCodes
+               ! write(*,*) '   loopCodes:',loopCodes
             end if
 
             ! Check for convergence
@@ -1559,7 +1601,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      call cpu_time(t_now)
                      t_mol = t_mol + (t_now - t_last)
                   end if
-                  code=7 !TODO(code) update this code for each ion
+                  code=7
 
                   ! print some before return
                   if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -1886,6 +1928,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      end if
                      code=8 !TODO(code) update this code for each ion
 
+                     loopCode_idx1=iElement
+                     loopCode_idx2=iIon
+
                      ! print some before return
                      if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
                         write(*,*) 'This is raised in `rtz_cool_step`'
@@ -1919,6 +1964,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                         t_ion = t_ion + (t_now - t_last)
                      end if
                      code=9
+                     
+                     loopCode_idx1=iElement
+                     loopCode_idx2=iIon
 
                      ! print some before return
                      if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -2026,6 +2074,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Save T and mu
       TK_to_save(icell)=TK
       mu_to_save(icell)=mu
+
+      ! print some before return
+      if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+         write(*,*) 'This is raised in `rtz_cool_step`'
+         write(*,*) 'icell:', icell
+         write(*,*) ' code:', code
+         write(*,*) '-> too small timestep'
+         
+         ! write(*,*) ':', 
+      end if
 
    END SUBROUTINE rtz_cool_step
 
