@@ -22,7 +22,8 @@ module rtz_cooling_module
    implicit none
 
    private   ! default
-   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust
+   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust, &
+          rtz_run_single_cell_test
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
@@ -617,6 +618,37 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
             end if
             write(*,*) 'loopCodes:', loopCodes
+            ! ---- machine-readable crash cell dump for single-cell replay ----
+            block
+               integer, parameter :: dump_unit = 998
+               open(unit=dump_unit, file='rtz_crash_cell_dump.dat', &
+                    status='replace', action='write')
+               write(dump_unit,*) n_elements, nGroups, ndim
+               write(dump_unit,*) aexp, tleft(i), ddt(i), dx_SS_H2, ilevel, nCell
+               write(dump_unit,*) T2(i)
+               write(dump_unit,*) xion(1:n_elements, 1:n_elements, i)
+               write(dump_unit,*) nElement(1:n_elements, i)
+               write(dump_unit,*) nCO(i)
+#ifdef RT
+               write(dump_unit,*) Np(1:nGroups, i)
+               write(dump_unit,*) Fp(1:ndim, 1:nGroups, i)
+               write(dump_unit,*) p_gas(1:ndim, i)
+               write(dump_unit,*) dNpdt(1:nGroups, i)
+               write(dump_unit,*) dFpdt(1:ndim, 1:nGroups, i)
+#endif
+#ifdef CALIMA
+               write(dump_unit,*) sigma(i)
+#if NDUST>0
+               write(dump_unit,*) rho_dust(i, 1:ndust)
+#endif
+#if NPAH>0
+               write(dump_unit,*) rho_pah(i, 1:npah)
+#endif
+#endif
+               close(dump_unit)
+               write(*,*) 'Crash cell state written to rtz_crash_cell_dump.dat'
+            end block
+            ! ---- end crash cell dump ----
             err_idx = i
             return ! to check other quantities, return instead of stop
          end if
@@ -2103,6 +2135,117 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(fred .gt. 1d0) Fp = Fp/fred
    END SUBROUTINE reduce_flux
 #endif
+
+!***********************************************************************
+SUBROUTINE rtz_run_single_cell_test(filename)
+   ! Read a crash dump written by rtz_solve_cooling's loopcnt guard and
+   ! replay just that one cell in isolation for diagnosis.
+   implicit none
+   character(len=*), intent(in) :: filename
+
+   real(dp), dimension(1:nvector) :: T2_1, nCO_1
+   real(dp), dimension(1:n_elements, 1:n_elements, 1:nvector) :: xion_1
+   real(dp), dimension(1:n_elements, 1:nvector) :: nElement_1
+#ifdef RT
+   real(dp), dimension(1:nGroups, 1:nvector) :: Np_1, dNpdt_1
+   real(dp), dimension(1:ndim, 1:nGroups, 1:nvector) :: Fp_1, dFpdt_1
+   real(dp), dimension(1:ndim, 1:nvector) :: p_gas_1
+#endif
+#ifdef CALIMA
+   real(dp), dimension(1:nvector) :: sigma_1
+#if NDUST>0
+   real(dp), dimension(1:nvector, 1:ndust) :: rho_dust_1
+#endif
+#if NPAH>0
+   real(dp), dimension(1:nvector, 1:npah) :: rho_pah_1
+#endif
+#endif
+
+   real(dp) :: aexp_r, tleft_r, ddt_r, dx_SS_H2_r
+   integer  :: ilevel_r, nCell_r, err_idx_out
+   integer  :: n_elem_r, nGroups_r, ndim_r
+   integer, parameter :: ru = 997
+
+   write(*,*) '*** rtz_run_single_cell_test: reading ', trim(filename)
+
+   open(unit=ru, file=trim(filename), status='old', action='read')
+
+   read(ru,*) n_elem_r, nGroups_r, ndim_r
+   if (n_elem_r /= n_elements .or. nGroups_r /= nGroups .or. ndim_r /= ndim) then
+      write(*,*) 'ERROR: dump dimensions mismatch'
+      write(*,*) '  file: n_elements=', n_elem_r, ' nGroups=', nGroups_r, ' ndim=', ndim_r
+      write(*,*) '  code: n_elements=', n_elements, ' nGroups=', nGroups, ' ndim=', ndim
+      close(ru); return
+   end if
+
+   T2_1=0d0; nCO_1=0d0; xion_1=0d0; nElement_1=0d0
+#ifdef RT
+   Np_1=0d0; dNpdt_1=0d0; Fp_1=0d0; dFpdt_1=0d0; p_gas_1=0d0
+#endif
+#ifdef CALIMA
+   sigma_1=0d0
+#if NDUST>0
+   rho_dust_1=0d0
+#endif
+#if NPAH>0
+   rho_pah_1=0d0
+#endif
+#endif
+
+   read(ru,*) aexp_r, tleft_r, ddt_r, dx_SS_H2_r, ilevel_r, nCell_r
+   read(ru,*) T2_1(1)
+   read(ru,*) xion_1(1:n_elements, 1:n_elements, 1)
+   read(ru,*) nElement_1(1:n_elements, 1)
+   read(ru,*) nCO_1(1)
+#ifdef RT
+   read(ru,*) Np_1(1:nGroups, 1)
+   read(ru,*) Fp_1(1:ndim, 1:nGroups, 1)
+   read(ru,*) p_gas_1(1:ndim, 1)
+   read(ru,*) dNpdt_1(1:nGroups, 1)
+   read(ru,*) dFpdt_1(1:ndim, 1:nGroups, 1)
+#endif
+#ifdef CALIMA
+   read(ru,*) sigma_1(1)
+#if NDUST>0
+   read(ru,*) rho_dust_1(1, 1:ndust)
+#endif
+#if NPAH>0
+   read(ru,*) rho_pah_1(1, 1:npah)
+#endif
+#endif
+   close(ru)
+
+   write(*,*) '*** Initial state:'
+   write(*,*) '    aexp=', aexp_r, '  dt(remaining)=', tleft_r
+   write(*,*) '    ilevel=', ilevel_r, '  dx_SS_H2=', dx_SS_H2_r
+   write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
+
+   err_idx_out = 0
+   call rtz_solve_cooling( &
+        T2_1, aexp_r, xion_1, nElement_1, nCO_1, &
+#ifdef RT
+        Np_1, Fp_1, p_gas_1, dNpdt_1, dFpdt_1, ilevel_r, &
+#endif
+        tleft_r, 1, dx_SS_H2_r, err_idx_out &
+#ifdef CALIMA
+        , sigma=sigma_1 &
+#if NDUST>0
+        , rho_dust=rho_dust_1 &
+#endif
+#if NPAH>0
+        , rho_pah=rho_pah_1 &
+#endif
+#endif
+        )
+
+   if (err_idx_out > 0) then
+      write(*,*) '*** Single-cell test: crash reproduced (err_idx=', err_idx_out, ')'
+   else
+      write(*,*) '*** Single-cell test: cell converged successfully'
+      write(*,*) '    Final T2=', T2_1(1)
+   end if
+
+END SUBROUTINE rtz_run_single_cell_test
 
 END MODULE rtz_cooling_module
 

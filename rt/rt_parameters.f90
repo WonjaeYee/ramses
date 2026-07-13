@@ -185,6 +185,8 @@ module rt_parameters
   real(dp)::rtz_primary_cosmic_ray_ionization_rate=0.d0
   real(dp)::rtz_max_cool_timestep=1.d11
   integer::rtz_eqm_min_its=50
+  logical::rtz_single_cell_test=.false.
+  character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
   logical::rt_isoPress=.false.         ! Use cE, not F, for rad. pressure
   real(dp)::rt_pressBoost=1d0          ! Boost on RT pressure

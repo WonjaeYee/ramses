@@ -9,6 +9,7 @@ subroutine init_time
 #ifdef RT
 #ifdef RTZ
   use rtz_cooling_module
+  use rt_parameters, only: rtz_single_cell_test, rtz_single_cell_test_file
   use movie_lines_module, only: init_movie_lines
   use cosmic_ray_ionization_module, only: initialize_cr_rates
   use photoionization_UVB_module, only: load_UVB_data, update_UVB
@@ -351,6 +352,12 @@ subroutine init_time
 
   ! Initialize tables for CO self-shielding
   call initialize_SCO_table()
+
+  ! Single-cell cooling test: replay a crash dump and stop before full sim init
+  if (rtz_single_cell_test) then
+     call rtz_run_single_cell_test(trim(rtz_single_cell_test_file))
+     stop 'rtz_single_cell_test complete'
+  end if
 
   ! Initialize the metal yields
   call initialize_SN_yields()
