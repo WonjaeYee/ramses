@@ -101,6 +101,9 @@ module pm_parameters
   real(dp) :: imf_a1 = -1.3d0
   real(dp) :: imf_a2 = -2.3d0
   integer :: uniform_rand_seed = 42 
+
+  real(dp) :: resolve_jeans_by = 1.0d0
+  ! form sink particles if the jeans length is not resolved by a cell size times this factor
 #endif 
 
 end module pm_parameters

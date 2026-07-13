@@ -3271,6 +3271,7 @@ subroutine read_sink_params()
        sink_constant_phys_radius,&
 #ifdef INDIVIDUAL_SINK_STARS
        p3_mchar,z_crit_pop3,uniform_rand_seed, &
+       resolve_jeans_by, &
 #endif
        use_bondi_correction
   real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v
