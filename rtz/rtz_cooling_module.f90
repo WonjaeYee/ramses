@@ -117,6 +117,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       , rho_dust &
       , rho_pah &
 #endif
+      , ddt_initial &
    )
    ! Semi-implicitly solve for new temperature, ionization states,
    ! photon density/flux, and gas velocity in a number of cells.
@@ -162,6 +163,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
 #endif
+   real(dp), intent(in), optional :: ddt_initial
 !--------------------------------------------------------
    real(dp),dimension(1:nvector):: tLeft, ddt
    logical:: dt_ok
@@ -473,6 +475,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    else
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
+      if (present(ddt_initial)) ddt(1) = ddt_initial
 
       do i=1,ncell
          indact(i) = i                   !      Set up indexes of active cells
@@ -624,7 +627,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                open(unit=dump_unit, file='rtz_crash_cell_dump.dat', &
                     status='replace', action='write')
                write(dump_unit,*) n_elements, nGroups, ndim
-               write(dump_unit,*) aexp, tleft(i), ddt(i), dx_SS_H2, ilevel, nCell
+               write(dump_unit,*) aexp, tleft(i), ddt(i), dx_SS_H2, ilevel, nCell, rt_c_cgs(ilevel)
                write(dump_unit,*) T2(i)
                write(dump_unit,*) xion(1:n_elements, 1:n_elements, i)
                write(dump_unit,*) nElement(1:n_elements, i)
@@ -2140,6 +2143,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 SUBROUTINE rtz_run_single_cell_test(filename)
    ! Read a crash dump written by rtz_solve_cooling's loopcnt guard and
    ! replay just that one cell in isolation for diagnosis.
+   use photoionization_UVB_module, only: update_UVB
    implicit none
    character(len=*), intent(in) :: filename
 
@@ -2161,7 +2165,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 #endif
 
-   real(dp) :: aexp_r, tleft_r, ddt_r, dx_SS_H2_r
+   real(dp) :: aexp_r, tleft_r, ddt_r, dx_SS_H2_r, rt_c_cgs_r
    integer  :: ilevel_r, nCell_r, err_idx_out
    integer  :: n_elem_r, nGroups_r, ndim_r
    integer, parameter :: ru = 997
@@ -2192,7 +2196,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 #endif
 
-   read(ru,*) aexp_r, tleft_r, ddt_r, dx_SS_H2_r, ilevel_r, nCell_r
+   read(ru,*) aexp_r, tleft_r, ddt_r, dx_SS_H2_r, ilevel_r, nCell_r, rt_c_cgs_r
    read(ru,*) T2_1(1)
    read(ru,*) xion_1(1:n_elements, 1:n_elements, 1)
    read(ru,*) nElement_1(1:n_elements, 1)
@@ -2215,10 +2219,15 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
    close(ru)
 
+   ! Restore physics globals to crash-time values before replay
+   rt_c_cgs(ilevel_r) = rt_c_cgs_r
+   call update_UVB((1.d0/aexp_r) - 1.d0)
+
    write(*,*) '*** Initial state:'
    write(*,*) '    aexp=', aexp_r, '  dt(remaining)=', tleft_r
    write(*,*) '    ilevel=', ilevel_r, '  dx_SS_H2=', dx_SS_H2_r
    write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
+   write(*,*) '    ddt(crash)=', ddt_r, '  rt_c_cgs=', rt_c_cgs_r
 
    err_idx_out = 0
    call rtz_solve_cooling( &
@@ -2236,6 +2245,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
         , rho_pah=rho_pah_1 &
 #endif
 #endif
+        , ddt_initial=ddt_r &
         )
 
    if (err_idx_out > 0) then
