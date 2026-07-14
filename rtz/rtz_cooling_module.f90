@@ -117,7 +117,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       , rho_dust &
       , rho_pah &
 #endif
-      , ddt_initial &
    )
    ! Semi-implicitly solve for new temperature, ionization states,
    ! photon density/flux, and gas velocity in a number of cells.
@@ -163,9 +162,26 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
 #endif
-   real(dp), intent(in), optional :: ddt_initial
 !--------------------------------------------------------
    real(dp),dimension(1:nvector):: tLeft, ddt
+   ! Initial-state copies written to crash dump (captured before sub-stepping begins)
+   real(dp),dimension(1:nvector):: T2_init, nCO_init
+   real(dp),dimension(1:n_elements,1:n_elements,1:nvector):: xion_init
+   real(dp),dimension(1:n_elements,1:nvector):: nElement_init
+#ifdef RT
+   real(dp),dimension(1:nGroups,1:nvector):: Np_init, dNpdt_init
+   real(dp),dimension(1:ndim,1:nGroups,1:nvector):: Fp_init, dFpdt_init
+   real(dp),dimension(1:ndim,1:nvector):: p_gas_init
+#endif
+#ifdef CALIMA
+   real(dp),dimension(1:nvector):: sigma_init
+#if NDUST>0
+   real(dp),dimension(1:nvector,1:ndust):: rho_dust_init
+#endif
+#if NPAH>0
+   real(dp),dimension(1:nvector,1:npah):: rho_pah_init
+#endif
+#endif
    logical:: dt_ok
    real(dp):: dt_rec
    real(dp):: dT2
@@ -475,7 +491,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    else
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
-      if (present(ddt_initial)) ddt(1) = ddt_initial
 
       do i=1,ncell
          indact(i) = i                   !      Set up indexes of active cells
@@ -525,12 +540,46 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       end do
 
+      ! Snapshot initial state for crash dump (state after clamping, before any sub-steps)
+      T2_init(1:ncell)                          = T2(1:ncell)
+      xion_init(1:n_elements,1:n_elements,1:ncell) = xion(1:n_elements,1:n_elements,1:ncell)
+      nElement_init(1:n_elements,1:ncell)       = nElement(1:n_elements,1:ncell)
+      nCO_init(1:ncell)                         = nCO(1:ncell)
+#ifdef RT
+      Np_init(1:nGroups,1:ncell)                = Np(1:nGroups,1:ncell)
+      Fp_init(1:ndim,1:nGroups,1:ncell)         = Fp(1:ndim,1:nGroups,1:ncell)
+      p_gas_init(1:ndim,1:ncell)                = p_gas(1:ndim,1:ncell)
+      dNpdt_init(1:nGroups,1:ncell)             = dNpdt(1:nGroups,1:ncell)
+      dFpdt_init(1:ndim,1:nGroups,1:ncell)      = dFpdt(1:ndim,1:nGroups,1:ncell)
+#endif
+#ifdef CALIMA
+      sigma_init(1:ncell)                       = sigma(1:ncell)
+#if NDUST>0
+      rho_dust_init(1:ncell,1:ndust)            = rho_dust(1:ncell,1:ndust)
+#endif
+#if NPAH>0
+      rho_pah_init(1:ncell,1:npah)              = rho_pah(1:ncell,1:npah)
+#endif
+#endif
+
       ! Loop until all cells have tleft=0
       ! **********************************************
       nAct=nCell                                      ! Currently active cells
       loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
+         if (rtz_single_cell_test .and. mod(loopcnt,10000)==0) then
+            write(*,'(A,I8,A,ES10.3,A,I3,A,ES12.5,A,ES12.5,A,ES12.5)') &
+               '  iter:', loopcnt, '  ddt:', ddt(indAct(1)), &
+               '  code:', code, &
+               '  T2:', T2(indAct(1)), &
+               '  nH:', nElement(1,indAct(1)), &
+               '  tleft:', tLeft(indAct(1))
+#ifdef CALIMA
+            write(*,*) '     Z_dust:', dust_helper%Z_dust(1:ndust)
+            write(*,*) '     T_dust:', dust_helper%T_dust(1:ndust)
+#endif
+         end if
          if (loopcnt.gt.100000) then
             write(*,*)ilevel,rt_c_cgs(ilevel)
             write(*,*) "Too high loopcnt",loopcnt
@@ -622,34 +671,36 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             end if
             write(*,*) 'loopCodes:', loopCodes
             ! ---- machine-readable crash cell dump for single-cell replay ----
+            ! Writes the INITIAL state (before any sub-steps) so the replay
+            ! traces the full trajectory from the start.
             block
                integer, parameter :: dump_unit = 998
                open(unit=dump_unit, file='rtz_crash_cell_dump.dat', &
                     status='replace', action='write')
                write(dump_unit,*) n_elements, nGroups, ndim
-               write(dump_unit,*) aexp, tleft(i), ddt(i), dx_SS_H2, ilevel, nCell, rt_c_cgs(ilevel)
-               write(dump_unit,*) T2(i)
-               write(dump_unit,*) xion(1:n_elements, 1:n_elements, i)
-               write(dump_unit,*) nElement(1:n_elements, i)
-               write(dump_unit,*) nCO(i)
+               write(dump_unit,*) aexp, dt, dx_SS_H2, ilevel, nCell, rt_c_cgs(ilevel)
+               write(dump_unit,*) T2_init(i)
+               write(dump_unit,*) xion_init(1:n_elements, 1:n_elements, i)
+               write(dump_unit,*) nElement_init(1:n_elements, i)
+               write(dump_unit,*) nCO_init(i)
 #ifdef RT
-               write(dump_unit,*) Np(1:nGroups, i)
-               write(dump_unit,*) Fp(1:ndim, 1:nGroups, i)
-               write(dump_unit,*) p_gas(1:ndim, i)
-               write(dump_unit,*) dNpdt(1:nGroups, i)
-               write(dump_unit,*) dFpdt(1:ndim, 1:nGroups, i)
+               write(dump_unit,*) Np_init(1:nGroups, i)
+               write(dump_unit,*) Fp_init(1:ndim, 1:nGroups, i)
+               write(dump_unit,*) p_gas_init(1:ndim, i)
+               write(dump_unit,*) dNpdt_init(1:nGroups, i)
+               write(dump_unit,*) dFpdt_init(1:ndim, 1:nGroups, i)
 #endif
 #ifdef CALIMA
-               write(dump_unit,*) sigma(i)
+               write(dump_unit,*) sigma_init(i)
 #if NDUST>0
-               write(dump_unit,*) rho_dust(i, 1:ndust)
+               write(dump_unit,*) rho_dust_init(i, 1:ndust)
 #endif
 #if NPAH>0
-               write(dump_unit,*) rho_pah(i, 1:npah)
+               write(dump_unit,*) rho_pah_init(i, 1:npah)
 #endif
 #endif
                close(dump_unit)
-               write(*,*) 'Crash cell state written to rtz_crash_cell_dump.dat'
+               write(*,*) 'Initial cell state written to rtz_crash_cell_dump.dat'
             end block
             ! ---- end crash cell dump ----
             err_idx = i
@@ -2165,7 +2216,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 #endif
 
-   real(dp) :: aexp_r, tleft_r, ddt_r, dx_SS_H2_r, rt_c_cgs_r
+   real(dp) :: aexp_r, dt_r, dx_SS_H2_r, rt_c_cgs_r
    integer  :: ilevel_r, nCell_r, err_idx_out
    integer  :: n_elem_r, nGroups_r, ndim_r
    integer, parameter :: ru = 997
@@ -2196,7 +2247,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 #endif
 
-   read(ru,*) aexp_r, tleft_r, ddt_r, dx_SS_H2_r, ilevel_r, nCell_r, rt_c_cgs_r
+   read(ru,*) aexp_r, dt_r, dx_SS_H2_r, ilevel_r, nCell_r, rt_c_cgs_r
    read(ru,*) T2_1(1)
    read(ru,*) xion_1(1:n_elements, 1:n_elements, 1)
    read(ru,*) nElement_1(1:n_elements, 1)
@@ -2224,10 +2275,10 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    call update_UVB((1.d0/aexp_r) - 1.d0)
 
    write(*,*) '*** Initial state:'
-   write(*,*) '    aexp=', aexp_r, '  dt(remaining)=', tleft_r
+   write(*,*) '    aexp=', aexp_r, '  dt=', dt_r
    write(*,*) '    ilevel=', ilevel_r, '  dx_SS_H2=', dx_SS_H2_r
    write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
-   write(*,*) '    ddt(crash)=', ddt_r, '  rt_c_cgs=', rt_c_cgs_r
+   write(*,*) '    rt_c_cgs=', rt_c_cgs_r
 
    err_idx_out = 0
    call rtz_solve_cooling( &
@@ -2235,7 +2286,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #ifdef RT
         Np_1, Fp_1, p_gas_1, dNpdt_1, dFpdt_1, ilevel_r, &
 #endif
-        tleft_r, 1, dx_SS_H2_r, err_idx_out &
+        dt_r, 1, dx_SS_H2_r, err_idx_out &
 #ifdef CALIMA
         , sigma=sigma_1 &
 #if NDUST>0
@@ -2245,7 +2296,6 @@ SUBROUTINE rtz_run_single_cell_test(filename)
         , rho_pah=rho_pah_1 &
 #endif
 #endif
-        , ddt_initial=ddt_r &
         )
 
    if (err_idx_out > 0) then
