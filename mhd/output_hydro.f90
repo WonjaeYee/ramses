@@ -6,6 +6,9 @@ subroutine backup_hydro(filename, filename_desc)
   use rtz_module
   use rt_parameters, only:iIons, nIons, isCO_rtz, isH2_rtz
 #endif
+#ifdef CALIMA
+   use dust_commons, only:dustbins_props, pahbins_props
+#endif
   use mpi_mod
   implicit none
 #ifndef WITHOUTMPI
@@ -30,6 +33,9 @@ subroutine backup_hydro(filename, filename_desc)
   character(len=100) :: field_name
 #ifdef RTZ
   integer :: counter, i_elements, i_ions
+#endif
+#ifdef CALIMA
+   integer :: i_dust, i_pah
 #endif
 
   if (verbose) write(*,*)'Entering backup_hydro'
@@ -157,7 +163,7 @@ subroutine backup_hydro(filename, filename_desc)
                  if (metal .and. ivar.ge.imetal .and. ivar.lt.iIons) then
 #ifdef RTZ
                     counter = -1
-                    field_name = 'metallicity'
+                    field_name = ''
                     do i_elements = 1,n_elements
                        if (elements(i_elements)%atomic_number.gt.0) then 
                           counter = counter + 1
@@ -172,6 +178,27 @@ subroutine backup_hydro(filename, filename_desc)
                     if (ivar.eq.iCO) field_name = 'CO'
                  end if
 #endif
+
+#ifdef CALIMA
+                    if (len_trim(field_name).eq.0) then
+                       do i_pah = 1, npah
+                          if (pahbins_props(i_pah)%u_hydro_idx.eq.ivar) then
+                             write(field_name, '("PAHBin_", i0.2)') i_pah
+                          end if
+                       end do
+                    end if
+                    if (len_trim(field_name).eq.0) then
+                       do i_dust = 1, ndust
+                          if (dustbins_props(i_dust)%u_hydro_idx.eq.ivar) then
+                             write(field_name, '("DustBin_", i0.2)') i_dust
+                          end if
+                       end do
+                    end if
+#endif
+
+                    if (len_trim(field_name).eq.0) then
+                       write(field_name, '("metallicity_", i0.2)') ivar - imetal
+                    end if
 
 #else
                     write(field_name, '("metallicity_", i0.2)') ivar - imetal    
