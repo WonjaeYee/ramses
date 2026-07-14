@@ -2107,10 +2107,8 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: charge_transfer_heat_cool
     real(dp):: photoheating
     real(dp):: total_cooling, total_heating
-    real(dp)::total_G0
     integer:: save_cooling_counter
 
-    total_G0 = G0 + UVB_G0
     h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
