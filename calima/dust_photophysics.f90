@@ -1652,7 +1652,7 @@ module dust_radiation
             fprime = dH_dT - dP_dT
             if (f .eq. 0d0) then
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
-                call dust_log_tdust_solver_update(iter_used, .false.)
+                call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
             end if
             ! if (abs(fprime) < 1d-20) exit
@@ -1663,7 +1663,7 @@ module dust_radiation
                 T = Tmin
                 call dust_emission_power(i_dust, T, P_rad)
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
-                call dust_log_tdust_solver_update(iter_used, .false.)
+                call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
             end if
 
@@ -1671,7 +1671,7 @@ module dust_radiation
                 T = T_new
                 call dust_emission_power(i_dust, T, P_rad)
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
-                call dust_log_tdust_solver_update(iter_used, .false.)
+                call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
             end if
             T = T_new
@@ -1679,7 +1679,7 @@ module dust_radiation
 
         ! fallback (rare)
         call solve_Tdust_brent_fast(i_dust,P_abs,H0,dH_dT,T0,recomb_heat,pe_heat,P_rad,Tmin,Td_max,T)
-        call dust_log_tdust_solver_update(iter_used, .true.)
+        call dust_log_tdust_solver_update(i_dust, T, iter_used, .true.)
 
         ! Save the final collisional heating rate
         if (dust_coll_cooling) then
@@ -1899,6 +1899,23 @@ module dust_radiation
             T_dust(j) = max(T0, Tmin)
         end do
     end subroutine update_T_dust
+
+    function get_dust_band_luminosity(j, T, mass, iband) result(lum)
+        implicit none
+        integer, intent(in) :: j, iband
+        real(dp), intent(in) :: T, mass
+        real(dp) :: lum
+        real(dp) :: logT, logL
+
+        if (T <= 0d0 .or. mass <= 0d0) then
+            lum = 0d0
+            return
+        end if
+
+        logT = log10(T)
+        call dustbins_props(j)%IRemission_tab(iband)%interpolate(logT, logL)
+        lum = (10d0**logL) * mass
+    end function get_dust_band_luminosity
 
 end module dust_radiation
 

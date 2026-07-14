@@ -29,7 +29,7 @@ module constants
   real(dp),parameter ::rhoc         = 1.8800000d-29 ! Crit. density [g cm-3]
   real(dp),parameter ::one_over_clight=3.335640484668562d-11 ! Save some computation
   real(dp),parameter ::four_pi_eps0 = 1.1126501d-19 ! 4 pi x vacuum permittivity [F nm-1]
-  real(dp),parameter ::e2instatC    = 2.3070775d-17 ! Elemental charge squared [statC^2]
+  real(dp),parameter ::e2instatC    = 2.3070775d-19 ! Elemental charge squared [statC^2]
 
   ! Dalton or unified atomic mass unit (amu) is the mass of 1/12 of a carbon-12 atom
   ! Since we do not track multiple isotopes, we use what is termed the

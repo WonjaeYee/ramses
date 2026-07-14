@@ -186,7 +186,7 @@ module dust_cooling
                 phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(-1) ! [eV]
                 call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
                 cooling_rate = exp(cooling_rate * ln10)
-                sum_rate = sum_rate + Coulomb_factor(-1) * ne * cooling_rate
+                sum_rate = sum_rate + ne * cooling_rate
             else
                 ! 1D interpolation: use stored phi=0 index
                 call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, cooling_rate, idx_x=idx_T)
@@ -217,7 +217,7 @@ module dust_cooling
                         phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(j-1) ! [eV]
                         call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
                         if (cooling_rate < -30d0) cycle
-                        sum_element = sum_element + Coulomb_factor(j-1) * xion * exp(cooling_rate * ln10)
+                        sum_element = sum_element + xion * exp(cooling_rate * ln10)
                     end do
                     sum_rate = sum_rate + nElement(iel) * sum_element
                 else

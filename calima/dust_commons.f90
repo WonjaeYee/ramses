@@ -251,6 +251,17 @@ module dust_commons
     integer*8 :: tdust_solver_iter_min_all=huge(0_8)
     integer*8 :: tdust_solver_iter_max_all=0
     integer*8 :: tdust_solver_brent_calls_all=0
+
+    ! Per-dust-bin temperature statistics for tdust_solver log
+    real(dp), dimension(1:ndust) :: tdust_min = huge(0d0)
+    real(dp), dimension(1:ndust) :: tdust_max = -huge(0d0)
+    real(dp), dimension(1:ndust) :: tdust_sum = 0d0
+    integer*8, dimension(1:ndust) :: tdust_bins_calls = 0_8
+
+    real(dp), dimension(1:ndust) :: tdust_min_all = huge(0d0)
+    real(dp), dimension(1:ndust) :: tdust_max_all = -huge(0d0)
+    real(dp), dimension(1:ndust) :: tdust_sum_all = 0d0
+    integer*8, dimension(1:ndust) :: tdust_bins_calls_all = 0_8
     ! ODE driver acceptance/rejection statistics (summed over all cells per coarse step)
     integer*8 :: ode_naccepted=0, ode_nrejected=0, ode_nreduced=0
     integer*8 :: ode_naccepted_all=0, ode_nrejected_all=0, ode_nreduced_all=0
@@ -265,8 +276,10 @@ module dust_commons
 
     contains
 
-    subroutine dust_log_tdust_solver_update(n_iter, used_brent)
+    subroutine dust_log_tdust_solver_update(i_dust, T, n_iter, used_brent)
         implicit none
+        integer, intent(in) :: i_dust
+        real(dp), intent(in) :: T
         integer, intent(in) :: n_iter
         logical, intent(in) :: used_brent
         integer*8 :: n_iter_i8
@@ -280,11 +293,19 @@ module dust_commons
         tdust_solver_iter_min = min(tdust_solver_iter_min, n_iter_i8)
         tdust_solver_iter_max = max(tdust_solver_iter_max, n_iter_i8)
         if (used_brent) tdust_solver_brent_calls = tdust_solver_brent_calls + 1_8
+
+        if (i_dust >= 1 .and. i_dust <= ndust) then
+            tdust_min(i_dust) = min(tdust_min(i_dust), T)
+            tdust_max(i_dust) = max(tdust_max(i_dust), T)
+            tdust_sum(i_dust) = tdust_sum(i_dust) + T
+            tdust_bins_calls(i_dust) = tdust_bins_calls(i_dust) + 1_8
+        end if
     end subroutine dust_log_tdust_solver_update
 
     subroutine dust_log_tdust_solver_print_reset
         implicit none
         real(dp) :: avg_iter
+        integer :: ii
 
         if (.not. dust_log) return
 
@@ -293,6 +314,17 @@ module dust_commons
             write(*,'(A,I0,A,I0,A,F10.3,A,I0)') 'Tdust solver stats: min_iter=', &
                 int(tdust_solver_iter_min), ', max_iter=', int(tdust_solver_iter_max), &
                 ', avg_iter=', avg_iter, ', brent_calls=', int(tdust_solver_brent_calls)
+            write(*,*) 'Tdust solver stats per dust bin [K]:'
+            do ii = 1, ndust
+                if (tdust_bins_calls(ii) > 0_8) then
+                    write(*,'(A,I0,A,ES13.6,A,ES13.6,A,ES13.6)') &
+                        '  bin ', ii, ': min=', tdust_min(ii), &
+                        ', max=', tdust_max(ii), &
+                        ', avg=', tdust_sum(ii)/real(tdust_bins_calls(ii), dp)
+                else
+                    write(*,'(A,I0,A)') '  bin ', ii, ': no calls'
+                end if
+            end do
         else
             write(*,'(A)') 'Tdust solver stats: no calls in this equilibrium iteration.'
         end if
@@ -302,6 +334,11 @@ module dust_commons
         tdust_solver_iter_min = huge(0_8)
         tdust_solver_iter_max = 0_8
         tdust_solver_brent_calls = 0_8
+
+        tdust_min = huge(0d0)
+        tdust_max = -huge(0d0)
+        tdust_sum = 0d0
+        tdust_bins_calls = 0_8
     end subroutine dust_log_tdust_solver_print_reset
 
     subroutine add_total_masses
@@ -505,6 +542,14 @@ module dust_commons
                 npah_processes, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
             ode_reduction_count_pah = ode_reduction_count_pah_all
         end if
+        call MPI_ALLREDUCE(tdust_min, tdust_min_all, ndust, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_max, tdust_max_all, ndust, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_sum, tdust_sum_all, ndust, MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        call MPI_ALLREDUCE(tdust_bins_calls, tdust_bins_calls_all, ndust, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+        tdust_min = tdust_min_all
+        tdust_max = tdust_max_all
+        tdust_sum = tdust_sum_all
+        tdust_bins_calls = tdust_bins_calls_all
 #endif
         ! 5. Construct the format string
         write(format_str, '(A, I0, A)') '(A,', ndust + npah, 'ES14.6)'
@@ -568,6 +613,17 @@ module dust_commons
                     ', max=', tdust_solver_iter_max, &
                     ', brent=', tdust_solver_brent_calls, &
                     ' (', 1d2*dble(tdust_solver_brent_calls)/dble(tdust_solver_calls), '%)'
+                write(*,*) '  Per-bin Tdust stats [K]:'
+                do ii = 1, ndust
+                    if (tdust_bins_calls(ii) > 0_8) then
+                        write(*,'(A,I0,A,ES13.6,A,ES13.6,A,ES13.6)') &
+                            '    bin ', ii, ': min=', tdust_min(ii), &
+                            ', max=', tdust_max(ii), &
+                            ', avg=', tdust_sum(ii)/real(tdust_bins_calls(ii), dp)
+                    else
+                        write(*,'(A,I0,A)') '    bin ', ii, ': no calls'
+                    end if
+                end do
             else
                 write(*,*) '  No Tdust solver calls this step.'
             end if
@@ -618,6 +674,10 @@ module dust_commons
         if (allocated(ode_reduction_count_dust_all)) ode_reduction_count_dust_all = 0_8
         if (allocated(ode_reduction_count_pah))      ode_reduction_count_pah      = 0_8
         if (allocated(ode_reduction_count_pah_all))  ode_reduction_count_pah_all  = 0_8
+        tdust_min = huge(0d0); tdust_min_all = huge(0d0)
+        tdust_max = -huge(0d0); tdust_max_all = -huge(0d0)
+        tdust_sum = 0d0; tdust_sum_all = 0d0
+        tdust_bins_calls = 0_8; tdust_bins_calls_all = 0_8
     end subroutine print_dust_log
 
     subroutine print_box_dust_masses()
