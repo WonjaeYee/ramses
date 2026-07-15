@@ -202,9 +202,11 @@ subroutine flag_formation_sites
 #ifdef INDIVIDUAL_SINK_STARS
         ok=ok.and.max_dens(jj)>n_sink * mH / scale_d
         ! Jeans length criterion
-        ok=ok.and.(resolve_jeans_by*dx_min)**2 > (pi/factG) * thermal_support(jj)/3.d0/clump_vol(jj) / max_dens(jj)**2
-        ! thermal_support = p*(gamma-1), thermal_support/max_dens = c_s^2
-        ! notice that thermal_support is total pressure over the clump...
+        if (ok) then
+           ! check jeans length only if the n_cell > 0
+           ok=ok.and.(resolve_jeans_by*dx_min)**2 > (pi/factG) * thermal_support(jj)/3.d0/clump_vol(jj) / max_dens(jj)**2
+           ! notice that thermal_support is total pressure over the clump...
+        end if
 #endif
         ! Clump has to be massive enough
         ok=ok.and.clump_mass4(jj)>mass_sink_seed*M_sun/(scale_d*scale_l**3)
