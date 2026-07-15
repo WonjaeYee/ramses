@@ -735,6 +735,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
+               ! Guard: ddt underflow to IEEE zero — can't make progress, bail
+               if (ddt(i) <= 0d0) then
+                  err_idx = i
+                  return
+               end if
                nAct_next=nAct_next+1 ; indAct(nAct_next) = i
                loopCodes(code) = loopCodes(code)+1
                cellcnt(i) = cellcnt(i) + 1
@@ -863,7 +868,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Variables specific to CALIMA
 #ifdef CALIMA
       integer::ii
-      real(dp)::rho_dust_tot
+      real(dp)::rho_dust_tot,rho_total_check
       real(dp),dimension(1:nGroups)::pahAbs,pahSc,pahRp
       logical::dust_step_ok
       real(dp)::t_sub_start, t_sub_end
@@ -1402,6 +1407,23 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #else
       mu = getMu_RTZ(ne, nElement_dep, dXion)
 #endif
+
+      ! Check that we are correctly conserving total mass
+      rho_total_check = 0.d0
+      do iElement = 1,n_elements
+         if (elements(iElement)%atomic_number > 0) then
+            rho_total_check = rho_total_check + dnElement(iElement) * elements(iElement)%atomic_mass_g
+         end if
+      end do
+      if (ndust > 0) rho_total_check = rho_total_check + sum(drho_dust(:))
+      if (npah  > 0) rho_total_check = rho_total_check + sum(drho_pah(:))
+      if (ABS(rho_total_check - rho) / rho > 1.d-6) then
+         write(*,*) "ERROR: Mass conservation violated in dust update"
+         write(*,*) "       rho_total_check = ", rho_total_check
+         write(*,*) "       rho               = ", rho
+         call clean_stop
+      end if
+
 
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
@@ -2305,6 +2327,9 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
    write(*,*) '    rt_c_cgs=', rt_c_cgs_r
    write(*,*) '    ddt(crash)=', ddt_r, '  tleft(crash)=', tleft_r
+   ! If the dump was written with ddt=0 (already underflowed at crash time),
+   ! reset ddt to tleft so the replay actually integrates.
+   if (ddt_r <= 0d0) ddt_r = tleft_r
 #ifdef RT
    write(*,*) '    Np:', Np_1(1:nGroups, 1)
    write(*,*) '    dNpdt:', dNpdt_1(1:nGroups, 1)
