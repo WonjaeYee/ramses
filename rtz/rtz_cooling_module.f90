@@ -569,23 +569,34 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
          if (rtz_single_cell_test .and. mod(loopcnt,10000)==0) then
-            write(*,'(A,I8,A,ES10.3,A,I3,A,ES12.5,A,ES12.5,A,ES12.5)') &
-               '  iter:', loopcnt, '  ddt:', ddt(indAct(1)), &
+            ! Print state of the active cell with smallest ddt
+            i = indAct(1)
+            do ia=2,nAct
+               if (ddt(indAct(ia)) < ddt(i)) i = indAct(ia)
+            end do
+            write(*,'(A,I8,A,I4,A,ES10.3,A,I3,A,ES12.5,A,ES12.5,A,ES12.5)') &
+               '  iter:', loopcnt, '  nAct:', nAct, '  ddt:', ddt(i), &
                '  code:', code, &
-               '  T2:', T2(indAct(1)), &
-               '  nH:', nElement(1,indAct(1)), &
-               '  tleft:', tLeft(indAct(1))
+               '  T2:', T2(i), &
+               '  nH:', nElement(1,i), &
+               '  tleft:', tLeft(i)
 #ifdef CALIMA
             write(*,*) '     Z_dust:', dust_helper%Z_dust(1:ndust)
             write(*,*) '     T_dust:', dust_helper%T_dust(1:ndust)
 #endif
          end if
          if (loopcnt.gt.100000) then
+            ! Find the active cell with the smallest sub-timestep (most bisected)
+            i = indAct(1)
+            do ia=2,nAct
+               if (ddt(indAct(ia)) < ddt(i)) i = indAct(ia)
+            end do
             write(*,*)ilevel,rt_c_cgs(ilevel)
             write(*,*) "Too high loopcnt",loopcnt
             write(*,*) 'This is raised in `rtz_solve_cooling`'
-            write(*,*) '   tleft:', tLeft
-            write(*,*) '     ddt:', ddt
+            write(*,*) '  nAct:', nAct
+            write(*,*) '   tleft(active):', tLeft(indAct(1:nAct))
+            write(*,*) '     ddt(active):', ddt(indAct(1:nAct))
             write(*,*) '  dt_rec:', dt_rec, new_line('')
             write(*,*) 'code:', code
 #ifdef CALIMA
