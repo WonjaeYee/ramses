@@ -117,6 +117,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       , rho_dust &
       , rho_pah &
 #endif
+      , ddt_initial &
+      , tleft_initial &
    )
    ! Semi-implicitly solve for new temperature, ionization states,
    ! photon density/flux, and gas velocity in a number of cells.
@@ -162,6 +164,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
 #endif
+   ! Optional: seed the sub-timestep for crash replay (crash-time ddt and tleft)
+   real(dp), intent(in), optional :: ddt_initial, tleft_initial
 !--------------------------------------------------------
    real(dp),dimension(1:nvector):: tLeft, ddt
    ! Initial-state copies written to crash dump (captured before sub-stepping begins)
@@ -493,6 +497,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    else
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
+      if (present(ddt_initial)) ddt(1:ncell) = ddt_initial
+      if (present(tleft_initial)) tleft(1:ncell) = tleft_initial
 
       do i=1,ncell
          indact(i) = i                   !      Set up indexes of active cells
@@ -685,36 +691,38 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                        '  mean:', sum(cellcnt(indAct(1:nAct)))/nAct
             write(*,*) 'per-cell failures (active):', cellcnt(indAct(1:nAct))
             ! ---- machine-readable crash cell dump for single-cell replay ----
-            ! Writes the INITIAL state (before any sub-steps) so the replay
-            ! traces the full trajectory from the start.
+            ! Writes the CRASH-TIME state (T2/Np/rho_dust at the point of
+            ! loopcnt>100000) plus crash-time ddt and tleft, so the replay
+            ! starts at the exact stuck state and reproduces the crash.
             block
                integer, parameter :: dump_unit = 998
                open(unit=dump_unit, file='rtz_crash_cell_dump.dat', &
                     status='replace', action='write')
                write(dump_unit,*) n_elements, nGroups, ndim
-               write(dump_unit,*) aexp, dt, dx_SS_H2, ilevel, nCell, rt_c_cgs(ilevel)
-               write(dump_unit,*) T2_init(i)
-               write(dump_unit,*) xion_init(1:n_elements, 1:n_elements, i)
-               write(dump_unit,*) nElement_init(1:n_elements, i)
-               write(dump_unit,*) nCO_init(i)
+               write(dump_unit,*) aexp, dt, dx_SS_H2, ilevel, nCell, rt_c_cgs(ilevel), &
+                                  ddt(i), tLeft(i)
+               write(dump_unit,*) T2(i)
+               write(dump_unit,*) xion(1:n_elements, 1:n_elements, i)
+               write(dump_unit,*) nElement(1:n_elements, i)
+               write(dump_unit,*) nCO(i)
 #ifdef RT
-               write(dump_unit,*) Np_init(1:nGroups, i)
-               write(dump_unit,*) Fp_init(1:ndim, 1:nGroups, i)
-               write(dump_unit,*) p_gas_init(1:ndim, i)
-               write(dump_unit,*) dNpdt_init(1:nGroups, i)
-               write(dump_unit,*) dFpdt_init(1:ndim, 1:nGroups, i)
+               write(dump_unit,*) Np(1:nGroups, i)
+               write(dump_unit,*) Fp(1:ndim, 1:nGroups, i)
+               write(dump_unit,*) p_gas(1:ndim, i)
+               write(dump_unit,*) dNpdt(1:nGroups, i)
+               write(dump_unit,*) dFpdt(1:ndim, 1:nGroups, i)
 #endif
 #ifdef CALIMA
-               write(dump_unit,*) sigma_init(i)
+               write(dump_unit,*) sigma(i)
 #if NDUST>0
-               write(dump_unit,*) rho_dust_init(i, 1:ndust)
+               write(dump_unit,*) rho_dust(i, 1:ndust)
 #endif
 #if NPAH>0
-               write(dump_unit,*) rho_pah_init(i, 1:npah)
+               write(dump_unit,*) rho_pah(i, 1:npah)
 #endif
 #endif
                close(dump_unit)
-               write(*,*) 'Initial cell state written to rtz_crash_cell_dump.dat'
+               write(*,*) 'Crash-time cell state written to rtz_crash_cell_dump.dat'
             end block
             ! ---- end crash cell dump ----
             err_idx = i
@@ -2233,7 +2241,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 #endif
 
-   real(dp) :: aexp_r, dt_r, dx_SS_H2_r, rt_c_cgs_r
+   real(dp) :: aexp_r, dt_r, dx_SS_H2_r, rt_c_cgs_r, ddt_r, tleft_r
    integer  :: ilevel_r, nCell_r, err_idx_out
    integer  :: n_elem_r, nGroups_r, ndim_r
    integer, parameter :: ru = 997
@@ -2264,7 +2272,7 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 #endif
 
-   read(ru,*) aexp_r, dt_r, dx_SS_H2_r, ilevel_r, nCell_r, rt_c_cgs_r
+   read(ru,*) aexp_r, dt_r, dx_SS_H2_r, ilevel_r, nCell_r, rt_c_cgs_r, ddt_r, tleft_r
    read(ru,*) T2_1(1)
    read(ru,*) xion_1(1:n_elements, 1:n_elements, 1)
    read(ru,*) nElement_1(1:n_elements, 1)
@@ -2291,11 +2299,12 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    rt_c_cgs(ilevel_r) = rt_c_cgs_r
    call update_UVB((1.d0/aexp_r) - 1.d0)
 
-   write(*,*) '*** Initial state:'
+   write(*,*) '*** Crash-time state:'
    write(*,*) '    aexp=', aexp_r, '  dt=', dt_r
    write(*,*) '    ilevel=', ilevel_r, '  dx_SS_H2=', dx_SS_H2_r
    write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
    write(*,*) '    rt_c_cgs=', rt_c_cgs_r
+   write(*,*) '    ddt(crash)=', ddt_r, '  tleft(crash)=', tleft_r
 #ifdef RT
    write(*,*) '    Np:', Np_1(1:nGroups, 1)
    write(*,*) '    dNpdt:', dNpdt_1(1:nGroups, 1)
@@ -2317,6 +2326,8 @@ SUBROUTINE rtz_run_single_cell_test(filename)
         , rho_pah=rho_pah_1 &
 #endif
 #endif
+        , ddt_initial=ddt_r &
+        , tleft_initial=tleft_r &
         )
 
    if (err_idx_out > 0) then
