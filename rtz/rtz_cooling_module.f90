@@ -201,6 +201,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nGroups):: group_egy_ratio, group_egy_erg
 #endif
    integer*8,dimension(20)::loopCodes=0
+   integer, dimension(1:nvector) :: cellcnt    ! per-cell failure count
+   integer :: last_code                        ! code from last cell's last step
    integer::iElement, ion_fracs
    real(dp)::current_mass_frac
    integer:: i_interp, convergence_counter
@@ -565,32 +567,30 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Loop until all cells have tleft=0
       ! **********************************************
       nAct=nCell                                      ! Currently active cells
+      cellcnt(1:nCell) = 0
+      last_code = 0
       loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
-         if (rtz_single_cell_test .and. mod(loopcnt,10000)==0) then
-            ! Print state of the active cell with smallest ddt
+         if (rtz_single_cell_test .and. mod(loopcnt,50)==0) then
             i = indAct(1)
-            do ia=2,nAct
-               if (ddt(indAct(ia)) < ddt(i)) i = indAct(ia)
-            end do
-            write(*,'(A,I8,A,I4,A,ES10.3,A,I3,A,ES12.5,A,ES12.5,A,ES12.5)') &
-               '  iter:', loopcnt, '  nAct:', nAct, '  ddt:', ddt(i), &
-               '  code:', code, &
-               '  T2:', T2(i), &
-               '  nH:', nElement(1,i), &
-               '  tleft:', tLeft(i)
+            write(*,'(A,I6,A,I3,A,ES10.3,A,ES10.3,A,ES12.5)') &
+               'iter:', loopcnt, ' code:', last_code, &
+               ' ddt:', ddt(i), ' tleft:', tLeft(i), ' T2:', T2(i)
+#ifdef RT
+            if (mod(loopcnt,500)==0) write(*,*) '  Np:', Np(1:nGroups, i)
+#endif
 #ifdef CALIMA
-            write(*,*) '     Z_dust:', dust_helper%Z_dust(1:ndust)
-            write(*,*) '     T_dust:', dust_helper%T_dust(1:ndust)
+            if (mod(loopcnt,500)==0) then
+               write(*,*) '  Z_dust:', dust_helper%Z_dust(1:ndust)
+               write(*,*) '  T_dust:', dust_helper%T_dust(1:ndust)
+            end if
 #endif
          end if
          if (loopcnt.gt.100000) then
-            ! Find the active cell with the smallest sub-timestep (most bisected)
-            i = indAct(1)
-            do ia=2,nAct
-               if (ddt(indAct(ia)) < ddt(i)) i = indAct(ia)
-            end do
+            ! Find the active cell with the most individual failures
+            ia = maxloc(cellcnt(indAct(1:nAct)), dim=1)
+            i = indAct(ia)
             write(*,*)ilevel,rt_c_cgs(ilevel)
             write(*,*) "Too high loopcnt",loopcnt
             write(*,*) 'This is raised in `rtz_solve_cooling`'
@@ -681,6 +681,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
             end if
             write(*,*) 'loopCodes:', loopCodes
+            write(*,*) 'max per-cell failures:', cellcnt(i), &
+                       '  mean:', sum(cellcnt(indAct(1:nAct)))/nAct
+            write(*,*) 'per-cell failures (active):', cellcnt(indAct(1:nAct))
             ! ---- machine-readable crash cell dump for single-cell replay ----
             ! Writes the INITIAL state (before any sub-steps) so the replay
             ! traces the full trajectory from the start.
@@ -726,8 +729,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! ddt(i) = dt_rec              ! Potentially optimized approach
                nAct_next=nAct_next+1 ; indAct(nAct_next) = i
                loopCodes(code) = loopCodes(code)+1
+               cellcnt(i) = cellcnt(i) + 1
+               last_code = code
                cycle
             endif
+            last_code = 0   ! successful step
             ! Update the cell state (advance the time by ddt):
             T2(i) = T2(i) + dT2
             xion(:,:,i) = xion(:,:,i) + dXion(:,:)
@@ -2290,6 +2296,10 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    write(*,*) '    ilevel=', ilevel_r, '  dx_SS_H2=', dx_SS_H2_r
    write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
    write(*,*) '    rt_c_cgs=', rt_c_cgs_r
+#ifdef RT
+   write(*,*) '    Np:', Np_1(1:nGroups, 1)
+   write(*,*) '    dNpdt:', dNpdt_1(1:nGroups, 1)
+#endif
 
    err_idx_out = 0
    call rtz_solve_cooling( &
