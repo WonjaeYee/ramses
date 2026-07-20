@@ -73,7 +73,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use rt_cooling_module, only: rt_solve_cooling,iIR,rt_isIRtrap &
        ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc
 #endif
-  use constants, only: a_r, Myr2sec
+  use constants, only: a_r, Myr2sec, pi, twopi
 #endif
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb
@@ -125,7 +125,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef RTZ
   real(dp), dimension(n_elements, 1:nvector):: nElement
   real(dp), dimension(1:nvector):: nCO
-  real(dp):: dx_SS_H2
+  real(dp), dimension(1:nvector):: dx_SS_H2
   integer:: counter, e_counter, jj
 #endif
 #ifdef CALIMA
@@ -135,8 +135,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
 #endif
 
-   integer::err_idx
-   real(dp)::temp_sum
+  real(dp)::factG
+
+  integer::err_idx
+  real(dp)::temp_sum
 
   ! Mesh spacing in that level
   dx=0.5D0**ilevel
@@ -154,6 +156,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef RT
   call rt_units(scale_Np, scale_Fp)
 #endif
+
+  ! to compute Jeans length
+  factG=1d0
+  if(cosmo)factG=3d0/4d0/twopi*omega_m*aexp
 
   ! Typical ISM density in H/cc
   nISM = n_star; nCOM=0
@@ -624,7 +630,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         ! Compute the cell length in cm if needed
         dx_SS_H2 = 0.d0
         if (isH2_rtz) then
-           dx_SS_H2 = (boxlen/(2.d0**ilevel)) * scale_l
+           ! dx_SS_H2 = (boxlen/(2.d0**ilevel)) * scale_l
+           ! to reduce the discretization on phase diagram,
+           ! use local Jeans length instead of cell size
+           do i=1,nleaf
+              ! get thermal pressure first ... should I keep err?
+              dx_SS_H2(i) = (gamma-1.0) * (uold(ind_leaf(i),neul) - ekk(i) - err(i) - emag(i))
+              ! coolfine1 runs only over active cells ... hopefully the density is nonzero
+              dx_SS_H2(i) = (pi/factG * dx_SS_H2(i))**0.5 / uold(ind_leaf(i),1)
+              ! don't forget to give dx_SS_H2 in unit of cm
+              dx_SS_H2(i) = dx_SS_H2(i) * scale_l
+           end do
         endif
 
         ! Solve cooling

@@ -151,7 +151,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nGroups, 1:nvector):: Np, dNpdt
    real(dp),dimension(1:ndim, 1:nGroups, 1:nvector):: Fp, dFpdt
    integer::ilevel
-   real(dp):: dx_SS_H2 
+   real(dp),dimension(1:nvector):: dx_SS_H2 
 #endif
    !  logical,dimension(1:nvector):: c_switch
    real(dp)::dt
@@ -799,10 +799,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       f_shd = 1.d0
       f_shd_CO = 1.d0
       if (isH2_rtz) then
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw)
       end if
       if (isCO_rtz) then
-         f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
+         f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
       end if
 
 #ifdef RT
@@ -1300,8 +1300,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_Tk = TK
       dust_helper%local_nH = nH(icell)
       dust_helper%local_rho = rho
-      dust_helper%local_dx = dx_SS_H2
-      dust_helper%local_vol = (dx_SS_H2*dx_SS_H2) * dx_SS_H2
+      dust_helper%local_dx = dx_SS_H2(icell)
+      dust_helper%local_vol = (dx_SS_H2(icell)*dx_SS_H2(icell)) * dx_SS_H2(icell)
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
       dust_helper%local_G0 = local_G0
       dust_helper%local_ne = ne
