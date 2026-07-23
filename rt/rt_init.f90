@@ -152,6 +152,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,isH2_rtz, isCO_rtz, rtz_UV_background_G0, rtz_H2_clumping      &
        & ,rtz_primary_cosmic_ray_ionization_rate, rtz_max_cool_timestep  &
        & ,rtz_eqm_min_its                                                &
+       & ,rtz_single_cell_test, rtz_single_cell_test_file               &
 #endif
        ! RT regions (for initialization)                                 &
        & ,rt_nregion, rt_region_type                                     &

@@ -22,7 +22,8 @@ module rtz_cooling_module
    implicit none
 
    private   ! default
-   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust
+   public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust, &
+          rtz_run_single_cell_test
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
@@ -116,6 +117,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       , rho_dust &
       , rho_pah &
 #endif
+      , ddt_initial &
+      , tleft_initial &
    )
    ! Semi-implicitly solve for new temperature, ionization states,
    ! photon density/flux, and gas velocity in a number of cells.
@@ -161,8 +164,28 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
 #endif
+   ! Optional: seed the sub-timestep for crash replay (crash-time ddt and tleft)
+   real(dp), intent(in), optional :: ddt_initial, tleft_initial
 !--------------------------------------------------------
    real(dp),dimension(1:nvector):: tLeft, ddt
+   ! Initial-state copies written to crash dump (captured before sub-stepping begins)
+   real(dp),dimension(1:nvector):: T2_init, nCO_init
+   real(dp),dimension(1:n_elements,1:n_elements,1:nvector):: xion_init
+   real(dp),dimension(1:n_elements,1:nvector):: nElement_init
+#ifdef RT
+   real(dp),dimension(1:nGroups,1:nvector):: Np_init, dNpdt_init
+   real(dp),dimension(1:ndim,1:nGroups,1:nvector):: Fp_init, dFpdt_init
+   real(dp),dimension(1:ndim,1:nvector):: p_gas_init
+#endif
+#ifdef CALIMA
+   real(dp),dimension(1:nvector):: sigma_init
+#if NDUST>0
+   real(dp),dimension(1:nvector,1:ndust):: rho_dust_init
+#endif
+#if NPAH>0
+   real(dp),dimension(1:nvector,1:npah):: rho_pah_init
+#endif
+#endif
    logical:: dt_ok
    real(dp):: dt_rec
    real(dp):: dT2
@@ -182,6 +205,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:nGroups):: group_egy_ratio, group_egy_erg
 #endif
    integer*8,dimension(20)::loopCodes=0
+   integer, dimension(1:nvector) :: cellcnt    ! per-cell failure count
+   integer :: last_code                        ! code from last cell's last step
    integer::iElement, ion_fracs
    real(dp)::current_mass_frac
    integer:: i_interp, convergence_counter
@@ -289,7 +314,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !!! USE FOR EQM TESTS WITH COOLING AT CONSTANT RHO
             ! Interpolate over density
             nElement(1:n_elements,1:ncell)  = 0.d0  ! Initialize to zero
-            nElement(1,1:ncell)  = 10.d0**(((8.d0 - (-3.d0)) * (real(i_interp,dp) - 1.d0)/(300.d0-1.d0)) + (-3.d0))   
+            nElement(1,1:ncell)  = 10.d0**(((10.d0 - (-3.d0)) * (real(i_interp,dp) - 1.d0)/(300.d0-1.d0)) + (-3.d0))   
             nElement(2,1:ncell)  = nElement(1,1:ncell) * 8.51d-02 ! Helium
             nElement(6,1:ncell)  = nElement(1,1:ncell) * 2.69d-04 * z_ave ! Carbon
             nElement(7,1:ncell)  = nElement(1,1:ncell) * 6.76d-05 * z_ave ! Nitrogen
@@ -472,6 +497,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    else
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
+      if (present(ddt_initial)) ddt(1:ncell) = ddt_initial
+      if (present(tleft_initial)) tleft(1:ncell) = tleft_initial
 
       do i=1,ncell
          indact(i) = i                   !      Set up indexes of active cells
@@ -521,18 +548,61 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       end do
 
+      ! Snapshot initial state for crash dump (state after clamping, before any sub-steps)
+      T2_init(1:ncell)                          = T2(1:ncell)
+      xion_init(1:n_elements,1:n_elements,1:ncell) = xion(1:n_elements,1:n_elements,1:ncell)
+      nElement_init(1:n_elements,1:ncell)       = nElement(1:n_elements,1:ncell)
+      nCO_init(1:ncell)                         = nCO(1:ncell)
+#ifdef RT
+      Np_init(1:nGroups,1:ncell)                = Np(1:nGroups,1:ncell)
+      Fp_init(1:ndim,1:nGroups,1:ncell)         = Fp(1:ndim,1:nGroups,1:ncell)
+      p_gas_init(1:ndim,1:ncell)                = p_gas(1:ndim,1:ncell)
+      dNpdt_init(1:nGroups,1:ncell)             = dNpdt(1:nGroups,1:ncell)
+      dFpdt_init(1:ndim,1:nGroups,1:ncell)      = dFpdt(1:ndim,1:nGroups,1:ncell)
+#endif
+#ifdef CALIMA
+      sigma_init(1:ncell)                       = sigma(1:ncell)
+#if NDUST>0
+      rho_dust_init(1:ncell,1:ndust)            = rho_dust(1:ncell,1:ndust)
+#endif
+#if NPAH>0
+      rho_pah_init(1:ncell,1:npah)              = rho_pah(1:ncell,1:npah)
+#endif
+#endif
+
       ! Loop until all cells have tleft=0
       ! **********************************************
       nAct=nCell                                      ! Currently active cells
+      cellcnt(1:nCell) = 0
+      last_code = 0
       loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
+         if (rtz_single_cell_test .and. mod(loopcnt,50)==0) then
+            i = indAct(1)
+            write(*,'(A,I6,A,I3,A,ES10.3,A,ES10.3,A,ES12.5)') &
+               'iter:', loopcnt, ' code:', last_code, &
+               ' ddt:', ddt(i), ' tleft:', tLeft(i), ' T2:', T2(i)
+#ifdef RT
+            if (mod(loopcnt,500)==0) write(*,*) '  Np:', Np(1:nGroups, i)
+#endif
+#ifdef CALIMA
+            if (mod(loopcnt,500)==0) then
+               write(*,*) '  Z_dust:', dust_helper%Z_dust(1:ndust)
+               write(*,*) '  T_dust:', dust_helper%T_dust(1:ndust)
+            end if
+#endif
+         end if
          if (loopcnt.gt.100000) then
+            ! Find the active cell with the most individual failures
+            ia = maxloc(cellcnt(indAct(1:nAct)), dim=1)
+            i = indAct(ia)
             write(*,*)ilevel,rt_c_cgs(ilevel)
             write(*,*) "Too high loopcnt",loopcnt
             write(*,*) 'This is raised in `rtz_solve_cooling`'
-            write(*,*) '   tleft:', tLeft
-            write(*,*) '     ddt:', ddt
+            write(*,*) '  nAct:', nAct
+            write(*,*) '   tleft(active):', tLeft(indAct(1:nAct))
+            write(*,*) '     ddt(active):', ddt(indAct(1:nAct))
             write(*,*) '  dt_rec:', dt_rec, new_line('')
             write(*,*) 'code:', code
 #ifdef CALIMA
@@ -617,6 +687,44 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
             end if
             write(*,*) 'loopCodes:', loopCodes
+            write(*,*) 'max per-cell failures:', cellcnt(i), &
+                       '  mean:', sum(cellcnt(indAct(1:nAct)))/nAct
+            write(*,*) 'per-cell failures (active):', cellcnt(indAct(1:nAct))
+            ! ---- machine-readable crash cell dump for single-cell replay ----
+            ! Writes the CRASH-TIME state (T2/Np/rho_dust at the point of
+            ! loopcnt>100000) plus crash-time ddt and tleft, so the replay
+            ! starts at the exact stuck state and reproduces the crash.
+            block
+               integer, parameter :: dump_unit = 998
+               open(unit=dump_unit, file='rtz_crash_cell_dump.dat', &
+                    status='replace', action='write')
+               write(dump_unit,*) n_elements, nGroups, ndim
+               write(dump_unit,*) aexp, dt, dx_SS_H2, ilevel, nCell, rt_c_cgs(ilevel), &
+                                  ddt(i), tLeft(i)
+               write(dump_unit,*) T2(i)
+               write(dump_unit,*) xion(1:n_elements, 1:n_elements, i)
+               write(dump_unit,*) nElement(1:n_elements, i)
+               write(dump_unit,*) nCO(i)
+#ifdef RT
+               write(dump_unit,*) Np(1:nGroups, i)
+               write(dump_unit,*) Fp(1:ndim, 1:nGroups, i)
+               write(dump_unit,*) p_gas(1:ndim, i)
+               write(dump_unit,*) dNpdt(1:nGroups, i)
+               write(dump_unit,*) dFpdt(1:ndim, 1:nGroups, i)
+#endif
+#ifdef CALIMA
+               write(dump_unit,*) sigma(i)
+#if NDUST>0
+               write(dump_unit,*) rho_dust(i, 1:ndust)
+#endif
+#if NPAH>0
+               write(dump_unit,*) rho_pah(i, 1:npah)
+#endif
+#endif
+               close(dump_unit)
+               write(*,*) 'Crash-time cell state written to rtz_crash_cell_dump.dat'
+            end block
+            ! ---- end crash cell dump ----
             err_idx = i
             return ! to check other quantities, return instead of stop
          end if
@@ -627,10 +735,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
+               ! Guard: ddt underflow to IEEE zero — can't make progress, bail
+               if (ddt(i) <= 0d0) then
+                  err_idx = i
+                  return
+               end if
                nAct_next=nAct_next+1 ; indAct(nAct_next) = i
                loopCodes(code) = loopCodes(code)+1
+               cellcnt(i) = cellcnt(i) + 1
+               last_code = code
                cycle
             endif
+            last_code = 0   ! successful step
             ! Update the cell state (advance the time by ddt):
             T2(i) = T2(i) + dT2
             xion(:,:,i) = xion(:,:,i) + dXion(:,:)
@@ -733,7 +849,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: UV_background_G0
       integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
       integer:: i_current_Ion
-      real(dp):: Zsolar, total_G0
+      real(dp):: Zsolar, total_G0, advected_G0
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
@@ -746,12 +862,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp)::loc_auger_prob
       integer::i_a
       real(dp) :: t_now
+      logical :: update_COspecies=.false.
       !-----------------------------------------------------------------------
       !-----------------------------------------------------------------------
       ! Variables specific to CALIMA
 #ifdef CALIMA
       integer::ii
-      real(dp)::rho_dust_tot
+      real(dp)::rho_dust_tot,rho_total_check
       real(dp),dimension(1:nGroups)::pahAbs,pahSc,pahRp
       logical::dust_step_ok
       real(dp)::t_sub_start, t_sub_end
@@ -880,13 +997,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
 #ifdef RT
       ! Update total G0 --> TODO(code) this isn't quite right we sould be checking bounds
+      advected_G0 = 0.0d0
       if (rt_advect) then
          do igroup=1,nGroups
             if (group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0) then 
-               total_G0 = total_G0 + (f_shd_CO * dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
+               advected_G0 = advected_G0 + (dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
             end if
-         end do
+         end do  
       end if
+      total_G0 = advected_G0 + UV_background_G0
 #endif
 
 
@@ -1128,17 +1247,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
          saved_cooling_rates = 0.d0
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, f_shd, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, f_shd, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), total_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, f_shd, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
@@ -1290,6 +1409,31 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dnElement = nElement_dep
       if (ndust > 0) drho_dust(:) = dust_helper%rho_dust
       if (npah  > 0) drho_pah(:)  = dust_helper%rho_pah
+      ! Get the new free electron fraction
+      ne = getNe(dXion, nElement_dep(:))
+      ! Get the new mean molecular weight
+#ifdef CO
+      mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+#else
+      mu = getMu_RTZ(ne, nElement_dep, dXion)
+#endif
+
+      ! Check that we are correctly conserving total mass
+      rho_total_check = 0.d0
+      do iElement = 1,n_elements
+         if (elements(iElement)%atomic_number > 0) then
+            rho_total_check = rho_total_check + dnElement(iElement) * elements(iElement)%atomic_mass_g
+         end if
+      end do
+      if (ndust > 0) rho_total_check = rho_total_check + sum(drho_dust(:))
+      if (npah  > 0) rho_total_check = rho_total_check + sum(drho_pah(:))
+      if (ABS(rho_total_check - rho) / rho > 1.d-6) then
+         write(*,*) "ERROR: Mass conservation violated in dust update"
+         write(*,*) "       rho_total_check = ", rho_total_check
+         write(*,*) "       rho               = ", rho
+         call clean_stop
+      end if
+
 
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
@@ -1398,12 +1542,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
       end if
 
+      if ((nElement_dep(6) + nCO(icell))/nElement_dep(1).gt.1d-10 .or. &
+         (nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then
+        update_COspecies = .true.
+      else
+        update_COspecies = .false.
+      end if
 #ifdef CO
       cr_CO = 0.d0
       de_CO = 0.d0
       dUU = 0.d0
       if (isCO_rtz) then
-         if ((nElement_dep(6) + nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then 
+         if (update_COspecies) then 
             n_C_og = n_CII + nCO(icell)
             n_O_og = n_OI + nCO(icell)
             n_CII = nElement_dep(6) * dXion(6,2)
@@ -1435,42 +1585,42 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! Clip delta_CO to enforce physical bounds
             delta_CO = max(min(delta_CO, max_delta_CO), min_delta_CO)
 
-         ! Apply updates
-         nCO_new  = nCO(icell) + delta_CO
-         nCII_new = n_CII - delta_CO
-         nOI_new  = n_OI  - delta_CO
+            ! Apply updates
+            nCO_new  = nCO(icell) + delta_CO
+            nCII_new = n_CII - delta_CO
+            nOI_new  = n_OI  - delta_CO
          
-         ! if (sum(dXion(6,1:7)) < 1.0d0) then
-         !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-         ! end if
-
+            ! if (sum(dXion(6,1:7)) < 1.0d0) then
+            !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+            ! end if
+         
             if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
                write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
                write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
             end if
 
-         ! Now update the ion fractions for C and O
-         ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
-         tot_C = nElement_dep(6) - n_CII
-         tot_C = tot_C + nCII_new
-         do iIon = 1, elements(6)%n_ions
-            if (iIon.ne.2) then 
-               dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-            else
-               dXion(6,iIon) = nCII_new / tot_C
-            end if
-         end do
+            ! Now update the ion fractions for C and O
+            ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
+            tot_C = nElement_dep(6) - n_CII
+            tot_C = tot_C + nCII_new
+            do iIon = 1, elements(6)%n_ions
+               if (iIon.ne.2) then 
+                  dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
+               else
+                  dXion(6,iIon) = nCII_new / tot_C
+               end if
+            end do
 
-         ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
-         tot_O = nElement_dep(8) - n_OI
-         tot_O = tot_O + nOI_new
-         do iIon = 1, elements(8)%n_ions
-            if (iIon.ne.1) then 
-               dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
-            else
-               dXion(8,iIon) = nOI_new / tot_O
-            end if
-         end do
+            ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
+            tot_O = nElement_dep(8) - n_OI
+            tot_O = tot_O + nOI_new
+            do iIon = 1, elements(8)%n_ions
+               if (iIon.ne.1) then 
+                  dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
+               else
+                  dXion(8,iIon) = nOI_new / tot_O
+               end if
+            end do
 
             if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
                write(*,*) 'nCO_new:', nCO_new
@@ -1530,8 +1680,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Loop over all elements
       do iElement = 1,n_elements
          if (elements(iElement)%atomic_number > 0) then
-            if (nElement_dep(iElement)/nElement_dep(1).le.1e-10 .or. &
-               nElement_dep(iElement).eq.0d0) then
+            if (iElement /= 6 .and. iElement /= 8) then
+               if (nElement_dep(iElement)/nElement_dep(1) .lt. 1d-10) then
+                  cycle
+               end if
+            else if (.not. update_COspecies) then
                cycle
             end if
             ! Get the atomic number
@@ -1933,6 +2086,133 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(fred .gt. 1d0) Fp = Fp/fred
    END SUBROUTINE reduce_flux
 #endif
+
+!***********************************************************************
+SUBROUTINE rtz_run_single_cell_test(filename)
+   ! Read a crash dump written by rtz_solve_cooling's loopcnt guard and
+   ! replay just that one cell in isolation for diagnosis.
+   use photoionization_UVB_module, only: update_UVB
+   implicit none
+   character(len=*), intent(in) :: filename
+
+   real(dp), dimension(1:nvector) :: T2_1, nCO_1
+   real(dp), dimension(1:n_elements, 1:n_elements, 1:nvector) :: xion_1
+   real(dp), dimension(1:n_elements, 1:nvector) :: nElement_1
+#ifdef RT
+   real(dp), dimension(1:nGroups, 1:nvector) :: Np_1, dNpdt_1
+   real(dp), dimension(1:ndim, 1:nGroups, 1:nvector) :: Fp_1, dFpdt_1
+   real(dp), dimension(1:ndim, 1:nvector) :: p_gas_1
+#endif
+#ifdef CALIMA
+   real(dp), dimension(1:nvector) :: sigma_1
+#if NDUST>0
+   real(dp), dimension(1:nvector, 1:ndust) :: rho_dust_1
+#endif
+#if NPAH>0
+   real(dp), dimension(1:nvector, 1:npah) :: rho_pah_1
+#endif
+#endif
+
+   real(dp) :: aexp_r, dt_r, dx_SS_H2_r, rt_c_cgs_r, ddt_r, tleft_r
+   integer  :: ilevel_r, nCell_r, err_idx_out
+   integer  :: n_elem_r, nGroups_r, ndim_r
+   integer, parameter :: ru = 997
+
+   write(*,*) '*** rtz_run_single_cell_test: reading ', trim(filename)
+
+   open(unit=ru, file=trim(filename), status='old', action='read')
+
+   read(ru,*) n_elem_r, nGroups_r, ndim_r
+   if (n_elem_r /= n_elements .or. nGroups_r /= nGroups .or. ndim_r /= ndim) then
+      write(*,*) 'ERROR: dump dimensions mismatch'
+      write(*,*) '  file: n_elements=', n_elem_r, ' nGroups=', nGroups_r, ' ndim=', ndim_r
+      write(*,*) '  code: n_elements=', n_elements, ' nGroups=', nGroups, ' ndim=', ndim
+      close(ru); return
+   end if
+
+   T2_1=0d0; nCO_1=0d0; xion_1=0d0; nElement_1=0d0
+#ifdef RT
+   Np_1=0d0; dNpdt_1=0d0; Fp_1=0d0; dFpdt_1=0d0; p_gas_1=0d0
+#endif
+#ifdef CALIMA
+   sigma_1=0d0
+#if NDUST>0
+   rho_dust_1=0d0
+#endif
+#if NPAH>0
+   rho_pah_1=0d0
+#endif
+#endif
+
+   read(ru,*) aexp_r, dt_r, dx_SS_H2_r, ilevel_r, nCell_r, rt_c_cgs_r, ddt_r, tleft_r
+   read(ru,*) T2_1(1)
+   read(ru,*) xion_1(1:n_elements, 1:n_elements, 1)
+   read(ru,*) nElement_1(1:n_elements, 1)
+   read(ru,*) nCO_1(1)
+#ifdef RT
+   read(ru,*) Np_1(1:nGroups, 1)
+   read(ru,*) Fp_1(1:ndim, 1:nGroups, 1)
+   read(ru,*) p_gas_1(1:ndim, 1)
+   read(ru,*) dNpdt_1(1:nGroups, 1)
+   read(ru,*) dFpdt_1(1:ndim, 1:nGroups, 1)
+#endif
+#ifdef CALIMA
+   read(ru,*) sigma_1(1)
+#if NDUST>0
+   read(ru,*) rho_dust_1(1, 1:ndust)
+#endif
+#if NPAH>0
+   read(ru,*) rho_pah_1(1, 1:npah)
+#endif
+#endif
+   close(ru)
+
+   ! Restore physics globals to crash-time values before replay
+   rt_c_cgs(ilevel_r) = rt_c_cgs_r
+   call update_UVB((1.d0/aexp_r) - 1.d0)
+
+   write(*,*) '*** Crash-time state:'
+   write(*,*) '    aexp=', aexp_r, '  dt=', dt_r
+   write(*,*) '    ilevel=', ilevel_r, '  dx_SS_H2=', dx_SS_H2_r
+   write(*,*) '    T2=', T2_1(1), '  nH=', nElement_1(1,1)
+   write(*,*) '    rt_c_cgs=', rt_c_cgs_r
+   write(*,*) '    ddt(crash)=', ddt_r, '  tleft(crash)=', tleft_r
+   ! If the dump was written with ddt=0 (already underflowed at crash time),
+   ! reset ddt to tleft so the replay actually integrates.
+   if (ddt_r <= 0d0) ddt_r = tleft_r
+#ifdef RT
+   write(*,*) '    Np:', Np_1(1:nGroups, 1)
+   write(*,*) '    dNpdt:', dNpdt_1(1:nGroups, 1)
+#endif
+
+   err_idx_out = 0
+   call rtz_solve_cooling( &
+        T2_1, aexp_r, xion_1, nElement_1, nCO_1, &
+#ifdef RT
+        Np_1, Fp_1, p_gas_1, dNpdt_1, dFpdt_1, ilevel_r, &
+#endif
+        dt_r, 1, dx_SS_H2_r, err_idx_out &
+#ifdef CALIMA
+        , sigma=sigma_1 &
+#if NDUST>0
+        , rho_dust=rho_dust_1 &
+#endif
+#if NPAH>0
+        , rho_pah=rho_pah_1 &
+#endif
+#endif
+        , ddt_initial=ddt_r &
+        , tleft_initial=tleft_r &
+        )
+
+   if (err_idx_out > 0) then
+      write(*,*) '*** Single-cell test: crash reproduced (err_idx=', err_idx_out, ')'
+   else
+      write(*,*) '*** Single-cell test: cell converged successfully'
+      write(*,*) '    Final T2=', T2_1(1)
+   end if
+
+END SUBROUTINE rtz_run_single_cell_test
 
 END MODULE rtz_cooling_module
 

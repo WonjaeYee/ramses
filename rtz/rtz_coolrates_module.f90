@@ -2054,8 +2054,8 @@ FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
 END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
-                     nCO, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, f_shd, dNp, ilevel, rate, &
-                     saved_cooling_rates, saved_cooling_rates_names)
+                     nCO, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, f_shd, &
+                     dNp, ilevel, rate, saved_cooling_rates, saved_cooling_rates_names)
     ! Main cooling driver
     !
     ! T --> Temperature [K]
@@ -2109,8 +2109,10 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: charge_transfer_heat_cool
     real(dp):: photoheating
     real(dp):: total_cooling, total_heating
+    real(dp)::total_G0
     integer:: save_cooling_counter
 
+    total_G0 = G0 + UVB_G0
     h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
@@ -2334,24 +2336,24 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Dust cooling
 #ifndef CALIMA
-    dust_rec_cooling_rate = dust_recombination_cooling(T, G0, ne, f_dg, element_number_densities(1))
-    ! dust_rec_cooling = dust_recombination_cooling_WD01(T, G0, ne, f_dg, element_number_densities(1))
-    dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+    dust_rec_cooling_rate = dust_recombination_cooling(T, total_G0, ne, f_dg, element_number_densities(1))
+    ! dust_rec_cooling = dust_recombination_cooling_WD01(T, total_G0, ne, f_dg, element_number_densities(1))
+    dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, total_G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
     
     ! Photoelectric heating --> note factor of 1.7 is because IUV
-    photoelectric_heat = photoelectric_heating(T, G0, ne, f_dg, element_number_densities(1))
-    ! photoelectric_heat = photoelectric_heating_WD01(T, G0, ne, f_dg, element_number_densities(1))
+    photoelectric_heat = photoelectric_heating(T, total_G0, ne, f_dg, element_number_densities(1))
+    ! photoelectric_heat = photoelectric_heating_WD01(T, total_G0, ne, f_dg, element_number_densities(1))
 
 #else
-    call compute_dust_coolrates(dust_helper, G0, T, ne, element_number_densities(:),&
+    call compute_dust_coolrates(dust_helper, total_G0, T, ne, element_number_densities(:),&
                                 element_ion_fractions(:,:),nH2,nCO,dust_rec_cooling_rate,&
                                 photoelectric_heat,dust_coll_cooling_rate,h2_formation_dust,dNp)
     if ((.not.dust_pe_heating).and.(.not.pah_pe_heating)) then
-        dust_rec_cooling_rate = dust_recombination_cooling(T, G0, ne, f_dg, element_number_densities(1))
-        photoelectric_heat = photoelectric_heating(T, G0, ne, f_dg, element_number_densities(1))
+        dust_rec_cooling_rate = dust_recombination_cooling(T, total_G0, ne, f_dg, element_number_densities(1))
+        photoelectric_heat = photoelectric_heating(T, total_G0, ne, f_dg, element_number_densities(1))
     end if
     if (.not.dust_coll_cooling) then
-        dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+        dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, total_G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
     end if
 #endif
     dust_cooling = dust_rec_cooling_rate + dust_coll_cooling_rate
@@ -2392,9 +2394,9 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Heating from H2 formation and destruction
     ! H2 self-shielding applies to the advected UV field only (not to the UV background).
-    ! G0 = UVB_G0 + advected_G0; so advected_G0 * f_shd + UVB_G0 = (G0-UVB_G0)*f_shd + UVB_G0
+    ! G0 here is the advected field; total = G0 + UVB_G0 (computed above as total_G0).
     ! h2_heat = H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr)
-    h2_heat = H2_heating_bialy((G0-UVB_G0)*f_shd+UVB_G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr,h2_formation_dust)
+    h2_heat = H2_heating_bialy(G0*f_shd+UVB_G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr,h2_formation_dust)
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = h2_heat; saved_cooling_rates_names(save_cooling_counter) = 'heat_H2'; save_cooling_counter = save_cooling_counter + 1

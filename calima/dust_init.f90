@@ -182,7 +182,7 @@ module dust_init
         if (DTMinit.eq.-1d0) then
             ! OPTION A: Initialise based on G/D for the MW
             if (GDinit.eq.-1d0) then
-                GD = GD_RR14(myq(imetal+8-1),Hfrac) ! O mass fraction
+                GD = GD_RR14(myq(imetal+8-1)/mO_amu, Hfrac/mH_amu)
             else
                 GD = GDinit
             end if
@@ -330,7 +330,7 @@ module dust_init
         ! for the equilibrium test runs in rtz_cooling_module.f90.
         ! nElement <--> element number densities [cm^-3]
         ! rho_dust <--> dust mass densities [g/cm^3]
-        ! rho_pah <--> PAH mass densities [g/cm^3]
+        ! rho_pah  <--> PAH mass densities [g/cm^3]
         implicit none
 
         ! ---- Input/Output ----
@@ -340,12 +340,26 @@ module dust_init
 
         ! ---- Local variables ----
         integer :: ii,ii1,ii2,jj,kk,ilim
-        real(dp) :: DTM_factor
+        real(dp) :: DTM_factor, GD
         real(dp) :: dustC,dustPAH,dustMass
         real(dp) :: total_dust_pah, total_metals, dust_fraction
         real(dp),dimension(:),allocatable :: M_el
 
-        DTM_factor = DTMinit / DTM_solar
+        if (DTMinit .eq. -1d0) then
+            ! G/D-based initialisation (mirrors OPTION A of init_dust_depletion)
+            if (GDinit .eq. -1d0) then
+                if (nElement(1) .gt. 0d0) then
+                    GD = GD_RR14(nElement(8), nElement(1))
+                else
+                    GD = GD_solar
+                end if
+            else
+                GD = GDinit
+            end if
+            DTM_factor = GD_solar / GD
+        else
+            DTM_factor = DTMinit / DTM_solar
+        end if
 
         do ii = 1, ndchemtype
             ii1 = istart_chemtype(ii)
@@ -441,14 +455,15 @@ module dust_init
         end if
     end subroutine init_dust_depletion_tests
 
-    function GD_RR14(Omass_frac,Hmass_frac)
-        ! This function returns an estimate of the gas to dust ration
+    function GD_RR14(nO,nH)
+        ! This function returns an estimate of the gas to dust ratio
         ! (G/D) based on a broken power-law fit by Remy-Ruyer et al. (2014)
         ! (see their parameters in Table 1:
         ! https://ui.adsabs.harvard.edu/abs/2014A%26A...563A..31R/abstract)
         ! This assumes that the solar abundance is (O/H)sun = 4.9e-4
+        ! nO and nH are any quantities proportional to the O and H number densities
         implicit none
-        real(dp),intent(in) :: Omass_frac, Hmass_frac ! Oxygen and hydrogen mass fractions
+        real(dp),intent(in) :: nO, nH
         real(dp) :: a, alpha_H, b, alpha_L, x_t, xsun
         real(dp) :: GD_RR14,x,y
 
@@ -456,7 +471,7 @@ module dust_init
         a = 2.21d0; alpha_H = 1d0; b = 0.96d0
         alpha_L = 3.10d0; x_t = 8.10d0; xsun = 8.69d0
 
-        x = 12 + log10(max((Omass_frac*mH_amu)/(Hmass_frac*mO_amu),1.d-40))
+        x = 12 + log10(max(nO/nH,1.d-40))
         if (x .gt. x_t) then
             y = a + alpha_H * (xsun - x)
         else
