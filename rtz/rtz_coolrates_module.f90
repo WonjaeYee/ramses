@@ -2054,16 +2054,18 @@ FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
 END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
-                     nCO, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
+                     nCO, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, f_shd, dNp, ilevel, rate, &
                      saved_cooling_rates, saved_cooling_rates_names)
     ! Main cooling driver
-    ! 
+    !
     ! T --> Temperature [K]
     ! ne --> Electron number density [cm^-3]
     ! aexp --> Scale factor
     ! element_number_densities --> vector with element number densities [cm^-3]
     ! element_ion_fractions --> 2D array with ion fractions
-    ! G0 --> habing band radiation field (MW units)
+    ! G0 --> total habing band radiation field (MW units); includes UVB_G0
+    ! UVB_G0 --> UV background habing field (MW units)
+    ! f_shd --> H2 self-shielding factor for the advected UV field
     ! f_dg --> dust to gas mass ratio normalized by MW value
     ! xe --> electron fraction i.e. ne / (rho/mH)
     ! xi_h_cr --> cosmic ray ionization rate
@@ -2075,7 +2077,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     use dust_interface, only: compute_dust_coolrates
 #endif
     implicit none
-    real(dp), intent(in):: T, ne, aexp, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, nCO
+    real(dp), intent(in):: T, ne, aexp, G0, UVB_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, f_shd, nCO
     real(dp), intent(in):: element_number_densities(27)
     real(dp), intent(in):: element_ion_fractions(27,27)
     real(dp), dimension(nGroups), intent(in):: dNp
@@ -2389,8 +2391,10 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     saved_cooling_rates(save_cooling_counter) = uvb_photoheat_G0; saved_cooling_rates_names(save_cooling_counter) = 'heat_G0'; save_cooling_counter = save_cooling_counter + 1
 
     ! Heating from H2 formation and destruction
+    ! H2 self-shielding applies to the advected UV field only (not to the UV background).
+    ! G0 = UVB_G0 + advected_G0; so advected_G0 * f_shd + UVB_G0 = (G0-UVB_G0)*f_shd + UVB_G0
     ! h2_heat = H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr)
-    h2_heat = H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr,h2_formation_dust)
+    h2_heat = H2_heating_bialy((G0-UVB_G0)*f_shd+UVB_G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr,h2_formation_dust)
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = h2_heat; saved_cooling_rates_names(save_cooling_counter) = 'heat_H2'; save_cooling_counter = save_cooling_counter + 1
