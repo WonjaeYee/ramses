@@ -684,14 +684,16 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
                               )
       end if
+#ifdef CALIMA
       do i=1,nleaf
-         if (any(rho_dust(i,:).gt.uold(ind_leaf(err_idx),1)*scale_d)) then
+         if (any(rho_dust(i,:).gt.uold(ind_leaf(i),1)*scale_d)) then
             write(*,*) 'Dust density exceeds total density in cell ', ind_leaf(i)
             write(*,*) 'Dust density: ', rho_dust(i,:)
-            write(*,*) 'Total density: ', uold(ind_leaf(err_idx),1)
+            write(*,*) 'Total density: ', uold(ind_leaf(i),1)
             call clean_stop
          end if
       end do
+#endif
 ! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'
