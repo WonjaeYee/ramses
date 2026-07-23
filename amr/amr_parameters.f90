@@ -282,6 +282,9 @@ module amr_parameters
   integer::i_mv_xhii=-1,  i_mv_xheii=-1,      i_mv_xheiii=-1
   integer::i_mv_fp=-1,    i_mv_pmag=-1
   integer::i_mv_IR=-1
+#ifdef CALIMA
+  integer::i_mv_DTM=-1
+#endif
 #ifdef RTZ
   character(len=256) :: movie_lines_file = ''
   real(dp)::init_xe=0.d0

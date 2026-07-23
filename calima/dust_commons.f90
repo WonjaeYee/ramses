@@ -746,7 +746,7 @@ module dust_commons
                             local_gas_mass = local_gas_mass + (uold(ind_cell(i), 1) * dx_loc**3)
                             ! Accumulate metal mass
                             do ii = 1, nmetals
-                                local_metal_mass = local_metal_mass + (uold(ind_cell(i), imetal + ii) * dx_loc**3)
+                                local_metal_mass = local_metal_mass + (uold(ind_cell(i), imetal + ii - 1) * dx_loc**3)
                             end do
                             ! Accumulate PAH bin masses
                             do ii = 1, npah

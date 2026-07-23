@@ -116,6 +116,7 @@ subroutine output_frame()
   integer :: j_band
   real(dp), dimension(1:ndust) :: T_dust_cell
   real(dp) :: Tmin, P_abs, Np_val, mass_g
+  real(dp) :: rho_metal_loc
 #endif
 
  nh_temp = nh_frame
@@ -834,6 +835,17 @@ subroutine output_frame()
                                   endif
 #endif
 #endif
+#ifdef CALIMA
+                                  if(movie_vars(kk).eq.i_mv_DTM)then
+                                     ok_frame=.true.
+                                     rho_metal_loc = 0.0d0
+                                     do j_band = 1, nmetals
+                                        rho_metal_loc = rho_metal_loc + uold(ind_cell(i), imetal + j_band - 1)
+                                     end do
+                                     uvar = sum(uold(ind_cell(i),idust:idust+ndust-1)) / &
+                                          & max(rho_metal_loc, smallr)
+                                  endif
+#endif
 #ifdef RTZ
 
                                   ! First we need to grab all of the elements and ionization fractions
@@ -1326,6 +1338,10 @@ subroutine set_movie_vars()
         movie_var_number(kk) = ivar
 
 #ifdef CALIMA
+     else if (movie_vars_txt(kk) .eq. 'DTM') then
+        if (i_mv_DTM .eq. -1) i_mv_DTM = kk
+        movie_vars(kk) = i_mv_DTM
+
      else if (ndust > 0) then
         ivar = 0
         if (allocated(dustbins_props(1)%IRemission_tab)) then
