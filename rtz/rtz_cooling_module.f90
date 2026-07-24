@@ -1413,9 +1413,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ne = getNe(dXion, nElement_dep(:))
       ! Get the new mean molecular weight
 #ifdef CO
-      mu = getMu_RTZ(ne, nElement_dep, dXion, dCO)
+      mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz, dCO)
 #else
-      mu = getMu_RTZ(ne, nElement_dep, dXion)
+      mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz)
 #endif
 
       ! Check that we are correctly conserving total mass
