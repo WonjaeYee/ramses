@@ -522,7 +522,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
             uold(ind_leaf(i),idust+jbin-1) = max(uold(ind_leaf(i),idust+jbin-1), 0.0d0)
          end do
          rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+#ifdef RTZ
+         ! rho_total_check is only declared (and only consumed) under RTZ
          rho_total_check(i) = rho_total_check(i) + sum(rho_dust(i,:))
+#endif
       end do
       ! PAH densities in g/cm^3
       if (npah > 0) then
@@ -536,7 +539,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                uold(ind_leaf(i),ipah+jbin-1) = max(uold(ind_leaf(i),ipah+jbin-1), 0.0d0)
             end do
             rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+#ifdef RTZ
             rho_total_check(i) = rho_total_check(i) + sum(rho_pah(i,:))
+#endif
          end do
       end if
 #endif

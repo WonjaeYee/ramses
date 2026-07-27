@@ -4,7 +4,8 @@
 ! and individual dust/PAH bins directly in code units for the RTZ network.
 !=======================================================================
 module dust_radpressure_module
-    use amr_parameters, only: dp, ndim, condinit_kind
+    use amr_parameters, only: dp, ndim
+    use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO
     use rt_parameters, only: nGroups, iGroups, group_egy, rt_pressBoost, &
@@ -289,7 +290,7 @@ contains
         ! 5. Calculate radiation pressure forces directly in code units
         do igroup = 1, nGroups
             iNp = iGroups(igroup)
-            if (condinit_kind == 'dustyspress') then
+            if (tva_test_mode == TVA_TEST_SPRESS) then
                 Fp_code = 0d0
                 if (ndim >= 1) Fp_code(1) = rt_n_source(igroup) / scale_Fp
                 Np_code = rt_n_source(igroup) / rt_c_code / scale_Np
@@ -363,7 +364,7 @@ contains
 
         end do
 
-        if (condinit_kind == 'dustyspress') then
+        if (tva_test_mode == TVA_TEST_SPRESS) then
             gas_force_code(:) = 0d0
         end if
 

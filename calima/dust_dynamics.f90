@@ -372,6 +372,8 @@ module dust_dynamics
         real(dp) :: grad_P, t_s_face, avg_ts_face, u_drift, D_i
         real(dp) :: eken, rho_gas_cell
         real(dp) :: a_rad_g_face, a_rad_mix, w_g, w_d_val, sum_eps_ts_D
+        real(dp) :: w_cap, wmax_all
+        integer(kind=8) :: nclip_all
         real(dp), dimension(1:ndust) :: a_rad_d_face, D_bin
 
 #ifndef WITHOUTMPI
@@ -509,7 +511,7 @@ module dust_dynamics
                 ! STEP 1: Cell-centred primitive extraction
                 ! ============================================================
                 do k=ku1,ku2; do j=ju1,ju2; do i=iu1,iu2; do l=1,ngrid
-                    if (condinit_kind == 'dustydiffuse') then
+                    if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         rho_mix(l,i,j,k) = 1.0_dp
                     else
                         rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr)
@@ -528,7 +530,7 @@ module dust_dynamics
                     end do
                     eken = half * eken / rho_mix(l,i,j,k)**2
 
-                    if (condinit_kind == 'dustydiffuse') then
+                    if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         Pg(l,i,j,k)  = (1.0_dp - eps_tot_arr(l,i,j,k)) * rho_mix(l,i,j,k)
                         c_s(l,i,j,k) = 1.0_dp
                     else
@@ -573,7 +575,7 @@ module dust_dynamics
                                 Pg_L      = Pg(l,i,j-1,k);       Pg_R      = Pg(l,i,j,k)
                                 rho_L     = rho_mix(l,i,j-1,k);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i,j-1,k); eps_tot_R = eps_tot_arr(l,i,j,k)
-                                c_s_face  = half * (c_s(l,i-1,j,k) + c_s(l,i,j,k))
+                                c_s_face  = half * (c_s(l,i,j-1,k) + c_s(l,i,j,k))
 #ifdef RT
                                 if (dust_radpressure) then
                                     a_rad_g_face = half * (a_rad_g(l,i,j-1,k,idim) + a_rad_g(l,i,j,k,idim))
@@ -592,7 +594,7 @@ module dust_dynamics
                                 Pg_L      = Pg(l,i,j,k-1);       Pg_R      = Pg(l,i,j,k)
                                 rho_L     = rho_mix(l,i,j,k-1);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i,j,k-1); eps_tot_R = eps_tot_arr(l,i,j,k)
-                                c_s_face  = half * (c_s(l,i-1,j,k) + c_s(l,i,j,k))
+                                c_s_face  = half * (c_s(l,i,j,k-1) + c_s(l,i,j,k))
 #ifdef RT
                                 if (dust_radpressure) then
                                     a_rad_g_face = half * (a_rad_g(l,i,j,k-1,idim) + a_rad_g(l,i,j,k,idim))
@@ -626,14 +628,14 @@ module dust_dynamics
                                 end if
                                 eps_face_bin = max(eps_face_bin, 0.0_dp)
 
-                                if (condinit_kind == 'dustydiffuse') then
+                                if (tva_test_mode == TVA_TEST_DIFFUSE) then
                                     t_s_face = 0.1_dp
-                                else if (condinit_kind == 'dustyshock') then
+                                else if (tva_test_mode == TVA_TEST_SHOCK) then
                                     t_s_face = eps_face_bin * rho_face / drag_coefficient(jbin)
-                                else if (condinit_kind == 'dustyblast1d') then
+                                else if (tva_test_mode == TVA_TEST_BLAST1D) then
                                     t_s_face = 6d-3
                                 else
-                                    t_s_face = (sgrain_code(jbin) * agrain_code(jbin)) / &
+                                    t_s_face = epstein_coef * (sgrain_code(jbin) * agrain_code(jbin)) / &
                                         max(rho_g_face * c_s_face, smallr)
                                 end if
 
@@ -667,18 +669,36 @@ module dust_dynamics
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
                             end do
 
+                            ! The dust update sums ndim independent directional flux
+                            ! divergences (dust_upwind_correct1/2), so the per-direction
+                            ! bound needs a 1/ndim -- cmpdt does the equivalent with
+                            ! ndim*c + sum|u| (hydro/courant_fine.f90:288-296). Without it a
+                            ! 3D cell can lose more dust in one step than it holds.
+                            ! The cap must match the one applied in the flux routines, or
+                            ! this bound would not be a bound on the drift actually used.
+                            w_cap = tva_wmax_cs * c_s_face
                             w_g = -sum_eps_ts_D
+                            if (tva_wmax_cs > 0.0_dp .and. abs(w_g) > w_cap) then
+                                tva_nclip = tva_nclip + 1
+                                tva_wmax_seen = max(tva_wmax_seen, abs(w_g) / max(c_s_face, smallc))
+                                w_g = sign(w_cap, w_g)
+                            end if
                             u_drift = abs(w_g)
                             if (u_drift > 0.0_dp) then
-                                dtcell = courant_factor * dx / u_drift
+                                dtcell = courant_factor * dx / (dble(ndim) * u_drift)
                                 dt_loc = min(dt_loc, dtcell)
                             end if
 
                             do jbin = 1, ndust
                                 w_d_val = t_s_face_arr(jbin) * D_bin(jbin) - sum_eps_ts_D
+                                if (tva_wmax_cs > 0.0_dp .and. abs(w_d_val) > w_cap) then
+                                    tva_nclip = tva_nclip + 1
+                                    tva_wmax_seen = max(tva_wmax_seen, abs(w_d_val) / max(c_s_face, smallc))
+                                    w_d_val = sign(w_cap, w_d_val)
+                                end if
                                 u_drift = abs(w_d_val)
                                 if (u_drift > 0.0_dp) then
-                                    dtcell = courant_factor * dx / u_drift
+                                    dtcell = courant_factor * dx / (dble(ndim) * u_drift)
                                     dt_loc = min(dt_loc, dtcell)
                                 end if
                             end do
@@ -688,9 +708,26 @@ module dust_dynamics
             end do
         end if
         dt_all = dt_loc
+        nclip_all = tva_nclip
+        wmax_all = tva_wmax_seen
 #ifndef WITHOUTMPI
         call MPI_ALLREDUCE(dt_loc, dt_all, 1, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_WORLD, info)
+        call MPI_ALLREDUCE(tva_nclip, nclip_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, info)
+        call MPI_ALLREDUCE(tva_wmax_seen, wmax_all, 1, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, info)
 #endif
+        ! Say so when the drift is what is setting the timestep. t_s ~ 1/rho_gas, so a
+        ! single low-density cell can throttle every rank; without this the collapse is
+        ! invisible. Once per coarse step, rank 1 only.
+        if (myid == 1 .and. dt_all < dtnew(ilevel) .and. nstep_coarse /= tva_last_warn_step) then
+            tva_last_warn_step = nstep_coarse
+            write(*,'(A,I3,A,ES10.3,A,ES10.3)') &
+                ' TVA: dust drift sets dt at level ', ilevel, ': ', dt_all, ' vs hydro ', dtnew(ilevel)
+            if (nclip_all > 0) write(*,'(A,I12,A,ES10.3)') &
+                '      drift clipped at tva_wmax_cs*c_s in ', nclip_all, &
+                ' faces; max |w|/c_s = ', wmax_all
+        end if
+        tva_nclip = 0
+        tva_wmax_seen = 0d0
         dtnew(ilevel) = min(dtnew(ilevel), dt_all)
 
     end subroutine get_dust_courant_dt
@@ -968,6 +1005,7 @@ module dust_dynamics
         
         real(dp), dimension(1:ndust) :: t_s_intrinsic
         real(dp) :: avg_ts_cell
+        real(dp) :: w_cap_cell
 
         dflux = 0.0_dp
         eflux = 0.0_dp
@@ -980,7 +1018,7 @@ module dust_dynamics
         ! STEP 1: BASE PRIMITIVE EXTRACTION
         ! ========================================================================
         do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
-            if (condinit_kind == 'dustydiffuse') then
+            if (tva_test_mode == TVA_TEST_DIFFUSE) then
                 rho_mix(l,i,j,k) = 1.0_dp
             else
                 rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr) 
@@ -1003,7 +1041,7 @@ module dust_dynamics
             
             eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken, smallc**2/gamma/(gamma-one))
             
-            if (condinit_kind == 'dustydiffuse') then
+            if (tva_test_mode == TVA_TEST_DIFFUSE) then
                 Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
                 c_s(l,i,j,k) = 1.0_dp
             else
@@ -1053,14 +1091,14 @@ module dust_dynamics
                 do jbin = 1, ndust
                     rhod_cell(l,i,j,k,jbin) = rho_mix(l,i,j,k) * eps(l,i,j,k,jbin)
 
-                    if (condinit_kind == 'dustydiffuse') then
+                    if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         t_s_intrinsic(jbin) = 0.1_dp
-                    else if (condinit_kind == 'dustyshock') then
+                    else if (tva_test_mode == TVA_TEST_SHOCK) then
                         t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(jbin)
-                    else if (condinit_kind == 'dustyblast1d') then
+                    else if (tva_test_mode == TVA_TEST_BLAST1D) then
                         t_s_intrinsic(jbin) = 6d-3
                     else
-                        t_s_intrinsic(jbin) = (sgrain_code(jbin) * agrain_code(jbin)) / &
+                        t_s_intrinsic(jbin) = epstein_coef * (sgrain_code(jbin) * agrain_code(jbin)) / &
                                             max((one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k) * c_s(l,i,j,k), smallr) 
                     end if
                     avg_ts_cell = avg_ts_cell + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin)
@@ -1073,10 +1111,25 @@ module dust_dynamics
                     end do
                     w_g_cell(l,i,j,k) = - (eps_tot(l,i,j,k) / max(one - eps_tot(l,i,j,k), smallr)) * w_drift_test(idim)
                 else
-                    w_g_cell(l,i,j,k) = -avg_ts_cell * grad_P_cell / max(rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k)), smallr)
+                    ! Barycentric frame: sum_i rho_i w_i + rho_g w_g = 0 with
+                    ! w_d,i = (t_s,i - avg_ts)*D and D = grad_P/rho_mix gives w_g = -avg_ts*D.
+                    ! There is no 1/(1-eps_tot) factor here -- this must agree with the
+                    ! radiation-pressure solver and with get_dust_courant_dt, which both
+                    ! divide by rho_mix alone.
+                    w_g_cell(l,i,j,k) = -avg_ts_cell * grad_P_cell / max(rho_mix(l,i,j,k), smallr)
                     do jbin = 1, ndust
                         w_d_cell(l,i,j,k,jbin) = (t_s_intrinsic(jbin) - avg_ts_cell) * grad_P_cell / rho_mix(l,i,j,k)
                     end do
+                    ! Same cap as get_dust_courant_dt: TVA is only valid for Stokes << 1.
+                    if (tva_wmax_cs > 0.0_dp) then
+                        w_cap_cell = tva_wmax_cs * c_s(l,i,j,k)
+                        if (abs(w_g_cell(l,i,j,k)) > w_cap_cell) &
+                            w_g_cell(l,i,j,k) = sign(w_cap_cell, w_g_cell(l,i,j,k))
+                        do jbin = 1, ndust
+                            if (abs(w_d_cell(l,i,j,k,jbin)) > w_cap_cell) &
+                                w_d_cell(l,i,j,k,jbin) = sign(w_cap_cell, w_d_cell(l,i,j,k,jbin))
+                        end do
+                    end if
                 end if
             end do; end do; end do; end do
 
@@ -1636,6 +1689,7 @@ module dust_dynamics
 
         real(dp), dimension(1:ndust) :: t_s_intrinsic, D_bin, a_rad_d_cell
         real(dp) :: avg_ts_cell, a_rad_g_cell, a_rad_mix, sum_eps_ts_D
+        real(dp) :: w_cap_cell
 
         ! Initialize output flux arrays
         dflux = 0.0_dp
@@ -1652,7 +1706,7 @@ module dust_dynamics
         ! STEP 1: PRIMITIVE VARIABLE & GAS DENSITY EXTRACTION (CELL-CENTERED)
         ! ========================================================================
         do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
-            if (condinit_kind == 'dustydiffuse') then
+            if (tva_test_mode == TVA_TEST_DIFFUSE) then
                 rho_mix(l,i,j,k) = 1.0_dp
             else
                 rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr) 
@@ -1675,7 +1729,7 @@ module dust_dynamics
             
             eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken, smallc**2/gamma/(gamma-one))
             
-            if (condinit_kind == 'dustydiffuse') then
+            if (tva_test_mode == TVA_TEST_DIFFUSE) then
                 Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
                 c_s(l,i,j,k) = 1.0_dp
             else
@@ -1725,14 +1779,14 @@ module dust_dynamics
                 do jbin = 1, ndust
                     rhod_cell(l,i,j,k,jbin) = rho_mix(l,i,j,k) * eps(l,i,j,k,jbin)
 
-                    if (condinit_kind == 'dustydiffuse') then
+                    if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         t_s_intrinsic(jbin) = 0.1_dp
-                    else if (condinit_kind == 'dustyshock') then
+                    else if (tva_test_mode == TVA_TEST_SHOCK) then
                         t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(jbin)
-                    else if (condinit_kind == 'dustyblast1d') then
+                    else if (tva_test_mode == TVA_TEST_BLAST1D) then
                         t_s_intrinsic(jbin) = 6d-3
                     else
-                        t_s_intrinsic(jbin) = (sgrain_code(jbin) * agrain_code(jbin)) / &
+                        t_s_intrinsic(jbin) = epstein_coef * (sgrain_code(jbin) * agrain_code(jbin)) / &
                                             max((one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k) * c_s(l,i,j,k), smallr) 
                     end if
                     avg_ts_cell = avg_ts_cell + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin)
@@ -1762,6 +1816,16 @@ module dust_dynamics
                     do jbin = 1, ndust
                         w_d_cell(l,i,j,k,jbin) = t_s_intrinsic(jbin) * D_bin(jbin) - sum_eps_ts_D
                     end do
+                    ! Same cap as get_dust_courant_dt: TVA is only valid for Stokes << 1.
+                    if (tva_wmax_cs > 0.0_dp) then
+                        w_cap_cell = tva_wmax_cs * c_s(l,i,j,k)
+                        if (abs(w_g_cell(l,i,j,k)) > w_cap_cell) &
+                            w_g_cell(l,i,j,k) = sign(w_cap_cell, w_g_cell(l,i,j,k))
+                        do jbin = 1, ndust
+                            if (abs(w_d_cell(l,i,j,k,jbin)) > w_cap_cell) &
+                                w_d_cell(l,i,j,k,jbin) = sign(w_cap_cell, w_d_cell(l,i,j,k,jbin))
+                        end do
+                    end if
                 end if
             end do; end do; end do; end do
 

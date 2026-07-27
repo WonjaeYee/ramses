@@ -166,7 +166,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   use hydro_parameters
   use const
 #ifdef CALIMA
-  use dust_commons, only: dust_tva, ndust
+  use dust_commons, only: dust_tva, ndust, tva_test_mode, TVA_TEST_DIFFUSE
 #endif
   implicit none
   integer::ncell
@@ -277,7 +277,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
          end do
          eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
          rho_gas = uu(k,1)*(1.0d0-eps_total)
-         if (condinit_kind == 'dustydiffuse') then
+         if (tva_test_mode == TVA_TEST_DIFFUSE) then
             uu(k,neul) = 1.0d0
          else
             uu(k,neul)=sqrt(uu(k,neul)/rho_gas)

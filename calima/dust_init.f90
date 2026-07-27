@@ -67,6 +67,14 @@ module dust_init
             end do
         end if
 #endif
+        write(*,*) '>>> DUST DYNAMICS ========================================'
+        write(*,*) 'dust_tva             = ',dust_tva,',    dust_radpressure    = ',dust_radpressure
+        if (dust_tva) then
+            write(*,*) 'use_w_drift_test     = ',use_w_drift_test
+            if (use_w_drift_test) write(*,*) '   w_drift_test      = ',w_drift_test
+            write(*,*) 'tva_wmax_cs          = ',tva_wmax_cs,' (cap on |w_drift| / c_s)'
+            write(*,*) 'epstein_coef         = ',epstein_coef,' = sqrt(pi*gamma/8)'
+        end if
         write(*,*) '=============================================================='
     end subroutine print_dust_parameters
 
@@ -154,6 +162,28 @@ module dust_init
             check_params_dust=.false.
         end if
 #endif
+        if (dust_tva .and. ndust <= 0) then
+            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust bin (NDUST>0)'
+            check_params_dust=.false.
+        end if
+        if (dust_radpressure .and. .not.dust_tva) then
+            if(myid==1)write(*,*)'Error: dust_radpressure has no effect without dust_tva=.true.'
+            check_params_dust=.false.
+        end if
+        if (dust_tva .and. myid==1) then
+            if (use_w_drift_test) then
+                write(*,*)'WARNING: use_w_drift_test=.true. replaces the physical drift ', &
+                          'with the constant w_drift_test. This is a test mode, not physics.'
+            end if
+            if (npah > 0) then
+                write(*,*)'WARNING: TVA advects the ',ndust,' dust bins only. The ',npah, &
+                          ' PAH bins stay perfectly coupled to the gas (see calima/README.md).'
+            end if
+            if (tva_wmax_cs <= 0d0) then
+                write(*,*)'WARNING: tva_wmax_cs<=0 disables the drift cap. TVA assumes ', &
+                          'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'
+            end if
+        end if
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)
@@ -680,6 +710,7 @@ module dust_init
         ! This is called during init_time.f90
         use hydro_parameters
         use amr_commons, only:myid
+        use amr_parameters, only:condinit_kind
         use dust_photoelectric_heating, only: most_negative_allowed_charge
         use dust_optics, only:getRATCrosssection
         use rk4_mod, only: rk4_step
@@ -696,6 +727,28 @@ module dust_init
         real(dp) :: R
         integer :: iend_chemtype
         external :: run_dust_solver_test
+
+        ! Epstein drag coefficient. t_s = rho_s*a/(rho_g*v_th) with v_th the MEAN thermal
+        ! speed sqrt(8kT/(pi mu mH)); the solver's c_s is adiabatic, and
+        ! v_th = sqrt(8/(pi*gamma))*c_s, so the coefficient is sqrt(pi*gamma/8) = 0.809 for
+        ! gamma=5/3. Cf. patch/mrn-scratch/synchro_fine.f90, which carries the isothermal
+        ! form of the same constant, sqrt(pi/8) = 0.62665706865775.
+        epstein_coef = sqrt(pi * gamma / 8d0)
+
+        ! Resolve the TVA test IC once, here, instead of string-comparing condinit_kind
+        ! inside the per-cell/per-face/per-bin solver loops.
+        select case (trim(condinit_kind))
+        case ('dustydiffuse'); tva_test_mode = TVA_TEST_DIFFUSE
+        case ('dustyshock');   tva_test_mode = TVA_TEST_SHOCK
+        case ('dustyblast1d'); tva_test_mode = TVA_TEST_BLAST1D
+        case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
+        case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
+        case default;          tva_test_mode = TVA_TEST_NONE
+        end select
+        if (myid == 1 .and. tva_test_mode /= TVA_TEST_NONE) then
+            write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                       'branch: the stopping time and/or thermodynamics are hardcoded, not physical.'
+        end if
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
         if (sum(dustbins_per_chemtype) /= ndust) then
@@ -1178,6 +1231,7 @@ module dust_init
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
                 dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,drag_coefficient,&
+                tva_wmax_cs,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
                 ! PAH modelling options

@@ -68,6 +68,27 @@ module dust_commons
     logical ::use_w_drift_test=.false.           ! Override the drift velocity with a constant value for testing
     real(dp),dimension(1:3)::w_drift_test=0.0_dp ! Constant drift velocity for each dimension (X, Y, Z)
     real(dp),dimension(1:ndust)::drag_coefficient=1d0 ! Constant drag coefficient for testing
+    real(dp) ::epstein_coef=1d0                  ! sqrt(pi*gamma/8), set once in init_CALIMA_dust.
+                                                 ! Epstein drag uses the MEAN thermal speed
+                                                 ! v_th = sqrt(8kT/(pi mu mH)); written with the
+                                                 ! ADIABATIC c_s used in the solver that is
+                                                 ! v_th = sqrt(8/(pi*gamma))*c_s, hence
+                                                 ! t_s = sqrt(pi*gamma/8)*s*a/(rho_g*c_s).
+                                                 ! (Laibe & Price 2012; Lebreuilly+2019.)
+    real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.
+                                                 ! TVA assumes Stokes << 1, which fails once the drift
+                                                 ! approaches c_s (typically in hot/diffuse cells, where
+                                                 ! t_s ~ 1/rho_gas blows up). <=0 disables the cap.
+    ! condinit_kind resolved to an integer once in init_CALIMA_dust, so the innermost
+    ! solver loops carry an integer compare instead of a character(60) one -- and so an
+    ! innocently named IC cannot silently switch the physics to a test branch.
+    integer,parameter ::TVA_TEST_NONE=0, TVA_TEST_DIFFUSE=1, TVA_TEST_SHOCK=2, &
+                      & TVA_TEST_BLAST1D=3, TVA_TEST_SPRESS=4, TVA_TEST_GAUSS=5
+    integer ::tva_test_mode=TVA_TEST_NONE
+    ! ==== Dust dynamics diagnostics (not in nml) ====
+    integer(kind=8) ::tva_nclip=0                ! Faces/cells whose drift was clipped since last report
+    real(dp) ::tva_wmax_seen=0d0                 ! Largest |w_drift|/c_s seen since last report
+    integer ::tva_last_warn_step=-1              ! Coarse step of the last "TVA sets dt" message
     ! ==== Dust standalone testing (read from nml) ====
     logical ::dust_test=.false.                  ! Activate accretion solver test
     real(dp) ::test_nH=1.0d2                     ! Target test gas hydrogen density [cm-3]
@@ -351,10 +372,13 @@ module dust_commons
     subroutine add_total_masses
         use amr_commons
         use hydro_commons
+#ifdef RTZ
+        use rtz_module, only: elements
+#endif
         implicit none
         integer::ilevel
         integer::i,ivar,ind,iskip
-        integer::ii,icell,igrid
+        integer::ii,icell,igrid,e_counter
         integer::nx_loc,ncache,ngrid
         integer,dimension(1:nvector)::ind_grid,ind_cell
         real(dp)::dx,dx_loc,scale
@@ -393,11 +417,25 @@ module dust_commons
                         do ii=1,ndust
                             total_dust_mass_species(npah+ii) = total_dust_mass_species(npah+ii) + (uold(ind_cell(i),idust+ii-1) * dx_loc**3)
                         end do
-                        ! Add total metal mass
+                        ! Add total metal mass. total_metal_mass is indexed by atomic
+                        ! number, but the uold block at imetal is PACKED over the
+                        ! elements(:) entries with atomic_number > 0, so the two must be
+                        ! walked with separate counters.
                         if (metal) then
+#ifdef RTZ
+                            e_counter = 0
                             do ii=1,n_elements
+                                if (elements(ii)%atomic_number > 0) then
+                                    total_metal_mass(ii) = total_metal_mass(ii) + &
+                                        (uold(ind_cell(i),imetal+e_counter) * dx_loc**3)
+                                    e_counter = e_counter + 1
+                                end if
+                            end do
+#else
+                            do ii=1,nmetals
                                 total_metal_mass(ii) = total_metal_mass(ii) + (uold(ind_cell(i),imetal+ii-1) * dx_loc**3)
                             end do
+#endif
                         end if
                         ! Add total CO mass
                         total_CO_mass = total_CO_mass + (uold(ind_cell(i),ico) * dx_loc**3)
@@ -412,12 +450,18 @@ module dust_commons
     subroutine print_total_masses(myid,tcurrent,scale_factor)
         use constants
         use amr_parameters, only:cosmo
+        use hydro_parameters, only:nmetals
         use mpi_mod
+#ifdef RTZ
+        use rtz_module, only: elements
+#endif
         implicit none
         integer,intent(in) :: myid
         real(dp),intent(in) :: tcurrent,scale_factor
         real(dp) :: scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2,scale_msun
-        real(dp) :: tmp_species_mass(1:6), tmp_metal_mass(1:7)
+        integer :: ii
+        character(len=2048) :: line
+        character(len=32) :: buf
 #ifndef WITHOUTMPI
         integer ::mpi_err
 #endif
@@ -436,37 +480,41 @@ module dust_commons
         total_metal_mass = total_metal_mass_all * scale_msun
         total_CO_mass = total_CO_mass_all * scale_msun
 #endif
-        ! 2. Print the total masses
-        tmp_species_mass = 0d0
-        if (ndust + npah > 0) then
-            tmp_species_mass(1:min(6, ndust+npah)) = total_dust_mass_species(1:min(6, ndust+npah))
-        end if
-        tmp_metal_mass = 0d0
-        if (n_elements > 0) then
-            tmp_metal_mass(1:min(7, n_elements)) = total_metal_mass(1:min(7, n_elements))
-        end if
+        ! 2. Print the total masses. The line is assembled from elements(:) and from the
+        ! actual bin counts, so it adapts to whatever element and dust/PAH set is
+        ! compiled in rather than assuming a fixed 7-element, 6-bin layout.
         if(myid==1)then
             if (cosmo) then
-222             format('aexp:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
-                & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
-                & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
-                & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
-                write(*,222)scale_factor,total_gas_mass,tmp_metal_mass(1),tmp_metal_mass(2),&
-                    &tmp_metal_mass(3),tmp_metal_mass(4),tmp_metal_mass(5),tmp_metal_mass(6),&
-                    &tmp_metal_mass(7),tmp_species_mass(1),tmp_species_mass(2),&
-                    &tmp_species_mass(3),tmp_species_mass(4),tmp_species_mass(5),&
-                    &tmp_species_mass(6),total_CO_mass
+                write(line,'("aexp:",e13.6,", Gas=",e13.6)') scale_factor, total_gas_mass
             else
-223             format('t:',e13.6,', Gas=',e13.6,', Fe=',e13.6,&
-                & ' O=',e13.6,' N=',e13.6,' Mg=',e13.6,' Si=',e13.6,' C=',e13.6,' S=',e13.6,&
-                & ' PAHSmall=',e13.6,' PAHLarge=',e13.6,&
-                & ' CSmall=',e13.6,' CLarge=',e13.6,' SilSmall=',e13.6,' SilLarge=',e13.6,' CO=',e13.6)
-                write(*,223)tcurrent*scale_t / Myr2sec,total_gas_mass,tmp_metal_mass(1),tmp_metal_mass(2),&
-                    &tmp_metal_mass(3),tmp_metal_mass(4),tmp_metal_mass(5),tmp_metal_mass(6),&
-                    &tmp_metal_mass(7),tmp_species_mass(1),tmp_species_mass(2),&
-                    &tmp_species_mass(3),tmp_species_mass(4),tmp_species_mass(5),&
-                    &tmp_species_mass(6),total_CO_mass
+                write(line,'("t:",e13.6,", Gas=",e13.6)') tcurrent*scale_t / Myr2sec, total_gas_mass
             end if
+            ! Gas-phase metals. total_metal_mass is indexed by atomic number.
+#ifdef RTZ
+            do ii = 1, n_elements
+                if (elements(ii)%atomic_number > 0) then
+                    write(buf,'(1x,A,"=",e13.6)') trim(elements(ii)%symbol), total_metal_mass(ii)
+                    line = trim(line)//trim(buf)
+                end if
+            end do
+#else
+            ! Without RTZ the metal block carries no element identity, so label by slot.
+            do ii = 1, nmetals
+                write(buf,'(1x,"Z",i0,"=",e13.6)') ii, total_metal_mass(ii)
+                line = trim(line)//trim(buf)
+            end do
+#endif
+            ! PAH bins, then dust bins, in the order they are stored
+            do ii = 1, npah
+                write(buf,'(1x,"PAH",i0,"=",e13.6)') ii, total_dust_mass_species(ii)
+                line = trim(line)//trim(buf)
+            end do
+            do ii = 1, ndust
+                write(buf,'(1x,"Dust",i0,"=",e13.6)') ii, total_dust_mass_species(npah+ii)
+                line = trim(line)//trim(buf)
+            end do
+            write(buf,'(1x,"CO=",e13.6)') total_CO_mass
+            write(*,'(A)') trim(line)//trim(buf)
         end if
 
         ! 3. Set the total masses to zero
@@ -702,15 +750,19 @@ module dust_commons
         use amr_commons
         use hydro_commons, only: uold, imetal,nmetals
         use constants, only: M_sun
+#ifdef RTZ
+        use rtz_module, only: elements
+#endif
 #ifndef WITHOUTMPI
         use mpi_mod
 #endif
         implicit none
-        integer :: ilevel, i, ind, iskip, ii, icell, igrid, nx_loc, ncache, ngrid
+        integer :: ilevel, i, ind, iskip, ii, icell, igrid, nx_loc, ncache, ngrid, counter
         integer, dimension(1:nvector) :: ind_grid, ind_cell
         real(dp) :: dx, dx_loc, scale, scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2, scale_msun
         real(dp), dimension(1:ndust+npah) :: local_bin_masses, global_bin_masses
         real(dp) :: local_gas_mass, local_metal_mass, global_gas_mass, global_metal_mass
+        logical, dimension(1:nmetals) :: metal_slot
 #ifndef WITHOUTMPI
         integer :: mpi_err
 #endif
@@ -722,6 +774,24 @@ module dust_commons
         local_metal_mass = 0d0
         global_gas_mass = 0d0
         global_metal_mass = 0d0
+
+        ! The element block at imetal is packed in the order of elements(:) with
+        ! atomic_number > 0, so it starts with H (and He, when helium is tracked).
+        ! Those are not metals and must be left out of the metal mass.
+#ifdef RTZ
+        metal_slot = .false.
+        counter = 0
+        do ii = 1, n_elements
+            if (elements(ii)%atomic_number > 0) then
+                counter = counter + 1
+                if (counter > nmetals) exit
+                metal_slot(counter) = (elements(ii)%atomic_number > 2)
+            end if
+        end do
+#else
+        ! Without RTZ, imetal is the plain metallicity scalar block: all of it is metal.
+        metal_slot = .true.
+#endif
 
         ! 2. Compute local grid leaf cell contributions
         nx_loc = (icoarse_max - icoarse_min + 1)
@@ -744,9 +814,10 @@ module dust_commons
                     do i = 1, ngrid
                         if (son(ind_cell(i)) == 0) then
                             local_gas_mass = local_gas_mass + (uold(ind_cell(i), 1) * dx_loc**3)
-                            ! Accumulate metal mass
+                            ! Accumulate metal mass (H and He are skipped, see metal_slot)
                             do ii = 1, nmetals
-                                local_metal_mass = local_metal_mass + (uold(ind_cell(i), imetal + ii - 1) * dx_loc**3)
+                                if (metal_slot(ii)) local_metal_mass = local_metal_mass + &
+                                    (uold(ind_cell(i), imetal + ii - 1) * dx_loc**3)
                             end do
                             ! Accumulate PAH bin masses
                             do ii = 1, npah
@@ -793,9 +864,12 @@ module dust_commons
             end do
             write(*, '(A, ES14.6)') '  Total dust+PAH mass in box [Msun]: ', sum(global_bin_masses)
             write(*, '(A, ES14.6)') '  Total gas mass in box [Msun]: ', global_gas_mass
-            write(*, '(A, ES14.6)') '  Total metal mass in box [Msun]: ', global_metal_mass
+            write(*, '(A, ES14.6)') '  Total gas-phase metal mass in box [Msun]: ', global_metal_mass
             write(*, '(A, ES14.6)') '  Total dust-to-gas ratio in the box: ', sum(global_bin_masses) / global_gas_mass
-            write(*, '(A, ES14.6)') '  Total dust-to-metal ratio in the box: ', sum(global_bin_masses) / global_metal_mass
+            ! Metals locked in grains have left the gas phase, so they belong in the
+            ! denominator: this is the DTM convention DTM_solar = 0.458 refers to.
+            write(*, '(A, ES14.6)') '  Total dust-to-metal ratio in the box: ', &
+                sum(global_bin_masses) / max(global_metal_mass + sum(global_bin_masses), tiny(1d0))
         end if
     end subroutine print_box_dust_masses
 

@@ -10,7 +10,7 @@ subroutine newdt_fine(ilevel)
   use turb_commons
 #endif
 #ifdef CALIMA
-  use dust_commons,   only: dust_tva, ndust
+  use dust_commons,   only: dust_tva, ndust, tva_test_mode, TVA_TEST_GAUSS
   use dust_dynamics,  only: get_dust_courant_dt
 #endif
   use constants, ONLY: pi
@@ -193,7 +193,7 @@ subroutine newdt_fine(ilevel)
   if (dust_tva .and. ndust > 0) call get_dust_courant_dt(ilevel)
 
   ! Force to use a very small timestep of 1e-8 for dustygauss convergence tests
-  if (condinit_kind == 'dustygauss') then
+  if (tva_test_mode == TVA_TEST_GAUSS) then
      dtnew(ilevel) = 1.0d-8
   end if
 #endif

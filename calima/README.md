@@ -86,3 +86,32 @@ The typical order is:
 - The dust optical tables are read from the directory given by dust_tables_dir.
 - The shared per-rank chemistry workspace is the DustChemistryInfo instance dust_helper.
 - Most CALIMA routines depend on dust_commons for bin metadata and on dustbin_types for the storage layout of tables and helper arrays.
+
+## Dust dynamics (TVA)
+
+`dust_tva=.true.` advects the dust bins relative to the gas at the terminal velocity
+(Lebreuilly+2019), as an operator-split upwind step applied to `unew` after the Godunov sweep
+(`amr_step.f90`, `dust_diffusion_fine` / `dust_push_fine`). Things to be aware of:
+
+- **PAH bins do not drift.** `dust_upwind_correct1/2` loop over the `ndust` dust bins only; the
+  `npah` PAH bins stay perfectly coupled to the gas. `compute_gas_dust_radpressure_acc` does return
+  a PAH acceleration, but it is not used, and PAH mass is excluded from `eps_tot` and from the
+  barycentric acceleration. Defensible for PAHs, which are small and well coupled, but it is an
+  approximation, not an accident. `check_params_dust` warns when `npah > 0` and TVA is on.
+- **Gas-phase metals do not follow the dust.** Only the `ndust` density scalars are advected;
+  `imetal` is untouched. Dust carrying C/O/Mg/Si/Fe across a cell boundary does not move the
+  corresponding gas-phase element, so the per-element budget drifts over time. Watch the
+  `dust_log` mass-conservation output.
+- **`tva_wmax_cs`** caps `|w_drift|` at that multiple of the local sound speed, in both
+  `get_dust_courant_dt` and the flux routines. TVA assumes Stokes << 1, which fails once the drift
+  approaches `c_s`; since `t_s ~ 1/rho_gas`, a single hot/diffuse cell would otherwise drive the
+  global timestep to zero. Set `<= 0` to disable (not recommended). Clipping is counted and
+  reported alongside the "dust drift sets dt" message.
+- **Enabling TVA changes the pure hydro** even before any drift matters: `ctoprim`
+  (`hydro/umuscl.f90`) and `cmpdt` (`hydro/courant_fine.f90`) switch the EoS from the mixture
+  density to the gas density `rho_mix*(1-eps_tot)`. A TVA run is therefore not bit-comparable to
+  the same setup with TVA off.
+- **`condinit_kind`** values `dustydiffuse`, `dustyshock`, `dustyblast1d`, `dustyspress` and
+  `dustygauss` select **test** branches that hardcode the stopping time and/or the thermodynamics.
+  These are resolved once into `tva_test_mode` at startup and warned about. Production ICs must use
+  a different `condinit_kind` (the default `region`).
