@@ -401,6 +401,7 @@ module dust_rates
                 do ii = ii1, ii2
                     sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
                     rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
+                    rate = min(rate, max_accretion_rate)
                     ! 5. Get the maximum rate computed here, if requested.
                     if (present(kmax)) then
                         kmax = max(kmax, abs(rate))
@@ -438,10 +439,15 @@ module dust_rates
         ! ---- Local variables ----
         integer :: jj, ii, ii1, ii2, kk, e_index, iion, izion, nions_loc
         integer :: n_el
-        real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
-        real(dp) :: sticking_ice, nO, depletion
+        real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, bin_prefactor
+        real(dp) :: sticking_ice, nO, min_growth_rate, element_growth_rate
+        real(dp),dimension(:),allocatable :: element_pot_rate
+        real(dp),dimension(:,:),allocatable :: ion_pot_contribution
+        real(dp) :: min_abundance_density,depletion,ion_flux
+        real(dp) :: element_pot_rate_1
 
         Tk_loc = dust_info%local_Tk
+        min_abundance_density = 1.d-10 * dust_info%local_rho
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
 #ifdef RTZ
         nO = y_gas(8,1) / elements(8)%atomic_mass_g
@@ -454,53 +460,117 @@ module dust_rates
             ii1 = istart_chemtype(jj) 
             ii2 = ii1 + dustbins_per_chemtype(jj) - 1
 
-            associate(bin => dustbins_props(ii1))
-                n_el = bin%nelements
-
-                if (n_el == 1) then
-                    ! 2. A single-element chemistry type has a limiter.
-                    e_index = bin%el_index(1)
-                    limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
-                else
-                    ! 3. Find the limiting element in a single pass, without a temporary array.
-                    e_index = bin%el_index(1)
-                    limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
-                    do kk = 2, n_el
-                        e_index = bin%el_index(kk)
-                        pseudo_rate = y_gas(e_index,1) / (bin%el_mfractions(kk) * sqrt(bin%el_atomic_masses_g(kk)))
-                        if (pseudo_rate < limit_rate) then
-                            limit_rate = pseudo_rate
-                        end if
-                    end do
-                end if
-
-                do ii = ii1, ii2
-                    ! 4. Compute accretion rate for this dust bin
+            ! 2. Loop over all bins in a given chemical species
+            do ii = ii1, ii2
+                associate(bin => dustbins_props(ii))
+                    n_el = bin%nelements
                     sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
-                    rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
-                    rate = min(rate, max_accretion_rate)
-                    if (present(kmax)) then
-                        kmax = max(kmax, abs(rate))
-                    end if
-                    rate = rate * y_dust(ii+dust_info%npah) ! [g cm-3 s-1]
-                    dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate  ! [g cm-3 s-1]
-
-                    ! 5. Update gas phase elements and their ions
-                    do kk = 1, n_el
-                        e_index = bin%el_index(kk)
+                    bin_prefactor = bin%k0_acc * prefactor * sticking_ice
+                    if (n_el == 1) then
+                        e_index = bin%el_index(1)
+                        element_pot_rate_1 = 0d0
                         nions_loc = n_elements
 #ifdef RTZ
                         nions_loc = max(1, elements(e_index)%n_ions)
 #endif
                         do iion = 1, nions_loc
                             izion = iion - 1
-                            depletion = rate * bin%el_mfractions(kk) * y_gas(e_index, iion+1)
-                            dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
-                            dydt_gas(e_index, 1) = dydt_gas(e_index, 1) - depletion
+                            if (y_gas(e_index, iion+1) <= min_abundance_density) cycle
+                            
+                            ! Raw kinetic arrival rate for this specific ion stage
+                            ion_flux = y_gas(e_index, iion+1) * dust_info%Coulomb_factor(ii,izion)
+                            element_pot_rate_1 = element_pot_rate_1 + ion_flux
                         end do
-                    end do
-                end do
-            end associate
+                        
+                        ! Normalize by stoichiometry and mass fraction to find the element's growth limit
+                        min_growth_rate = element_pot_rate_1 * bin_prefactor / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
+                        
+                        ! Final mass growth rate for this dust bin [g cm-3 s-1]
+                        rate = min_growth_rate * y_dust(ii+dust_info%npah)
+                        rate = min(rate, max_accretion_rate)
+                        dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate
+
+                        if (present(kmax)) then
+                            kmax = max(kmax, abs(min_growth_rate))
+                        end if
+
+                        if (element_pot_rate_1 > 0d0) then
+                            do iion = 1, nions_loc
+                                izion = iion - 1
+                                if (y_gas(e_index, iion+1) <= min_abundance_density) cycle
+                                ion_flux = y_gas(e_index, iion+1) * bin_prefactor * dust_info%Coulomb_factor(ii,izion)
+                                depletion = rate * bin%el_mfractions(1) * (ion_flux / element_pot_rate_1)
+                                dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
+                                dydt_gas(e_index, 1)      = dydt_gas(e_index, 1)      - depletion
+                            end do
+                        end if
+                    else
+                        allocate(element_pot_rate(1:n_el))
+                        allocate(ion_pot_contribution(1:n_el,1:n_elements))
+                        min_growth_rate = huge(1d0)
+                        bin_prefactor = bin%k0_acc * prefactor * sticking_ice
+
+                        ! --- STEP 1: Compute total potential arrival rate for each required element ---
+                        do kk = 1, n_el
+                            e_index = bin%el_index(kk)
+                            element_pot_rate(kk) = 0d0
+                            ion_pot_contribution(kk,:) = 0d0
+                            nions_loc = n_elements
+#ifdef RTZ
+                            nions_loc = max(1, elements(e_index)%n_ions)
+#endif
+                            do iion = 1, nions_loc
+                                izion = iion - 1
+                                if (y_gas(e_index, iion+1) <= min_abundance_density) cycle
+                                
+                                ! Raw kinetic arrival rate for this specific ion stage
+                                ion_flux = y_gas(e_index, iion+1) * dust_info%Coulomb_factor(ii,izion)
+                                
+                                ! Store this ion's individual potential contribution for Step 3
+                                ion_pot_contribution(kk, iion) = ion_flux
+                                element_pot_rate(kk) = element_pot_rate(kk) + ion_flux
+                            end do
+                            
+                            ! Normalize by stoichiometry and mass fraction to find the element's growth limit
+                            element_growth_rate = element_pot_rate(kk) * bin_prefactor / (bin%el_mfractions(kk) * sqrt(bin%el_atomic_masses_g(kk)))
+                            
+                            ! Find the absolute limiting element for this mineral composition
+                            if (element_growth_rate < min_growth_rate) then
+                                min_growth_rate = element_growth_rate
+                            end if
+                        end do
+                        
+                        ! --- STEP 2: Scale actual growth and deplete the gas phase ---
+                        ! Final mass growth rate for this dust bin [g cm-3 s-1]
+                        rate = min_growth_rate * y_dust(ii+dust_info%npah)
+                        rate = min(rate, max_accretion_rate)
+                        dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate
+
+                        if (present(kmax)) then
+                            kmax = max(kmax, abs(min_growth_rate))
+                        end if
+
+                        do kk = 1, n_el
+                            e_index = bin%el_index(kk)
+                            
+                            if (element_pot_rate(kk) > 0d0) then
+                                nions_loc = n_elements
+#ifdef RTZ
+                                nions_loc = max(1, elements(e_index)%n_ions)
+#endif
+                                do iion = 1, nions_loc
+                                    ! Actual depletion of this specific ion stage
+                                    depletion = rate * bin%el_mfractions(kk) * (ion_pot_contribution(kk, iion) / element_pot_rate(kk))
+                                    dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
+                                    dydt_gas(e_index, 1)      = dydt_gas(e_index, 1)      - depletion
+                                end do
+                            end if
+                        end do
+                        deallocate(element_pot_rate)
+                        deallocate(ion_pot_contribution)
+                    end if
+                end associate
+            end do
         end do speciesloop
     end subroutine coulomb_accretion_rate
 
