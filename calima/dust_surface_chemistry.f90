@@ -132,7 +132,9 @@ module dust_surface_chemistry
         ! (https://iopscience.iop.org/article/10.1086/422087/pdf)
         vH = sqrt(2D0 * kB * Tgas / mH) ! thermal velocity (assuming Mawell-Boltzmann distribution)
         F = h_flux(nHI,vH)
-        
+        ! Guard: no atomic H flux → no H2 formation on grains (also prevents NaN in high_temp_correction)
+        if (F <= 0d0) return
+
         ! Add the contribution from each dust grain
         do j = 1, ndust
             sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * twopi * (dustbins_props(j)%asize_cm)**2D0 ! in cm-1

@@ -127,6 +127,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp), dimension(1:nvector):: nCO
   real(dp), dimension(1:nvector):: dx_SS_H2
   integer:: counter, e_counter, jj
+  real(dp),dimension(1:nvector):: rho_total_check
 #endif
 #ifdef CALIMA
   real(dp) :: sigma2
@@ -411,6 +412,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         counter = 0
         e_counter = 0
         nElement = 0d0
+        rho_total_check = 0d0
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
@@ -420,6 +422,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                        ! This gives us a number density [Atoms/cm^3]
                        elements(ii)%scale_n = scale_d / elements(ii)%atomic_mass_g
                        nElement(ii,i) = uold(ind_leaf(i),imetal+e_counter) * elements(ii)%scale_n
+                       rho_total_check(i) = rho_total_check(i) + nElement(ii,i) * elements(ii)%atomic_mass_g
                     end if
                  end do ! end loop over leaf cells
                  counter = counter + 1 ! increment ionization counter
@@ -513,6 +516,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       ! Dust densities in g/cm^3
       do i=1,nleaf
          rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+         rho_total_check(i) = rho_total_check(i) + sum(rho_dust(i,:))
       end do
       if (any(rho_dust(:,:).lt.0d0)) then
          write(*,*) 'Negative dust density in cell ', ind_leaf(i)
@@ -523,6 +527,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       ! PAH densities in g/cm^3
       do i=1,nleaf
          rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+         rho_total_check(i) = rho_total_check(i) + sum(rho_pah(i,:))
       end do
       if (any(rho_pah(:,:).lt.0d0)) then
          write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
@@ -530,6 +535,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
          write(*,*) 'PAH density: ', rho_pah(i,:)
          call clean_stop
       end if
+#endif
+#ifdef RTZ
+      ! Check that the total densities are consistent with the sum of the individual species densities
+      do i=1,nleaf
+         if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / uold(ind_leaf(i),1)*scale_d .gt. 1d-3) then
+            write(*,*) 'Total density check failed in cell ', ind_leaf(i)
+            write(*,*) 'Total density: ', uold(ind_leaf(i),1)*scale_d
+            write(*,*) 'Sum of species densities: ', rho_total_check(i)
+            call clean_stop
+         end if
+      end do
 #endif
 
      ! grackle tabular cooling
@@ -684,6 +700,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
                               )
       end if
+#ifdef CALIMA
+      do i=1,nleaf
+         if (any(rho_dust(i,:).gt.uold(ind_leaf(i),1)*scale_d)) then
+            write(*,*) 'Dust density exceeds total density in cell ', ind_leaf(i)
+            write(*,*) 'Dust density: ', rho_dust(i,:)
+            write(*,*) 'Total density: ', uold(ind_leaf(i),1)
+            call clean_stop
+         end if
+      end do
+#endif
+! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
            write(*,*) 'This is raised in `coolfine1`'
            write(*,*) '  myid:', myid
