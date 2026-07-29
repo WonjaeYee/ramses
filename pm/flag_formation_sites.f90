@@ -81,7 +81,7 @@ subroutine flag_formation_sites
   do j=1,nsink
 #ifdef INDIVIDUAL_SINK_STARS
      ! Only block if sinks are actively accreting
-     if (evolution_flag(j).ne.1) then
+     if (abs(evolution_flag(j)).ne.1) then
         cycle
      end if
 #endif
@@ -191,7 +191,7 @@ subroutine flag_formation_sites
          end if
      else
         ! Clump has to be peaky enough
-        ! ok=ok.and.relevance(jj)>0
+        ok=ok.and.relevance(jj)>0
         ! temporarily skip this to simplify the formation
         ! Clump has to contain at least one cell
         ok=ok.and.n_cells(jj)>0

@@ -1735,7 +1735,7 @@ subroutine compute_accretion_rate(write_sinks)
 
 #ifdef INDIVIDUAL_SINK_STARS
      ! Accretion only onto pre main-sequence stars
-     if(evolution_flag(isink).ne.1) then
+     if(abs(evolution_flag(isink)).ne.1) then
         dMsink_overdt(isink)=0.d0
      endif
 #endif

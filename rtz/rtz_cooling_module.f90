@@ -553,23 +553,28 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,*) 'Pcoll_dust:', dust_helper%Pcoll_dust(1:ndust)
 #endif
             write(*,"(A11, *(X, I6))") ' loopCodes:', loopCodes
+            write(*,*) '(from code 0)'
             write(*,"(A11, *(X, I6))") 'loopCodes1:', loopCodes1
+            write(*,*) '(Np update: nGroups)'
             write(*,"(A11)") 'loopCodes2:'
             do loopCode_idx1=1,nGroups
                write(*,"(*(X, I6))") loopCodes2(loopCode_idx1, 1:ndim)
             end do
+            write(*,*) '(Fp update: nGroups, ndim)'
             write(*,"(A11)") 'loopCodes8:'
             do loopCode_idx1=1,n_elements
                if (elements(loopCode_idx1)%atomic_number > 0) then
                   write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes8(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
                end if
             end do
+            write(*,*) '(xion update: n_elements, n_ions)'
             write(*,"(A11)") 'loopCodes9:'
             do loopCode_idx1=1,n_elements
                if (elements(loopCode_idx1)%atomic_number > 0) then
                   write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes9(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
                end if
             end do
+            write(*,*) '(ne update: n_elements, n_ions)'
             err_idx = i
             return ! to check other quantities, return instead of stop
          end if
