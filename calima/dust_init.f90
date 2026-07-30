@@ -28,6 +28,8 @@ module dust_init
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Anninos)'
         else if (dust_solver_type == 3) then
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK54)'
+        else if (dust_solver_type == 4) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Implicit backward-Euler)'
         else
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Unknown)'
         end if
@@ -656,6 +658,7 @@ module dust_init
         use rk4_mod, only: rk4_step
         use anninos_mod, only: anninos_step
         use rk54_mod, only: rk54_step
+        use implicit_step_mod, only: implicit_step
         use ode_interface_mod, only: dust_solver_step
         implicit none
         integer, intent(in) :: nGroups
@@ -1108,6 +1111,11 @@ module dust_init
         else if (dust_solver_type == 3) then
             dust_solver_step => rk54_step
             solver_substepped = .true.
+        else if (dust_solver_type == 4) then
+            ! Implicit backward-Euler solver — always accepts, no 10% rule.
+            ! Use for benchmarking or when nH_implicit_threshold is not appropriate.
+            dust_solver_step => implicit_step
+            solver_substepped = .false.
         else
             if (myid == 1) then
                 write(*,*) 'ERROR: Invalid dust_solver_type = ', dust_solver_type
@@ -1135,7 +1143,7 @@ module dust_init
 
         namelist/calima_params/&
                 ! Dust physics flags
-                dust_log,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+                dust_log,dust_solver_type,nH_implicit_threshold,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
                 dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,&
                 dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
                 dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&

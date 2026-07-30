@@ -185,6 +185,8 @@ module rt_parameters
   real(dp)::rtz_primary_cosmic_ray_ionization_rate=0.d0
   real(dp)::rtz_max_cool_timestep=1.d11
   integer::rtz_eqm_min_its=50
+  real(dp)::rtz_nH_implicit_threshold=1.0d6
+  logical::rtz_use_implicit_chem=.true.
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate

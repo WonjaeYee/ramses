@@ -530,6 +530,7 @@ contains
         use ode_driver_mod, only: integrate_dust_ode
         use ode_interface_mod, only: dust_solver_step
         use dust_rhs_mod, only: dust_rhs
+        use implicit_step_mod, only: implicit_step
         use dust_rates, only: compute_rate_caches
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
 #ifdef RTZ
@@ -616,10 +617,18 @@ contains
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
         end if
 
-        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
+        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution.
+        !    At high gas density (nH > nH_implicit_threshold) automatically switch to
+        !    the implicit backward-Euler solver, regardless of dust_solver_type, to
+        !    avoid the many substeps that the Anninos/RK methods require near equilibrium.
         step_ok = .true.
-        call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
-                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
+        if (dinfo%local_nH > nH_implicit_threshold) then
+            call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,implicit_step,&
+                                    y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
+        else
+            call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
+                                    y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
+        end if
 
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then

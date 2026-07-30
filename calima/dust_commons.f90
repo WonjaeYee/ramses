@@ -16,7 +16,8 @@ module dust_commons
     ! ==== Flags and logicals (read from nml) ====
     logical, parameter ::dust=.true.             ! CALIMA always includes dust
     logical ::dust_log=.false.                   ! Activate dust logging
-    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
+    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54, 4 = Implicit (always)
+    real(dp)::nH_implicit_threshold=1.0d6       ! nH [cm^-3] above which the implicit solver is used automatically
     logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
     logical ::dust_eq_test=.false.               ! Activate dust equilibrium test parameters

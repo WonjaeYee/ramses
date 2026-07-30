@@ -323,7 +323,7 @@ ifeq ($(CALIMA),1)
    endif
    MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_cooling.o \
                dust_dynamics.o dust_photophysics.o dust_seeding.o dust_surface_chemistry.o \
-               dust_rates.o dust_solver.o dust_interface.o dust_init.o dust_test.o
+               dust_rates.o dust_solver.o implicit_step.o dust_interface.o dust_init.o dust_test.o
 endif
 ifeq ($(RT),1)
    MODOBJ += rt_parameters.o rt_hydro_commons.o coolrates_module.o \

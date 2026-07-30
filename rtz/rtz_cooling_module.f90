@@ -428,6 +428,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !       write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, nCO(i)/nH(i), (nCO(i)+nElement(6,i))/nH(i), (nCO(i)+nElement(8,i))/nH(i)
             !    else
                   write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1), xion(1,3,1)
+                  flush(6)
             !    end if
             ! else
                ! write(*,*) nH(i), TK_to_save(i), T2(i), mu_to_save(i), loopcnt, xion(1,1,1), xion(1,2,1)
@@ -1286,8 +1287,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dUU   = MAX(dUU, ABS(dT2-T2(icell))) / (T2(icell)+T_MIN) &
                            *one_over_T_FRAC
          
-         ! 2026.05.29
-         dUU = max(dUU, abs(dRate*ddt(icell)*one_over_T_FRAC))
+         ! 2026.05.29 — for the implicit chemistry path in equilibrium mode, skip the
+         ! dRate*ddt stability check: near equilibrium rate≈0 so the explicit T formula
+         ! is well-behaved regardless of ddt. Keeping this check causes code=3 to fire
+         ! repeatedly (because dRate is set by the cooling curve slope, not by how far
+         ! the system is from equilibrium), resetting the convergence counter indefinitely.
+         ! For nH < threshold (Anninos / explicit dust path), the check is still needed
+         ! because the explicit dust solver requires small ddt.
+         if (rtz_equilibrium_test.le.0 .or. nH(icell) .lt. rtz_nH_implicit_threshold) then
+            dUU = max(dUU, abs(dRate*ddt(icell)*one_over_T_FRAC))
+         end if
          
          fracMax=MAX(fracMax,dUU)
          if(dUU .gt. 1.) then                                     ! 10% rule
@@ -1391,9 +1400,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_now)
             t_dust = t_dust + (t_now - t_last)
+         else
+            code = 10
+            RETURN
          end if
-         code = 10
-         RETURN
       end if
       ! Propagate changes in nElement_dep to dnElement
       dnElement = nElement_dep
@@ -1431,6 +1441,37 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          t_last = t_now
       end if
 #endif
+      !/////////////////////////////////////////
+      !//     IMPLICIT CHEMISTRY (HIGH nH)   //
+      !/////////////////////////////////////////
+      ! Evaluate update_COspecies here so it is available to the implicit branch.
+      if ((nElement_dep(6) + nCO(icell))/nElement_dep(1).gt.1d-10 .or. &
+         (nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then
+        update_COspecies = .true.
+      else
+        update_COspecies = .false.
+      end if
+
+      ! At nH > rtz_nH_implicit_threshold, use a single backward-Euler step
+      ! over all species simultaneously, bypassing the Anninos loops below.
+      if (nElement_dep(1) > rtz_nH_implicit_threshold .and. rtz_use_implicit_chem) then
+         dust_effective_number_density = nElement_dep(1) * dust_to_gas_mass_ratio_over_mw
+         call rtz_implicit_chem_step(icell, ddt(icell), TK, nElement_dep, &
+              ss_factor, UV_background_G0, total_G0, &
+              total_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
+              cosmic_ray_scale_factor, dust_effective_number_density, &
+              dust_to_gas_mass_ratio_over_mw, f_shd, update_COspecies)
+         ! In equilibrium mode, preserve fracMax (contains dRate*ddt contribution) so
+         ! dt_rec is limited the same way the Anninos path is, preventing runaway growth.
+         if (rtz_equilibrium_test.le.0) fracMax = 0d0
+         if (rtz_equilibrium_test.gt.0) then
+            call cpu_time(t_now)
+            t_ion = t_ion + (t_now - t_last)
+            t_last = t_now
+         end if
+         goto 99  ! skip H2, CO, and ion loops; jump to final mu/T update
+      end if
+
       !/////////////////////////////////////////
       !//           UPDATE MOLECULES          //
       !/////////////////////////////////////////
@@ -1516,9 +1557,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (rtz_equilibrium_test.gt.0) then
                   call cpu_time(t_now)
                   t_mol = t_mol + (t_now - t_last)
+               else
+                  code=6 !TODO(code) update this code for each ion
+                  RETURN
                end if
-               code=6 !TODO(code) update this code for each ion
-               RETURN
             end if
          end if
 
@@ -1532,12 +1574,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
       end if
 
-      if ((nElement_dep(6) + nCO(icell))/nElement_dep(1).gt.1d-10 .or. &
-         (nElement_dep(8) + nCO(icell))/nElement_dep(1).gt.1d-10) then
-        update_COspecies = .true.
-      else
-        update_COspecies = .false.
-      end if
 #ifdef CO
       cr_CO = 0.d0
       de_CO = 0.d0
@@ -1638,9 +1674,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if (rtz_equilibrium_test.gt.0) then
                      call cpu_time(t_now)
                      t_mol = t_mol + (t_now - t_last)
+                  else
+                     code=7 !TODO(code) update this code for each ion
+                     RETURN
                   end if
-                  code=7 !TODO(code) update this code for each ion
-                  RETURN
                end if
             end if
 
@@ -1947,9 +1984,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      if (rtz_equilibrium_test.gt.0) then
                         call cpu_time(t_now)
                         t_ion = t_ion + (t_now - t_last)
+                     else
+                        code=8 !TODO(code) update this code for each ion
+                        RETURN
                      end if
-                     code=8 !TODO(code) update this code for each ion
-                     RETURN
                   end if
                end if
 
@@ -1967,9 +2005,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      if (rtz_equilibrium_test.gt.0) then
                         call cpu_time(t_now)
                         t_ion = t_ion + (t_now - t_last)
+                     else
+                        code=9
+                        RETURN
                      end if
-                     code=9
-                     RETURN
                   end if
                end if
 
@@ -2005,6 +2044,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             end if
          end if
       end do ! END ELEMENT LOOP
+
+      ! Landing point for the implicit chemistry branch (goto 99)
+99    continue
+
+      ! Recompute ne after chemistry update (implicit or explicit)
+      ne = getNe(dXion, nElement_dep(:))
 
       ! UPDATE FINAL MU AND TEMPERATURE ************************************
 #ifdef CO
@@ -2060,6 +2105,469 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       mu_to_save(icell)=mu
 
    END SUBROUTINE rtz_cool_step
+
+! ==========================================================================
+!  rtz_eval_chem_rhs
+!  Pure chemistry RHS: returns d/dt of all ion fractions and nCO given the
+!  current state (xion_in, nCO_in) and frozen parameters.
+!  Mirrors the H2, CO, and ion update expressions in rtz_cool_step exactly,
+!  but written as an explicit time derivative f(y) rather than the Anninos
+!  semi-implicit update.  Called by rtz_implicit_chem_step (below).
+! ==========================================================================
+   subroutine rtz_eval_chem_rhs(xion_in, nCO_in, TK, nElement_dep, &
+       ss_factor_in, UV_G0, total_G0_in, &
+       total_cr_rate, H2_cr_rate, cr_scale_in, &
+       dust_eff_nd, dust_to_gas_mw, f_shd_in, update_CO, &
+       f_xion, f_nCO, sr_precomp, ct_ion_pre, ct_rec_pre)
+      use collisional_ionization_module
+      use recombination_module
+      use charge_exchange_module
+      use dust_recombination_module
+      use photoionization_UVB_module
+      use cosmic_ray_ionization_module
+      use molecules_module
+      use rt_parameters
+      use rtz_module, only: elements
+#ifdef CALIMA
+      use dust_commons, only: H2ondust, dust_helper
+#endif
+      implicit none
+
+      real(dp), intent(in)  :: xion_in(n_elements,n_elements), nCO_in
+      real(dp), intent(in)  :: TK, nElement_dep(n_elements)
+      real(dp), intent(in)  :: ss_factor_in, UV_G0, total_G0_in
+      real(dp), intent(in)  :: total_cr_rate, H2_cr_rate, cr_scale_in
+      real(dp), intent(in)  :: dust_eff_nd, dust_to_gas_mw, f_shd_in
+      logical,  intent(in)  :: update_CO
+      real(dp), intent(out) :: f_xion(n_elements,n_elements), f_nCO
+      real(dp), intent(in)  :: sr_precomp(n_elements,n_elements,3)
+      real(dp), intent(in)  :: ct_ion_pre(n_elements,n_elements)
+      real(dp), intent(in)  :: ct_rec_pre(n_elements,n_elements)
+
+      real(dp) :: ne, xe
+      real(dp) :: alpha_H2_loc, beta_H2_loc, de_H2, xH2_loc
+      real(dp) :: cr, de
+      integer  :: iElement, iIon, n_ions, i_oe, i_oi
+      real(dp) :: HI_nd, HII_nd, other_nd
+      real(dp) :: n_CII, n_OI, n_H2_co, x_OI
+#ifdef RT
+      integer  :: igroup_rhs
+#endif
+
+      f_xion = 0d0
+      f_nCO  = 0d0
+
+      ne = getNe(xion_in, nElement_dep)
+      xe = ne / max(nElement_dep(1), 1d-40)
+
+      !---- H2 rates (needed for HI creation/destruction in ion loop) ----
+      alpha_H2_loc = 0d0
+      de_H2        = 0d0
+      if (isH2_rtz) then
+         xH2_loc = xion_in(1,3) / 2d0
+#ifdef CALIMA
+         if (H2ondust) then
+            alpha_H2_loc = alpha_H2(TK, 0d0, xe, H2_cr_rate, total_G0_in, &
+                                    xion_in(1,1), xion_in(1,2), nElement_dep(1))
+            alpha_H2_loc = alpha_H2_loc + dust_helper%H2_formation_rate * xion_in(1,1) * nElement_dep(1)
+         else
+            alpha_H2_loc = alpha_H2(TK, dust_to_gas_mw, xe, H2_cr_rate, total_G0_in, &
+                                    xion_in(1,1), xion_in(1,2), nElement_dep(1))
+         end if
+#else
+         alpha_H2_loc = alpha_H2(TK, dust_to_gas_mw, xe, H2_cr_rate, total_G0_in, &
+                                 xion_in(1,1), xion_in(1,2), nElement_dep(1))
+#endif
+         if (rtz_include_collisional_ionization) then
+            if (elements(2)%atomic_number > 0) then
+               beta_H2_loc = beta_H2_krome(TK, xion_in(1,1)*nElement_dep(1), ne, &
+                                            xH2_loc*nElement_dep(1), xion_in(2,1)*nElement_dep(2))
+            else
+               beta_H2_loc = beta_H2_krome(TK, xion_in(1,1)*nElement_dep(1), ne, &
+                                            xH2_loc*nElement_dep(1), 0d0)
+            end if
+            de_H2 = de_H2 + beta_H2_loc
+         end if
+         if (rtz_include_photoionization) de_H2 = de_H2 + UV_G0 * 5.68d-11
+         if (rtz_include_cosmic_ray_ionization) de_H2 = de_H2 + H2_cr_rate
+#ifdef RT
+         if (rtz_include_photoionization .and. rt_advect) then
+            do igroup_rhs = 1, nGroups
+               if (isLW(igroup_rhs) == 1) then
+                  de_H2 = de_H2 + signc(igroup_rhs,1,3) * dNp(igroup_rhs) * f_shd_in
+               else
+                  de_H2 = de_H2 + signc(igroup_rhs,1,3) * dNp(igroup_rhs)
+               end if
+            end do
+         end if
+#endif
+         ! d(2*xH2)/dt = 2*(alpha_H2 - de_H2*xH2)
+         f_xion(1,3) = 2d0 * (alpha_H2_loc - de_H2 * xH2_loc)
+      end if
+
+      !---- CO rate ----
+#ifdef CO
+      if (isCO_rtz .and. update_CO) then
+         n_CII  = nElement_dep(6) * xion_in(6,2)
+         n_OI   = nElement_dep(8) * xion_in(8,1)
+         n_H2_co= 0.5d0 * nElement_dep(1) * xion_in(1,3)
+         x_OI   = n_OI / max(nElement_dep(1), 1d-40)
+         f_nCO  = alpha_CO(total_G0_in, H2_cr_rate, n_CII, n_H2_co, x_OI, &
+                           xion_in(1,1)*nElement_dep(1)) &
+                  - beta_CO(total_G0_in, H2_cr_rate) * nCO_in
+      end if
+#endif
+
+      !---- Ion loop ----
+      HI_nd  = xion_in(1,1) * nElement_dep(1)
+      HII_nd = xion_in(1,2) * nElement_dep(1)
+
+      do iElement = 1, n_elements
+         if (elements(iElement)%atomic_number <= 0) cycle
+         if (iElement /= 6 .and. iElement /= 8) then
+            if (nElement_dep(iElement)/nElement_dep(1) < 1d-10) cycle
+         else
+            if (.not. update_CO) cycle
+         end if
+         n_ions = elements(iElement)%n_ions
+
+         do iIon = 1, n_ions
+            cr = 0d0 ; de = 0d0
+
+            !-- H2 coupling to HI --
+            if (iElement==1 .and. iIon==1 .and. isH2_rtz) then
+               cr = cr + de_H2 * xion_in(1,3)   ! H2 dissociation → HI
+               de = de + 2d0*alpha_H2_loc / max(xion_in(1,1), 1d-40)  ! H2 formation removes HI
+            end if
+
+            !-- Recombination from more excited state --
+            if (iIon < n_ions) cr = cr + sr_precomp(iElement,iIon+1,1)*ne*xion_in(iElement,iIon+1)
+
+            !-- Collisional ionization from less excited state --
+            if (rtz_include_collisional_ionization) then
+               if (iIon > 1) cr = cr + sr_precomp(iElement,iIon-1,2)*ne*xion_in(iElement,iIon-1)
+            end if
+
+            !-- UVB photoionization --
+            if (rtz_include_HM12_UVB) then
+               if (iIon > 1) cr = cr + HM12_UVB_z(iElement,iIon-1,1)*ss_factor_in*xion_in(iElement,iIon-1)
+            end if
+
+            !-- Sub-ionizing ISRF --
+            if (rtz_include_photoionization .and. iIon==2) then
+               cr = cr + UV_G0*elements(iElement)%G0_photo_rate*xion_in(iElement,1)
+            end if
+
+            !-- Cosmic ray ionization --
+            if (rtz_include_cosmic_ray_ionization) then
+               if (iIon > 1) cr = cr + cosmic_ray_ionization_rates(iElement,iIon-1)*total_cr_rate*xion_in(iElement,iIon-1)
+               if (iIon == 2) cr = cr + cosmic_ray_ionization_rates_induced_UV(iElement)*cr_scale_in*xion_in(iElement,1)
+            end if
+
+            !-- Dust recombination from more excited state --
+            if (rtz_include_dust_recombination .and. iIon < n_ions) then
+               cr = cr + sr_precomp(iElement,iIon+1,3)*dust_eff_nd*xion_in(iElement,iIon+1)
+            end if
+
+#ifdef RT
+            if (rtz_include_photoionization .and. rt_advect .and. iIon > 1) then
+               cr = cr + xion_in(iElement,iIon-1) * sum(signc(:,iElement,iIon-1)*dNp)
+            end if
+#endif
+
+            !-- Collisional ionization of this state --
+            if (rtz_include_collisional_ionization .and. iIon < n_ions) then
+               de = de + sr_precomp(iElement,iIon,2)*ne
+            end if
+
+            !-- UVB photoionization of this state --
+            if (rtz_include_HM12_UVB .and. iIon < n_ions) then
+               de = de + HM12_UVB_z(iElement,iIon,1)*ss_factor_in
+            end if
+
+            !-- Sub-ionizing ISRF (ground state) --
+            if (rtz_include_photoionization .and. iIon==1) then
+               de = de + UV_G0*elements(iElement)%G0_photo_rate
+            end if
+
+            !-- Recombination from this state --
+            if (iIon > 1) de = de + sr_precomp(iElement,iIon,1)*ne
+
+            !-- Cosmic ray ionization of this state --
+            if (rtz_include_cosmic_ray_ionization) then
+               if (iIon < n_ions) de = de + cosmic_ray_ionization_rates(iElement,iIon)*total_cr_rate
+               if (iIon == 1)     de = de + cosmic_ray_ionization_rates_induced_UV(iElement)*cr_scale_in
+            end if
+
+            !-- Dust recombination from this state --
+            if (rtz_include_dust_recombination .and. iIon > 1) then
+               de = de + sr_precomp(iElement,iIon,3)*dust_eff_nd
+            end if
+
+#ifdef RT
+            if (rtz_include_photoionization .and. rt_advect .and. iIon < n_ions) then
+               de = de + sum(signc(:,iElement,iIon)*dNp)
+            end if
+#endif
+
+            !-- Charge exchange --
+            if (rtz_include_charge_exchange) then
+               if (iElement == 1) then
+                  do i_oe = 2, n_elements
+                     if (elements(i_oe)%atomic_number <= 0) cycle
+                     do i_oi = 1, elements(i_oe)%n_ions
+                        other_nd = nElement_dep(i_oe) * xion_in(i_oe, i_oi)
+                        if (iIon == 1) then  ! HI
+                           cr = cr + ct_ion_pre(i_oi,i_oe)*xion_in(1,2)*other_nd
+                           de = de + ct_rec_pre(i_oi,i_oe)*other_nd
+                        else                 ! HII
+                           de = de + ct_ion_pre(i_oi,i_oe)*other_nd
+                           cr = cr + ct_rec_pre(i_oi,i_oe)*xion_in(1,1)*other_nd
+                        end if
+                     end do
+                  end do
+               else
+                  if (iIon > 1) then
+                     cr = cr + ct_ion_pre(iIon-1,iElement)*xion_in(iElement,iIon-1)*HII_nd
+                     de = de + ct_rec_pre(iIon,iElement)*HI_nd
+                  end if
+                  if (iIon < n_ions) then
+                     de = de + ct_ion_pre(iIon,iElement)*HII_nd
+                     cr = cr + ct_rec_pre(iIon+1,iElement)*xion_in(iElement,iIon+1)*HI_nd
+                  end if
+               end if
+            end if
+
+            f_xion(iElement,iIon) = cr - de * xion_in(iElement,iIon)
+
+         end do  ! iIon
+      end do  ! iElement
+
+   end subroutine rtz_eval_chem_rhs
+
+! ==========================================================================
+!  rtz_implicit_chem_step
+!  Backward-Euler implicit chemistry step.  Replaces the H2 + CO + ion
+!  Anninos loops in rtz_cool_step when nH > rtz_nH_implicit_threshold.
+!  Updates the host-associated dXion and dCO directly.
+!  Always accepted (no 10% rule).
+! ==========================================================================
+   subroutine rtz_implicit_chem_step(icell, h_step, TK, nElement_dep, &
+       ss_factor_in, UV_G0, total_G0_in, &
+       total_cr_rate, H2_cr_rate, cr_scale_in, &
+       dust_eff_nd, dust_to_gas_mw, f_shd_in, update_CO)
+      use rt_parameters, only: isH2_rtz, isCO_rtz
+      use rtz_module, only: elements
+      use collisional_ionization_module
+      use recombination_module
+      use dust_recombination_module
+      use charge_exchange_module
+      implicit none
+
+      integer,  intent(in) :: icell
+      real(dp), intent(in) :: h_step, TK, nElement_dep(n_elements)
+      real(dp), intent(in) :: ss_factor_in, UV_G0, total_G0_in
+      real(dp), intent(in) :: total_cr_rate, H2_cr_rate, cr_scale_in
+      real(dp), intent(in) :: dust_eff_nd, dust_to_gas_mw, f_shd_in
+      logical,  intent(in) :: update_CO
+
+      ! ---- compact state vector ----
+      integer, parameter :: N_CHEM_MAX = 130
+      integer :: n_chem, idx_co
+      integer :: flat_e(N_CHEM_MAX), flat_i(N_CHEM_MAX)
+      real(dp) :: y0(N_CHEM_MAX), delta_y(N_CHEM_MAX)
+      real(dp) :: f0_xion(n_elements,n_elements), f0_nCO
+      real(dp) :: fp_xion(n_elements,n_elements), fp_nCO
+      real(dp) :: f0(N_CHEM_MAX), fp(N_CHEM_MAX)
+      real(dp) :: A(N_CHEM_MAX,N_CHEM_MAX)
+      integer  :: ipiv(N_CHEM_MAX)
+      real(dp) :: xion_pert(n_elements,n_elements), nCO_pert
+      real(dp) :: eps_j
+      integer  :: j, k, iElement, iIon, n_ions, ion_fracs
+      integer  :: info
+      real(dp) :: current_mass_frac
+      real(dp) :: nCO_work
+      real(dp) :: sr_precomp(n_elements,n_elements,3), ne0
+      real(dp) :: ct_ion_pre(n_elements,n_elements), ct_rec_pre(n_elements,n_elements)
+      ! Rate cache: skip expensive precomputation when TK/ne0/UV_G0 unchanged
+      real(dp), save :: TK_save = 0d0, ne0_save = -1d300, UV_G0_save = -1d300
+      real(dp), save :: sr_save(n_elements,n_elements,3)
+      real(dp), save :: ct_ion_save(n_elements,n_elements), ct_rec_save(n_elements,n_elements)
+      ! Convergence cache: skip full step if previous step produced negligible change
+      real(dp), save :: max_delta_prev = 1d0
+
+      !---- build compact index map ----
+      n_chem = 0
+      idx_co = 0
+      do iElement = 1, n_elements
+         if (elements(iElement)%atomic_number <= 0) cycle
+         n_ions = elements(iElement)%n_ions + elements(iElement)%n_mol
+         do iIon = 1, n_ions
+            n_chem = n_chem + 1
+            if (n_chem > N_CHEM_MAX) then
+               write(*,*) 'rtz_implicit_chem_step: N_CHEM_MAX exceeded, aborting implicit step'
+               return
+            end if
+            flat_e(n_chem) = iElement
+            flat_i(n_chem) = iIon
+         end do
+      end do
+#ifdef CO
+      if (isCO_rtz) then
+         n_chem = n_chem + 1
+         idx_co = n_chem
+      end if
+#endif
+
+      !---- precompute TK- and ne-dependent rates (cache to avoid repeat work) ----
+      ne0 = getNe(dXion, nElement_dep)
+      if (abs(TK  - TK_save)   > 1d-6 * max(TK_save,   1d0)   .or. &
+          abs(ne0 - ne0_save)  > 1d-4 * max(ne0_save,  1d-30)  .or. &
+          abs(UV_G0 - UV_G0_save) > 1d-6 * max(UV_G0_save, 1d-30)) then
+         sr_precomp = 0d0
+         ct_ion_pre = 0d0
+         ct_rec_pre = 0d0
+         do iElement = 1, n_elements
+            if (elements(iElement)%atomic_number <= 0) cycle
+            n_ions = elements(iElement)%n_ions
+            sr_precomp(iElement,1,2) = collisional_ionization(TK, 1, iElement)
+            do iIon = 1, n_ions-1
+               sr_precomp(iElement,iIon+1,1) = recombination(TK, iIon+1, iElement)
+               if (iIon < n_ions-1) sr_precomp(iElement,iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
+               sr_precomp(iElement,iIon+1,3) = dust_recombination(iIon+1, iElement, TK, UV_G0, ne0)
+            end do
+            if (iElement >= 2) then
+               do iIon = 1, n_ions
+                  ct_ion_pre(iIon,iElement) = charge_transfer_ionization(iIon, iElement, TK)
+                  ct_rec_pre(iIon,iElement) = charge_transfer_recombination(iIon, iElement, TK)
+               end do
+            end if
+         end do
+         sr_save     = sr_precomp
+         ct_ion_save = ct_ion_pre
+         ct_rec_save = ct_rec_pre
+         TK_save     = TK
+         ne0_save    = ne0
+         UV_G0_save  = UV_G0
+         max_delta_prev = 1d0   ! force full step after any cache invalidation
+      else
+         sr_precomp = sr_save
+         ct_ion_pre = ct_ion_save
+         ct_rec_pre = ct_rec_save
+      end if
+
+      !---- early exit if previous step changed state negligibly (already at eqm) ----
+      if (max_delta_prev < 1d-10) return
+
+      !---- pack current state into y0 ----
+      nCO_work = dCO
+      do k = 1, n_chem
+         if (k == idx_co) then
+            y0(k) = nCO_work
+         else
+            y0(k) = dXion(flat_e(k), flat_i(k))
+         end if
+      end do
+
+      !---- baseline RHS ----
+      call rtz_eval_chem_rhs(dXion, nCO_work, TK, nElement_dep, &
+          ss_factor_in, UV_G0, total_G0_in, &
+          total_cr_rate, H2_cr_rate, cr_scale_in, &
+          dust_eff_nd, dust_to_gas_mw, f_shd_in, update_CO, &
+          f0_xion, f0_nCO, sr_precomp, ct_ion_pre, ct_rec_pre)
+      do k = 1, n_chem
+         if (k == idx_co) then
+            f0(k) = f0_nCO
+         else
+            f0(k) = f0_xion(flat_e(k), flat_i(k))
+         end if
+      end do
+
+      !---- numerical Jacobian: J(:,j) = (f(y+eps*e_j) - f(y)) / eps ----
+      A = 0d0
+      do j = 1, n_chem
+         xion_pert = dXion
+         nCO_pert  = nCO_work
+
+         if (j == idx_co) then
+            eps_j = sqrt(epsilon(1d0)) * max(abs(nCO_work), 1d-30)
+            nCO_pert = nCO_pert + eps_j
+         else
+            eps_j = sqrt(epsilon(1d0)) * max(abs(dXion(flat_e(j),flat_i(j))), 1d-30)
+            xion_pert(flat_e(j), flat_i(j)) = xion_pert(flat_e(j), flat_i(j)) + eps_j
+         end if
+
+         call rtz_eval_chem_rhs(xion_pert, nCO_pert, TK, nElement_dep, &
+             ss_factor_in, UV_G0, total_G0_in, &
+             total_cr_rate, H2_cr_rate, cr_scale_in, &
+             dust_eff_nd, dust_to_gas_mw, f_shd_in, update_CO, &
+             fp_xion, fp_nCO, sr_precomp, ct_ion_pre, ct_rec_pre)
+         do k = 1, n_chem
+            if (k == idx_co) then
+               fp(k) = fp_nCO
+            else
+               fp(k) = fp_xion(flat_e(k), flat_i(k))
+            end if
+         end do
+         A(1:n_chem, j) = (fp(1:n_chem) - f0(1:n_chem)) / eps_j
+      end do
+
+      !---- build (I - h*J) in place ----
+      do k = 1, n_chem
+         A(k, 1:n_chem) = -h_step * A(k, 1:n_chem)
+         A(k, k) = A(k, k) + 1d0
+      end do
+
+      !---- solve (I - h*J)*delta = h*f0 ----
+      delta_y(1:n_chem) = h_step * f0(1:n_chem)
+      call rtz_lu_factor(A, n_chem, ipiv, info)
+      if (info == 0) then
+         call rtz_lu_solve(A, delta_y, n_chem, ipiv)
+      end if
+      ! info /= 0: fallback — delta_y already = h*f0 (explicit Euler)
+
+      !---- update convergence indicator ----
+      max_delta_prev = 0d0
+      do k = 1, n_chem
+         max_delta_prev = max(max_delta_prev, abs(delta_y(k)) / max(abs(y0(k)), 1d-30))
+      end do
+
+      !---- apply update ----
+      do k = 1, n_chem
+         if (k == idx_co) then
+            dCO = max(nCO_work + delta_y(k), 0d0)
+         else
+            dXion(flat_e(k), flat_i(k)) = dXion(flat_e(k), flat_i(k)) + delta_y(k)
+            dXion(flat_e(k), flat_i(k)) = min(max(dXion(flat_e(k), flat_i(k)), x_MIN), 1d0)
+         end if
+      end do
+
+      !---- renormalise each element's ion fractions (same as Anninos post-loop) ----
+      do iElement = 1, n_elements
+         if (elements(iElement)%atomic_number <= 0) cycle
+         ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
+         if (iElement <= 2) then
+            current_mass_frac = sum(dXion(iElement, 2:ion_fracs))
+            dXion(iElement, 1) = 0d0
+            if (current_mass_frac >= 0d0) then
+               if (current_mass_frac <= 1d0) then
+                  dXion(iElement, 1) = 1d0 - current_mass_frac
+               else
+                  dXion(iElement, 1:ion_fracs) = dXion(iElement, 1:ion_fracs) / current_mass_frac
+               end if
+            else
+               dXion(iElement, 1) = 1d0
+               dXion(iElement, 2:ion_fracs) = 0d0
+            end if
+         else
+            current_mass_frac = sum(dXion(iElement, 1:ion_fracs))
+            if (current_mass_frac > 0d0) then
+               dXion(iElement, 1:ion_fracs) = dXion(iElement, 1:ion_fracs) / current_mass_frac
+            end if
+         end if
+      end do
+
+   end subroutine rtz_implicit_chem_step
 
    END SUBROUTINE rtz_solve_cooling
 
@@ -2363,6 +2871,62 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    end if
 
 END SUBROUTINE rtz_run_single_cell_test
+
+! ==========================================================================
+!  rtz_lu_factor  —  LU factorisation with partial pivoting (Doolittle)
+! ==========================================================================
+   subroutine rtz_lu_factor(A, n, ipiv, info)
+      implicit none
+      integer,  intent(in)    :: n
+      real(dp), intent(inout) :: A(n,n)
+      integer,  intent(out)   :: ipiv(n)
+      integer,  intent(out)   :: info
+      integer  :: k, j, imax
+      real(dp) :: amax, tmp(n)
+      info = 0
+      do k = 1, n
+         amax = 0d0 ; imax = k
+         do j = k, n
+            if (abs(A(j,k)) > amax) then
+               amax = abs(A(j,k)) ; imax = j
+            end if
+         end do
+         ipiv(k) = imax
+         if (amax == 0d0) then
+            info = k ; return
+         end if
+         if (imax /= k) then
+            tmp = A(k,:) ; A(k,:) = A(imax,:) ; A(imax,:) = tmp
+         end if
+         A(k+1:n, k) = A(k+1:n, k) / A(k,k)
+         do j = k+1, n
+            A(j, k+1:n) = A(j, k+1:n) - A(j,k) * A(k, k+1:n)
+         end do
+      end do
+   end subroutine rtz_lu_factor
+
+! ==========================================================================
+!  rtz_lu_solve  —  solve A*x=b using LU factorisation from rtz_lu_factor
+! ==========================================================================
+   subroutine rtz_lu_solve(LU, b, n, ipiv)
+      implicit none
+      integer,  intent(in)    :: n
+      real(dp), intent(in)    :: LU(n,n)
+      real(dp), intent(inout) :: b(n)
+      integer,  intent(in)    :: ipiv(n)
+      integer  :: k
+      real(dp) :: tmp
+      do k = 1, n
+         tmp = b(k) ; b(k) = b(ipiv(k)) ; b(ipiv(k)) = tmp
+      end do
+      do k = 2, n
+         b(k) = b(k) - dot_product(LU(k,1:k-1), b(1:k-1))
+      end do
+      do k = n, 1, -1
+         if (k < n) b(k) = b(k) - dot_product(LU(k,k+1:n), b(k+1:n))
+         b(k) = b(k) / LU(k,k)
+      end do
+   end subroutine rtz_lu_solve
 
 END MODULE rtz_cooling_module
 
