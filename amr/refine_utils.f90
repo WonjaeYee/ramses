@@ -630,6 +630,10 @@ subroutine make_grid_fine(ind_grid,ind_cell,ind,ilevel,nn,ibound,boundary_region
   real(dp),dimension(1:nvector,0:twondim  ,1:nrtvar),save::urt1
   real(dp),dimension(1:nvector,1:twotondim,1:nrtvar),save::urt2
 #endif
+#if NVARNOADVECT>0
+   real(dp),dimension(1:nvector,0:twondim  ,1:nvarnoadvect),save::unoadv1
+   real(dp),dimension(1:nvector,1:twotondim,1:nvarnoadvect),save::unoadv2
+#endif
   real(dp),dimension(1:nvector,1:ndim),save::xx
   integer ,dimension(1:nvector),save::cc
 
@@ -829,6 +833,13 @@ subroutine make_grid_fine(ind_grid,ind_cell,ind,ilevel,nn,ibound,boundary_region
                  u1(i,j,ivar)=uold(ind_fathers(i,j),ivar)
               end do
            end do
+#if NVARNOADVECT>0
+           do ivar=1,nvarnoadvect
+              do i=1,nn
+                 unoadv1(i,j,ivar)=unoadvect(ind_fathers(i,j),ivar)
+              end do
+           end do
+#endif
 #ifdef SOLVERmhd
            ! Gather son index
            do i=1,nn
@@ -842,6 +853,9 @@ subroutine make_grid_fine(ind_grid,ind_cell,ind,ilevel,nn,ibound,boundary_region
 #else
         call interpol_hydro(u1,u2,nn)
 #endif
+#if NVARNOADVECT>0
+        call interpol_hydro_no_advect(unoadv1,unoadv2,nn)
+#endif
         ! Scatter to children cells
         do j=1,twotondim
            iskip=ncoarse+(j-1)*ngridmax
@@ -850,6 +864,13 @@ subroutine make_grid_fine(ind_grid,ind_cell,ind,ilevel,nn,ibound,boundary_region
                  uold(iskip+ind_grid_son(i),ivar)=u2(i,j,ivar)
               end do
            end do
+#if NVARNOADVECT>0
+           do ivar=1,nvarnoadvect
+              do i=1,nn
+                 unoadvect(iskip+ind_grid_son(i),ivar)=unoadv2(i,j,ivar)
+              end do
+           end do
+#endif
         enddo
      end if
 #ifdef RT
@@ -1097,6 +1118,13 @@ subroutine kill_grid(ind_cell,ilevel,nn,ibound,boundary_region)
               unew(ind_cell_son(i),ivar)=0.0D0
            end do
         end do
+#if NVARNOADVECT>0
+        do ivar=1,nvarnoadvect
+           do i=1,nn
+              unoadvect(ind_cell_son(i),ivar)=0.0D0
+           end do
+        end do
+#endif
      end if
      if(momentum_feedback>0)then
         do i=1,nn

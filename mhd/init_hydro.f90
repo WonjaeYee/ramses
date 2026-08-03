@@ -33,6 +33,11 @@ subroutine init_hydro
      allocate(fluxes(1:ncell,1:twondim))
      fluxes(1:ncell,1:twondim)=0.0d0
   end if
+#if NVARNOADVECT>0
+  allocate(unoadvect(1:ncell,1:nvarnoadvect))
+  !TODO(code): we might want a different initial value per variable
+  unoadvect=noadvect_init
+#endif
   if(momentum_feedback>0)then
      allocate(pstarold(1:ncell))
      allocate(pstarnew(1:ncell))
@@ -79,6 +84,7 @@ subroutine init_hydro
      open(unit=ilun,file=fileloc,form='unformatted')
      read(ilun)ncpu2
      read(ilun)nvar2
+     nvar2 = nvar2 - nvarnoadvect_og
      read(ilun)ndim2
      read(ilun)nlevelmax2
      read(ilun)nboundary2
@@ -180,6 +186,17 @@ subroutine init_hydro
                        uold(ind_grid(i)+iskip,ivar)=xx(i)*max(uold(ind_grid(i)+iskip,1),smallr)
                     end do
                  end do
+#endif
+#if NVARNOADVECT>0
+                 ! TODO(code): HK note: not sure if this is compatible with the above code
+                 if (nvarnoadvect_og.gt.0) then
+                    do ivar=1,nvarnoadvect_og
+                       read(ilun)xx
+                       do i=1,ncache
+                          unoadvect(ind_grid(i)+iskip,ivar)=xx(i)
+                       end do
+                    end do
+                 end if
 #endif
               end do
               deallocate(ind_grid,xx)

@@ -242,6 +242,7 @@ subroutine upl(ind_cell,ncell)
 #endif
   integer ,dimension(1:nvector),save::igrid_son,ind_cell_son
   real(dp),dimension(1:nvector),save::getx,ekin,emag,erad
+  real(dp),dimension(1:nvector),save::getx_no_advect
   integer,dimension(1:6,1:4)::hhh
 
   ! Get child oct index
@@ -425,6 +426,28 @@ subroutine upl(ind_cell,ncell)
 
   end do
   ! End loop over dimensions
+
+#if NVARNOADVECT>0
+  ! Loop over variables
+  do ivar=1,nvarnoadvect
+     getx_no_advect(1:ncell)=0.0d0
+     do ind_son=1,twotondim
+        iskip_son=ncoarse+(ind_son-1)*ngridmax
+        do i=1,ncell
+           ind_cell_son(i)=iskip_son+igrid_son(i)
+        end do
+        ! Update average
+        do i=1,ncell
+           getx_no_advect(i)=getx_no_advect(i)+unoadvect(ind_cell_son(i),ivar)
+        end do
+     end do
+   
+     ! Scatter result to cells
+     do i=1,ncell
+        unoadvect(ind_cell(i),ivar)=getx_no_advect(i)/dble(twotondim)
+     end do     
+  end do   
+#endif
 
   !------------------------
   ! Average internal energy
@@ -785,6 +808,47 @@ subroutine interpol_hydro(u1,ind1,u2,nn)
   end if
 
 end subroutine interpol_hydro
+!###########################################################
+!###########################################################
+!###########################################################
+!###########################################################
+subroutine interpol_hydro_no_advect(u1,u2,nn)
+   use amr_commons
+   use hydro_commons
+   use poisson_commons
+   implicit none
+   integer::nn
+   real(dp),dimension(1:nvector,0:twondim  ,1:nvarnoadvect)::u1
+   real(dp),dimension(1:nvector,1:twotondim,1:nvarnoadvect)::u2
+
+   integer::i,j,ivar,ind
+   real(dp),dimension(1:nvector,0:twondim),save::a
+   ! Beware, this only supports direct injection as interpolation method
+   ! Other schemes will result in erroneous values being spread onto child cells 
+   ! Even if other schemes are used however, non-advected quantities 
+   ! are by construction not used in the computation of fluxes and should 
+   ! be recomputed to their expected values as soon as the refinement step is
+   ! over
+
+   ! Loop over interpolation variables
+   do ivar=1,nvarnoadvect
+ 
+      ! Load father variable
+      do j=0,twondim
+         do i=1,nn 
+            a(i,j)=u1(i,j,ivar)
+         end do
+      end do
+ 
+      ! Interpolate over children cells
+      do ind=1,twotondim
+         u2(1:nn,ind,ivar)=a(1:nn,0)
+      end do
+ 
+   end do
+   ! End loop over variables
+   
+end subroutine interpol_hydro_no_advect
 !###########################################################
 !###########################################################
 !###########################################################
