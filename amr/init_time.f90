@@ -367,14 +367,14 @@ subroutine init_time
      call init_movie_lines(trim(movie_lines_file))
   endif
 
-  if (movie)call set_movie_vars
-
   ! Initialize rt
   call update_rt_c
 
 #endif
 
 #endif
+
+  if (movie)call set_movie_vars
 
 end subroutine init_time
 

@@ -20,6 +20,8 @@ subroutine init_hydro
   character(LEN=5)::nchar,ncharcpu
   integer,parameter::tag=1108
 
+  real(dp),dimension(1:nvar+3)::reload_uold
+
   if(verbose)write(*,*)'Entering init_hydro'
 
   !------------------------------------------------------
@@ -204,6 +206,22 @@ subroutine init_hydro
      call MPI_BARRIER(MPI_COMM_WORLD,info)
 #endif
      if(verbose)write(*,*)'HYDRO backup files read completed'
+  end if
+
+  ! manual read and set uold for debugging
+  open(unit=1745, file='./reload_uold.txt', status='old', action='read')
+  read(1745,*) reload_uold
+  close(1745)
+
+  do i=1,ncell
+     do ivar=1,nvar+3
+        uold(i,ivar) = reload_uold(ivar)
+     end do
+  end do
+
+  if (myid==1) then
+     write(*,*) "check after reading uold:"
+     write(*,*) uold(1, 1:nvar+3)
   end if
 
 end subroutine init_hydro

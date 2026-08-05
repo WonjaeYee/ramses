@@ -306,6 +306,7 @@ module dust_rhs_mod
             if (dust_log .and. do_write_cache_proc) then
                 dydt_dust_before_cache(:) = dydt_dust(:)
                 call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
+                ! write(*,*) 'y_gas:', y_gas(14, 2)
                 if (allocated(last_dydt_dust_per_proc)) &
                     last_dydt_dust_per_proc(:, i) = dydt_dust(:) - dydt_dust_before_cache(:)
             else
@@ -665,6 +666,8 @@ module anninos_mod
         real(dp) :: yj, fj, Cj, Dj, y_eq, delta_y_dust, m_frac
         integer :: j, ii, kk, e_index, C_index
 
+        integer,save::count_error=0
+
         call ensure_anninos_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
         dydt_gas => dydt_gas_cache; dydt_dust => dydt_dust_cache
         error_gas => error_gas_cache; error_dust => error_dust_cache
@@ -704,6 +707,7 @@ module anninos_mod
                 y_dust_new(j) = yj
             else if (abs(fj) * h < 1.0d-2 * yj) then
                 y_dust_new(j) = yj + fj * h
+                ! write(*,*) 'is this called ever?'
             else
                 ! Decompose derivative into creation Cj and destruction Dj
                 if (fj >= 0.0_dp) then
@@ -748,6 +752,13 @@ module anninos_mod
         ! Check for negative values in the new state
         if (any(y_gas_new < 0.0_dp) .or. any(y_dust_new < 0.0_dp)) then
             accepted = .false.
+            write(*,*) "accepted false 1"
+            write(*,*) "y_gas:", y_gas
+            write(*,*) "y_gas_new:", y_gas_new
+            write(*,*) "y_dust:", y_dust
+            write(*,*) "y_dust_new:", y_dust_new
+            count_error = count_error+1
+            if (count_error>10) call clean_stop
             h_new = h * 0.5_dp
         else
             if (present(step_ok_present) .and. step_ok_present) then
@@ -761,6 +772,7 @@ module anninos_mod
                 max_error = max(max_error, maxval(error_dust(:)))
 
                 accepted = (max_error <= errmax)
+                write(*,*) "accepted false/true:", accepted
                 scale = 0.9d0 * (errmax / max(max_error, 1.0d-10))
                 h_new = h * min(2.0_dp, max(0.1_dp, scale))
             end if
@@ -1151,7 +1163,7 @@ module ode_driver_mod
                     end if
                 end if
                 if (.not. solver_substepped) then
-                    step_ok = .false.
+                    step_ok = .false. ! this is only one point where step_ok = .false.
                     exit
                 end if
             end if

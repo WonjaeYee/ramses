@@ -164,17 +164,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
   ! Typical ISM density in H/cc
   nISM = n_star; nCOM=0
-  if(cosmo)then
-#ifdef grackle
-     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*grackle_HydrogenFractionByMass/mH
-#else
-#ifdef RTZ
-     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*0.76/mH 
-#else
-     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*X/mH
-#endif
-#endif
-  endif
+!  if(cosmo)then
+!#ifdef grackle
+!     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*grackle_HydrogenFractionByMass/mH
+!#else
+!#ifdef RTZ
+!     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*0.76/mH 
+!#else
+!     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*X/mH
+!#endif
+!#endif
+!  endif
   nISM = MAX(nCOM,nISM)
   polytrope_rho_cu = polytrope_rho/scale_d
 
@@ -215,6 +215,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      end do
      if(nleaf.eq.0)cycle
 
+     ! force to read first row
+     do i=1,ngrid
+        ind_leaf(i) = 1
+     end do
      ! Compute rho
      do i=1,nleaf
         nH(i)=MAX(uold(ind_leaf(i),1),smallr)
