@@ -40,7 +40,9 @@ subroutine rt_init_hydro
 
   call rt_init
 
+#ifdef RTZ_ONE_CELL_TEST
   ! manual read and set uold for debugging
+  ! one-cell test should start as a new run, not as restart
   open(unit=2900, file='./reload_rtuold.txt', status='old', action='read')
   read(2900,*) reload_rtuold
   close(2900)
@@ -55,6 +57,7 @@ subroutine rt_init_hydro
      write(*,*) "check after reading rtuold:"
      write(*,*) rtuold(1, :)
   end if
+#endif
 
   if(nrestart .eq. 0) return
 

@@ -164,17 +164,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
   ! Typical ISM density in H/cc
   nISM = n_star; nCOM=0
-!  if(cosmo)then
-!#ifdef grackle
-!     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*grackle_HydrogenFractionByMass/mH
-!#else
-!#ifdef RTZ
-!     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*0.76/mH 
-!#else
-!     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*X/mH
-!#endif
-!#endif
-!  endif
+  if(cosmo)then
+#ifdef grackle
+     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*grackle_HydrogenFractionByMass/mH
+#else
+#ifdef RTZ
+     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*0.76/mH 
+#else
+     nCOM = del_star*omega_b*rhoc*(h0/100)**2/aexp**3*X/mH
+#endif
+#endif
+  endif
   nISM = MAX(nCOM,nISM)
   polytrope_rho_cu = polytrope_rho/scale_d
 
@@ -215,10 +215,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      end do
      if(nleaf.eq.0)cycle
 
+#ifdef RTZ_ONE_CELL_TEST
      ! force to read first row
      do i=1,ngrid
         ind_leaf(i) = 1
      end do
+#endif
+
      ! Compute rho
      do i=1,nleaf
         nH(i)=MAX(uold(ind_leaf(i),1),smallr)
@@ -508,48 +511,48 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 
 #ifdef CALIMA
-      ! Get the quantities necessary for CALIMA dust modelling
-      ! Compute the local velocity dispersion sigma in cm/s
-      sigma(1:nvector) = 0.0d0
-      if (comp_sigma_turb) then
-         do i=1,nleaf
-            call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
-            sigma(i) = sqrt(sigma2)
-         end do
-      endif
-      ! Dust densities in g/cm^3
-      do i=1,nleaf
-         rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
-         rho_total_check(i) = rho_total_check(i) + sum(rho_dust(i,:))
-      end do
-      if (any(rho_dust(:,:).lt.0d0)) then
-         write(*,*) 'Negative dust density in cell ', ind_leaf(i)
-         write(*,*) 'Dust density: ', rho_dust(i,:)
-         write(*,*) 'PAH density : ', rho_pah(i,:)
-         call clean_stop
-      end if
-      ! PAH densities in g/cm^3
-      do i=1,nleaf
-         rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
-         rho_total_check(i) = rho_total_check(i) + sum(rho_pah(i,:))
-      end do
-      if (any(rho_pah(:,:).lt.0d0)) then
-         write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
-         write(*,*) 'Dust density: ', rho_dust(i,:)
-         write(*,*) 'PAH density: ', rho_pah(i,:)
-         call clean_stop
-      end if
+     ! Get the quantities necessary for CALIMA dust modelling
+     ! Compute the local velocity dispersion sigma in cm/s
+     sigma(1:nvector) = 0.0d0
+     if (comp_sigma_turb) then
+        do i=1,nleaf
+           call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
+           sigma(i) = sqrt(sigma2)
+        end do
+     endif
+     ! Dust densities in g/cm^3
+     do i=1,nleaf
+        rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+        rho_total_check(i) = rho_total_check(i) + sum(rho_dust(i,:))
+     end do
+     if (any(rho_dust(:,:).lt.0d0)) then
+        write(*,*) 'Negative dust density in cell ', ind_leaf(i)
+        write(*,*) 'Dust density: ', rho_dust(i,:)
+        write(*,*) 'PAH density : ', rho_pah(i,:)
+        call clean_stop
+     end if
+     ! PAH densities in g/cm^3
+     do i=1,nleaf
+        rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+        rho_total_check(i) = rho_total_check(i) + sum(rho_pah(i,:))
+     end do
+     if (any(rho_pah(:,:).lt.0d0)) then
+        write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
+        write(*,*) 'Dust density: ', rho_dust(i,:)
+        write(*,*) 'PAH density: ', rho_pah(i,:)
+        call clean_stop
+     end if
 #endif
 #ifdef RTZ
-      ! Check that the total densities are consistent with the sum of the individual species densities
-      do i=1,nleaf
-         if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / uold(ind_leaf(i),1)*scale_d .gt. 1d-3) then
-            write(*,*) 'Total density check failed in cell ', ind_leaf(i)
-            write(*,*) 'Total density: ', uold(ind_leaf(i),1)*scale_d
-            write(*,*) 'Sum of species densities: ', rho_total_check(i)
-            call clean_stop
-         end if
-      end do
+     ! Check that the total densities are consistent with the sum of the individual species densities
+     do i=1,nleaf
+        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / uold(ind_leaf(i),1)*scale_d .gt. 1d-3) then
+           write(*,*) 'Total density check failed in cell ', ind_leaf(i)
+           write(*,*) 'Total density: ', uold(ind_leaf(i),1)*scale_d
+           write(*,*) 'Sum of species densities: ', rho_total_check(i)
+           call clean_stop
+        end if
+     end do
 #endif
 
      ! grackle tabular cooling
@@ -688,9 +691,31 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 !         !    end if
 !         end do
 !
-        ! for static test, temporarily disable RTZ solver
-      if (rtz_cooling) then
-        call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
+
+#ifdef RTZ_ONE_CELL_TEST
+        write(*,*) "these are given to `rtz_solve_cooling`:"
+        write(*,*) "   T2_new:", T2_new(1)
+        write(*,*) " nElement and xion:"
+        do ii=1,n_elements
+           if (elements(ii)%atomic_number > 0) then
+              write(*,"(A3, X, E22.15)") elements(ii)%symbol, nElement(ii, 1)
+              write(*,"(A3, *(X, E22.15))") "", xion(ii, 1:elements(ii)%n_ions, 1)
+           end if
+        end do
+        write(*,*) "      nCO:", nCO(1)
+        write(*,*) "Np and Fp:"
+        do ii=1,nGroups
+           write(*,"(I3, X, E22.15)") ii, Np(ii, 1)
+           write(*,"(A3, 3(X, E22.15))") '', Fp(1:ndim, ii, 1)
+        end do
+        write(*,*) "    p_gas:", p_gas
+        write(*,*) " dx_SS_H2:", dx_SS_H2
+        write(*,*) "   dtcool:", dtcool
+#endif
+
+       ! for static test, temporarily disable RTZ solver
+        if (rtz_cooling) then
+           call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
                               ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
                               ,dx_SS_H2, err_idx &
 #ifdef CALIMA
@@ -703,16 +728,22 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 #endif
                               )
-      end if
+        end if
+
+#ifdef RTZ_ONE_CELL_TEST
+        write(*,*) "one-cell test ended"
+        call clean_stop
+#endif
+
 #ifdef CALIMA
-      do i=1,nleaf
-         if (any(rho_dust(i,:).gt.uold(ind_leaf(i),1)*scale_d)) then
-            write(*,*) 'Dust density exceeds total density in cell ', ind_leaf(i)
-            write(*,*) 'Dust density: ', rho_dust(i,:)
-            write(*,*) 'Total density: ', uold(ind_leaf(i),1)
-            call clean_stop
-         end if
-      end do
+        do i=1,nleaf
+           if (any(rho_dust(i,:).gt.uold(ind_leaf(i),1)*scale_d)) then
+              write(*,*) 'Dust density exceeds total density in cell ', ind_leaf(i)
+              write(*,*) 'Dust density: ', rho_dust(i,:)
+              write(*,*) 'Total density: ', uold(ind_leaf(i),1)
+              call clean_stop
+           end if
+        end do
 #endif
 ! #ifndef SKIP_RTZ_COOLING, for test purpose
         if (err_idx > 0) then
@@ -854,13 +885,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      endif
 
 #ifdef CALIMA
-      ! Update dust and PAH densities for CALIMA
-      do i=1,nleaf
-         uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
-      end do
-      do i=1,nleaf
-         uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
-      end do
+     ! Update dust and PAH densities for CALIMA
+     do i=1,nleaf
+        uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
+     end do
+     do i=1,nleaf
+        uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
+     end do
 #endif
 #ifdef RT
      if(neq_chem) then

@@ -204,7 +204,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:ndim, 1:nGroups):: dFp
    real(dp),dimension(1:nGroups):: group_egy_ratio, group_egy_erg
 #endif
-   integer*8,dimension(20)::loopCodes=0
+   integer*8,dimension(0:20)::loopCodes=0
    integer, dimension(1:nvector) :: cellcnt    ! per-cell failure count
    integer :: last_code                        ! code from last cell's last step
    integer::iElement, ion_fracs
@@ -232,17 +232,19 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    ! print not only the loopCodes but also details
    integer::loopCode_idx1,loopCode_idx2
-   integer*8,dimension(1:nGroups):: loopCodes1
-   integer*8,dimension(1:nGroups,1:ndim):: loopCodes2
-   integer*8,dimension(1:n_elements,1:7):: loopCodes8,loopCodes9
+   integer*8,dimension(1:nGroups):: loopCodes01
+   integer*8,dimension(1:nGroups,1:ndim):: loopCodes02
+   integer*8,dimension(1:n_elements,1:7):: loopCodes08,loopCodes09
+   integer*8,dimension(1:n_elements,0:7):: loopCodes10
    
-   ! if it is not initialized, it is accumulated for all cells(?)
+   ! if it is not initialized, it can be accumulated for all cells(?)
    loopCodes = 0
 
-   loopCodes1 = 0
-   loopCodes2 = 0
-   loopCodes8 = 0
-   loopCodes9 = 0
+   loopCodes01 = 0
+   loopCodes02 = 0
+   loopCodes08 = 0
+   loopCodes09 = 0
+   loopCodes10 = 0
 
 #ifdef RT
    call rtz_updateRTGroups_CoolConstants(ilevel)
@@ -626,29 +628,36 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,*) 'Prec_dust :', dust_helper%Prec_dust(1:ndust)
             write(*,*) 'Pcoll_dust:', dust_helper%Pcoll_dust(1:ndust)
 #endif
-            write(*,"(A11, *(X, I6))") ' loopCodes:', loopCodes
+            write(*,"(A11, *(X, I6))") ' loopCodes:', loopCodes(0:10)
             write(*,*) '(from code 0)'
-            write(*,"(A11, *(X, I6))") 'loopCodes1:', loopCodes1
+            write(*,"(A11, *(X, I6))") 'loopCodes01:', loopCodes01
             write(*,*) '(Np update: nGroups)'
-            write(*,"(A11)") 'loopCodes2:'
+            write(*,"(A11)") 'loopCodes02:'
             do loopCode_idx1=1,nGroups
-               write(*,"(*(X, I6))") loopCodes2(loopCode_idx1, 1:ndim)
+               write(*,"(*(X, I6))") loopCodes02(loopCode_idx1, 1:ndim)
             end do
             write(*,*) '(Fp update: nGroups, ndim)'
-            write(*,"(A11)") 'loopCodes8:'
+            write(*,"(A11)") 'loopCodes08:'
             do loopCode_idx1=1,n_elements
                if (elements(loopCode_idx1)%atomic_number > 0) then
-                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes8(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes08(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
                end if
             end do
             write(*,*) '(xion update: n_elements, n_ions)'
-            write(*,"(A11)") 'loopCodes9:'
+            write(*,"(A11)") 'loopCodes09:'
             do loopCode_idx1=1,n_elements
                if (elements(loopCode_idx1)%atomic_number > 0) then
-                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes9(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes09(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
                end if
             end do
             write(*,*) '(ne update: n_elements, n_ions)'
+            write(*,"(A11)") 'loopCodes10:'
+            do loopCode_idx1=1,n_elements
+               if (elements(loopCode_idx1)%atomic_number > 0) then
+                  write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes10(loopCode_idx1, 0:elements(loopCode_idx1)%n_ions)
+               end if
+            end do
+            write(*,*) '(negative density from dust update: n_elements, n_ions)'
             ! Wonjae error message above
             ! Curro error message below
             write(*,*) 'max per-cell failures:', cellcnt(i), &
@@ -695,8 +704,23 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          nAct_next=0                     ! Active cells for the next iteration
          do ia=1,nAct                             ! Loop over the active cells
             i = indAct(ia)                        !                 Cell index
+
+#ifdef RTZ_ONE_CELL_TEST
+            write(*,"(A10, X, I6, A10, X, E22.15)") "loopcnt:", loopcnt, "ddt:", ddt(i)
+#endif
+
             call rtz_cool_step(i)
-            loopCodes(code+1) = loopCodes(code+1)+1 ! to also print code=0 case
+
+#ifdef RTZ_ONE_CELL_TEST
+            write(*,"(A10, X, I6, A10, X, E22.15)") "code:", code, "dt_rec:", dt_rec
+            write(*,*) ''
+#endif
+
+            loopCodes(code) = loopCodes(code)+1
+            ! start index with 0 to print code=0 case
+            ! details of them (e.g., loopCodes01) are counted
+            ! when we return from rtz_cool_step
+
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
@@ -706,15 +730,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   return
                end if
                nAct_next=nAct_next+1 ; indAct(nAct_next) = i
-               if (code == 1) then
-                  loopCodes1(loopCode_idx1) = loopCodes1(loopCode_idx1) + 1
-               else if (code == 2) then
-                  loopCodes2(loopCode_idx1,loopCode_idx2) = loopCodes2(loopCode_idx1,loopCode_idx2) + 1
-               else if (code == 8) then
-                  loopCodes8(loopCode_idx1,loopCode_idx2) = loopCodes8(loopCode_idx1,loopCode_idx2) + 1
-               else if (code == 9) then
-                  loopCodes9(loopCode_idx1,loopCode_idx2) = loopCodes9(loopCode_idx1,loopCode_idx2) + 1
-               end if
                cellcnt(i) = cellcnt(i) + 1
                last_code = code
                cycle
@@ -750,6 +765,41 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! loop statistics
       max_cool_loopcnt=max(max_cool_loopcnt,loopcnt)
+
+#ifdef RTZ_ONE_CELL_TEST
+      write(*,*) "`rtz_cool_step` is done with loopcnt:", loopcnt
+      write(*,"(A11, *(X, I6))") ' loopCodes:', loopCodes
+      write(*,*) '(from code 0)'
+      write(*,"(A11, *(X, I6))") 'loopCodes01:', loopCodes01
+      write(*,*) '(Np update: nGroups)'
+      write(*,"(A11)") 'loopCodes02:'
+      do loopCode_idx1=1,nGroups
+         write(*,"(*(X, I6))") loopCodes02(loopCode_idx1, 1:ndim)
+      end do
+      write(*,*) '(Fp update: nGroups, ndim)'
+      write(*,"(A11)") 'loopCodes08:'
+      do loopCode_idx1=1,n_elements
+         if (elements(loopCode_idx1)%atomic_number > 0) then
+            write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes08(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+         end if
+      end do
+      write(*,*) '(xion update: n_elements, n_ions)'
+      write(*,"(A11)") 'loopCodes09:'
+      do loopCode_idx1=1,n_elements
+         if (elements(loopCode_idx1)%atomic_number > 0) then
+            write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes09(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+         end if
+      end do
+      write(*,*) '(ne update: n_elements, n_ions)'
+      write(*,"(A11)") 'loopCodes10:'
+      do loopCode_idx1=1,n_elements
+         if (elements(loopCode_idx1)%atomic_number > 0) then
+            write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes10(loopCode_idx1, 0:elements(loopCode_idx1)%n_ions)
+         end if
+      end do
+      write(*,*) '(negative density from dust update: n_elements, n_ions)'
+      ! Wonjae error message above
+#endif
 
    end if
 
@@ -1092,7 +1142,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                end if
                code=1
 
-               loopCode_idx1=igroup
+               ! update loop counts under rtz_cool_step
+               ! not after returning to rtz_solve_cooling
+               loopCodes01(igroup) = loopCodes01(igroup) + 1
 
                ! print some before return
                if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -1134,8 +1186,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   end if
                   code=2
 
-                  loopCode_idx1=igroup
-                  loopCode_idx2=idim
+                  loopCodes02(igroup,idim) = loopCodes02(igroup,idim) + 1
 
                   ! print some before return
                   if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -1437,13 +1488,27 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
-         ! write(*,*) 'before dust update, dXion:', dXion(14, 1)
+         
+#ifdef RTZ_ONE_CELL_TEST
+         write(*,"(A14)") 'before update:'
+         write(*,"(A11, *(X, E22.15))") 'rho_dust:', dust_helper%rho_dust
+         write(*,"(A11, *(X, E22.15))") ' rho_pah:', dust_helper%rho_pah
+         write(*,"(A11, *(X, E22.15))") 'n(C):', nElement_dep(6)
+#endif
+
          call compute_dust_update(dust_helper,nElement_dep,dXion,ddt(icell)&
 #ifdef RT
                                  ,dNp&
 #endif
-                                 ,step_ok=dust_step_ok)
-         ! write(*,*) ' after dust update, dXion:', dXion(14, 1)
+                                 ,step_ok=dust_step_ok, dUU=dUU)
+
+#ifdef RTZ_ONE_CELL_TEST
+         write(*,"(A14)") ' after update:'
+         write(*,"(A11, *(X, E22.15))") 'rho_dust:', dust_helper%rho_dust
+         write(*,"(A11, *(X, E22.15))") ' rho_pah:', dust_helper%rho_pah
+         write(*,"(A11, *(X, E22.15))") 'n(C):', nElement_dep(6)
+#endif
+
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_end)
             t_dust_update = t_dust_update + (t_sub_end - t_sub_start)
@@ -1451,12 +1516,51 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       else
          dust_step_ok = .true.
       end if
-      if (.not. dust_step_ok) then
+
+      dUU = dUU * one_over_x_FRAC
+      fracMax = max(fracMax, dUU)
+
+#ifdef RTZ_ONE_CELL_TEST
+      write(*,*) "from dust part,"
+      write(*,"(A11, X, E22.15)") "fracMax:", fracMax
+      write(*,"(A11, X, E22.15)") "dt_rec:", 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
+#endif
+
+      if ((.not. dust_step_ok).or.(dUU>1.0d0)) then
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_now)
             t_dust = t_dust + (t_now - t_last)
          end if
          code = 10
+
+         ! main reason why dust_step_ok becomes .false.
+         ! is the nElement_dep becoming negative by too much of dust formation...
+         ! we don't need compute_dust_update to return indices
+         ! check negative ones here and count on loopCodes10
+         do loopCode_idx1=1,n_elements
+            if (elements(loopCode_idx1)%atomic_number > 0) then
+
+               if (nElement_dep(loopCode_idx1) < 0.0) then
+                  loopCodes10(loopCode_idx1, 0) = loopCodes10(loopCode_idx1, 0) + 1
+               end if
+
+               do loopCode_idx2=1,elements(loopCode_idx1)%n_ions
+                  if (dXion(loopCode_idx1,loopCode_idx2) < 0.0) then
+                     loopCodes10(loopCode_idx1, loopCode_idx2) = loopCodes10(loopCode_idx1, loopCode_idx2) + 1
+                  end if
+               end do
+
+               end if
+         end do
+         ! opps... compute_dust_update does not return trial solution...
+         ! temporarily forced integrate_dust_ode to set
+         ! - y_gas_temp to y_gas_new
+         ! - y_dust_temp to y_dust_new
+         ! so that problematic solution can also be printed out
+         ! if dust_step_ok is .false. anyway that solution will be discarded
+         
+         ! if the trial solution is not negative but does not satisfy 10% rule,
+         ! that will only count up loopCodes, not loopCodes10
 
          ! print some before return
          if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -1672,10 +1776,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             nCII_new = n_CII - delta_CO
             nOI_new  = n_OI  - delta_CO
          
-            if (loopcnt==100000.and.rtz_equilibrium_test.lt.0) then
-               write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
-               write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-            end if
+            ! if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
+            !    write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
+            !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
+            ! end if
 
             ! Now update the ion fractions for C and O
             ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
@@ -1687,11 +1791,19 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! trial 1:
                ! - if CO created, take from C II
                ! - if CO destroyed, dump on C I
+               ! -> add delta_CO (negative) on dXion(6, 1)
+
+               ! trial 2:
+               ! - if CO created, take from C Ii
+               ! - if CO destroyed, dump on all C
+               ! -> no update of dXion
                if (delta_CO > 0.0_dp) then
                   if (iIon.ne.2) then 
                      dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
+                     ! xion(6,iIon, icell) = nElement_dep(6) * xion(6,iIon, icell) / tot_C
                   else
                      dXion(6,iIon) = nCII_new / tot_C
+                     ! xion(6,iIon, icell) = nCII_new / tot_C
                   end if
                else
                   ! if (iIon.ne.1) then
@@ -1706,16 +1818,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             tot_O = nElement_dep(8) - n_OI
             tot_O = tot_O + nOI_new
             do iIon = 1, elements(8)%n_ions
-               if (iIon.ne.1) then 
-                  dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
+               if (delta_CO > 0.0_dp) then
+                  if (iIon.ne.1) then 
+                     dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
+                  else
+                     dXion(8,iIon) = nOI_new / tot_O
+                  end if
                else
-                  dXion(8,iIon) = nOI_new / tot_O
+                  ! doing nothing in this case means
+                  ! oxygen from destroyed CO goes to all ionization status equally;
+                  ! we don't adjust dXion, but only change nElement_dep
                end if
             end do
 
-            ! if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
+            if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
             ! if (rtz_single_cell_test) then
-            if (.false.) then
+            ! if (.false.) then
             ! if (nElement_dep(6)<0.0) then
                write(*,*) "     loopcnt:", loopcnt
                write(*,*) '         nCO:', nCO(icell)
@@ -1734,15 +1852,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                write(*,*) '       n_CII:', n_CII
                write(*,*) '    nCII_new:', nCII_new
                
-               write(*,*) "for Oxygen"
-               write(*,*) "    nElement:", nElement(8, icell)
-               write(*,*) 'nElement_dep:', nElement_dep(8)
-               write(*,*) '        xion:', xion(8,1:elements(8)%n_ions,icell)
-               write(*,*) '       dXion:', dXion(8,1:elements(8)%n_ions)
-               write(*,*) '  sum(dXion):', sum(dXion(8,1:elements(8)%n_ions))
-               write(*,*) '       tot_O:', tot_O
-               write(*,*) '        n_OI:', n_OI
-               write(*,*) '     nOI_new:', nOI_new
+               ! write(*,*) "for Oxygen"
+               ! write(*,*) "    nElement:", nElement(8, icell)
+               ! write(*,*) 'nElement_dep:', nElement_dep(8)
+               ! write(*,*) '        xion:', xion(8,1:elements(8)%n_ions,icell)
+               ! write(*,*) '       dXion:', dXion(8,1:elements(8)%n_ions)
+               ! write(*,*) '  sum(dXion):', sum(dXion(8,1:elements(8)%n_ions))
+               ! write(*,*) '       tot_O:', tot_O
+               ! write(*,*) '        n_OI:', n_OI
+               ! write(*,*) '     nOI_new:', nOI_new
 
                ! write(*,*) '   loopCodes:',loopCodes
             end if
@@ -2054,8 +2172,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
                end if
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
-               
-               ! if (iElement==14 .and. iIon==1) write(*,*) 'dXion:', dXion(14, 1)
 
                ! Get the new electron fraction
                ne = getNe(dXion, nElement_dep(:))
@@ -2089,12 +2205,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      end if
                      code=8 !TODO(code) update this code for each ion
 
-                     loopCode_idx1=iElement
-                     loopCode_idx2=iIon
+                     loopCodes08(iElement,iIon) = loopCodes08(iElement,iIon) + 1
+                     
+#ifdef RTZ_ONE_CELL_TEST
+                     ! print out evolution of problematic ionizations
+                     write(*,"(2(A10, X, I6))") "loopcnt:", loopcnt, "code:", code
+                     write(*,"(2(A10, X, I6))") "iElement:", iElement, "iIon:", iIon
+                     write(*,"(3(A10, X, E22.15))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+                     write(*,"(A10, *(X, E22.15))") "xion:", xion(iElement, 1:7, icell)
+                     write(*,"(A10, *(X, E22.15))") "dXion:", dXion(iElement, 1:7)
+                     write(*,"(2(A10, X, E22.15))") "TK:", TK, "dT2:", dT2
+                     write(*,*) ''
+#endif
 
                      ! print some before return
-                     ! if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
-                     if (rtz_single_cell_test) then
+                     if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
+                     ! if (rtz_single_cell_test) then
                         write(*,*) 'This is raised in `rtz_cool_step`'
                         write(*,*) 'icell:', icell
                         write(*,*) ' code:', code
@@ -2129,8 +2255,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      end if
                      code=9
 
-                     loopCode_idx1=iElement
-                     loopCode_idx2=iIon
+                     loopCodes09(iElement,iIon) = loopCodes09(iElement,iIon) + 1
+
+#ifdef RTZ_ONE_CELL_TEST
+                     ! print out evolution of problematic ionizations
+                     write(*,"(2(A10, X, I6))") "loopcnt:", loopcnt, "code:", code
+                     write(*,"(2(A10, X, I6))") "iElement:", iElement, "iIon:", iIon
+                     write(*,"(3(A10, X, E22.15))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+                     write(*,"(A10, *(X, E22.15))") 'neInit:', neInit
+                     write(*,"(A10, *(X, E22.15))") 'ne:', ne
+                     write(*,*) ''
+#endif
 
                      ! print some before return
                      if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
@@ -2325,11 +2460,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    END FUNCTION dust_to_gas_scale_RR14
 
+   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions &
 #ifdef CO
-   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions, nCO) result(mu)
-#else
-   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions) result(mu)
+      , nCO &
 #endif
+      ) result(mu)
       implicit none
       real(dp), intent(in):: ne
       real(dp), intent(in):: element_number_densities(27)

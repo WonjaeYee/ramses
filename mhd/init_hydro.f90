@@ -20,7 +20,9 @@ subroutine init_hydro
   character(LEN=5)::nchar,ncharcpu
   integer,parameter::tag=1108
 
+#ifdef RTZ_ONE_CELL_TEST
   real(dp),dimension(1:nvar+3)::reload_uold
+#endif
 
   if(verbose)write(*,*)'Entering init_hydro'
 
@@ -208,6 +210,7 @@ subroutine init_hydro
      if(verbose)write(*,*)'HYDRO backup files read completed'
   end if
 
+#ifdef RTZ_ONE_CELL_TEST
   ! manual read and set uold for debugging
   open(unit=1745, file='./reload_uold.txt', status='old', action='read')
   read(1745,*) reload_uold
@@ -223,5 +226,6 @@ subroutine init_hydro
      write(*,*) "check after reading uold:"
      write(*,*) uold(1, 1:nvar+3)
   end if
+#endif
 
 end subroutine init_hydro

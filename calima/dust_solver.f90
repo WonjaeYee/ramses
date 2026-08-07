@@ -306,7 +306,6 @@ module dust_rhs_mod
             if (dust_log .and. do_write_cache_proc) then
                 dydt_dust_before_cache(:) = dydt_dust(:)
                 call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
-                ! write(*,*) 'y_gas:', y_gas(14, 2)
                 if (allocated(last_dydt_dust_per_proc)) &
                     last_dydt_dust_per_proc(:, i) = dydt_dust(:) - dydt_dust_before_cache(:)
             else
@@ -666,7 +665,9 @@ module anninos_mod
         real(dp) :: yj, fj, Cj, Dj, y_eq, delta_y_dust, m_frac
         integer :: j, ii, kk, e_index, C_index
 
+#ifdef RTZ_ONE_CELL_TEST
         integer,save::count_error=0
+#endif
 
         call ensure_anninos_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
         dydt_gas => dydt_gas_cache; dydt_dust => dydt_dust_cache
@@ -725,10 +726,19 @@ module anninos_mod
                     y_eq = Cj / Dj
                     y_dust_new(j) = y_eq + (yj - y_eq) * exp(-Dj * h)
                 end if
+                ! Curro / Wonjae
+                ! y_dust_new(j) = yj + Cj*h - yj*Dj*h
             end if
 
             ! Enforce non-negativity
-            y_dust_new(j) = max(y_dust_new(j), 0.0_dp)
+            ! y_dust_new(j) = max(y_dust_new(j), 0.0_dp)
+            ! Curro / Wonjae
+            ! if (y_dust_new(j) < 0.0_dp) then
+            !     ! at this moment, this problem is assumed to happen
+            !     ! only between PAH size bins
+            !     ! subtract from small positive number
+            !     temp_delta_PAH = 1.0d-30 - y_dust_new(j)
+            ! end if
 
             ! 3. Symmetrically update gas phase elements to conserve mass
             delta_y_dust = y_dust_new(j) - yj
@@ -752,14 +762,14 @@ module anninos_mod
         ! Check for negative values in the new state
         if (any(y_gas_new < 0.0_dp) .or. any(y_dust_new < 0.0_dp)) then
             accepted = .false.
-            write(*,*) "accepted false 1"
-            write(*,*) "y_gas:", y_gas
-            write(*,*) "y_gas_new:", y_gas_new
-            write(*,*) "y_dust:", y_dust
-            write(*,*) "y_dust_new:", y_dust_new
-            count_error = count_error+1
-            if (count_error>10) call clean_stop
             h_new = h * 0.5_dp
+
+#ifdef RTZ_ONE_CELL_TEST
+            ! write(*,*) "negative y_gas_new or y_dust_new"
+            count_error = count_error+1
+            ! if (count_error>10) call clean_stop
+#endif
+
         else
             if (present(step_ok_present) .and. step_ok_present) then
                 accepted = .true.
@@ -772,7 +782,6 @@ module anninos_mod
                 max_error = max(max_error, maxval(error_dust(:)))
 
                 accepted = (max_error <= errmax)
-                write(*,*) "accepted false/true:", accepted
                 scale = 0.9d0 * (errmax / max(max_error, 1.0d-10))
                 h_new = h * min(2.0_dp, max(0.1_dp, scale))
             end if
@@ -1154,6 +1163,11 @@ module ode_driver_mod
                     end if
                 end if
             else
+                ! to count which elements are going wrong,
+                ! return the problematic solution, too
+                ! anyway this will be discarded if step_ok=.false.
+                y_gas_temp(:,:) = y_gas_new(:,:)
+                y_dust_temp(:) = y_dust_new(:)
                 nrejected = nrejected + 1
                 if (dust_log) then
                     ode_nrejected = ode_nrejected + 1_8
