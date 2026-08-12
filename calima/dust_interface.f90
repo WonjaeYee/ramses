@@ -671,7 +671,7 @@ contains
         end do
         do ii = 1, dinfo%ndust
             if (y_dust(dinfo%npah+ii)<1d-28.and.y_dust_out(dinfo%npah+ii)<1d-28) then
-                y_dust_out(dinfo%npah+ii) = y_dust(ii)
+                y_dust_out(dinfo%npah+ii) = y_dust(dinfo%npah+ii)
             end if
         end do
 
