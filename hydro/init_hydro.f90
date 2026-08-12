@@ -24,7 +24,7 @@ subroutine init_hydro
 #endif
 
 #ifdef RTZ_ONE_CELL_TEST
-  real(dp),dimension(1:nvar+3)::reload_uold
+  real(dp),dimension(1:nvar)::reload_uold
 #endif
 
   if(verbose)write(*,*)'Entering init_hydro'
@@ -297,14 +297,14 @@ subroutine init_hydro
   close(1745)
 
   do i=1,ncell
-     do ivar=1,nvar+3
+     do ivar=1,nvar
         uold(i,ivar) = reload_uold(ivar)
      end do
   end do
 
   if (myid==1) then
      write(*,*) "check after reading uold:"
-     write(*,*) uold(1, 1:nvar+3)
+     write(*,*) uold(1, 1:nvar)
   end if
 #endif
 
