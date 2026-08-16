@@ -102,7 +102,7 @@ module dustbin_types
             ! ---- Input DustChemistryInfo with local variables----
             class(DustChemistryInfo),intent(in) :: dust_info
             real(dp),intent(in) :: y_gas(:,:), y_dust(:)
-            real(dp),intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+            real(dp),intent(inout) :: dydt_gas(:,:), dydt_dust(:, :)
             real(dp),intent(inout),optional :: kmax
 
             ! Do something to compute the rate

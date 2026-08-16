@@ -20,7 +20,7 @@ module ode_interface_mod
             implicit none
             type(DustChemistryInfo), intent(in) :: dust_info
             real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-            real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+            real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
             real(dp), intent(inout), optional :: kmax
             logical, intent(in), optional :: debug_flag
             logical, intent(in), optional :: write_cache
@@ -65,9 +65,9 @@ module dust_rhs_mod
     real(dp), allocatable, save :: last_kmax_pah(:)
     ! Per-process dydt contributions from the most recent dust_rhs call [g cm-3 s-1].
     ! Indexed as last_dydt_dust_per_proc(ispecies, iprocess).
-    real(dp), allocatable, save :: last_dydt_dust_per_proc(:,:)
-    real(dp), allocatable, save :: last_dydt_pah_per_proc(:,:)
-    real(dp), allocatable, save :: dydt_dust_before_cache(:)
+    real(dp), allocatable, save :: last_dydt_dust_per_proc(:,:, :)
+    real(dp), allocatable, save :: last_dydt_pah_per_proc(:,:, :)
+    real(dp), allocatable, save :: dydt_dust_before_cache(:, :)
 
     contains
 
@@ -80,12 +80,12 @@ module dust_rhs_mod
         first_call = .false.
 
         if (allocated(dydt_dust_before_cache)) then
-            if (size(dydt_dust_before_cache) /= ndust+npah) then
+            if (size(dydt_dust_before_cache, 1) /= ndust+npah) then
                 deallocate(dydt_dust_before_cache)
             end if
         end if
         if (.not. allocated(dydt_dust_before_cache)) then
-            allocate(dydt_dust_before_cache(ndust+npah))
+            allocate(dydt_dust_before_cache(ndust+npah, 2))
         end if
 
         if (allocated(last_kmax_dust)) then
@@ -134,8 +134,8 @@ module dust_rhs_mod
                 end if
             end if
             if (.not. allocated(last_dydt_dust_per_proc)) then
-                allocate(last_dydt_dust_per_proc(ndust+npah, max(1, ndust_processes)))
-                last_dydt_dust_per_proc(:,:) = 0.0_dp
+                allocate(last_dydt_dust_per_proc(ndust+npah, max(1, ndust_processes), 2))
+                last_dydt_dust_per_proc(:,:, :) = 0.0_dp
             end if
 
             if (allocated(last_dydt_pah_per_proc)) then
@@ -145,8 +145,8 @@ module dust_rhs_mod
                 end if
             end if
             if (.not. allocated(last_dydt_pah_per_proc)) then
-                allocate(last_dydt_pah_per_proc(ndust+npah, max(1, npah_processes)))
-                last_dydt_pah_per_proc(:,:) = 0.0_dp
+                allocate(last_dydt_pah_per_proc(ndust+npah, max(1, npah_processes), 2))
+                last_dydt_pah_per_proc(:,:, :) = 0.0_dp
             end if
         end if
     end subroutine ensure_kmax_storage
@@ -270,7 +270,7 @@ module dust_rhs_mod
         ! ---- Input/Output variables ----
         type(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
         logical, intent(in), optional :: debug_flag
         logical, intent(in), optional :: write_cache
@@ -282,7 +282,7 @@ module dust_rhs_mod
 
         ! 1. Initialize the time derivatives to zero
         dydt_gas(:,:) = 0.0_dp
-        dydt_dust(:) = 0.0_dp
+        dydt_dust(:,:) = 0.0_dp
 
         call ensure_kmax_storage
         if (allocated(last_kmax_dust)) last_kmax_dust(:) = 0.0_dp
@@ -291,8 +291,8 @@ module dust_rhs_mod
             do_write_cache = .true.
             if (present(write_cache)) do_write_cache = write_cache
             if (do_write_cache) then
-                if (allocated(last_dydt_dust_per_proc)) last_dydt_dust_per_proc(:,:) = 0.0_dp
-                if (allocated(last_dydt_pah_per_proc))  last_dydt_pah_per_proc(:,:)  = 0.0_dp
+                if (allocated(last_dydt_dust_per_proc)) last_dydt_dust_per_proc(:,:, :) = 0.0_dp
+                if (allocated(last_dydt_pah_per_proc))  last_dydt_pah_per_proc(:,:, :)  = 0.0_dp
             end if
         end if
 
@@ -304,10 +304,10 @@ module dust_rhs_mod
             do_write_cache_proc = .true.
             if (present(write_cache)) do_write_cache_proc = write_cache
             if (dust_log .and. do_write_cache_proc) then
-                dydt_dust_before_cache(:) = dydt_dust(:)
+                dydt_dust_before_cache(:, 1:2) = dydt_dust(:, 1:2)
                 call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
                 if (allocated(last_dydt_dust_per_proc)) &
-                    last_dydt_dust_per_proc(:, i) = dydt_dust(:) - dydt_dust_before_cache(:)
+                    last_dydt_dust_per_proc(:, i, 1:2) = dydt_dust(:, 1:2) - dydt_dust_before_cache(:, 1:2)
             else
                 call dust_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
             end if
@@ -319,10 +319,10 @@ module dust_rhs_mod
             do_write_cache_proc = .true.
             if (present(write_cache)) do_write_cache_proc = write_cache
             if (dust_log .and. do_write_cache_proc) then
-                dydt_dust_before_cache(:) = dydt_dust(:)
+                dydt_dust_before_cache(:, 1:2) = dydt_dust(:, 1:2)
                 call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
                 if (allocated(last_dydt_pah_per_proc)) &
-                    last_dydt_pah_per_proc(:, i) = dydt_dust(:) - dydt_dust_before_cache(:)
+                    last_dydt_pah_per_proc(:, i, 1:2) = dydt_dust(:, 1:2) - dydt_dust_before_cache(:, 1:2)
             else
                 call pah_processes_list(i)%comp_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,process_kmax)
             end if
@@ -345,7 +345,7 @@ module rk4_mod
 
     ! Cache for intermediate RK4 stages to avoid automatic array allocations
     real(dp), allocatable, save, target :: k1_gas_cache(:,:), k2_gas_cache(:,:), k3_gas_cache(:,:), k4_gas_cache(:,:)
-    real(dp), allocatable, save, target :: k1_dust_cache(:), k2_dust_cache(:), k3_dust_cache(:), k4_dust_cache(:)
+    real(dp), allocatable, save, target :: k1_dust_cache(:,:), k2_dust_cache(:,:), k3_dust_cache(:,:), k4_dust_cache(:,:)
     real(dp), allocatable, save, target :: y_gas_temp_cache(:,:), y_dust_temp_cache(:)
     real(dp), allocatable, save, target :: error_gas_cache(:,:), error_dust_cache(:)
     real(dp), allocatable, save, target :: y_gas_stage_cache(:,:), y_dust_stage_cache(:)
@@ -382,7 +382,7 @@ module rk4_mod
         need_realloc = .false.
         if (.not. allocated(k1_dust_cache)) then
             need_realloc = .true.
-        else if (size(k1_dust_cache) /= ndust_total) then
+        else if (size(k1_dust_cache, 1) /= ndust_total) then
             need_realloc = .true.
         end if
 
@@ -391,8 +391,8 @@ module rk4_mod
             if (allocated(y_dust_temp_cache)) deallocate(y_dust_temp_cache)
             if (allocated(error_dust_cache)) deallocate(error_dust_cache)
             if (allocated(y_dust_stage_cache)) deallocate(y_dust_stage_cache)
-            allocate(k1_dust_cache(ndust_total), k2_dust_cache(ndust_total), &
-                     k3_dust_cache(ndust_total), k4_dust_cache(ndust_total))
+            allocate(k1_dust_cache(ndust_total, 2), k2_dust_cache(ndust_total, 2), &
+                     k3_dust_cache(ndust_total, 2), k4_dust_cache(ndust_total, 2))
             allocate(y_dust_temp_cache(ndust_total))
             allocate(error_dust_cache(ndust_total))
             allocate(y_dust_stage_cache(ndust_total))
@@ -428,7 +428,7 @@ module rk4_mod
 
         ! ---- Local variables ----
         real(dp), pointer :: k1_gas(:,:), k2_gas(:,:), k3_gas(:,:), k4_gas(:,:)
-        real(dp), pointer :: k1_dust(:), k2_dust(:), k3_dust(:), k4_dust(:)
+        real(dp), pointer :: k1_dust(:,:), k2_dust(:,:), k3_dust(:,:), k4_dust(:,:)
         real(dp), pointer :: y_gas_stage(:,:), y_dust_stage(:)
         real(dp) :: kmax, h_local
 
@@ -471,33 +471,33 @@ module rk4_mod
         end if
         if (present(debug_flag)) then
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k1_dust(:,1)-k1_dust(:,2))
             call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k2_dust(:,1)-k2_dust(:,2))
             call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:)
+            y_dust_stage(:) = y_dust(:) + h_local * (k3_dust(:,1)-k3_dust(:,2))
             call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k1_dust(:,1)-k1_dust(:,2))
             call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:)
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k2_dust(:,1)-k2_dust(:,2))
             call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,write_cache=.false.)
 
             y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:)
+            y_dust_stage(:) = y_dust(:) + h_local * (k3_dust(:,1)-k3_dust(:,2))
             call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,write_cache=.false.)
         end if
 
         ! 3. Combine the stages to compute the new solution
         y_gas_new(:,:) = y_gas(:,:) + (h_local * SIXTH) * (k1_gas(:,:) + TWO*k2_gas(:,:) + TWO*k3_gas(:,:) + k4_gas(:,:))
-        y_dust_new(:) = y_dust(:) + (h_local * SIXTH) * (k1_dust(:) + TWO*k2_dust(:) + TWO*k3_dust(:) + k4_dust(:))
+        y_dust_new(:) = y_dust(:) + (h_local * SIXTH) * ((k1_dust(:,1)-k1_dust(:,2)) + TWO*(k2_dust(:,1)-k2_dust(:,2)) + TWO*(k3_dust(:,1)-k3_dust(:,2)) + (k4_dust(:,1)-k4_dust(:,2)))
 
         ! 4. Update the time step size for the next step (this will be used by the adaptive RK4 wrapper)
         h = h_local
@@ -587,7 +587,7 @@ module anninos_mod
     public :: anninos_step
 
     ! Cache to avoid automatic array allocations
-    real(dp), allocatable, save, target :: dydt_gas_cache(:,:), dydt_dust_cache(:)
+    real(dp), allocatable, save, target :: dydt_gas_cache(:,:), dydt_dust_cache(:, :)
     real(dp), allocatable, save, target :: error_gas_cache(:,:), error_dust_cache(:)
 
     contains
@@ -617,14 +617,14 @@ module anninos_mod
         need_realloc = .false.
         if (.not. allocated(dydt_dust_cache)) then
             need_realloc = .true.
-        else if (size(dydt_dust_cache) /= ndust_total) then
+        else if (size(dydt_dust_cache, 1) /= ndust_total) then
             need_realloc = .true.
         end if
 
         if (need_realloc) then
             if (allocated(dydt_dust_cache)) deallocate(dydt_dust_cache)
             if (allocated(error_dust_cache)) deallocate(error_dust_cache)
-            allocate(dydt_dust_cache(ndust_total))
+            allocate(dydt_dust_cache(ndust_total, 2))
             allocate(error_dust_cache(ndust_total))
         end if
     end subroutine ensure_anninos_cache
@@ -659,7 +659,7 @@ module anninos_mod
         logical, intent(in), optional :: step_ok_present
 
         ! ---- Local variables ----
-        real(dp), pointer :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), pointer :: dydt_gas(:,:), dydt_dust(:, :)
         real(dp), pointer :: error_gas(:,:), error_dust(:)
         real(dp) :: kmax, scale, max_error
         real(dp) :: yj, fj, Cj, Dj, y_eq, delta_y_dust, m_frac
@@ -702,7 +702,8 @@ module anninos_mod
         ! 2. Update dust/PAH bins using Anninos method
         do j = 1, size(y_dust)
             yj = y_dust(j)
-            fj = dydt_dust(j)
+            fj = dydt_dust(j, 1) - dydt_dust(j, 2)
+            ! keep fj to be the net rate
 
             if (abs(fj) * h < 1.0d-12 * yj) then
                 y_dust_new(j) = yj
@@ -711,13 +712,15 @@ module anninos_mod
                 ! write(*,*) 'is this called ever?'
             else
                 ! Decompose derivative into creation Cj and destruction Dj
-                if (fj >= 0.0_dp) then
-                    Cj = fj
-                    Dj = 0.0_dp
-                else
-                    Cj = 0.0_dp
-                    Dj = -fj / max(yj, 1.0d-30)
-                end if
+                ! if (fj >= 0.0_dp) then
+                !     Cj = fj
+                !     Dj = 0.0_dp
+                ! else
+                !     Cj = 0.0_dp
+                !     Dj = -fj / max(yj, 1.0d-30)
+                ! end if
+                Cj = dydt_dust(j, 1)
+                Dj = dydt_dust(j, 2) / max(yj, 1.0d-30)
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
@@ -803,8 +806,8 @@ module rk54_mod
     ! Cache for intermediate RK54 stages to avoid automatic array allocations
     real(dp), allocatable, save, target :: k1_gas_cache(:,:), k2_gas_cache(:,:), k3_gas_cache(:,:), &
                                            k4_gas_cache(:,:), k5_gas_cache(:,:), k6_gas_cache(:,:)
-    real(dp), allocatable, save, target :: k1_dust_cache(:), k2_dust_cache(:), k3_dust_cache(:), &
-                                           k4_dust_cache(:), k5_dust_cache(:), k6_dust_cache(:)
+    real(dp), allocatable, save, target :: k1_dust_cache(:,:), k2_dust_cache(:,:), k3_dust_cache(:,:), &
+                                           k4_dust_cache(:,:), k5_dust_cache(:,:), k6_dust_cache(:,:)
     real(dp), allocatable, save, target :: y_gas_temp_cache(:,:), y_dust_temp_cache(:)
     real(dp), allocatable, save, target :: error_gas_cache(:,:), error_dust_cache(:)
 
@@ -840,7 +843,7 @@ module rk54_mod
         need_realloc = .false.
         if (.not. allocated(k1_dust_cache)) then
             need_realloc = .true.
-        else if (size(k1_dust_cache) /= ndust_total) then
+        else if (size(k1_dust_cache, 1) /= ndust_total) then
             need_realloc = .true.
         end if
 
@@ -849,9 +852,9 @@ module rk54_mod
                                                      k4_dust_cache, k5_dust_cache, k6_dust_cache)
             if (allocated(y_dust_temp_cache)) deallocate(y_dust_temp_cache)
             if (allocated(error_dust_cache)) deallocate(error_dust_cache)
-            allocate(k1_dust_cache(ndust_total), k2_dust_cache(ndust_total), &
-                     k3_dust_cache(ndust_total), k4_dust_cache(ndust_total), &
-                     k5_dust_cache(ndust_total), k6_dust_cache(ndust_total))
+            allocate(k1_dust_cache(ndust_total, 2), k2_dust_cache(ndust_total, 2), &
+                     k3_dust_cache(ndust_total, 2), k4_dust_cache(ndust_total, 2), &
+                     k5_dust_cache(ndust_total, 2), k6_dust_cache(ndust_total, 2))
             allocate(y_dust_temp_cache(ndust_total))
             allocate(error_dust_cache(ndust_total))
         end if
@@ -888,7 +891,7 @@ module rk54_mod
 
         ! ---- Local variables ----
         real(dp), pointer :: k1_gas(:,:), k2_gas(:,:), k3_gas(:,:), k4_gas(:,:), k5_gas(:,:), k6_gas(:,:)
-        real(dp), pointer :: k1_dust(:), k2_dust(:), k3_dust(:), k4_dust(:), k5_dust(:), k6_dust(:)
+        real(dp), pointer :: k1_dust(:,:), k2_dust(:,:), k3_dust(:,:), k4_dust(:,:), k5_dust(:,:), k6_dust(:,:)
         real(dp), pointer :: y_gas_temp(:,:), y_dust_temp(:)
         real(dp), pointer :: error_gas(:,:), error_dust(:)
         real(dp) :: kmax, scale, max_error
@@ -976,7 +979,7 @@ module rk54_mod
 
         ! Stage 2
         y_gas_temp = y_gas + h_local * a21 * k1_gas
-        y_dust_temp = y_dust + h_local * a21 * k1_dust
+        y_dust_temp = y_dust + h_local * a21 * (k1_dust(:, 1) - k1_dust(:, 2))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
         else
@@ -985,7 +988,7 @@ module rk54_mod
 
         ! Stage 3
         y_gas_temp = y_gas + h_local * (a31 * k1_gas + a32 * k2_gas)
-        y_dust_temp = y_dust + h_local * (a31 * k1_dust + a32 * k2_dust)
+        y_dust_temp = y_dust + h_local * (a31 * (k1_dust(:,1)-k1_dust(:,2)) + a32 * (k2_dust(:,1)-k2_dust(:,2)))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
         else
@@ -994,7 +997,7 @@ module rk54_mod
 
         ! Stage 4
         y_gas_temp = y_gas + h_local * (a41 * k1_gas + a42 * k2_gas + a43 * k3_gas)
-        y_dust_temp = y_dust + h_local * (a41 * k1_dust + a42 * k2_dust + a43 * k3_dust)
+        y_dust_temp = y_dust + h_local * (a41 * (k1_dust(:,1)-k1_dust(:,2)) + a42 * (k2_dust(:,1)-k2_dust(:,2)) + a43 * (k3_dust(:,1)-k3_dust(:,2)))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         else
@@ -1003,7 +1006,7 @@ module rk54_mod
 
         ! Stage 5
         y_gas_temp = y_gas + h_local * (a51 * k1_gas + a52 * k2_gas + a53 * k3_gas + a54 * k4_gas)
-        y_dust_temp = y_dust + h_local * (a51 * k1_dust + a52 * k2_dust + a53 * k3_dust + a54 * k4_dust)
+        y_dust_temp = y_dust + h_local * (a51 * (k1_dust(:,1)-k1_dust(:,2)) + a52 * (k2_dust(:,1)-k2_dust(:,2)) + a53 * (k3_dust(:,1)-k3_dust(:,2)) + a54 * (k4_dust(:,1)-k4_dust(:,2)))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust,debug_flag=debug_flag,write_cache=.false.)
         else
@@ -1012,7 +1015,7 @@ module rk54_mod
 
         ! Stage 6
         y_gas_temp = y_gas + h_local * (a61 * k1_gas + a62 * k2_gas + a63 * k3_gas + a64 * k4_gas + a65 * k5_gas)
-        y_dust_temp = y_dust + h_local * (a61 * k1_dust + a62 * k2_dust + a63 * k3_dust + a64 * k4_dust + a65 * k5_dust)
+        y_dust_temp = y_dust + h_local * (a61 * (k1_dust(:,1)-k1_dust(:,2)) + a62 * (k2_dust(:,1)-k2_dust(:,2)) + a63 * (k3_dust(:,1)-k3_dust(:,2)) + a64 * (k4_dust(:,1)-k4_dust(:,2)) + a65 * (k5_dust(:,1)-k5_dust(:,2)))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust,debug_flag=debug_flag,write_cache=.false.)
         else
@@ -1021,12 +1024,12 @@ module rk54_mod
 
         ! Compute 5th-order solutions
         y_gas_new = y_gas + h_local * (b1 * k1_gas + b3 * k3_gas + b4 * k4_gas + b6 * k6_gas)
-        y_dust_new = y_dust + h_local * (b1 * k1_dust + b3 * k3_dust + b4 * k4_dust + b6 * k6_dust)
+        y_dust_new = y_dust + h_local * (b1 * (k1_dust(:,1)-k1_dust(:,2)) + b3 * (k3_dust(:,1)-k3_dust(:,2)) + b4 * (k4_dust(:,1)-k4_dust(:,2)) + b6 * (k6_dust(:,1)-k6_dust(:,2)))
 
         ! Error estimate
         error_gas = abs(h_local * (e1 * k1_gas + e3 * k3_gas + e4 * k4_gas + e5 * k5_gas + e6 * k6_gas)) / &
                     max(abs(y_gas), 1.0d-40)
-        error_dust = abs(h_local * (e1 * k1_dust + e3 * k3_dust + e4 * k4_dust + e5 * k5_dust + e6 * k6_dust)) / &
+        error_dust = abs(h_local * (e1 * (k1_dust(:,1)-k1_dust(:,2)) + e3 * (k3_dust(:,1)-k3_dust(:,2)) + e4 * (k4_dust(:,1)-k4_dust(:,2)) + e5 * (k5_dust(:,1)-k5_dust(:,2)) + e6 * (k6_dust(:,1)-k6_dust(:,2)))) / &
                      max(abs(y_dust), 1.0d-40)
 
         max_error = maxval(error_gas)
@@ -1154,12 +1157,12 @@ module ode_driver_mod
                     if (ndust_processes > 0 .and. allocated(dM_ode_dust) .and. &
                         allocated(last_dydt_dust_per_proc)) then
                         dM_ode_dust(:, 1:ndust_processes) = dM_ode_dust(:, 1:ndust_processes) + &
-                            last_dydt_dust_per_proc(:, 1:ndust_processes) * h * dust_info%local_vol
+                            (last_dydt_dust_per_proc(:, 1:ndust_processes, 1)-last_dydt_dust_per_proc(:, 1:ndust_processes, 2)) * h * dust_info%local_vol
                     end if
                     if (npah_processes > 0 .and. allocated(dM_ode_pah) .and. &
                         allocated(last_dydt_pah_per_proc)) then
                         dM_ode_pah(:, 1:npah_processes) = dM_ode_pah(:, 1:npah_processes) + &
-                            last_dydt_pah_per_proc(:, 1:npah_processes) * h * dust_info%local_vol
+                            (last_dydt_pah_per_proc(:, 1:npah_processes, 1)-last_dydt_pah_per_proc(:, 1:npah_processes, 2)) * h * dust_info%local_vol
                     end if
                 end if
             else
