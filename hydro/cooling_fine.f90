@@ -730,11 +730,6 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                               )
         end if
 
-#ifdef RTZ_ONE_CELL_TEST
-        write(*,*) "one-cell test ended"
-        call clean_stop
-#endif
-
 #ifdef CALIMA
         do i=1,nleaf
            if (any(rho_dust(i,:).gt.uold(ind_leaf(i),1)*scale_d)) then
@@ -745,8 +740,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            end if
         end do
 #endif
-! #ifndef SKIP_RTZ_COOLING, for test purpose
+
+#ifdef RTZ_ONE_CELL_TEST
+        ! for one-cell test, always print
+        err_idx = 1
+#else
         if (err_idx > 0) then
+#endif
            write(*,*) 'This is raised in `coolfine1`'
            write(*,*) '  myid:', myid
            write(*,*) 'ilevel:', ilevel
@@ -779,8 +779,15 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) 'rho_pah:', rho_pah(err_idx,:)
 #endif
 #endif     
+
+#ifdef RTZ_ONE_CELL_TEST
+           write(*,*) "one-cell test ended"
+           call clean_stop
+#else
            call clean_stop
         end if
+#endif
+
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &

@@ -664,16 +664,16 @@ contains
         ! test trial: very small value, ignore evolution
         ! this can be very problematic in other cases...
         ! 1d-28 seems to be fine, 1d-31 cannot prevents the error
-        do ii = 1, dinfo%npah
-            if (y_dust(ii)<1d-28.and.y_dust_out(ii)<1d-28) then
-                y_dust_out(ii) = y_dust(ii)
-            end if
-        end do
-        do ii = 1, dinfo%ndust
-            if (y_dust(dinfo%npah+ii)<1d-28.and.y_dust_out(dinfo%npah+ii)<1d-28) then
-                y_dust_out(dinfo%npah+ii) = y_dust(dinfo%npah+ii)
-            end if
-        end do
+        ! do ii = 1, dinfo%npah
+        !     if (y_dust(ii)<1d-28.and.y_dust_out(ii)<1d-28) then
+        !         y_dust_out(ii) = y_dust(ii)
+        !     end if
+        ! end do
+        ! do ii = 1, dinfo%ndust
+        !     if (y_dust(dinfo%npah+ii)<1d-28.and.y_dust_out(dinfo%npah+ii)<1d-28) then
+        !         y_dust_out(dinfo%npah+ii) = y_dust(dinfo%npah+ii)
+        !     end if
+        ! end do
 
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
             dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)

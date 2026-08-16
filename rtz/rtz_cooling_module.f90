@@ -897,6 +897,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp)::t_sub_start, t_sub_end
 #endif
       !-----------------------------------------------------------------------
+      real(dp)::alpha
 
       ! RTZ variable initialization
       if (rtz_equilibrium_test.gt.0) then
@@ -1089,6 +1090,33 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          phSc(1:nGroups)=0.
 
          ! HKnote: OTSA is required with RTZ (for now)
+
+         ! try to mimic emission from gas under rt_solve_cooling
+         if (.not.rt_OTSA .and. rt_advect) then ! actually rt_advect does not need to be checked
+            do igroup=1,nGroups
+               ! photons from recombination should be spreaded on multiple radiation bins
+               ! but... at this moment dump on one bin
+
+               ! H II -> H I
+               if ((groupL0(igroup) <= 13.60).and.(13.60 < groupL1(igroup))) then
+                  alpha = old_recombination_HII(TK)
+                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(1)*dXion(1,2) * ne
+               end if
+
+               ! He II -> He I
+               if ((groupL0(igroup) <= 24.590).and.(24.590 < groupL1(igroup))) then
+                  alpha = old_recombination_HeII(TK)
+                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,2) * ne
+               end if
+
+               ! He III -> He II
+               if ((groupL0(igroup) <= 54.420).and.(54.420 < groupL1(igroup))) then
+                  alpha = old_recombination_HeIII(TK)
+                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,3) * ne
+               end if
+
+            end do
+         end if
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS
          do igroup=1,nGroups       ! ----------------Ionization absorbtion
