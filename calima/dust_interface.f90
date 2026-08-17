@@ -696,12 +696,12 @@ contains
         ! check for gas
         do ii = 1, n_elements
             if (elements(ii)%atomic_number > 0) then
-                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1) + 1d-28))
+                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1) + 1d-40))
 
                 ! if not, ion part is zero
                 if (carry_gas_ions) then
                     do jj=1,elements(ii)%n_ions
-                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj) + 1d-28))
+                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj) + 1d-40))
                     end do
                 end if
 
@@ -711,7 +711,7 @@ contains
         ! check for dust
         if (dinfo%ndust > 0 .or. dinfo%npah > 0) then
             do ii = 1, dinfo%npah+dinfo%ndust
-                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii) + 1d-28))
+                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii) + 1d-40))
             end do
         end if
 #endif

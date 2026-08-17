@@ -719,6 +719,7 @@ module anninos_mod
                 !     Cj = 0.0_dp
                 !     Dj = -fj / max(yj, 1.0d-30)
                 ! end if
+                ! Curro / Wonjae
                 Cj = dydt_dust(j, 1)
                 Dj = dydt_dust(j, 2) / max(yj, 1.0d-30)
 
