@@ -5,6 +5,22 @@ import numpy as np
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+mpl.rcParams.update({
+    'font.family': 'serif',
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'axes.linewidth': 0.8,
+    'axes.facecolor': 'none',
+    'figure.facecolor': 'none',
+    'legend.frameon': False,
+    'lines.linewidth': 2.5,
+})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
@@ -86,10 +102,10 @@ def initial_profile(x):
 # =====================================================================
 # 4. PLOT OVERLAY
 # =====================================================================
-fig, ax = plt.subplots(figsize=(10, 6))
+fig, ax = plt.subplots(figsize=(5.5, 4))
 
 # Plot analytical initial condition
-ax.plot(x_eval, initial_profile(x_eval), 'k-', alpha=0.3, linewidth=2, label='Initial (Analytic)')
+ax.plot(x_eval, initial_profile(x_eval), 'k-', alpha=0.4, linewidth=2.5, label='Initial (Analytic)')
 
 # Load and plot numerical initial condition (Snapshot 1)
 try:
@@ -97,12 +113,12 @@ try:
     order = snap_init["data"]["x"].argsort()
     x_num = snap_init["data"]["x"][order]
     f_dust_num = snap_init["data"]["DustBin_01"][order]
-    ax.plot(x_num, f_dust_num, 'k--', linewidth=1.5, label='Initial (Numerical)')
+    ax.plot(x_num, f_dust_num, 'k--', linewidth=2.5, label='Initial (Numerical)')
 except Exception as e:
     print(f"Error loading initial snapshot: {e}")
 
 # Loop and calculate spatial shifts for each specified output time
-colors = ['#d7191c', '#fdae61', '#abdda4', '#2b83ba']
+colors = ['#1565c0', '#b71c1c', '#1b5e20', '#6a1b9a']
 for i, t in enumerate(output_times):
     # Pure hyperbolic advection shift: x_shifted = x0 + u_drift * t
     x_shifted = x0 + (u_drift_pc_myr * t)
@@ -110,7 +126,7 @@ for i, t in enumerate(output_times):
     # Evaluate shifted analytical distribution profile
     eps_analytic = eps_base + delta_eps * np.exp(-((x_eval - x_shifted)**2) / (2.0 * sigma_shell**2))
     
-    ax.plot(x_eval, eps_analytic, '-', color=colors[i], linewidth=2.0, alpha=0.5,
+    ax.plot(x_eval, eps_analytic, '-', color=colors[i], linewidth=2.5, alpha=0.5,
              label=f't = {t:.2f} Myr (Analytic)')
              
     # Load and plot matching numerical snapshot (Snapshot 2 is t=0.74, 3 is t=1.48, etc.)
@@ -120,7 +136,7 @@ for i, t in enumerate(output_times):
         order = snap["data"]["x"].argsort()
         x_num = snap["data"]["x"][order]
         f_dust_num = snap["data"]["DustBin_01"][order]
-        ax.plot(x_num, f_dust_num, '--', color=colors[i], linewidth=1.5,
+        ax.plot(x_num, f_dust_num, '--', color=colors[i], linewidth=2.5,
                  label=f't = {t:.2f} Myr (Numerical)')
     except Exception as e:
         print(f"Error loading snapshot {snap_idx}: {e}")
@@ -130,12 +146,10 @@ ax.set_xlim(0.0, boxlen)
 ax.set_ylim(0.0, delta_eps * 1.2)
 ax.set_xlabel('Position x [pc]', fontsize=12)
 ax.set_ylabel('Dust Mass Fraction $\epsilon_1$', fontsize=12)
-ax.set_title('DustySpress: 1D Radiation Pressure Dust Shell Test\n'
-             r'(0.1 $\mu$m Graphite Grain $\cdot$ $\rho_0=10^{-24}$ g/cm$^3$ $\cdot$ $F_0=3.2$ erg/s/cm$^2$)', fontsize=12)
-ax.legend(loc='upper right', frameon=True, shadow=False)
-ax.grid(True, linestyle=':', alpha=0.6)
+ax.legend(loc='upper right', frameon=False)
+ax.grid(True, linestyle=':', alpha=0.3, color='#aaaaaa')
 fig.tight_layout()
 
 # Save figure
-fig.savefig("dustyspress.png", bbox_inches="tight",format='png')
+fig.savefig("dustyspress.png", dpi=300, bbox_inches="tight", format='png', transparent=True)
 print("Saved convergence plot to dustyspress.png")

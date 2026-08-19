@@ -6,6 +6,22 @@ from scipy.optimize import brentq
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+mpl.rcParams.update({
+    'font.family': 'serif',
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'axes.linewidth': 0.8,
+    'axes.facecolor': 'none',
+    'figure.facecolor': 'none',
+    'legend.frameon': False,
+    'lines.linewidth': 2.5,
+})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
@@ -219,16 +235,16 @@ v_gas, v_dust = derive_velocities(x, rho, eps, pressure, v_mix)
 # ---------------------------------------------------------------------------
 # Plotting — 2×2 panel figure
 # ---------------------------------------------------------------------------
-color_gas    = "#1f77b4"   # muted blue  (numerical gas)
-color_dust   = "#d62728"   # brick red   (numerical dust)
-color_prs    = "#ff7f0e"   # orange      (numerical pressure)
-color_analy  = "#444444"   # dark grey   (analytic)
+color_gas    = "#1565c0"   # deep blue   (numerical gas)
+color_dust   = "#b71c1c"   # deep red    (numerical dust)
+color_prs    = "#e65100"   # deep orange (numerical pressure)
+color_analy  = "#212121"   # near black  (analytic)
 
-lw_num   = 1.8
-lw_ana   = 1.5
+lw_num   = 2.5
+lw_ana   = 2.0
 ls_ana   = "--"
 
-fig, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+fig, axes = plt.subplots(2, 2, figsize=(7.5, 6), sharex=True)
 ax_rho_gas  = axes[0, 0]
 ax_prs      = axes[1, 0]
 ax_rho_dust = axes[0, 1]
@@ -238,8 +254,7 @@ ax_vel      = axes[1, 1]
 ax_rho_gas.plot(x,      rho_gas,   color=color_gas,   lw=lw_num, label="Numerical")
 # ax_rho_gas.plot(x_fine, rho_gas_a, color=color_analy, lw=lw_ana, ls=ls_ana, label="Analytic")
 ax_rho_gas.set_ylabel(r"$\rho_\mathrm{gas}$", fontsize=13)
-ax_rho_gas.set_title("Gas Density", fontsize=12, fontweight="bold")
-ax_rho_gas.grid(True, linestyle=":", alpha=0.5)
+ax_rho_gas.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
 ax_rho_gas.legend(fontsize=10, loc="upper right")
 
 # --- Bottom-left : gas pressure ---------------------------------------------
@@ -247,16 +262,14 @@ ax_prs.plot(x,      pressure, color=color_prs,   lw=lw_num, label="Numerical")
 # ax_prs.plot(x_fine, P_gas_a,  color=color_analy, lw=lw_ana, ls=ls_ana, label="Analytic")
 ax_prs.set_xlabel("$x$", fontsize=13)
 ax_prs.set_ylabel(r"$P_\mathrm{gas}$", fontsize=13)
-ax_prs.set_title("Gas Pressure", fontsize=12, fontweight="bold")
-ax_prs.grid(True, linestyle=":", alpha=0.5)
+ax_prs.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
 ax_prs.legend(fontsize=10, loc="upper right")
 
 # --- Top-right : dust density -----------------------------------------------
 ax_rho_dust.plot(x,      rho_dust,   color=color_dust,  lw=lw_num, label="Numerical")
 # ax_rho_dust.plot(x_fine, rho_dust_a, color=color_analy, lw=lw_ana, ls=ls_ana, label="Analytic")
 ax_rho_dust.set_ylabel(r"$\rho_\mathrm{dust}$", fontsize=13)
-ax_rho_dust.set_title("Dust Density", fontsize=12, fontweight="bold")
-ax_rho_dust.grid(True, linestyle=":", alpha=0.5)
+ax_rho_dust.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
 ax_rho_dust.legend(fontsize=10, loc="upper right")
 
 # --- Bottom-right : gas & dust velocities -----------------------------------
@@ -268,22 +281,15 @@ ax_vel.plot(x, v_dust, color=color_dust,  lw=lw_num, ls="--",  label=r"$v_\mathr
 #             label=r"$v_\mathrm{mix}$ (analytic, $K\!\to\!\infty$)")
 ax_vel.set_xlabel("$x$", fontsize=13)
 ax_vel.set_ylabel("Velocity", fontsize=13)
-ax_vel.set_title("Gas & Dust Velocities", fontsize=12, fontweight="bold")
-ax_vel.grid(True, linestyle=":", alpha=0.5)
+ax_vel.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
 ax_vel.legend(fontsize=10, loc="upper right")
 
 # Global formatting
-fig.suptitle(
-    rf"DustyShock — $t = {t:.4f}$  "
-    r"($c_\mathrm{eff} = c_s\sqrt{1-\varepsilon}$, TVA)",
-    fontsize=14,
-    fontweight="bold",
-    y=1.01,
-)
 for ax in axes.flat:
     ax.set_xlim(x.min(), x.max())
 
 fig.tight_layout()
 outfile = "dustyshock.pdf"
-fig.savefig(outfile, bbox_inches="tight")
+fig.savefig(outfile, bbox_inches="tight", transparent=True)
+fig.savefig(outfile.replace(".pdf", ".png"), dpi=300, bbox_inches="tight", transparent=True)
 print(f"Saved plot to {outfile}")

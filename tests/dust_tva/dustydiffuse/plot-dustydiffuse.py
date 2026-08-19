@@ -5,6 +5,22 @@ import numpy as np
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+mpl.rcParams.update({
+    'font.family': 'serif',
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'axes.linewidth': 0.8,
+    'axes.facecolor': 'none',
+    'figure.facecolor': 'none',
+    'legend.frameon': False,
+    'lines.linewidth': 2.5,
+})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
@@ -23,16 +39,16 @@ def run_simulation():
 run_simulation()
 
 # Create plot
-fig, ax = plt.subplots(figsize=(9, 6))
+fig, ax = plt.subplots(figsize=(5.5, 4))
 
 # Define colors for the outputs (Snapshot 1: initial condition, Snapshots 2, 3, 4, 5: evolution)
 output_indices = [1, 2, 3, 4, 5]
 colors = {
-    1: "#777777",   # Dark Gray (initial condition)
-    2: "#5c3c92",   # Purple
-    3: "#077b8a",   # Teal
-    4: "#2e8b57",   # Sea Green
-    5: "#d9534f"   # Soft Red
+    1: "#424242",   # Near Black (initial condition)
+    2: "#4a148c",   # Dark Purple
+    3: "#006064",   # Dark Teal
+    4: "#1b5e20",   # Dark Green
+    5: "#b71c1c",   # Dark Red
 }
 
 # Physical parameters for the analytical Barenblatt-Pattle solution
@@ -78,7 +94,7 @@ for idx in output_indices:
             rho_dust_analytic, 
             "-", 
             color=colors[idx], 
-            linewidth=2.0, 
+            linewidth=2.5,
             alpha=0.4,
             label=label_analytic
         )
@@ -90,19 +106,19 @@ for idx in output_indices:
         rho_dust_num,
         "--",
         color=colors[idx],
-        linewidth=1.5,
+        linewidth=2.5,
         label=label_numerical
     )
 
 # Formatting
 ax.set_xlabel("x", fontsize=12)
 ax.set_ylabel("Dust Density", fontsize=12)
-ax.set_title("DustyDiffuse: Non-linear Diffusion Evolution", fontsize=14, fontweight="bold")
-ax.grid(True, linestyle=":", alpha=0.6)
+ax.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
 ax.legend(fontsize=10, loc="upper right")
 ax.set_xlim(0.0, L)
 ax.set_ylim(0.0, 0.12)
 
 fig.tight_layout()
-fig.savefig("dustydiffuse.pdf", bbox_inches="tight")
-print("Saved convergence plot to dustydiffuse.pdf")
+fig.savefig("dustydiffuse.pdf", bbox_inches="tight", transparent=True)
+fig.savefig("dustydiffuse.png", dpi=300, bbox_inches="tight", transparent=True)
+print("Saved convergence plot to dustydiffuse.pdf / dustydiffuse.png")

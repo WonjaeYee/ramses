@@ -36,6 +36,22 @@ import numpy as np
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
+mpl.rcParams.update({
+    'font.family': 'serif',
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'axes.linewidth': 0.8,
+    'axes.facecolor': 'none',
+    'figure.facecolor': 'none',
+    'legend.frameon': False,
+    'lines.linewidth': 2.5,
+})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
@@ -108,7 +124,7 @@ print("  analytic        = [%.5f %.5f %.5f]" % tuple(expected))
 print("  offset          = [%+.5f %+.5f %+.5f]" % tuple(delta))
 
 # --- figure: profile along each axis vs the analytic top hat --------------------------
-fig, axarr = plt.subplots(1, 3, figsize=(13, 4))
+fig, axarr = plt.subplots(1, 3, figsize=(9, 3.2))
 cell = BOXLEN / 2 ** int(round(np.log2(BOXLEN / np.min(dx))))
 for ia, (ax, coord) in enumerate(zip(axarr, (x, y, z))):
     # collapse onto this axis: mass-weighted mean dust fraction per slab
@@ -118,7 +134,7 @@ for ia, (ax, coord) in enumerate(zip(axarr, (x, y, z))):
     den, _ = np.histogram(coord, bins=edges, weights=vol)
     prof = num / np.maximum(den, 1e-300)
     ctr = 0.5 * (edges[1:] + edges[:-1])
-    ax.step(ctr, prof, where="mid", label="RAMSES", lw=1.6)
+    ax.step(ctr, prof, where="mid", label="RAMSES", lw=2.5, color="#1565c0")
 
     # analytic: top hat of width CUBE_LEN centred on the drifted position, periodic
     c0 = np.mod(CUBE_CTR[ia] + W_DRIFT[ia] * t, BOXLEN)
@@ -127,20 +143,18 @@ for ia, (ax, coord) in enumerate(zip(axarr, (x, y, z))):
     # the enhanced region is diluted by (CUBE_LEN/BOXLEN)^2
     dilut = (CUBE_LEN / BOXLEN) ** 2
     ana = eps_bg + (eps_hi - eps_bg) * dilut * (np.abs(off) <= 0.5 * CUBE_LEN)
-    ax.plot(ctr, ana, "--", color="crimson", label="analytic", lw=1.4)
+    ax.plot(ctr, ana, "--", color="#b71c1c", label="analytic", lw=2.0)
 
-    ax.axvline(com[ia], color="C0", alpha=0.5, ls=":", label="centroid")
-    ax.axvline(expected[ia], color="crimson", alpha=0.5, ls=":", label="analytic centroid")
+    ax.axvline(com[ia], color="#1565c0", alpha=0.5, ls=":", label="centroid")
+    ax.axvline(expected[ia], color="#b71c1c", alpha=0.5, ls=":", label="analytic centroid")
     ax.set_xlabel(AXES[ia])
     ax.set_ylabel("mean dust fraction" if ia == 0 else "")
-    ax.set_title(r"%s:  $w=%.2f$,  $wt=%.3f$" % (AXES[ia], W_DRIFT[ia], W_DRIFT[ia] * t))
     if ia == 0:
+
         ax.legend(fontsize=8)
-fig.suptitle("DustyAdvect3D   t = %.4f   mass err %.2e   centroid offset [%+.4f %+.4f %+.4f]"
-             % (t, err_mass, delta[0], delta[1], delta[2]))
 fig.tight_layout()
-fig.savefig("dustyadvect3d.pdf", bbox_inches="tight")
-fig.savefig("dustyadvect3d.png", dpi=110, bbox_inches="tight")
+fig.savefig("dustyadvect3d.pdf", bbox_inches="tight", transparent=True)
+fig.savefig("dustyadvect3d.png", dpi=300, bbox_inches="tight", transparent=True)
 print("  wrote dustyadvect3d.pdf / .png")
 
 # Keep the harness's bookkeeping happy (it expects a .tex per test).
