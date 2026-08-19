@@ -654,6 +654,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         dx_SS_H2 = 0.d0
         if (isH2_rtz) then
            ! dx_SS_H2 = (boxlen/(2.d0**ilevel)) * scale_l
+
            ! to reduce the discretization on phase diagram,
            ! use local Jeans length instead of cell size
            do i=1,nleaf

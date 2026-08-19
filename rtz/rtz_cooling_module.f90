@@ -226,6 +226,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp),dimension(1:npah)::drho_pah
 #endif
 
+   integer::nx_loc
+   real(dp)::scale, dx_loc, vol_loc
+   real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v
+
    ! temporal index to check problem
    integer::err_idx
    integer,parameter::loopcnt_limit=100000
@@ -237,6 +241,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer*8,dimension(1:n_elements,1:7):: loopCodes08,loopCodes09
    integer*8,dimension(1:n_elements,0:7):: loopCodes10
    
+   ! get cell size
+   nx_loc = (icoarse_max-icoarse_min+1)
+   scale = boxlen/dble(nx_loc)
+   dx_loc = (0.5d0**ilevel)*scale
+   vol_loc = dx_loc**ndim
+
+   call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+
    ! if it is not initialized, it can be accumulated for all cells(?)
    loopCodes = 0
 
@@ -872,7 +884,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: UV_background_G0
       integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
       integer:: i_current_Ion
-      real(dp):: Zsolar, local_G0
+      real(dp):: Zsolar, advected_G0
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
@@ -943,9 +955,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
 
       primary_cosmic_ray_ionization_rate = rtz_primary_cosmic_ray_ionization_rate
-      UV_background_G0 = rtz_UV_background_G0
 
-      local_G0 = 0.0_dp
+      UV_background_G0 = rtz_UV_background_G0
+      advected_G0 = 0.0_dp
 
       ! END RTZ variable initialization
 
@@ -1021,7 +1033,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_advect) then
          do igroup=1,nGroups
             if (group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0) then 
-               local_G0 = local_G0 + (dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
+               advected_G0 = advected_G0 + (dNp(igroup) * rt_c_cgs(ilevel) * group_egy(igroup) * eV2erg / (1.6d-3))
             end if
          end do  
       end if
@@ -1038,7 +1050,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
-         call compute_dust_rad_rates(dust_helper,local_G0,Tk,ne,&
+         call compute_dust_rad_rates(dust_helper,advected_G0+UV_background_G0,Tk,ne,&
                                     &dustAbs,dustSc,dustRp,&
                                     &pahAbs,pahSc,pahRp)
          if (rtz_equilibrium_test.gt.0) then
@@ -1296,7 +1308,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_start)
       end if
-      call compute_dust_precool(dust_helper, local_G0, TK, ne, nElement_dep, &
+      call compute_dust_precool(dust_helper, advected_G0+UV_background_G0, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
                                  ,dNp)
@@ -1327,17 +1339,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
          !HKnote: we call prime first so what we can store the correct cooling rates
          saved_cooling_rates = 0.d0
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, local_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, local_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, local_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
@@ -1506,10 +1518,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_Tk = TK
       dust_helper%local_nH = nH(icell)
       dust_helper%local_rho = rho
-      dust_helper%local_dx = dx_SS_H2(icell)
-      dust_helper%local_vol = (dx_SS_H2(icell)*dx_SS_H2(icell)) * dx_SS_H2(icell)
+      dust_helper%local_dx = dx_loc*scale_l ! dx_SS_H2(icell)
+      dust_helper%local_vol = (dx_loc*scale_l)**3 ! (dx_SS_H2(icell)*dx_SS_H2(icell)) * dx_SS_H2(icell)
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
-      dust_helper%local_G0 = local_G0
+      dust_helper%local_G0 = advected_G0+UV_background_G0
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
       if (ndust_processes .gt. 0 .or. npah_processes .gt. 0) then
@@ -1657,15 +1669,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
          if (H2ondust) then
             alpha_H2_loc = alpha_H2(TK, 0d0, xe, H2_cosmic_ray_ionization_rate, &
-                                 local_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
+                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
             alpha_H2_loc = alpha_H2_loc + dust_helper%H2_formation_rate * dXion(1,1) * nElement_dep(1)
          else
             alpha_H2_loc = alpha_H2(TK, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionization_rate, &
-                                 local_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1))
+                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1))
          end if
 #else 
          alpha_H2_loc = alpha_H2(TK, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionization_rate, &
-                                 local_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
+                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
 #endif
          cr_H2 = cr_H2 + alpha_H2_loc
 
@@ -1776,10 +1788,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
 
             !! Creation !!
-            cr_CO = alpha_CO(local_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
+            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
 
             !! Destruction !!
-            de_CO = beta_CO(local_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
+            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
             if (de_CO * ddt(icell) < 1.d-6) then

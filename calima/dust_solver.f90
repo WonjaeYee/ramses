@@ -391,8 +391,8 @@ module rk4_mod
             if (allocated(y_dust_temp_cache)) deallocate(y_dust_temp_cache)
             if (allocated(error_dust_cache)) deallocate(error_dust_cache)
             if (allocated(y_dust_stage_cache)) deallocate(y_dust_stage_cache)
-            allocate(k1_dust_cache(ndust_total, 2), k2_dust_cache(ndust_total, 2), &
-                     k3_dust_cache(ndust_total, 2), k4_dust_cache(ndust_total, 2))
+            allocate(k1_dust_cache(ndust_total, 3), k2_dust_cache(ndust_total, 3), &
+                     k3_dust_cache(ndust_total, 3), k4_dust_cache(ndust_total, 3))
             allocate(y_dust_temp_cache(ndust_total))
             allocate(error_dust_cache(ndust_total))
             allocate(y_dust_stage_cache(ndust_total))
@@ -460,6 +460,7 @@ module rk4_mod
                 call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,write_cache=.true.)
             end if
         end if
+        k1_dust(:,3) = k1_dust(:,1)-k1_dust(:,2)
       
         ! 2. Use the provided kmax to compute a guess of the neccessary
         ! time step size for stability, but never increase the time step 
@@ -471,33 +472,38 @@ module rk4_mod
         end if
         if (present(debug_flag)) then
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k1_dust(:,1)-k1_dust(:,2))
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:,3)
             call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
+            k2_dust(:,3) = k2_dust(:,1)-k2_dust(:,2)
 
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k2_dust(:,1)-k2_dust(:,2))
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:,3)
             call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
+            k3_dust(:,3) = k3_dust(:,1)-k3_dust(:,2)
 
             y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + h_local * (k3_dust(:,1)-k3_dust(:,2))
+            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:,3)
             call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k1_dust(:,1)-k1_dust(:,2))
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:,3)
             call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,write_cache=.false.)
+            k2_dust(:,3) = k2_dust(:,1)-k2_dust(:,2)
 
             y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * (k2_dust(:,1)-k2_dust(:,2))
+            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:,3)
             call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,write_cache=.false.)
+            k3_dust(:,3) = k3_dust(:,1)-k3_dust(:,2)
 
             y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + h_local * (k3_dust(:,1)-k3_dust(:,2))
+            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:,3)
             call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,write_cache=.false.)
         end if
+        k4_dust(:,3) = k4_dust(:,1) - k4_dust(:,2)
 
         ! 3. Combine the stages to compute the new solution
         y_gas_new(:,:) = y_gas(:,:) + (h_local * SIXTH) * (k1_gas(:,:) + TWO*k2_gas(:,:) + TWO*k3_gas(:,:) + k4_gas(:,:))
-        y_dust_new(:) = y_dust(:) + (h_local * SIXTH) * ((k1_dust(:,1)-k1_dust(:,2)) + TWO*(k2_dust(:,1)-k2_dust(:,2)) + TWO*(k3_dust(:,1)-k3_dust(:,2)) + (k4_dust(:,1)-k4_dust(:,2)))
+        y_dust_new(:) = y_dust(:) + (h_local * SIXTH) * (k1_dust(:,3) + TWO*k2_dust(:,3) + TWO*k3_dust(:,3) + k4_dust(:,3))
 
         ! 4. Update the time step size for the next step (this will be used by the adaptive RK4 wrapper)
         h = h_local
@@ -853,9 +859,9 @@ module rk54_mod
                                                      k4_dust_cache, k5_dust_cache, k6_dust_cache)
             if (allocated(y_dust_temp_cache)) deallocate(y_dust_temp_cache)
             if (allocated(error_dust_cache)) deallocate(error_dust_cache)
-            allocate(k1_dust_cache(ndust_total, 2), k2_dust_cache(ndust_total, 2), &
-                     k3_dust_cache(ndust_total, 2), k4_dust_cache(ndust_total, 2), &
-                     k5_dust_cache(ndust_total, 2), k6_dust_cache(ndust_total, 2))
+            allocate(k1_dust_cache(ndust_total, 3), k2_dust_cache(ndust_total, 3), &
+                     k3_dust_cache(ndust_total, 3), k4_dust_cache(ndust_total, 3), &
+                     k5_dust_cache(ndust_total, 3), k6_dust_cache(ndust_total, 3))
             allocate(y_dust_temp_cache(ndust_total))
             allocate(error_dust_cache(ndust_total))
         end if
@@ -971,6 +977,7 @@ module rk54_mod
                 call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,write_cache=.true.)
             end if
         end if
+        k1_dust(:,3) = k1_dust(:,1)-k1_dust(:,2)
 
         if (firstcall .and. .not. (present(step_ok_present) .and. step_ok_present)) then
             h_local = min(1d0 / kmax, h)
@@ -980,57 +987,62 @@ module rk54_mod
 
         ! Stage 2
         y_gas_temp = y_gas + h_local * a21 * k1_gas
-        y_dust_temp = y_dust + h_local * a21 * (k1_dust(:, 1) - k1_dust(:, 2))
+        y_dust_temp = y_dust + h_local * a21 * k1_dust(:, 3)
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             call rhs(dust_info,y_gas_temp,y_dust_temp,k2_gas,k2_dust,write_cache=.false.)
         end if
+        k2_dust(:,3) = k2_dust(:,1)-k2_dust(:,2)
 
         ! Stage 3
         y_gas_temp = y_gas + h_local * (a31 * k1_gas + a32 * k2_gas)
-        y_dust_temp = y_dust + h_local * (a31 * (k1_dust(:,1)-k1_dust(:,2)) + a32 * (k2_dust(:,1)-k2_dust(:,2)))
+        y_dust_temp = y_dust + h_local * (a31 * k1_dust(:,3) + a32 * k2_dust(:,3))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             call rhs(dust_info,y_gas_temp,y_dust_temp,k3_gas,k3_dust,write_cache=.false.)
         end if
+        k3_dust(:,3) = k3_dust(:,1)-k3_dust(:,2)
 
         ! Stage 4
         y_gas_temp = y_gas + h_local * (a41 * k1_gas + a42 * k2_gas + a43 * k3_gas)
-        y_dust_temp = y_dust + h_local * (a41 * (k1_dust(:,1)-k1_dust(:,2)) + a42 * (k2_dust(:,1)-k2_dust(:,2)) + a43 * (k3_dust(:,1)-k3_dust(:,2)))
+        y_dust_temp = y_dust + h_local * (a41 * k1_dust(:,3) + a42 * k2_dust(:,3) + a43 * k3_dust(:,3))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             call rhs(dust_info,y_gas_temp,y_dust_temp,k4_gas,k4_dust,write_cache=.false.)
         end if
+        k4_dust(:,3) = k4_dust(:,1)-k4_dust(:,2)
 
         ! Stage 5
         y_gas_temp = y_gas + h_local * (a51 * k1_gas + a52 * k2_gas + a53 * k3_gas + a54 * k4_gas)
-        y_dust_temp = y_dust + h_local * (a51 * (k1_dust(:,1)-k1_dust(:,2)) + a52 * (k2_dust(:,1)-k2_dust(:,2)) + a53 * (k3_dust(:,1)-k3_dust(:,2)) + a54 * (k4_dust(:,1)-k4_dust(:,2)))
+        y_dust_temp = y_dust + h_local * (a51 * k1_dust(:,3) + a52 * k2_dust(:,3) + a53 * k3_dust(:,3) + a54 * k4_dust(:,3))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             call rhs(dust_info,y_gas_temp,y_dust_temp,k5_gas,k5_dust,write_cache=.false.)
         end if
+        k5_dust(:,3) = k5_dust(:,1)-k5_dust(:,2)
 
         ! Stage 6
         y_gas_temp = y_gas + h_local * (a61 * k1_gas + a62 * k2_gas + a63 * k3_gas + a64 * k4_gas + a65 * k5_gas)
-        y_dust_temp = y_dust + h_local * (a61 * (k1_dust(:,1)-k1_dust(:,2)) + a62 * (k2_dust(:,1)-k2_dust(:,2)) + a63 * (k3_dust(:,1)-k3_dust(:,2)) + a64 * (k4_dust(:,1)-k4_dust(:,2)) + a65 * (k5_dust(:,1)-k5_dust(:,2)))
+        y_dust_temp = y_dust + h_local * (a61 * k1_dust(:,3) + a62 * k2_dust(:,3) + a63 * k3_dust(:,3) + a64 * k4_dust(:,3) + a65 * k5_dust(:,3))
         if (present(debug_flag)) then
             call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust,debug_flag=debug_flag,write_cache=.false.)
         else
             call rhs(dust_info,y_gas_temp,y_dust_temp,k6_gas,k6_dust,write_cache=.false.)
         end if
+        k6_dust(:,3) = k6_dust(:,1)-k6_dust(:,2)
 
         ! Compute 5th-order solutions
         y_gas_new = y_gas + h_local * (b1 * k1_gas + b3 * k3_gas + b4 * k4_gas + b6 * k6_gas)
-        y_dust_new = y_dust + h_local * (b1 * (k1_dust(:,1)-k1_dust(:,2)) + b3 * (k3_dust(:,1)-k3_dust(:,2)) + b4 * (k4_dust(:,1)-k4_dust(:,2)) + b6 * (k6_dust(:,1)-k6_dust(:,2)))
+        y_dust_new = y_dust + h_local * (b1 * k1_dust(:,3) + b3 * k3_dust(:,3) + b4 * k4_dust(:,3) + b6 * k6_dust(:,3))
 
         ! Error estimate
         error_gas = abs(h_local * (e1 * k1_gas + e3 * k3_gas + e4 * k4_gas + e5 * k5_gas + e6 * k6_gas)) / &
                     max(abs(y_gas), 1.0d-40)
-        error_dust = abs(h_local * (e1 * (k1_dust(:,1)-k1_dust(:,2)) + e3 * (k3_dust(:,1)-k3_dust(:,2)) + e4 * (k4_dust(:,1)-k4_dust(:,2)) + e5 * (k5_dust(:,1)-k5_dust(:,2)) + e6 * (k6_dust(:,1)-k6_dust(:,2)))) / &
+        error_dust = abs(h_local * (e1 * k1_dust(:,3) + e3 * k3_dust(:,3) + e4 * k4_dust(:,3) + e5 * k5_dust(:,3) + e6 * k6_dust(:,3))) / &
                      max(abs(y_dust), 1.0d-40)
 
         max_error = maxval(error_gas)
