@@ -57,7 +57,9 @@ SUBROUTINE sink_RT_feedback(ilevel, dt)
   integer,dimension(1:nvector),save:: ind_grid, ind_part, ind_grid_part
   !this array gathers the ionising flux by looping over stellar object
   !note that this array is local and therefore is not declared in pm_common
-  real(dp),dimension(1:nsink,1:ngroups):: sink_ioni_flux
+  ! real(dp),dimension(1:nsink,1:ngroups):: sink_ioni_flux
+  ! [WJ, 2026.08.20]
+  ! to print out photon rates in log, move this array to pm_commons
   logical::ok_part=.false.
 !-------------------------------------------------------------------------
   if(.not.rt_advect)RETURN
@@ -66,7 +68,7 @@ SUBROUTINE sink_RT_feedback(ilevel, dt)
   if(verbose)write(*,111)ilevel
 
   ! Start by looping over the stellar objects and gather their fluxes
-  call gather_ioni_flux(dt,sink_ioni_flux,ilevel)
+  call gather_ioni_flux(dt,ilevel)
 
   ! Loop over cpus
   do icpu=1,ncpu
@@ -122,7 +124,7 @@ SUBROUTINE sink_RT_feedback(ilevel, dt)
               endif
               if(ip == nvector)then
                  call sink_RT_vsweep_stellar( &
-                              ind_grid,ind_part,ind_grid_part,ig,ip,dt,ilevel,sink_ioni_flux)
+                              ind_grid,ind_part,ind_grid_part,ig,ip,dt,ilevel)
                  ip = 0
                  ig = 0
               end if
@@ -135,7 +137,7 @@ SUBROUTINE sink_RT_feedback(ilevel, dt)
      ! End loop over grids
      if(ip > 0) then
          call sink_RT_vsweep_stellar( &
-                     ind_grid,ind_part,ind_grid_part,ig,ip,dt,ilevel,sink_ioni_flux)
+                     ind_grid,ind_part,ind_grid_part,ig,ip,dt,ilevel)
      endif
   end do
   ! End loop over cpus
@@ -147,7 +149,7 @@ END SUBROUTINE sink_RT_feedback
 !*************************************************************************
 !*************************************************************************
 !*************************************************************************
-SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
+SUBROUTINE gather_ioni_flux(dt,ilevel)
 ! This routine is called by sink_RT_feedback if stellar objects are used
 ! It gathers the ionising flux on each sinks which is used to perform ionising radiation feedback
 
@@ -165,21 +167,22 @@ SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
   implicit none
 
   real(dp),intent(in)::dt
-  real(dp),dimension(1:nsink,1:ngroups),intent(out):: sink_ioni_flux !this arrays gathers the ionising flux by looping over stellar object
+  ! real(dp),dimension(1:nsink,1:ngroups),intent(out):: sink_ioni_flux !this arrays gathers the ionising flux by looping over stellar object
   integer:: istellar,isink,ig
   real(dp)::M_stellar,Flux_stellar
   real(dp),dimension(1:ngroups)::nphotons
   real(dp)::star_effective_temp, star_met, star_met_fe
   real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v, scale_msun
 #ifdef INDIVIDUAL_SINK_STARS
-  real(dp),dimension(1:23)::mist_prop
+  real(dp),dimension(1:20)::mist_prop
   real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max, dx, scale, dx_min, factG
   real(sp)::t_pre,t_now
   integer::nx_loc, ilevel
 #else
-   integer::ilevel
+  integer::ilevel
 #endif
+  integer::ibin
 
   call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
   scale_msun = scale_d * (scale_l**3) / M_sun
@@ -233,11 +236,9 @@ SUBROUTINE gather_ioni_flux(dt,sink_ioni_flux,ilevel)
            t_now = real((t-main_sequence_time(isink))*scale_t/(365.25*24*60*60), sp)
            mist_prop = get_stellar_properties(real(star_met_fe, sp), real(star_alpha_over_Fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_msun, sp), t_now, t_pre)
            ! mist_prop is purely counts -> divide with dt to get flux
-           ! sink_ioni_flux(isink,1:ngroups) = mist_prop(23:16:-1) / dt * 1d36
-           ! TODO: mist module ... short to long wavelength, high to low energy
-           sink_ioni_flux(isink,1:ngroups) = mist_prop(13:20) / dt * 1d36
-           ! write(*,*) isink, sink_ioni_flux(isink,:) / scale_t
-
+           do ibin=1,ngroups
+              sink_ioni_flux(isink,ibin) = mist_prop(12+ibin) / dt * 1d36
+           end do
 #ifdef ONE_EIGHTH_TEST
            ! temporarily divide by 8 for reflective test
            sink_ioni_flux(isink,:) = sink_ioni_flux(isink,:) / 8.0
@@ -290,7 +291,7 @@ END SUBROUTINE gather_ioni_flux
 !*************************************************************************
 !*************************************************************************
 !*************************************************************************
-SUBROUTINE sink_RT_vsweep_stellar(ind_grid,ind_part,ind_grid_part,ng,np,dt,ilevel,sink_ioni_flux)
+SUBROUTINE sink_RT_vsweep_stellar(ind_grid,ind_part,ind_grid_part,ng,np,dt,ilevel)
 ! This routine is called by subroutine sink_rt_feedback.
 ! Each sink and cloud  particle dumps a number of photons into the nearest grid cell
 ! using array rtunew.
@@ -336,7 +337,7 @@ SUBROUTINE sink_RT_vsweep_stellar(ind_grid,ind_part,ind_grid_part,ng,np,dt,ileve
   ! units and temporary quantities
   real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v,scale_Np,scale_Fp
   !this arrays gather the ionising flux by looping over stellar object
-  real(dp),dimension(1:nsink,1:ngroups):: sink_ioni_flux
+  ! real(dp),dimension(1:nsink,1:ngroups):: sink_ioni_flux
 
 !-------------------------------------------------------------------------
   ! Conversion factor from user units to cgs units

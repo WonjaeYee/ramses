@@ -644,7 +644,7 @@ subroutine grow_sink(ilevel,on_creation)
   integer::ig,ip,npart1,npart2,icpu,isink,lev
   integer,dimension(1:nvector)::ind_grid,ind_part,ind_grid_part
 #ifdef INDIVIDUAL_SINK_STARS
-  real(dp),dimension(1:23)::mist_prop
+  real(dp),dimension(1:20)::mist_prop
   real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max, dx, scale, dx_min
   real(sp)::t_pre,t_now
@@ -1050,7 +1050,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp):: d_sink_loc
 
 #ifdef INDIVIDUAL_SINK_STARS
-  real(dp),dimension(1:23)::mist_prop
+  real(dp),dimension(1:20)::mist_prop
   real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max
   real(sp)::t_pre,t_now
@@ -1810,6 +1810,11 @@ subroutine print_sink_properties(dMEDoverdt,dMEDoverdt_smbh,rho_inf,r2)
   real(dp)::l_abs,l_max,factG,scale,dx_min
   real(dp),dimension(1:ndim)::skip_loc
   real(dp)::tproper_high_z
+#ifdef RT
+  real(dp)::scale_Np, scale_Fp
+
+  call rt_units(scale_Np, scale_Fp)
+#endif
 
   ! Gravitational constant
   factG=1d0
@@ -1890,9 +1895,9 @@ subroutine print_sink_properties(dMEDoverdt,dMEDoverdt_smbh,rho_inf,r2)
            write(*,*)'simulation time [yr] = ',t*scale_t/yr2sec
         end if
 #ifdef INDIVIDUAL_SINK_STARS
-        write(*,'(" ==============================================================================================================================================================")')
-        write(*,'("   Id     M[Msol]      M_F[Msol]         x             y             z         vx[km/s]      vy[km/s]      vz[km/s]     spin/spmax    Mdot[Msol/y]   age[Myr]")')
-        write(*,'(" ==============================================================================================================================================================")')
+        write(*,'(" ===-====-=============-=============-=============-=============-=============-=============-=============-=============-=============-=============-=============-=============-=============-=============-")')
+        write(*,'("   Id  Tag       M[Msol]     M_F[Msol]             x             y             z      vx[km/s]      vy[km/s]      vz[km/s]    spin/spmax  Mdot[Msol/y]      age[Myr]   rho [g/cm3]  photons (sub-ion|ion)[s-1]")')
+        write(*,'(" =============================================================================================================================================================================================================")')
 #else
         write(*,'(" ==============================================================================================================================================")')
         write(*,'("   Id     M[Msol]          x             y             z         vx[km/s]      vy[km/s]      vz[km/s]     spin/spmax    Mdot[Msol/y]   age[Myr]")')
@@ -1903,24 +1908,32 @@ subroutine print_sink_properties(dMEDoverdt,dMEDoverdt_smbh,rho_inf,r2)
            isink=idsink_sort(i)
            l_abs=(lsink(isink,1)**2+lsink(isink,2)**2+lsink(isink,3)**2)**0.5d0
            l_max=msink(isink)*sqrt(factG*msink(isink)/(dble(ir_cloud)*dx_min))*(dble(ir_cloud)*dx_min)
-           write(*,'(I5,11(2X,1PE12.5))')&
-                & idsink(isink),&
-                & msink(isink)*scale_m/M_sun,&
 #ifdef INDIVIDUAL_SINK_STARS
+           write(*,'(I5, I5, *(X,1PE13.5E3))')&
+                & idsink(isink),&
+                & evolution_flag(isink),&
+                & msink(isink)*scale_m/M_sun,&
                 & msink_actual(isink)*scale_m/M_sun, &
-#endif
                 & xsink(isink,1:ndim),&
                 & vsink(isink,1:ndim)*scale_v/1d5,&
                 & l_abs/l_max,&
                 & dMsink_overdt(isink)*scale_m/scale_t/(M_sun/yr2sec),&
-#ifdef INDIVIDUAL_SINK_STARS
-                & getStarAgeMyr(tsink(isink))
+                & getStarAgeMyr(tsink(isink)),&
+                & rho_gas(isink)*scale_d,&
+                & [sum(sink_ioni_flux(isink,1:4)), sum(sink_ioni_flux(isink,5:8))] * scale_Np/scale_t
 #else
+           write(*,'(I5,10(2X,1PE12.5))')&
+                & idsink(isink),&
+                & msink(isink)*scale_m/M_sun,&
+                & xsink(isink,1:ndim),&
+                & vsink(isink,1:ndim)*scale_v/1d5,&
+                & l_abs/l_max,&
+                & dMsink_overdt(isink)*scale_m/scale_t/(M_sun/yr2sec),&
                 & ((t-tsink(isink))*scale_t/yr2sec)/1e6
 #endif
         end do
 #ifdef INDIVIDUAL_SINK_STARS
-        write(*,'(" ==============================================================================================================================================================")')
+        write(*,'(" =============================================================================================================================================================================================================")')
 #else
         write(*,'(" ==============================================================================================================================================")')
 #endif
