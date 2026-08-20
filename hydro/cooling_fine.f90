@@ -699,15 +699,15 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         write(*,*) " nElement and xion:"
         do ii=1,n_elements
            if (elements(ii)%atomic_number > 0) then
-              write(*,"(A3, X, E22.15)") elements(ii)%symbol, nElement(ii, 1)
-              write(*,"(A3, *(X, E22.15))") "", xion(ii, 1:elements(ii)%n_ions, 1)
+              write(*,"(A3, X, 1PE22.15)") elements(ii)%symbol, nElement(ii, 1)
+              write(*,"(A3, *(X, 1PE22.15))") "", xion(ii, 1:elements(ii)%n_ions, 1)
            end if
         end do
         write(*,*) "      nCO:", nCO(1)
         write(*,*) "Np and Fp:"
         do ii=1,nGroups
-           write(*,"(I3, X, E22.15)") ii, Np(ii, 1)
-           write(*,"(A3, 3(X, E22.15))") '', Fp(1:ndim, ii, 1)
+           write(*,"(I3, X, 1PE22.15)") ii, Np(ii, 1)
+           write(*,"(A3, 3(X, 1PE22.15))") '', Fp(1:ndim, ii, 1)
         end do
         write(*,*) "    p_gas:", p_gas
         write(*,*) " dx_SS_H2:", dx_SS_H2

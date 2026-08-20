@@ -585,7 +585,7 @@ end module rk4_mod
 module anninos_mod
     use amr_parameters, only: dp
     use dustbin_types, only: DustChemistryInfo
-    use dust_commons, only: errmax, dustbins_props, pahbins_props
+    use dust_commons, only: errmax, dustbins_props, pahbins_props, y_min
     use ode_interface_mod, only: rhs_interface
 
     implicit none
@@ -679,6 +679,7 @@ module anninos_mod
         dydt_gas => dydt_gas_cache; dydt_dust => dydt_dust_cache
         error_gas => error_gas_cache; error_dust => error_dust_cache
 
+        accepted = .true.
         break = .false.
 
         ! 1. Evaluate RHS
@@ -715,7 +716,6 @@ module anninos_mod
                 y_dust_new(j) = yj
             else if (abs(fj) * h < 1.0d-2 * yj) then
                 y_dust_new(j) = yj + fj * h
-                ! write(*,*) 'is this called ever?'
             else
                 ! Decompose derivative into creation Cj and destruction Dj
                 ! if (fj >= 0.0_dp) then
@@ -727,7 +727,7 @@ module anninos_mod
                 ! end if
                 ! Curro / Wonjae
                 Cj = dydt_dust(j, 1)
-                Dj = dydt_dust(j, 2) / max(yj, 1.0d-30)
+                Dj = dydt_dust(j, 2) / yj ! applying floor below should ensure this is non-zero
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
@@ -736,19 +736,16 @@ module anninos_mod
                     y_eq = Cj / Dj
                     y_dust_new(j) = y_eq + (yj - y_eq) * exp(-Dj * h)
                 end if
-                ! Curro / Wonjae
-                ! y_dust_new(j) = yj + Cj*h - yj*Dj*h
             end if
 
             ! Enforce non-negativity
-            ! y_dust_new(j) = max(y_dust_new(j), 0.0_dp)
-            ! Curro / Wonjae
-            ! if (y_dust_new(j) < 0.0_dp) then
-            !     ! at this moment, this problem is assumed to happen
-            !     ! only between PAH size bins
-            !     ! subtract from small positive number
-            !     temp_delta_PAH = 1.0d-30 - y_dust_new(j)
-            ! end if
+            ! a. if the trial solution goes negative, reject
+            if (y_dust_new(j) < 0.0_dp) then
+                accepted = .false.
+            end if
+            ! b. if the trial solution is positive but smaller than floor, put on the floor
+            ! this should be here to keep symmetry between gas and dust/PAH
+            y_dust_new(j) = max(y_dust_new(j), y_min)
 
             ! 3. Symmetrically update gas phase elements to conserve mass
             delta_y_dust = y_dust_new(j) - yj
@@ -770,24 +767,17 @@ module anninos_mod
         end do
 
         ! Check for negative values in the new state
-        if (any(y_gas_new < 0.0_dp) .or. any(y_dust_new < 0.0_dp)) then
+        if (any(y_gas_new < 0.0_dp) .or. .not.accepted) then
             accepted = .false.
             h_new = h * 0.5_dp
-
-#ifdef RTZ_ONE_CELL_TEST
-            ! write(*,*) "negative y_gas_new or y_dust_new"
-            count_error = count_error+1
-            ! if (count_error>10) call clean_stop
-#endif
-
         else
             if (present(step_ok_present) .and. step_ok_present) then
                 accepted = .true.
                 h_new = h
             else
                 ! Compute relative error for step control (10% rule)
-                error_gas(:,:) = abs(y_gas_new(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), 1.0d-40)
-                error_dust(:) = abs(y_dust_new(:) - y_dust(:)) / max(abs(y_dust(:)), 1.0d-40)
+                error_gas(:,:) = abs(y_gas_new(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), y_min)
+                error_dust(:) = abs(y_dust_new(:) - y_dust(:)) / max(abs(y_dust(:)), y_min)
                 max_error = maxval(error_gas(:,:))
                 max_error = max(max_error, maxval(error_dust(:)))
 

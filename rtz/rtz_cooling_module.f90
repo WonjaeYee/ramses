@@ -1531,9 +1531,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          
 #ifdef RTZ_ONE_CELL_TEST
          write(*,"(A14)") 'before update:'
-         write(*,"(A11, *(X, E22.15))") 'rho_dust:', dust_helper%rho_dust
-         write(*,"(A11, *(X, E22.15))") ' rho_pah:', dust_helper%rho_pah
-         write(*,"(A11, *(X, E22.15))") 'n(C):', nElement_dep(6)
+         write(*,"(A11, *(X, 1PE22.15))") 'rho_dust:', dust_helper%rho_dust
+         write(*,"(A11, *(X, 1PE22.15))") ' rho_pah:', dust_helper%rho_pah
+         write(*,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
 #endif
 
          call compute_dust_update(dust_helper,nElement_dep,dXion,ddt(icell)&
@@ -1544,9 +1544,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
 #ifdef RTZ_ONE_CELL_TEST
          write(*,"(A14)") ' after update:'
-         write(*,"(A11, *(X, E22.15))") 'rho_dust:', dust_helper%rho_dust
-         write(*,"(A11, *(X, E22.15))") ' rho_pah:', dust_helper%rho_pah
-         write(*,"(A11, *(X, E22.15))") 'n(C):', nElement_dep(6)
+         write(*,"(A11, *(X, 1PE22.15))") 'rho_dust:', dust_helper%rho_dust
+         write(*,"(A11, *(X, 1PE22.15))") ' rho_pah:', dust_helper%rho_pah
+         write(*,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
 #endif
 
          if (rtz_equilibrium_test.gt.0) then
@@ -1562,8 +1562,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
 #ifdef RTZ_ONE_CELL_TEST
       write(*,*) "from dust part,"
-      write(*,"(A11, X, E22.15)") "fracMax:", fracMax
-      write(*,"(A11, X, E22.15)") "dt_rec:", 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
+      write(*,"(A11, X, 1PE22.15)") "fracMax:", fracMax
+      write(*,"(A11, X, 1PE22.15)") "dt_rec:", 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
 #endif
 
       if ((.not. dust_step_ok).or.(dUU>1.0d0)) then
