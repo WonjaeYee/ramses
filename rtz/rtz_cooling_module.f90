@@ -817,7 +817,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
-                             &ndust_processes,npah_processes
+                             &ndust_processes,npah_processes,dustbins_props
       use dust_interface
 #endif
       implicit none
@@ -851,6 +851,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer:: i_current_Ion
       real(dp):: Zsolar, total_G0, advected_G0
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
+      real(dp):: tau_dust_LW
+      integer :: idust_sh, igroup_lw
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -949,10 +951,34 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%csr_pah = sigcr_pah
 #endif
 
-      f_shd = 1.d0
-      f_shd_CO = 1.d0
+      f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0
       if (isH2_rtz) then
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
+#ifdef CALIMA
+         ! Per-bin LW optical depth using evolved grain sizes and compositions.
+         ! group_csa_dust(idust,igroup) [cm²/grain] is the photon-weighted
+         ! absorption cross-section per grain over the group energy band.
+         do idust_sh = 1, ndust
+            if (dustbins_props(idust_sh)%mgrain > 0d0) then
+               do igroup_lw = 1, nGroups
+                  if (isLW(igroup_lw) .eq. 1) then
+                     tau_dust_LW = tau_dust_LW + group_csa_dust(idust_sh, igroup_lw) &
+                                 * (dust_helper%rho_dust(idust_sh) / dustbins_props(idust_sh)%mgrain) &
+                                 * dx_SS_H2
+                  end if
+               end do
+            end if
+         end do
+         ! If no LW groups are defined, fall back to the fixed cross-section formula.
+         if (tau_dust_LW .eq. 0d0) then
+            tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
+                        * (nElement_dep(1)*dXion(1,1) + nElement_dep(1)*dXion(1,3)) * dx_SS_H2
+         end if
+#else
+         ! Non-CALIMA: fixed MW cross-section scaled by evolved dust-to-gas ratio.
+         tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
+                     * (nElement_dep(1)*dXion(1,1) + nElement_dep(1)*dXion(1,3)) * dx_SS_H2
+#endif
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(tau_dust_LW)
       end if
       if (isCO_rtz) then
          f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
@@ -1368,7 +1394,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_dx = dx_SS_H2
       dust_helper%local_vol = (dx_SS_H2*dx_SS_H2) * dx_SS_H2
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
-      dust_helper%local_G0 = total_G0
+      ! Apply dust self-shielding so CALIMA sees the within-cell-attenuated field.
+      ! tau_dust_LW is computed above from per-bin grain properties (or the MW fallback).
+      dust_helper%local_G0 = total_G0 * safe_exp(-tau_dust_LW)
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
       if (ndust_processes .gt. 0 .or. npah_processes .gt. 0) then
@@ -1555,7 +1583,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             cr_CO = alpha_CO(total_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, x_OI, dXion(1,1)*nElement_dep(1))
 
             !! Destruction !!
-            de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate)
+            de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate) * f_shd_CO
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
             if (de_CO * ddt(icell) < 1.d-6) then

@@ -281,19 +281,15 @@ FUNCTION beta_CO(G0, xi_cr_H2) result(rate)
 
 END FUNCTION beta_CO
 
-FUNCTION comp_Sd(nHI, nH2, dx_SS, Z) result(ss_factor)
-  ! Returns the self shielding factor for dust
-  ! see section 2.2 http://iopscience.iop.org/0004-637X/697/1/55/pdf/apj_697_1_55.pdf
+FUNCTION comp_Sd(tau_dust) result(ss_factor)
+  ! Returns the dust LW shielding factor given a pre-computed optical depth.
+  ! The caller is responsible for computing tau_dust from either the per-bin
+  ! CALIMA grain opacities (recommended with #CALIMA) or the fixed MW
+  ! cross-section formula:  tau = 2.34e-21 * Z * (N_HI + 2*N_H2).
   implicit none
-  real(dp), intent(in)::nHI, nH2, dx_SS, Z
-  real(dp):: ss_factor
-  real(dp):: Sdeff, cNHI, cNH2
-  ! TODO: This needs to be updated to use the actual dust properties
-  Sdeff = 2.34d-21    ! dust cross section cm^2 ! Updated for bare-gr-s
-  cNHI = nHI*dx_SS    ! HI column density
-  cNH2 = nH2*dx_SS    ! H2 column density
-
-  ss_factor = safe_exp(-Sdeff*Z*(cNHI + (2.d0*cNH2)))
+  real(dp), intent(in) :: tau_dust
+  real(dp)             :: ss_factor
+  ss_factor = safe_exp(-tau_dust)
 END FUNCTION comp_Sd
 
 FUNCTION comp_SH2(nH2, dx_SS) result(ss_factor)
