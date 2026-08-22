@@ -13,7 +13,7 @@ module use_mist
    private
    public read_mist_parameters, load_sample,&
       get_stellar_properties, get_stellar_lifetime,&
-      i_mass, i_rmom, i_chem, i_phot
+      i_mass, i_rmom, i_chem, i_phot, photon_scale
 
    integer,parameter::rp=kind(1.0e0)
    !! Precision number to use in this module
@@ -60,6 +60,10 @@ module use_mist
    !! beginning index of chemical ejecta in array `prop`.
    integer::i_phot
    !! beginning index of photon ejecta in array `prop`.
+
+   real(dp)::photon_scale
+   !! scale of photon numbers.
+   !! to get the actual number of photons, `prop` should be multiplied with this factor
 
    ! integer,allocatable,dimension(:,:)::idx_table
    !! Table to store parameter indices
@@ -156,6 +160,8 @@ subroutine load_sample
       i_rmom = prop_nums(1) + 1
       i_chem = prop_nums(1) + 2
       i_phot = prop_nums(1) + prop_nums(2) + 1
+
+      photon_scale = 10.0**prop_rad_scale
 
       ! temporarily set to print always
       ! if (verbose) then
