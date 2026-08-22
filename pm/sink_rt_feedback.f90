@@ -161,7 +161,7 @@ SUBROUTINE gather_ioni_flux(dt,ilevel)
   ! use SED_module, only: interpolate_popII_table, interpolate_popIII_table, get_popIII_temp_from_mass
 #ifdef INDIVIDUAL_SINK_STARS
   use SED_module, only: interpolate_popIII_table, get_popIII_temp_from_mass
-  use use_mist, only:get_stellar_properties
+  use use_mist, only:get_stellar_properties, i_phot
 #endif
   use constants, only: M_sun, twopi
   implicit none
@@ -237,7 +237,7 @@ SUBROUTINE gather_ioni_flux(dt,ilevel)
            mist_prop = get_stellar_properties(real(star_met_fe, sp), real(star_alpha_over_Fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_msun, sp), t_now, t_pre)
            ! mist_prop is purely counts -> divide with dt to get flux
            do ibin=1,ngroups
-              sink_ioni_flux(isink,ibin) = mist_prop(12+ibin) / dt * 1d36
+              sink_ioni_flux(isink,ibin) = mist_prop(i_phot-1+ibin) / dt * 1d36
            end do
 #ifdef ONE_EIGHTH_TEST
            ! temporarily divide by 8 for reflective test

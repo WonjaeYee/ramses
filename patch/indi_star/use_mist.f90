@@ -11,7 +11,9 @@ module use_mist
    implicit none
 
    private
-   public read_mist_parameters, load_sample, get_stellar_properties, get_stellar_lifetime
+   public read_mist_parameters, load_sample,&
+      get_stellar_properties, get_stellar_lifetime,&
+      i_mass, i_rmom, i_chem, i_phot
 
    integer,parameter::rp=kind(1.0e0)
    !! Precision number to use in this module
@@ -48,9 +50,16 @@ module use_mist
    !! Order of axes: (properties, age, mass, vvc, afe, feh)
 
    integer::num_t
-   ! Number of points on the age axis.
-   integer::num_i,num_c
-   ! Number of instantaneous properties and chemical ejecta.
+   !! Number of points along the age axis.
+
+   integer::i_mass
+   !! index of stellar mass in array `prop`.
+   integer::i_rmom
+   !! index of radial momentum in array `prop`.
+   integer::i_chem
+   !! beginning index of chemical ejecta in array `prop`.
+   integer::i_phot
+   !! beginning index of photon ejecta in array `prop`.
 
    ! integer,allocatable,dimension(:,:)::idx_table
    !! Table to store parameter indices
@@ -142,8 +151,11 @@ subroutine load_sample
       close(unit_open)
 
       num_t = sample_shape(2)
-      num_i = prop_nums(1) ! instantaneous properties
-      num_c = prop_nums(2) ! chemical ejecta
+
+      i_mass = prop_nums(1)
+      i_rmom = prop_nums(1) + 1
+      i_chem = prop_nums(1) + 2
+      i_phot = prop_nums(1) + prop_nums(2) + 1
 
       ! temporarily set to print always
       ! if (verbose) then
@@ -307,12 +319,6 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
    real(rp),dimension(1:sample_shape(1))::arr0
    ! Properties to be returned
 
-   ! for checking, print message
-   ! if (verbose) then
-   ! write(*,*)'This is `get_stellar_properties`'
-   ! write(*,*)'  inputs are:', z, v, m, t_now, t_pre
-   ! end if
-
    ! Find nearest point on the sample grid (feh, afe, vvc, mass)
    idx_z = get_nearest_index(val=z, arr=axis_z)
    idx_a = get_nearest_index(val=a, arr=axis_a)
@@ -336,16 +342,6 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
    idx_t_now = get_age_index(t=use_t_now, t1=t12(1), t2=t12(2), num=num_t)
    idx_t_pre = get_age_index(t=use_t_pre, t1=t12(1), t2=t12(2), num=num_t)
 
-   ! if (myid==1 .and. verbose) then
-   !     write(*,*) 'this is get_stellar_properties'
-   !     write(*,*) ' z, idx_z:', z, idx_z
-   !     write(*,*) ' a, idx_a:', a, idx_a
-   !     write(*,*) ' v, idx_v:', v, idx_v
-   !     write(*,*) ' m, idx_m:', m, idx_m
-   !     write(*,*) 'idx_t_pre:', idx_t_pre
-   !     write(*,*) 'idx_t_now:', idx_t_now
-   ! end if
-
    if ((0 < idx_t_now).and.(idx_t_now < num_t)) then
       ! interpolation
       ! recover age values of left- and right-sides from indices
@@ -356,7 +352,7 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
       ! take first row
       arr_now = sample(:, 1, idx_m, idx_v, idx_a, idx_z)
       ! set ejecta zero
-      arr_now(num_i+1:) = 0.0_rp
+      arr_now(i_rmom:) = 0.0_rp
    else if (idx_t_now == num_t) then
       ! take last row
       arr_now = sample(:, num_t, idx_m, idx_v, idx_a, idx_z)
@@ -368,27 +364,30 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
       arr_pre = linear_interpolation(x=use_t_pre, x1=x12(1), x2=x12(2), y1=y12(:,1), y2=y12(:,2))
    else if (idx_t_pre == 0) then
       arr_pre = sample(:, 1, idx_m, idx_v, idx_a, idx_z)
-      arr_pre(num_i+1:) = 0.0_rp
+      arr_pre(i_rmom:) = 0.0_rp
    else if (idx_t_pre == num_t) then
       arr_pre = sample(:, num_t, idx_m, idx_v, idx_a, idx_z)
    end if
    
    ! For instantaneous properties, take from current one
-   arr0(1:num_i) = arr_now(1:num_i)
+   arr0(i_mass) = arr_now(i_mass)
    ! For cumulative properties, take subtraction
-   arr0(num_i+1:) = arr_now(num_i+1:) - arr_pre(num_i+1:)
+   arr0(i_rmom:) = arr_now(i_rmom:) - arr_pre(i_rmom:)
 
    ! Since a nearest sample along the mass axis is taken,
-   ! we need to rescale mass properties with respect to the given mass-sample mass ratio
+   ! we need to rescale mass properties with respect to the given actual mass
 
    ! current stellar mass
-   arr0(1) = arr0(1) * (m / axis_m(idx_m))
+   arr0(i_mass) = arr0(i_mass) * (m / axis_m(idx_m))
 
    ! wind momentum and chemical ejecta
-   arr0(num_i+1:num_i+num_c) = arr0(num_i+1:num_i+num_c) * (m / axis_m(idx_m))
+   arr0(i_rmom:i_phot-1) = arr0(i_rmom:i_phot-1) * (m / axis_m(idx_m))
 
    ! photon counts ... only mass-luminosity relation? or also effective temperature??
    ! -> no modification for now...
+
+   ! ensure positivity of all quantities
+   arr0 = max(arr0, 0.0_rp)
 
    ! Return in double precision
    prop = real(arr0, kind=dp)

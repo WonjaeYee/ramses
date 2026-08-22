@@ -626,7 +626,7 @@ subroutine grow_sink(ilevel,on_creation)
   use rtz_module
   use SED_module, only: interpolate_popii_age
   use constants, only: M_sun, twopi
-  use use_mist, only: get_stellar_properties, get_stellar_lifetime
+  use use_mist, only: get_stellar_properties, get_stellar_lifetime, i_mass
 #endif
   implicit none
 #ifndef WITHOUTMPI
@@ -876,7 +876,7 @@ subroutine grow_sink(ilevel,on_creation)
 
                  ! change the mass to the current mass from MIST
                  ! write(*,*)'mass from mist:', mist_prop(1)
-                 msink(isink) = mist_prop(1) / (scale_m/M_sun)
+                 msink(isink) = mist_prop(i_mass) / (scale_m/M_sun)
 
                  ! temp: print [Fe/H] and [alpha/Fe] to check
                  ! write(*,*) '[Fe/H]=', star_met_fe
@@ -1003,7 +1003,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 #endif
 #ifdef INDIVIDUAL_SINK_STARS
   use imf_module
-  use use_mist, only: get_stellar_properties, get_stellar_lifetime
+  use use_mist, only: get_stellar_properties, get_stellar_lifetime, i_rmom, i_chem
 #endif
   implicit none
   !----------------------------------------------------------------------------
@@ -1430,14 +1430,14 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        mist_prop = get_stellar_properties(real(star_met_fe, sp), real(star_alpha_over_Fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp), t_now, t_pre)
                        
                        ! set `loc_metal_yield` variable from MIST
-                       loc_metal_yield(1:10) = mist_prop(3:12)
+                       loc_metal_yield(1:NMETALS) = mist_prop(i_chem:i_chem+NMETALS-1)
                        ! write(*,*)'loc_metal_yield:',loc_metal_yield
 
                        ! energy is calculated later
                        sn_e = 0d0
 
                        ! get vector from radial momentum of stellar wind
-                       pwind = (mist_prop(2)*1.d5/scale_v*M_sun/scale_m) * (r_rel / max(r_len, tiny(0.0_dp)))
+                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m) * (r_rel / max(r_len, tiny(0.0_dp)))
                     end if
                  end if
               end if 
