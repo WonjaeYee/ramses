@@ -144,7 +144,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rt_isoPress, rt_isIRtrap, heat_unresolved_HII                  &
        & ,cosmic_rays                                                    &
 #ifdef RTZ
-       & ,rtz_cooling, rtz_equilibrium_test                              &
+       & ,rtz_cooling, rtz_equilibrium_test, rtz_shielding_config         &
        & ,rtz_include_collisional_ionization, rtz_include_photoionization&
        & ,rtz_include_cosmic_ray_ionization, rtz_include_charge_exchange &
        & ,rtz_include_dust_recombination, rtz_include_HM12_UVB           &

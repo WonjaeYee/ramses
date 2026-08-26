@@ -990,11 +990,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0
       if (isH2_rtz) then
 #ifdef CALIMA
-         ! Per-bin LW optical depth using evolved grain sizes and compositions.
-         ! Falls back to the fixed MW cross-section if no LW RT groups are defined.
-         call compute_lw_dust_optical_depth( &
-              dust_helper%rho_dust, dx_SS_H2, dust_to_gas_mass_ratio_over_mw, &
-              nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), tau_dust_LW)
+         ! rtz_shielding_config 0: fixed MW cross-section (old behaviour, same as non-CALIMA path)
+         ! rtz_shielding_config 1,2,3: per-bin CALIMA tau (falls back to MW when no LW groups)
+         if (rtz_shielding_config .le. 0) then
+            tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
+                        * (nElement_dep(1)*dXion(1,1) &
+                        +  2.0d0*0.5d0*nElement_dep(1)*dXion(1,3)) * dx_SS_H2
+         else
+            call compute_lw_dust_optical_depth( &
+                 dust_helper%rho_dust, dx_SS_H2, dust_to_gas_mass_ratio_over_mw, &
+                 nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), tau_dust_LW)
+         end if
          if (rtz_equilibrium_test .eq. 3) eqm_tau_dust_LW_new = tau_dust_LW
          f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * safe_exp(-tau_dust_LW)
 #else
@@ -1005,11 +1011,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       end if
       if (isCO_rtz) then
-         ! comp_SCO gives H2-line-overlap + CO self-shielding (Lee et al. 1996 table).
-         ! The dust continuum must be multiplied in separately, same τ_dust_LW used for H2.
-         ! For non-CALIMA runs τ_dust_LW=0 here so safe_exp(-0)=1 → no change in that path.
-         f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) &
-                  * safe_exp(-tau_dust_LW)
+         ! rtz_shielding_config 0,1: no CO shielding applied (f_shd_CO stays 1)
+         ! rtz_shielding_config 2: CO line self-shielding only (Lee et al. 1996), no dust
+         ! rtz_shielding_config 3: CO line + dust continuum exp(-tau_dust_LW) [default]
+         if (rtz_shielding_config .ge. 2) then
+            f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
+            if (rtz_shielding_config .ge. 3) &
+               f_shd_CO = f_shd_CO * safe_exp(-tau_dust_LW)
+         end if
       end if
 
 #ifdef RT

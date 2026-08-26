@@ -171,6 +171,12 @@ module rt_parameters
   ! RTZ parameters -----------------------------------------------------------------------
   logical::rtz_cooling=.false. ! RTZ Non-equilibrium cooling ------------
   integer::rtz_equilibrium_test=-1 ! RTZ EQM test ------------------
+  ! Shielding configuration (for equilibrium-test comparisons):
+  !  0 = old: fixed MW comp_Sd for H2, NO shielding applied to CO photodissociation
+  !  1 = new H2 dust only: CALIMA per-bin tau for H2, NO shielding applied to CO
+  !  2 = new CO line: CALIMA per-bin tau for H2, comp_SCO line shielding applied to CO (no dust)
+  !  3 = full (default): CALIMA per-bin tau for H2, comp_SCO * exp(-tau) applied to CO
+  integer::rtz_shielding_config=3
   logical::rtz_include_collisional_ionization=.true.
   logical::rtz_include_photoionization=.true.
   logical::rtz_include_cosmic_ray_ionization=.true.
