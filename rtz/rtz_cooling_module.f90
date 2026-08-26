@@ -848,7 +848,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
                              &ndust_processes,npah_processes
-      use dust_optics,  only: compute_lw_dust_optical_depth
+      use dust_optics,  only: compute_lw_dust_optical_depth, compute_lw_tau_effective
       use dust_interface
 #endif
       implicit none
@@ -883,6 +883,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: Zsolar, total_G0, advected_G0
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: tau_dust_LW
+      logical :: lw_groups_present
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -1249,7 +1250,30 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dust_helper%local_rad_ani(:) = 0d0
          dust_helper%local_solid_angle(:) = 0d0
       end if
- 
+
+      ! Refine τ_dust_LW with the anisotropy-corrected absorption-only formula.
+      !
+      ! τ_eff(ig) = (2 - f_ig) × (dustAbs(ig) / local_c) × dx_SS_H2
+      !
+      ! α_geom(f) = 2 - f interpolates between the isotropic diffuse-field limit
+      ! (f=0, α_geom=2, ⟨1/μ⟩=2) and the free-streaming beam limit (f=1, α_geom=1).
+      ! Only absorption (not scattering) enters τ; M1 RT handles scattering by
+      ! damping the flux toward isotropy each sub-step.
+      !
+      ! Requires rt_advect=.true. (so dustAbs has been set by compute_dust_rad_rates)
+      ! and at least one RT group tagged as LW.  When those conditions are not met,
+      ! the grain cross-section result from compute_lw_dust_optical_depth (above)
+      ! is kept unchanged.
+      if (isH2_rtz .and. rt_advect) then
+         call compute_lw_tau_effective( &
+              dustAbs, dust_helper%local_rad_ani, dust_helper%local_c, dx_SS_H2, &
+              tau_dust_LW, lw_groups_present)
+         if (lw_groups_present) then
+            f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) &
+                  * safe_exp(-tau_dust_LW)
+         end if
+      end if
+
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_start)
       end if
