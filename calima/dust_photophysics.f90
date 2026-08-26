@@ -1477,6 +1477,47 @@ module dust_optics
         isize = species
         fRpLambda_dust = f * lambda * getRpCrosssection(lambda,isize)
     END FUNCTION fRpLambda_dust
+
+    subroutine compute_lw_dust_optical_depth(rho_dust_cell, dx, dust_to_gas_mw, nHI, nH2, tau_LW)
+        ! Compute the LW-band dust optical depth for a single cell.
+        !
+        ! Under CALIMA the per-bin grain cross-sections from the evolved dust model
+        ! are used; if no LW RT groups are defined (isLW all zero) the result falls
+        ! back to the fixed MW formula so that non-RT runs are unchanged.
+        !
+        ! Arguments
+        ! ---------
+        ! rho_dust_cell(ndust) : dust mass density per bin  [g cm^-3]
+        ! dx                   : cell size for column density estimate  [cm]
+        ! dust_to_gas_mw       : dust-to-gas mass ratio normalised to MW (Z_eff)
+        ! nHI                  : HI number density  [cm^-3]  -- fallback only
+        ! nH2                  : H2 molecule number density  [cm^-3]  -- fallback only
+        ! tau_LW               : output LW optical depth  [dimensionless]
+        use rt_parameters, only: isLW
+        implicit none
+        real(dp), intent(in)  :: rho_dust_cell(ndust)
+        real(dp), intent(in)  :: dx, dust_to_gas_mw, nHI, nH2
+        real(dp), intent(out) :: tau_LW
+        integer :: i, ig
+
+        tau_LW = 0d0
+        do i = 1, ndust
+            if (dustbins_props(i)%mgrain > 0d0) then
+                do ig = 1, size(group_csa_dust, 2)
+                    if (isLW(ig) .eq. 1) then
+                        tau_LW = tau_LW + group_csa_dust(i, ig) &
+                               * (rho_dust_cell(i) / dustbins_props(i)%mgrain) * dx
+                    end if
+                end do
+            end if
+        end do
+        ! Fall back to fixed cross-section when no LW groups are present.
+        ! sigma_eff = 2.34e-21 cm^2/H (bare graphite-silicate, Gnedin & Kravtsov 2009).
+        if (tau_LW .eq. 0d0) then
+            tau_LW = 2.34d-21 * dust_to_gas_mw * (nHI + 2d0*nH2) * dx
+        end if
+    end subroutine compute_lw_dust_optical_depth
+
 end module dust_optics
 
 module dust_radiation

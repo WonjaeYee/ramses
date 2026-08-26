@@ -10,7 +10,8 @@ module rtz_cooling_module
    use amr_parameters, only: ndim, dp, nvector
    use rt_parameters
    use constants
-   use rtz_module  
+   use rtz_module
+   use safe_math, only: safe_exp
 #ifdef CALIMA
    use dust_commons, only: dust_helper,sigca_dust,sigcs_dust,sigcr_dust,&
                            sigcrat_dust,sigca_pah,sigcs_pah,sigcr_pah,&
@@ -817,7 +818,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       use rtz_coolrates_module, only: all_cooling
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
-                             &ndust_processes,npah_processes,dustbins_props
+                             &ndust_processes,npah_processes
+      use dust_optics,  only: compute_lw_dust_optical_depth
       use dust_interface
 #endif
       implicit none
@@ -852,7 +854,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: Zsolar, total_G0, advected_G0
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: tau_dust_LW
-      integer :: idust_sh, igroup_lw
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -955,30 +956,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (isH2_rtz) then
 #ifdef CALIMA
          ! Per-bin LW optical depth using evolved grain sizes and compositions.
-         ! group_csa_dust(idust,igroup) [cm²/grain] is the photon-weighted
-         ! absorption cross-section per grain over the group energy band.
-         do idust_sh = 1, ndust
-            if (dustbins_props(idust_sh)%mgrain > 0d0) then
-               do igroup_lw = 1, nGroups
-                  if (isLW(igroup_lw) .eq. 1) then
-                     tau_dust_LW = tau_dust_LW + group_csa_dust(idust_sh, igroup_lw) &
-                                 * (dust_helper%rho_dust(idust_sh) / dustbins_props(idust_sh)%mgrain) &
-                                 * dx_SS_H2
-                  end if
-               end do
-            end if
-         end do
-         ! If no LW groups are defined, fall back to the fixed cross-section formula.
-         if (tau_dust_LW .eq. 0d0) then
-            tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
-                        * (nElement_dep(1)*dXion(1,1) + nElement_dep(1)*dXion(1,3)) * dx_SS_H2
-         end if
+         ! Falls back to the fixed MW cross-section if no LW RT groups are defined.
+         call compute_lw_dust_optical_depth( &
+              dust_helper%rho_dust, dx_SS_H2, dust_to_gas_mass_ratio_over_mw, &
+              nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), tau_dust_LW)
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * safe_exp(-tau_dust_LW)
 #else
-         ! Non-CALIMA: fixed MW cross-section scaled by evolved dust-to-gas ratio.
-         tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
-                     * (nElement_dep(1)*dXion(1,1) + nElement_dep(1)*dXion(1,3)) * dx_SS_H2
+         ! Non-CALIMA: original fixed MW cross-section formula.
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * &
+                 comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), &
+                         dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
 #endif
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * comp_Sd(tau_dust_LW)
       end if
       if (isCO_rtz) then
          f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
