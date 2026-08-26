@@ -1264,7 +1264,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! and at least one RT group tagged as LW.  When those conditions are not met,
       ! the grain cross-section result from compute_lw_dust_optical_depth (above)
       ! is kept unchanged.
-      if (isH2_rtz .and. rt_advect) then
+      ! Equilibrium tests always use a fixed isotropic anisotropy (f=0 → τ_abs from
+      ! compute_lw_dust_optical_depth above), bypassing the dynamic RT-derived factor.
+      if (isH2_rtz .and. rt_advect .and. rtz_equilibrium_test.le.0) then
          call compute_lw_tau_effective( &
               dustAbs, dust_helper%local_rad_ani, dust_helper%local_c, dx_SS_H2, &
               tau_dust_LW, lw_groups_present)
