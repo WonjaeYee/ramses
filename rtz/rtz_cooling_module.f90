@@ -298,7 +298,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rtz_equilibrium_test .eq. 3) then
          shld_unit = base_unit + 202
          open(unit=shld_unit, file='shielding_factors.dat', status='replace')
-         write(shld_unit,'(A)') '# nH  N_H  N_H2  x_H2  x_CO  TK  ' // &
+         write(shld_unit,'(A)') '# nH  N_H  N_H2  x_H2  x_HI  x_CO  TK  Z_dust  ' // &
               'tau_dust_old  tau_dust_new  f_SH2  f_shd_old  f_shd_new  ' // &
               'f_shd_CO  local_G0_old  local_G0_new'
       end if
@@ -465,7 +465,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2)
             f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2)
             write(shld_unit, '(*(ES15.7," "))') nElement(1,i), N_H_col, N_H2_col, &
-                 xion(1,3,i), nCO(i)/nElement(1,i), TK_to_save(i), &
+                 xion(1,3,i), xion(1,1,i), nCO(i)/nElement(1,i), TK_to_save(i), eqm_dust_to_gas_mw, &
                  tau_shld_old, tau_shld_new, f_SH2_out, &
                  f_SH2_out*safe_exp(-tau_shld_old), f_SH2_out*safe_exp(-tau_shld_new), &
                  f_CO_out, rtz_UV_background_G0*safe_exp(-tau_shld_old), rtz_UV_background_G0*safe_exp(-tau_shld_new)
