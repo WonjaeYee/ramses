@@ -463,7 +463,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             tau_shld_new = tau_shld_old   ! non-CALIMA: old and new are identical
 #endif
             f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2)
-            f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2)
+            ! f_CO_out = line shielding × dust continuum, consistent with production code
+            f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2) &
+                      * safe_exp(-tau_shld_new)
             write(shld_unit, '(*(ES15.7," "))') nElement(1,i), N_H_col, N_H2_col, &
                  xion(1,3,i), xion(1,1,i), nCO(i)/nElement(1,i), TK_to_save(i), eqm_dust_to_gas_mw, &
                  tau_shld_old, tau_shld_new, f_SH2_out, &
@@ -1003,7 +1005,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       end if
       if (isCO_rtz) then
-         f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
+         ! comp_SCO gives H2-line-overlap + CO self-shielding (Lee et al. 1996 table).
+         ! The dust continuum must be multiplied in separately, same τ_dust_LW used for H2.
+         ! For non-CALIMA runs τ_dust_LW=0 here so safe_exp(-0)=1 → no change in that path.
+         f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) &
+                  * safe_exp(-tau_dust_LW)
       end if
 
 #ifdef RT
