@@ -666,7 +666,7 @@ module dust_init
         real(dp) :: mf_max,mf_min,prefactor,chi_total,frac_tot,mcoag
         real(dp) :: R
         integer :: iend_chemtype
-        external :: run_dust_solver_test
+        ! external :: run_dust_solver_test
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
         if (sum(dustbins_per_chemtype) /= ndust) then
@@ -1120,9 +1120,10 @@ module dust_init
             call print_dust_parameters
         end if
 
-        if (dust_test) then
-            call run_dust_solver_test()
-        end if
+        ! if (dust_test) then
+        !     call run_dust_solver_test()
+        ! end if
+
     end subroutine init_CALIMA_dust
 
     subroutine read_CALIMA_params(nml_ok,nGroups)

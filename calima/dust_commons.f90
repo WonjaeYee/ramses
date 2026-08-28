@@ -274,6 +274,9 @@ module dust_commons
     integer*8, dimension(:), allocatable :: ode_reduction_count_dust_all
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah_all
 
+    real(dp), parameter :: y_min = 1.0d-60
+    !! minimum of mass density of gas, dust, and PAH
+
     contains
 
     subroutine dust_log_tdust_solver_update(i_dust, T, n_iter, used_brent)

@@ -592,7 +592,6 @@ subroutine read_movie_params(namelist_unit,nml_ok)
       if(tendmov==0.and.aendmov==0)movie=.false.
    endif
 
-   if (movie)call set_movie_vars
 
 end subroutine read_movie_params
 !###############################################################
