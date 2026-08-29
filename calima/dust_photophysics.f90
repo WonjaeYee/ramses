@@ -1477,6 +1477,102 @@ module dust_optics
         isize = species
         fRpLambda_dust = f * lambda * getRpCrosssection(lambda,isize)
     END FUNCTION fRpLambda_dust
+
+    subroutine compute_lw_dust_optical_depth(rho_dust_cell, dx, dust_to_gas_mw, nHI, nH2, tau_LW)
+        ! Compute the LW-band dust optical depth for a single cell.
+        !
+        ! Under CALIMA the per-bin grain cross-sections from the evolved dust model
+        ! are used; if no LW RT groups are defined (isLW all zero) the result falls
+        ! back to the fixed MW formula so that non-RT runs are unchanged.
+        !
+        ! Arguments
+        ! ---------
+        ! rho_dust_cell(ndust) : dust mass density per bin  [g cm^-3]
+        ! dx                   : cell size for column density estimate  [cm]
+        ! dust_to_gas_mw       : dust-to-gas mass ratio normalised to MW (Z_eff)
+        ! nHI                  : HI number density  [cm^-3]  -- fallback only
+        ! nH2                  : H2 molecule number density  [cm^-3]  -- fallback only
+        ! tau_LW               : output LW optical depth  [dimensionless]
+        use rt_parameters, only: isLW
+        implicit none
+        real(dp), intent(in)  :: rho_dust_cell(ndust)
+        real(dp), intent(in)  :: dx, dust_to_gas_mw, nHI, nH2
+        real(dp), intent(out) :: tau_LW
+        integer :: i, ig
+
+        tau_LW = 0d0
+        do i = 1, ndust
+            if (dustbins_props(i)%mgrain > 0d0) then
+                do ig = 1, size(group_csa_dust, 2)
+                    if (isLW(ig) .eq. 1) then
+                        tau_LW = tau_LW + group_csa_dust(i, ig) &
+                               * (rho_dust_cell(i) / dustbins_props(i)%mgrain) * dx
+                    end if
+                end do
+            end if
+        end do
+        ! Fall back to fixed cross-section when no LW groups are present.
+        ! sigma_eff = 2.34e-21 cm^2/H (bare graphite-silicate, Gnedin & Kravtsov 2009).
+        if (tau_LW .eq. 0d0) then
+            tau_LW = 2.34d-21 * dust_to_gas_mw * (nHI + 2d0*nH2) * dx
+        end if
+    end subroutine compute_lw_dust_optical_depth
+
+    subroutine compute_lw_tau_effective(dustAbs_in, rad_ani, local_c, dx, tau_LW, has_lw_groups)
+        ! Compute the effective LW-band optical depth accounting for radiation anisotropy.
+        !
+        ! Uses the M1-RT anisotropy closure:  α_geom(f) = 2 - f,
+        ! where f = |Fp| / (c Np) ∈ [0, 1] is the local flux-to-photon-density ratio.
+        !
+        !   Free-streaming beam (f → 1): α_geom = 1   (ray travels perpendicular distance dx)
+        !   Isotropic / diffuse field (f → 0): α_geom = 2  (flux-weighted ⟨1/μ⟩ = 2)
+        !
+        ! Only absorption (not scattering) enters τ, because RAMSES-RT's M1 sub-step
+        ! already damps Fp toward isotropy as photons scatter.
+        !
+        !   τ_abs(ig) = dustAbs(ig) / local_c × dx      [absorption coeff × path length]
+        !   τ_eff(ig) = (2 - f_ig) × τ_abs(ig)
+        !   τ_LW      = Σ_{ig: isLW} τ_eff(ig)
+        !
+        ! Arguments
+        ! ---------
+        ! dustAbs_in(nGroups) : dust+PAH absorption rate per RT group  [s^-1]
+        !                       (from compute_dust_rad_rates; valid only when rt_advect=.true.)
+        ! rad_ani(nGroups)    : anisotropy factor f per group  [0, 1]
+        !                       (from compute_local_anisotropy_factor; stored in dinfo%local_rad_ani)
+        ! local_c             : reduced speed of light  [cm/s]  (rt_c_cgs at the current level)
+        ! dx                  : cell path length for the column density estimate  [cm]
+        ! tau_LW (out)        : effective LW optical depth  [dimensionless]
+        !                       Set to 0 when local_c ≤ 0 or no LW groups are defined.
+        ! has_lw_groups (out) : .true. if at least one RT group has isLW=1.
+        !                       When .false., the caller should retain the result of
+        !                       compute_lw_dust_optical_depth (grain cross-section formula).
+        use rt_parameters, only: isLW
+        implicit none
+        real(dp), intent(in)  :: dustAbs_in(:)   ! [s^-1], size nGroups
+        real(dp), intent(in)  :: rad_ani(:)       ! [0,1],  size nGroups
+        real(dp), intent(in)  :: local_c          ! [cm/s]
+        real(dp), intent(in)  :: dx               ! [cm]
+        real(dp), intent(out) :: tau_LW
+        logical,  intent(out) :: has_lw_groups
+        real(dp) :: f_ani, tau_abs
+        integer  :: ig
+
+        tau_LW       = 0d0
+        has_lw_groups = .false.
+
+        if (local_c <= 0d0) return
+
+        do ig = 1, size(dustAbs_in)
+            if (isLW(ig) .eq. 1) then
+                has_lw_groups = .true.
+                f_ani   = min(max(rad_ani(ig), 0d0), 1d0)   ! clamp to [0, 1]
+                tau_abs = dustAbs_in(ig) / local_c * dx
+                tau_LW  = tau_LW + (2.0d0 - f_ani) * tau_abs
+            end if
+        end do
+    end subroutine compute_lw_tau_effective
+
 end module dust_optics
 
 module dust_radiation
