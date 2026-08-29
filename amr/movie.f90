@@ -1324,27 +1324,15 @@ subroutine set_movie_vars()
         ! Find which photon group to show
         read( movie_vars_txt(kk)(3:4), '(i1)' ) ivar
         movie_var_number(kk) = ivar
+     else
 
-#ifdef CALIMA
-     else if (ndust > 0) then
-        ivar = 0
-        if (allocated(dustbins_props(1)%IRemission_tab)) then
-            do j_band = 1, size(dustbins_props(1)%IRemission_tab)
-                if (trim(movie_vars_txt(kk)) == trim(dustbins_props(1)%IRemission_tab(j_band)%name)) then
-                    ivar = j_band
-                    exit
-                end if
-            end do
-        end if
-        if (ivar > 0) then
-            if (i_mv_IR .eq. -1) i_mv_IR = kk
-            movie_vars(kk) = i_mv_IR
-            movie_var_number(kk) = ivar
-        endif
-#endif
+! escape from the `else if` part
+! RTZ and CALIMA movie variables need another loop
+! which cannot be simple as above
+! so, escape as `else` and loop over RTZ/CALIMA variables
+! if there was no matching, `movie_vars(kk)` will be stay as -1
 
 #ifdef RTZ
-     else
         line_matched = .false.
         do i=1, total_lines
             if (trim(movie_vars_txt(kk)) == trim(registered_lines(i)%name)) then
@@ -1353,11 +1341,31 @@ subroutine set_movie_vars()
                 exit
             end if
         end do
-        if (.not. line_matched) then
-            print *, "Unknown movie variable: ", trim(movie_vars_txt(kk))
+#endif
+
+#ifdef CALIMA
+        if (ndust > 0) then
+           ivar = 0
+           if (allocated(dustbins_props(1)%IRemission_tab)) then
+                 do j_band = 1, size(dustbins_props(1)%IRemission_tab)
+                    if (trim(movie_vars_txt(kk)) == trim(dustbins_props(1)%IRemission_tab(j_band)%name)) then
+                       ivar = j_band
+                       exit
+                    end if
+                 end do
+           end if
+           if (ivar > 0) then
+                 if (i_mv_IR .eq. -1) i_mv_IR = kk
+                 movie_vars(kk) = i_mv_IR
+                 movie_var_number(kk) = ivar
+           endif
         end if
 #endif
      endif
+
+     if (movie_vars(kk) == -1) then
+        write(*,*) "unknown `movie_vars_txt`:", movie_vars_txt(kk)
+     end if
 
   end do
 

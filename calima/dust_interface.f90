@@ -525,7 +525,7 @@ contains
         end if
     end subroutine compute_dust_coolrates
 
-    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np,step_ok)
+    subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np,step_ok, dUU)
 
         use ode_driver_mod, only: integrate_dust_ode
         use ode_interface_mod, only: dust_solver_step
@@ -550,6 +550,11 @@ contains
         real(dp) :: sum_check
         real(dp), pointer :: y_gas(:,:), y_gas_out(:,:)
         real(dp), pointer :: y_dust(:), y_dust_out(:)
+
+        integer :: jj
+        real(dp), intent(out) :: dUU
+
+        dUU = 0.0_dp ! should I keep previous values?
 
         ! If no dust or PAH process is active, just return
         if (ndust_processes.eq.0 .and. npah_processes.eq.0) then
@@ -655,6 +660,21 @@ contains
 #endif
             end do
         end if
+
+        ! test trial: very small value, ignore evolution
+        ! this can be very problematic in other cases...
+        ! 1d-28 seems to be fine, 1d-31 cannot prevents the error
+        ! do ii = 1, dinfo%npah
+        !     if (y_dust(ii)<1d-28.and.y_dust_out(ii)<1d-28) then
+        !         y_dust_out(ii) = y_dust(ii)
+        !     end if
+        ! end do
+        ! do ii = 1, dinfo%ndust
+        !     if (y_dust(dinfo%npah+ii)<1d-28.and.y_dust_out(dinfo%npah+ii)<1d-28) then
+        !         y_dust_out(dinfo%npah+ii) = y_dust(dinfo%npah+ii)
+        !     end if
+        ! end do
+
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
             dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
             dinfo%rho_dust(1:dinfo%ndust) = y_dust_out(dinfo%npah+1:dinfo%npah+dinfo%ndust)
@@ -663,6 +683,38 @@ contains
         else if (dinfo%npah > 0) then
             dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
         end if
+
+#ifdef RTZ
+        ! check fractional change
+        ! for this moment, only for cases with RTZ
+
+        ! 10% rule is there very inside of anninos_step...
+        ! but that is actually never triggered with anninos solver (step_ok_presents is .true.)
+        ! and extracting that info seems to be very complicated
+        ! as an temporary way, compute dUU here again
+
+        ! check for gas
+        do ii = 1, n_elements
+            if (elements(ii)%atomic_number > 0) then
+                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1)+1.0d-40))
+
+                ! if not, ion part is zero
+                if (carry_gas_ions) then
+                    do jj=1,elements(ii)%n_ions
+                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj)+1.0d-40))
+                    end do
+                end if
+
+            end if
+        end do
+
+        ! check for dust
+        if (dinfo%ndust > 0 .or. dinfo%npah > 0) then
+            do ii = 1, dinfo%npah+dinfo%ndust
+                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+1.0d-40))
+            end do
+        end if
+#endif
 
     end subroutine compute_dust_update
 
