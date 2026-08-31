@@ -678,7 +678,7 @@ module dust_rates
                 if (present(kmax)) then
                     kmax = max(kmax, rate1)
                 end if
-                rate2 = rate1 * y_dust(index) ! [g cm-3 s-1]
+                rate2 = 0.5d0 * rate1 * y_dust(index) ! [g cm-3 s-1]; factor 1/2 for identical-grain self-collisions
                 dydt_dust(index, 2) = dydt_dust(index, 2) + rate2 ! [g cm-3 s-1]
                 dydt_dust(index+1, 1) = dydt_dust(index+1, 1) + rate2 ! [g cm-3 s-1]
             end do
@@ -1000,6 +1000,10 @@ module dust_rates
                 if (present(kmax)) then
                     kmax = max(kmax, abs(rate1))
                 end if
+
+                ! Factor of 1/2 for identical-grain self-collisions (avoids double-counting).
+                ! kmax is kept un-halved above for conservative step-size control.
+                rate1 = 0.5d0 * rate1
 
                 ! 5. Update the dust derivatives for all fragments
                 dydt_dust(index, 2) = dydt_dust(index, 2) + rate1 * y_dust(index) ! [g cm-3 s-1]
@@ -1499,8 +1503,8 @@ module dust_rates
         log_T = log10(dust_info%local_Tk)
         log_nH = log10(dust_info%local_nH)
 
-        ! 1. Loop over PAH sizes
-        pahloop: do pp = 1, dust_info%npah
+        ! 1. Loop over PAH sizes; start at 2 because the product bin is pp-1
+        pahloop: do pp = 2, dust_info%npah
             if (.not. pahbins_props(pp)%is_cluster) cycle ! Cluster evaporation is only for PAH clusters
             k_single = dust_info%local_G0 / 0.19306d0
             k_multi = 1d0 / exp((-3.1692061d0 * log10(dust_info%local_G0) + 13.5642486d0) * ln10)

@@ -50,9 +50,9 @@ module pm_commons
   integer,allocatable,dimension(:)     ::evolution_flag ! 1: pre main-sequence, 0: main-sequence
   real(dp),allocatable,dimension(:)    ::main_sequence_time
 
+#endif
 #ifdef RT
   real(dp),allocatable,dimension(:,:):: sink_ioni_flux
-#endif
 #endif
 
   ! Particles related arrays

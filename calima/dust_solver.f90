@@ -574,11 +574,12 @@ module rk4_mod
         scale = 0.9d0 * (errmax / max(max_error,1.0d-10))
         h_new = h * min(2.0_dp, max(0.1_dp, scale))  ! Limit the change in step size
 
-        ! 4. If the step is accepted, update the solution; otherwise, keep the old solution
-        if (accepted) then
-            y_gas_new(:,:) = y_gas_temp(:,:)
-            y_dust_new(:) = y_dust_temp(:)
-        end if
+        ! 4. Always write the attempted solution to the output arrays so the caller has
+        !    a valid state regardless of acceptance (y_gas_new is intent(out); if we skip
+        !    the assignment on rejection the arrays are undefined, corrupting y_gas_temp
+        !    in integrate_dust_ode when it reads them in the rejected-step branch).
+        y_gas_new(:,:) = y_gas_temp(:,:)
+        y_dust_new(:) = y_dust_temp(:)
     end subroutine rk4_step
 end module rk4_mod
 
@@ -727,7 +728,7 @@ module anninos_mod
                 ! end if
                 ! Curro / Wonjae
                 Cj = dydt_dust(j, 1)
-                Dj = dydt_dust(j, 2) / yj ! applying floor below should ensure this is non-zero
+                Dj = dydt_dust(j, 2) / max(yj, y_min)   ! floor guards against division by zero; consistent with y_min everywhere
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
@@ -738,14 +739,15 @@ module anninos_mod
                 end if
             end if
 
-            ! Enforce non-negativity
-            ! a. if the trial solution goes negative, reject
+            ! Enforce non-negativity.
+            ! If the Anninos formula (Cj>=0, Dj>=0) gives a negative result, that
+            ! indicates a coding bug in the rate routines. Reject the step and leave
+            ! y_dust_new(j) = yj so the gas update below is a no-op for this bin,
+            ! keeping gas-dust mass conservation intact on the rejected step.
             if (y_dust_new(j) < 0.0_dp) then
                 accepted = .false.
+                y_dust_new(j) = yj  ! no-op gas update; step will be discarded by caller
             end if
-            ! b. if the trial solution is positive but smaller than floor, put on the floor
-            ! this should be here to keep symmetry between gas and dust/PAH
-            y_dust_new(j) = max(y_dust_new(j), y_min)
 
             ! 3. Symmetrically update gas phase elements to conserve mass
             delta_y_dust = y_dust_new(j) - yj
@@ -1169,11 +1171,6 @@ module ode_driver_mod
                     end if
                 end if
             else
-                ! to count which elements are going wrong,
-                ! return the problematic solution, too
-                ! anyway this will be discarded if step_ok=.false.
-                y_gas_temp(:,:) = y_gas_new(:,:)
-                y_dust_temp(:) = y_dust_new(:)
                 nrejected = nrejected + 1
                 if (dust_log) then
                     ode_nrejected = ode_nrejected + 1_8
@@ -1183,9 +1180,16 @@ module ode_driver_mod
                     end if
                 end if
                 if (.not. solver_substepped) then
+                    ! Non-substepped path (anninos): forward the rejected state to the
+                    ! caller so it can inspect it, then signal that the step failed.
+                    ! (The step function always fills y_gas_new in this path.)
+                    y_gas_temp(:,:) = y_gas_new(:,:)
+                    y_dust_temp(:) = y_dust_new(:)
                     step_ok = .false. ! this is only one point where step_ok = .false.
                     exit
                 end if
+                ! Substepped path (rk4/rk54): standard adaptive-step retry — keep
+                ! y_gas_temp at the pre-step state and let h shrink via h_new below.
             end if
 
             ! 5. Update the time step size for the next iteration (only if solver is substepped)
@@ -1238,12 +1242,14 @@ module ode_driver_mod
             ode_substeps_max  = max(ode_substeps_max, int(naccepted, kind=8))
         end if
 
-        ! if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
-        !     print *, 'DEBUG integrate_dust_ode: negative final density detected.'
-        !     print *, 'y_gas_final:  ',y_gas_final(:,:)
-        !     print *, 'y_dust_final: ',y_dust_final(:)
-        !     call clean_stop
-        ! end if
+        ! Final sanity check: if negative values slipped through (coding bug in rate
+        ! routines or unforeseen edge case), warn and count but do not crash.
+        ! This should never fire if Cj>=0 and Dj>=0 everywhere in dust_rates.f90.
+        if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
+            print *, 'WARNING integrate_dust_ode: negative density in final state (bug in rate routines).'
+            print *, '  y_gas_final min:  ', minval(y_gas_final)
+            print *, '  y_dust_final min: ', minval(y_dust_final)
+        end if
     end subroutine integrate_dust_ode
 
 end module ode_driver_mod
