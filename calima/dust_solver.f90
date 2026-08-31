@@ -72,12 +72,10 @@ module dust_rhs_mod
     contains
 
     subroutine ensure_kmax_storage
+        ! Re-checks dimensions on every entry so the arrays stay valid if ndust/npah
+        ! ever change between calls (e.g. during benchmark sweeps).  The allocated()
+        ! and size() checks are cheap and well-predicted.
         implicit none
-        logical, save :: first_call = .true.
-
-        if (.not. first_call) return
-
-        first_call = .false.
 
         if (allocated(dydt_dust_before_cache)) then
             if (size(dydt_dust_before_cache, 1) /= ndust+npah) then
@@ -336,7 +334,7 @@ end module dust_rhs_mod
 module rk4_mod
     use amr_parameters, only: dp
     use dustbin_types, only: DustChemistryInfo
-    use dust_commons, only: errmax
+    use dust_commons, only: errmax, y_min
     use ode_interface_mod, only: rhs_interface, HALF, TWO, SIXTH
 
     implicit none
@@ -439,73 +437,53 @@ module rk4_mod
 
         break = .false.
 
-        ! 1. Perform the four RK4 stages
+        ! 1. Perform the four RK4 stages.
+        ! debug_flag is optional: Fortran propagates its absent/present status when it is
+        ! passed by keyword, so a single call handles both debug and non-debug paths.
         if (first_call) then
-            ! On the first call, we compute kmax to get an estimate of the necessary time step size for stability.
-            if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,debug_flag=debug_flag,write_cache=.true.)
-            else
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,write_cache=.true.)
-            end if
+            ! On the first call, compute kmax to estimate the required step size for stability.
+            call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,kmax,debug_flag=debug_flag,write_cache=.true.)
             if (kmax.eq.0d0) then
-                ! If kmax is zero it means there are no active dust
-                ! processes, so there is no point in doing a dust integration.
+                ! kmax=0 means no active dust processes; skip the integration.
                 break = .true.
                 return
             end if
         else
-            if (present(debug_flag)) then
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,debug_flag=debug_flag,write_cache=.true.)
-            else
-                call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,write_cache=.true.)
-            end if
+            call rhs(dust_info,y_gas,y_dust,k1_gas,k1_dust,debug_flag=debug_flag,write_cache=.true.)
         end if
         k1_dust(:,3) = k1_dust(:,1)-k1_dust(:,2)
-      
-        ! 2. Use the provided kmax to compute a guess of the neccessary
-        ! time step size for stability, but never increase the time step 
-        ! beyond the provided h
+
+        ! 2. Use kmax to bound the step size for stability (only on first call).
         if (first_call .and. .not. (present(step_ok_present) .and. step_ok_present)) then
-            h_local = min(1d0 / kmax,h)
+            h_local = min(1d0 / kmax, h)
         else
             h_local = h
         end if
-        if (present(debug_flag)) then
-            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:,3)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
-            k2_dust(:,3) = k2_dust(:,1)-k2_dust(:,2)
 
-            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:,3)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
-            k3_dust(:,3) = k3_dust(:,1)-k3_dust(:,2)
+        ! Stages 2-4 (shared code path for debug and non-debug via optional propagation).
+        y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
+        y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:,3)
+        call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,debug_flag=debug_flag,write_cache=.false.)
+        k2_dust(:,3) = k2_dust(:,1)-k2_dust(:,2)
 
-            y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:,3)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
-        else
-            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k1_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k1_dust(:,3)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k2_gas,k2_dust,write_cache=.false.)
-            k2_dust(:,3) = k2_dust(:,1)-k2_dust(:,2)
+        y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
+        y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:,3)
+        call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,debug_flag=debug_flag,write_cache=.false.)
+        k3_dust(:,3) = k3_dust(:,1)-k3_dust(:,2)
 
-            y_gas_stage(:,:) = y_gas(:,:) + (h_local * HALF) * k2_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + (h_local * HALF) * k2_dust(:,3)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k3_gas,k3_dust,write_cache=.false.)
-            k3_dust(:,3) = k3_dust(:,1)-k3_dust(:,2)
-
-            y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
-            y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:,3)
-            call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,write_cache=.false.)
-        end if
+        y_gas_stage(:,:) = y_gas(:,:) + h_local * k3_gas(:,:)
+        y_dust_stage(:) = y_dust(:) + h_local * k3_dust(:,3)
+        call rhs(dust_info,y_gas_stage,y_dust_stage,k4_gas,k4_dust,debug_flag=debug_flag,write_cache=.false.)
         k4_dust(:,3) = k4_dust(:,1) - k4_dust(:,2)
 
         ! 3. Combine the stages to compute the new solution
         y_gas_new(:,:) = y_gas(:,:) + (h_local * SIXTH) * (k1_gas(:,:) + TWO*k2_gas(:,:) + TWO*k3_gas(:,:) + k4_gas(:,:))
         y_dust_new(:) = y_dust(:) + (h_local * SIXTH) * (k1_dust(:,3) + TWO*k2_dust(:,3) + TWO*k3_dust(:,3) + k4_dust(:,3))
 
-        ! 4. Update the time step size for the next step (this will be used by the adaptive RK4 wrapper)
+        ! 4. Write the actually-taken step size back via the intent(inout) h argument.
+        ! rk4_step reads h after this call to compute h_new = h * scale; on first_call
+        ! h_local = min(1/kmax, h_requested) < h_requested, so h_new must be scaled from
+        ! h_local (the step we actually took), not from the originally requested h.
         h = h_local
     end subroutine rk4_raw
 
@@ -562,9 +540,10 @@ module rk4_mod
             return
         end if
 
-        ! 2. Max relative change w.r.t. old state
-        error_gas(:,:) = abs(y_gas_temp(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), 1.0d-40)
-        error_dust(:) = abs(y_dust_temp(:) - y_dust(:)) / max(abs(y_dust(:)), 1.0d-40)
+        ! 2. Max relative change w.r.t. old state.
+        ! Use y_min as the denominator floor (consistent with anninos_step and elsewhere).
+        error_gas(:,:) = abs(y_gas_temp(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), y_min)
+        error_dust(:) = abs(y_dust_temp(:) - y_dust(:)) / max(abs(y_dust(:)), y_min)
         max_error = maxval(error_gas(:,:))
         max_error = max(max_error, maxval(error_dust(:)))
 
@@ -718,15 +697,10 @@ module anninos_mod
             else if (abs(fj) * h < 1.0d-2 * yj) then
                 y_dust_new(j) = yj + fj * h
             else
-                ! Decompose derivative into creation Cj and destruction Dj
-                ! if (fj >= 0.0_dp) then
-                !     Cj = fj
-                !     Dj = 0.0_dp
-                ! else
-                !     Cj = 0.0_dp
-                !     Dj = -fj / max(yj, 1.0d-30)
-                ! end if
-                ! Curro / Wonjae
+                ! Decompose derivative into creation Cj and destruction Dj.
+                ! We split the net rate fj = C - D*y (Anninos et al. 1997) by reading
+                ! production and destruction terms directly from the RHS, rather than
+                ! inferring the sign of fj.  This handles sign changes mid-step correctly.
                 Cj = dydt_dust(j, 1)
                 Dj = dydt_dust(j, 2) / max(yj, y_min)   ! floor guards against division by zero; consistent with y_min everywhere
 
@@ -1103,6 +1077,10 @@ module ode_driver_mod
         logical :: accepted,break,firstcall
         logical :: debug_enabled
         real(dp) :: mass_init, mass_final
+        ! Maximum allowed relative mass-conservation error (gas+dust total).
+        ! Tighter than numerical round-off (~1e-15) but looser than solver tolerance (errmax=0.1)
+        ! so it catches coding bugs without triggering on normal floating-point accumulation.
+        real(dp), parameter :: mass_conservation_tol = 1d-10
 
         debug_enabled = dust_log
         if (present(debug_flag)) debug_enabled = debug_flag
@@ -1205,7 +1183,7 @@ module ode_driver_mod
                 h = h_candidate
                 icount = icount + 1
                 if (icount > countmax) then
-                    print *, "Warning: Maximum number of ODE solver iterations reached. Integration may not have converged."
+                    print *, "FATAL ERROR: Maximum number of ODE solver iterations reached. Integration did not converge."
                     print *, '  Requested total dt [s]        = ', dt
                     print *, '  Integrated tau [s]            = ', tau
                     print *, '  Last attempted timestep h [s] = ', h
@@ -1226,11 +1204,12 @@ module ode_driver_mod
 
         mass_final = sum(y_gas_final(:,1)) + sum(y_dust_final(:))
         if (mass_init > 0d0) then
-            if (abs(mass_final - mass_init) / mass_init > 1d-10) then
-                print *, 'WARNING: integrate_dust_ode: mass not conserved!'
+            if (abs(mass_final - mass_init) / mass_init > mass_conservation_tol) then
+                print *, 'FATAL ERROR: integrate_dust_ode: mass not conserved!'
                 print *, '  Initial mass = ', mass_init
                 print *, '  Final mass   = ', mass_final
                 print *, '  Rel. diff    = ', abs(mass_final - mass_init)/mass_init
+                call clean_stop
             end if
         end if
 
@@ -1242,13 +1221,14 @@ module ode_driver_mod
             ode_substeps_max  = max(ode_substeps_max, int(naccepted, kind=8))
         end if
 
-        ! Final sanity check: if negative values slipped through (coding bug in rate
-        ! routines or unforeseen edge case), warn and count but do not crash.
-        ! This should never fire if Cj>=0 and Dj>=0 everywhere in dust_rates.f90.
+        ! Final sanity check: negative densities in the final state mean a bug in the
+        ! rate routines (Cj or Dj < 0 somewhere in dust_rates.f90).  Fatal — do not
+        ! propagate a physically impossible state into the next RTZ iteration.
         if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
-            print *, 'WARNING integrate_dust_ode: negative density in final state (bug in rate routines).'
+            print *, 'FATAL ERROR: integrate_dust_ode: negative density in final state (bug in rate routines).'
             print *, '  y_gas_final min:  ', minval(y_gas_final)
             print *, '  y_dust_final min: ', minval(y_dust_final)
+            call clean_stop
         end if
     end subroutine integrate_dust_ode
 

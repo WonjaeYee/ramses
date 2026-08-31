@@ -153,6 +153,7 @@ contains
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
+        integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: Zel, nHI, prevD
         integer :: n_charge
 
@@ -252,16 +253,18 @@ contains
                 else
                     ! We want the PAH PEH also have rt, so we use the full model
                     do ii = 1, dinfo%npah
+                        i_neutral = 2*ii - 1  ! row for neutral PAH cross-sections in csa_pah
+                        i_charged = 2*ii      ! row for charged PAH cross-sections in csa_pah
                         ! Consider the contribution from the UV background first
                         call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                             ne,Tk,dinfo%fcharge_pah(:,ii),&
                                                             dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
+                                                            dinfo%csa_pah(i_neutral,:),&
+                                                            dinfo%csa_pah(i_charged,:),&
+                                                            dinfo%csa_pah(i_charged,:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,dinfo%fcharge_pah(:,ii),&
@@ -280,10 +283,12 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
+                    i_neutral = 2*ii - 1
+                    i_charged = 2*ii
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
+                                                        dinfo%csa_pah(i_neutral,:),&
+                                                        dinfo%csa_pah(i_charged,:),&
+                                                        dinfo%csa_pah(i_charged,:),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,dinfo%fcharge_pah(:,ii))
@@ -350,6 +355,7 @@ contains
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
+        integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: nHI
         real(dp), dimension(1:dinfo%ndust) :: T_dust
         real(dp), dimension(1:dinfo%ncharge_pah_max,1:dinfo%npah) :: fcharge_pah
@@ -467,16 +473,18 @@ contains
                 else
                     ! We want the PAH PEH also have rt, so we use the full model
                     do ii = 1, dinfo%npah
+                        i_neutral = 2*ii - 1  ! row for neutral PAH cross-sections in csa_pah
+                        i_charged = 2*ii      ! row for charged PAH cross-sections in csa_pah
                         ! Consider the contribution from the UV background first
                         call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                             ne,Tk,fcharge_pah(:,ii),&
                                                             Pabs_pah(ii,1),Pinj_pah(ii),&
                                                             Prad_pah(ii),Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
+                                                            dinfo%csa_pah(i_neutral,:),&
+                                                            dinfo%csa_pah(i_charged,:),&
+                                                            dinfo%csa_pah(i_charged,:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
@@ -495,10 +503,12 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
+                    i_neutral = 2*ii - 1
+                    i_charged = 2*ii
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
+                                                        dinfo%csa_pah(i_neutral,:),&
+                                                        dinfo%csa_pah(i_charged,:),&
+                                                        dinfo%csa_pah(i_charged,:),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,fcharge_pah(:,ii))
@@ -546,15 +556,24 @@ contains
         logical, intent(out) :: step_ok
 
         ! --- Local variables ----
-        integer :: ii, ndust_total
+        integer :: ii, jj, ndust_total
         real(dp) :: sum_check
         real(dp), pointer :: y_gas(:,:), y_gas_out(:,:)
         real(dp), pointer :: y_dust(:), y_dust_out(:)
+        real(dp) :: mass_g(n_elements)   ! element atomic masses — populated once via #ifdef, used throughout
 
-        integer :: jj
         real(dp), intent(out) :: dUU
 
         dUU = 0.0_dp ! should I keep previous values?
+
+        ! Populate mass_g once so the pack/unpack loops below are #ifdef-free.
+#ifdef RTZ
+        do ii = 1, n_elements
+            mass_g(ii) = elements(ii)%atomic_mass_g
+        end do
+#else
+        mass_g(:) = el_atomic_masses_g(1:n_elements)
+#endif
 
         ! If no dust or PAH process is active, just return
         if (ndust_processes.eq.0 .and. npah_processes.eq.0) then
@@ -595,23 +614,16 @@ contains
 
         if (carry_gas_ions) then
             do ii = 1, n_elements
-#ifdef RTZ
-                y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
-                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * elements(ii)%atomic_mass_g
-#else
-                y_gas(ii,1) = nElement(ii) * el_atomic_masses_g(ii)
-                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * el_atomic_masses_g(ii)
-#endif
+                y_gas(ii,1) = nElement(ii) * mass_g(ii)
+                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * mass_g(ii)
             end do
         else
             do ii = 1, n_elements
-#ifdef RTZ
-                y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
-#else
-                y_gas(ii,1) = nElement(ii) * el_atomic_masses_g(ii)
-#endif
+                y_gas(ii,1) = nElement(ii) * mass_g(ii)
             end do
         end if
+        ! Pack y_dust: PAH bins first [1:npah], then grain bins [npah+1:npah+ndust].
+        ! This convention is mirrored in the unpack block below and in integrate_dust_ode.
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
             y_dust(dinfo%npah+1:dinfo%npah+dinfo%ndust) = dinfo%rho_dust(1:dinfo%ndust)
@@ -621,7 +633,13 @@ contains
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
         end if
 
-        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
+        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution.
+        ! Guard against an uninitialised procedure pointer (set by init_dust_solver based
+        ! on dust_solver_type); a null dereference here would be a silent SIGSEGV.
+        if (.not. associated(dust_solver_step)) then
+            print *, "FATAL ERROR: dust_solver_step is not associated. Check dust_solver_type in namelist."
+            call clean_stop
+        end if
         step_ok = .true.
         call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
                                 y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
@@ -629,52 +647,23 @@ contains
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then
             do ii = 1, n_elements
-#ifdef RTZ
-                nElement(ii) = y_gas_out(ii,1) / elements(ii)%atomic_mass_g
+                nElement(ii) = y_gas_out(ii,1) / mass_g(ii)
                 if (nElement(ii) > 1d-30) then
-                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / elements(ii)%atomic_mass_g
+                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / mass_g(ii)
                     ! Make sure that xelem_ions add up to 1 for each element
                     sum_check = sum(xelem_ions(ii,:))
                     if (sum_check > 1d-30) then
                         xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
                     end if
                 end if
-#else
-                nElement(ii) = y_gas_out(ii,1) / el_atomic_masses_g(ii)
-                if (nElement(ii) > 1d-30) then
-                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / el_atomic_masses_g(ii)
-                    ! Make sure that xelem_ions add up to 1 for each element
-                    sum_check = sum(xelem_ions(ii,:))
-                    if (sum_check > 1d-30) then
-                        xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
-                    end if
-                end if
-#endif
             end do
         else
             do ii = 1, n_elements
-#ifdef RTZ
-                nElement(ii) = y_gas_out(ii,1) / elements(ii)%atomic_mass_g
-#else
-                nElement(ii) = y_gas_out(ii,1) / el_atomic_masses_g(ii)
-#endif
+                nElement(ii) = y_gas_out(ii,1) / mass_g(ii)
             end do
         end if
 
-        ! test trial: very small value, ignore evolution
-        ! this can be very problematic in other cases...
-        ! 1d-28 seems to be fine, 1d-31 cannot prevents the error
-        ! do ii = 1, dinfo%npah
-        !     if (y_dust(ii)<1d-28.and.y_dust_out(ii)<1d-28) then
-        !         y_dust_out(ii) = y_dust(ii)
-        !     end if
-        ! end do
-        ! do ii = 1, dinfo%ndust
-        !     if (y_dust(dinfo%npah+ii)<1d-28.and.y_dust_out(dinfo%npah+ii)<1d-28) then
-        !         y_dust_out(dinfo%npah+ii) = y_dust(dinfo%npah+ii)
-        !     end if
-        ! end do
-
+        ! Unpack y_dust_out: PAH bins first [1:npah], grain bins [npah+1:npah+ndust].
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
             dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
             dinfo%rho_dust(1:dinfo%ndust) = y_dust_out(dinfo%npah+1:dinfo%npah+dinfo%ndust)
@@ -685,13 +674,10 @@ contains
         end if
 
 #ifdef RTZ
-        ! check fractional change
-        ! for this moment, only for cases with RTZ
-
-        ! 10% rule is there very inside of anninos_step...
-        ! but that is actually never triggered with anninos solver (step_ok_presents is .true.)
-        ! and extracting that info seems to be very complicated
-        ! as an temporary way, compute dUU here again
+        ! Compute dUU: the maximum fractional change in any gas or dust species over this step.
+        ! dUU is returned *unscaled* (pure fractional change, dimensionless).
+        ! The caller (rtz_cool_step in rtz_cooling_module.f90) multiplies by one_over_x_FRAC
+        ! before comparing against the RTZ convergence criterion.
 
         ! check for gas
         do ii = 1, n_elements
