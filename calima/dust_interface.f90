@@ -332,17 +332,6 @@ contains
         ! total_col_power --> output total collisional cooling power from dust (erg/s/cm^3)
         ! H2_formation_rate --> output H2 formation rate on dust grains (cm^3/s)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
-        use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_dust_charge_dist, compute_Coulomb_focusing
-        use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
-                                            compute_dust_peh_rate
-        use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
-                                            compute_pah_peh_equilibrium,&
-                                            interpolate_pah_peh_equilibrium,&
-                                            compute_pah_charge_equilibrium
-        use dust_radiation, only: update_T_dust
-        use dust_surface_chemistry, only: grain_h2_formation_rate
-
         implicit none
         ! ---- Inputs ----
         class(DustChemistryInfo), intent(inout) :: dinfo
@@ -353,186 +342,33 @@ contains
         real(dp), intent(out) :: H2_formation_rate
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
 
-        ! ---- Local variables ----
-        integer :: ii,j,idx_g,idx_T
-        integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
-        real(dp) :: nHI
-        real(dp), dimension(1:dinfo%ndust) :: T_dust
-        real(dp), dimension(1:dinfo%ncharge_pah_max,1:dinfo%npah) :: fcharge_pah
-        real(dp), dimension(1:dinfo%ndust):: Pinj_dust, Prec_dust, Pcoll_dust, Prad_dust
-        real(dp), dimension(1:dinfo%npah) :: Pinj_pah, Prec_pah, Prad_pah
-        real(dp), dimension(1:dinfo%npah,1:dinfo%nGroups) :: Pabs_pah
 
-
-        if (dinfo%use_precomp) then
-            ! In this case we use the rates computed during the pre-cool step
-            total_rec_power = 0d0
-            total_inj_power = 0d0
-            total_col_power = 0d0
-            H2_formation_rate = -1d0
-            if (dinfo%ndust > 0) then
-                total_rec_power = sum(dinfo%Prec_dust)
-                total_inj_power = sum(dinfo%Pinj_dust)
-                total_col_power = sum(dinfo%Pcoll_dust)
-                if (H2ondust) then
-                    H2_formation_rate = dinfo%H2_formation_rate
-                end if
-            end if
-            if (dinfo%npah  > 0) then
-                total_rec_power = total_rec_power + sum(dinfo%Prec_pah)
-                total_inj_power = total_inj_power + sum(dinfo%Pinj_pah)
-            end if
-            dinfo%use_precomp = .false. ! Reset the flag for next time
-            return
+        ! If precomputed rates are not already in dinfo (i.e. compute_dust_precool was not
+        ! called before us this step), delegate to it now.  This eliminates ~148 lines
+        ! of duplicated physics that previously lived in the non-precomp branch here.
+        if (.not. dinfo%use_precomp) then
+            call compute_dust_precool(dinfo, G0_total, Tk, ne, nElement, xelem_ions, nH2, nCO, Np=Np)
         end if
 
+        ! Read the precomputed rates from dinfo (populated either just above or by an
+        ! external compute_dust_precool call earlier in the RTZ step).
         total_rec_power = 0d0
         total_inj_power = 0d0
         total_col_power = 0d0
         H2_formation_rate = -1d0
-        T_dust = 0d0
-        fcharge_pah = 0d0
-        Pinj_dust = 0d0
-        Prec_dust = 0d0
-        Pcoll_dust = 0d0
-        Prad_dust = 0d0
-        Pinj_pah = 0d0
-        Prec_pah = 0d0
-        Prad_pah = 0d0
-        Pabs_pah = 0d0
-
         if (dinfo%ndust > 0) then
-            ! 1. Compute the equilibrium dust photoelectric heating and recombination cooling rates
-            if (dust_pe_heating .and. present(Np)) then
-                do ii = 1, dinfo%ndust
-                    if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
-                        call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
-                                                        &Pinj_dust(ii),&
-                                                        &Prec_dust(ii))
-                    else
-                        call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii))
-                        ! Consider the contribution from the UV background
-                        call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
-                                                        &Pinj_dust(ii),Prec_dust(ii))
-                        ! Now consider the contribution from the local radiation field
-                        call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
-                                                    dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
-                                                    dinfo%local_solid_angle(:),Np(:),&
-                                                    dinfo%group_eV(:),dinfo%Z_dust(ii),dinfo%Z_sigma(ii),Tk,ne,&
-                                                    Pinj_dust(ii),Prec_dust(ii))
-                    end if
-                end do
-            elseif (dust_pe_heating) then
-                do ii = 1, dinfo%ndust
-                    call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
-                                                    &Pinj_dust(ii),&
-                                                    &Prec_dust(ii))
-                end do
-            end if
-
-            ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
-            if (present(Np)) then
-                call update_T_dust(dinfo%G0_background,Pcoll_dust(:),Prec_dust(:),Pinj_dust(:),Prad_dust(:),&
-                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
-                                    Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:))
-            else
-                call update_T_dust(dinfo%G0_background,Pcoll_dust(:),Prec_dust(:),Pinj_dust(:),Prad_dust(:),&
-                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:))
-            end if
-
-            ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
-            do ii = 1, dinfo%ndust
-                Pcoll_dust(ii) = Pcoll_dust(ii) * dinfo%n_dust(ii)
-                Prec_dust(ii) = Prec_dust(ii) * dinfo%n_dust(ii)
-                Pinj_dust(ii) = Pinj_dust(ii) * dinfo%n_dust(ii)
-                Prad_dust(ii) = Prad_dust(ii) * dinfo%n_dust(ii)
-            end do
-
-            total_rec_power = total_rec_power + sum(Prec_dust)
-            total_inj_power = total_inj_power + sum(Pinj_dust)
-            total_col_power = total_col_power + sum(Pcoll_dust)
-
-            ! 6. Compute the H2 formation rate on dust grains
+            total_rec_power = sum(dinfo%Prec_dust)
+            total_inj_power = sum(dinfo%Pinj_dust)
+            total_col_power = sum(dinfo%Pcoll_dust)
             if (H2ondust) then
-                nHI = nElement(1) * xelem_ions(1,1)
-                H2_formation_rate = grain_h2_formation_rate(nHI,nElement(1),Tk,dinfo%rho_dust(:),T_dust(:))
-            endif
-        end if
-
-        if (dinfo%npah > 0) then
-            ! 7. Compute the PAH PEH model
-            if (pah_pe_heating .and. present(Np)) then
-                if (pah_pe_heating_isrf) then
-                    ! We have rt, but we want to just use the ISRF-averaged model
-                        do ii = 1, dinfo%npah
-                            call interpolate_pah_peh_equilibrium(ii,G0_total,&
-                                                                ne,Tk,fcharge_pah(:,ii),&
-                                                                Pabs_pah(ii,1),Pinj_pah(ii),&
-                                                                Prad_pah(ii),Prec_pah(ii))
-                        end do
-                else
-                    ! We want the PAH PEH also have rt, so we use the full model
-                    do ii = 1, dinfo%npah
-                        i_neutral = 2*ii - 1  ! row for neutral PAH cross-sections in csa_pah
-                        i_charged = 2*ii      ! row for charged PAH cross-sections in csa_pah
-                        ! Consider the contribution from the UV background first
-                        call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
-                                                            ne,Tk,fcharge_pah(:,ii),&
-                                                            Pabs_pah(ii,1),Pinj_pah(ii),&
-                                                            Prad_pah(ii),Prec_pah(ii))
-                        ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
-                                                            dinfo%csa_pah(i_neutral,:),&
-                                                            dinfo%csa_pah(i_charged,:),&
-                                                            dinfo%csa_pah(i_charged,:),&
-                                                            dinfo%nGroups,dinfo%local_solid_angle(:),&
-                                                            Np(:),dinfo%group_eV(:),&
-                                                            dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
-                                                            Pabs_pah(ii,:),Pinj_pah(ii),&
-                                                            Prad_pah(ii),Prec_pah(ii))
-                    end do
-                end if
-            else if (pah_pe_heating) then
-                ! We want PAH PEH but don't have rt
-                do ii = 1, dinfo%npah
-                    call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
-                                                        ne,Tk,fcharge_pah(:,ii),&
-                                                        Pabs_pah(ii,1),Pinj_pah(ii),&
-                                                        Prad_pah(ii),Prec_pah(ii))
-                end do
-            else if (present(Np)) then
-                ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
-                do ii = 1, dinfo%npah
-                    i_neutral = 2*ii - 1
-                    i_charged = 2*ii
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
-                                                        dinfo%csa_pah(i_neutral,:),&
-                                                        dinfo%csa_pah(i_charged,:),&
-                                                        dinfo%csa_pah(i_charged,:),&
-                                                        dinfo%nGroups,dinfo%local_solid_angle(:),&
-                                                        Np(:),dinfo%group_eV(:),dinfo%local_c,&
-                                                        Tk,ne,fcharge_pah(:,ii))
-                end do
-            else
-                ! We don't want PAH PEH but don't have rt, so we just interpolate
-                ! the ISRF-averaged PAH charge tables
-                do ii = 1, dinfo%npah
-                    call interpolate_pah_charge_equilibrium(ii,dinfo%G0_background,ne,Tk,&
-                       &fcharge_pah(:,ii))
-                end do
+                H2_formation_rate = dinfo%H2_formation_rate
             end if
-
-            ! 8. Now convert from erg/s to erg/s/cm3
-            do ii = 1, dinfo%npah
-                Pabs_pah(ii,:) = Pabs_pah(ii,:) * dinfo%n_pah(ii)
-                Pinj_pah(ii) = Pinj_pah(ii) * dinfo%n_pah(ii)
-                Prad_pah(ii) = Prad_pah(ii) * dinfo%n_pah(ii)
-                Prec_pah(ii) = Prec_pah(ii) * dinfo%n_pah(ii)
-            end do
-
-            total_rec_power = total_rec_power + sum(Prec_pah)
-            total_inj_power = total_inj_power + sum(Pinj_pah)
         end if
+        if (dinfo%npah > 0) then
+            total_rec_power = total_rec_power + sum(dinfo%Prec_pah)
+            total_inj_power = total_inj_power + sum(dinfo%Pinj_pah)
+        end if
+        dinfo%use_precomp = .false.
     end subroutine compute_dust_coolrates
 
     subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np,step_ok, dUU)
@@ -561,6 +397,11 @@ contains
         real(dp), pointer :: y_gas(:,:), y_gas_out(:,:)
         real(dp), pointer :: y_dust(:), y_dust_out(:)
         real(dp) :: mass_g(n_elements)   ! element atomic masses — populated once via #ifdef, used throughout
+        real(dp) :: h_init_val           ! substep hint for integrate_dust_ode
+        ! Cache the last accepted substep's recommended next-step size across calls.
+        ! On re-entry with the same (or similar) conditions this skips the firstcall
+        ! 1/kmax reduction, cutting substep count at equilibrium for explicit solvers.
+        real(dp), save :: last_h_ode = 0.0_dp
 
         real(dp), intent(out) :: dUU
 
@@ -641,8 +482,11 @@ contains
             call clean_stop
         end if
         step_ok = .true.
+        h_init_val = dt
+        if (last_h_ode > 0.0_dp) h_init_val = last_h_ode
         call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
-                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
+                                y_gas_out,y_dust_out,h_init_val,0d0,dt,&
+                                debug_flag=dust_debug,step_ok=step_ok,h_last=last_h_ode)
 
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then

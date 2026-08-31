@@ -1039,19 +1039,25 @@ module dust_init
             end if
         end do
 
-        ! 6. Allocate per-process dM tracking arrays (sizes known after init_dust_processes)
+        ! 6. Allocate per-process tracking arrays (sizes known after init_dust_processes).
+        !    dM_ode_* are only needed when dust_debug=.true. (mass budget logging).
+        !    ode_reduction_count_* are needed for dust_log=.true. (solver stats).
         if (ndust_processes > 0) then
-            if (.not. allocated(dM_ode_dust)) &
-                allocate(dM_ode_dust(ndust+npah, ndust_processes))
-            dM_ode_dust(:,:) = 0.0_dp
+            if (dust_debug) then
+                if (.not. allocated(dM_ode_dust)) &
+                    allocate(dM_ode_dust(ndust+npah, ndust_processes))
+                dM_ode_dust(:,:) = 0.0_dp
+            end if
             if (.not. allocated(ode_reduction_count_dust)) &
                 allocate(ode_reduction_count_dust(ndust_processes))
             ode_reduction_count_dust(:) = 0_8
         end if
         if (npah_processes > 0) then
-            if (.not. allocated(dM_ode_pah)) &
-                allocate(dM_ode_pah(ndust+npah, npah_processes))
-            dM_ode_pah(:,:) = 0.0_dp
+            if (dust_debug) then
+                if (.not. allocated(dM_ode_pah)) &
+                    allocate(dM_ode_pah(ndust+npah, npah_processes))
+                dM_ode_pah(:,:) = 0.0_dp
+            end if
             if (.not. allocated(ode_reduction_count_pah)) &
                 allocate(ode_reduction_count_pah(npah_processes))
             ode_reduction_count_pah(:) = 0_8
@@ -1136,7 +1142,7 @@ module dust_init
 
         namelist/calima_params/&
                 ! Dust physics flags
-                dust_log,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
+                dust_log,dust_debug,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
                 dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,&
                 dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
                 dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
