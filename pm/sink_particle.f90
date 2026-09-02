@@ -1064,6 +1064,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   integer::ielem,jelem
   real(dp)::fchem
 
+  real(dp)::check_H
+
   ! strict initialization 
   injected_mass = 0d0
   loc_metal_yield = 0d0
@@ -1319,6 +1321,31 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 #endif
               unew(indp(j,ind),ivar)=unew(indp(j,ind),ivar)-m_acc*uold(indp(j,ind),ivar)/d/vol_loc
            end do
+           
+           ! check HI+HII+H2
+           check_H = unew(indp(j,ind),27) + unew(indp(j,ind),28) + unew(indp(j,ind),81)
+
+           if (check_H < 0.9*unew(indp(j,ind),1)) then
+              write(*,*) "normalization is off after accretion (1)"
+              write(*,*) "isink:", isink
+              write(*,*) "m_acc:", m_acc
+              write(*,*) "d:", d
+              write(*,*) "vol_loc:", vol_loc
+              write(*,*) "check_H:", check_H
+              write(*,*) "uold:", uold(indp(j,ind),:)
+              write(*,*) "unew:", unew(indp(j,ind),:)
+           end if
+
+           if (check_H > 1.1*unew(indp(j,ind),1)) then
+              write(*,*) "normalization is off after accretion (2)"
+              write(*,*) "isink:", isink
+              write(*,*) "m_acc:", m_acc
+              write(*,*) "d:", d
+              write(*,*) "vol_loc:", vol_loc
+              write(*,*) "check_H:", check_H
+              write(*,*) "uold:", uold(indp(j,ind),:)
+              write(*,*) "unew:", unew(indp(j,ind),:)
+           end if
 
 
 
@@ -1524,6 +1551,35 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        counter = counter + elements(iElement)%n_ions
                     end if
                  end do
+              end if
+
+              ! check HI+HII+H2
+              check_H = unew(indp(j,ind),27) + unew(indp(j,ind),28) + unew(indp(j,ind),81)
+
+              if (check_H < 0.9*unew(indp(j,ind),1)) then
+                 write(*,*) "normalization is off after ejection (1)"
+                 write(*,*) "isink:", isink
+                 write(*,*) "ijm:", ijm
+                 write(*,*) "ijp:", ijp
+                 write(*,*) "ije:", ije
+                 write(*,*) "loc_metal_yield:", loc_metal_yield
+                 write(*,*) "vol_loc:", vol_loc
+                 write(*,*) "check_H:", check_H
+                 write(*,*) "uold:", uold(indp(j,ind),:)
+                 write(*,*) "unew:", unew(indp(j,ind),:)
+              end if
+
+              if (check_H > 1.1*unew(indp(j,ind),1)) then
+                 write(*,*) "normalization is off after ejection (2)"
+                 write(*,*) "isink:", isink
+                 write(*,*) "ijm:", ijm
+                 write(*,*) "ijp:", ijp
+                 write(*,*) "ije:", ije
+                 write(*,*) "loc_metal_yield:", loc_metal_yield
+                 write(*,*) "vol_loc:", vol_loc
+                 write(*,*) "check_H:", check_H
+                 write(*,*) "uold:", uold(indp(j,ind),:)
+                 write(*,*) "unew:", unew(indp(j,ind),:)
               end if
 
            end if

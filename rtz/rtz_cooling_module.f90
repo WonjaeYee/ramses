@@ -2333,31 +2333,31 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
             ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
 
-            if (iElement.le.2) then 
-                  current_mass_frac = sum(dXion(iElement,2:ion_fracs))
-
-                  dXion(iElement,1) = 0.d0
-
-                  if (current_mass_frac.ge.0.d0) then
-                     if (current_mass_frac.le.1.d0) then
-                        dXion(iElement,1) = 1.d0 - current_mass_frac
-                     else
-                        do iIon=1,ion_fracs
-                           dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
-                        end do
-                     end if
-                  else
-                     dXion(iElement,1) = 1.d0
-                     dXion(iElement,2:ion_fracs) = 0.d0
-                  end if
-               ! end if
-            else 
+!             if (iElement.le.2) then 
+!                   current_mass_frac = sum(dXion(iElement,2:ion_fracs))
+! 
+!                   dXion(iElement,1) = 0.d0
+! 
+!                   if (current_mass_frac.ge.0.d0) then
+!                      if (current_mass_frac.le.1.d0) then
+!                         dXion(iElement,1) = 1.d0 - current_mass_frac
+!                      else
+!                         do iIon=1,ion_fracs
+!                            dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
+!                         end do
+!                      end if
+!                   else
+!                      dXion(iElement,1) = 1.d0
+!                      dXion(iElement,2:ion_fracs) = 0.d0
+!                   end if
+!                ! end if
+!             else 
                current_mass_frac = sum(dXion(iElement,1:ion_fracs))
                do iIon=1,ion_fracs
                   !  dXion(iElement,iIon) = dXion(iElement,iIon) + ((1.d0 - current_mass_frac) * (dXion(iElement,iIon) / current_mass_frac))
                   dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
                end do
-            end if
+!             end if
          end if
       end do ! END ELEMENT LOOP
 

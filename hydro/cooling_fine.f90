@@ -714,6 +714,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         write(*,*) "   dtcool:", dtcool
 #endif
 
+        do i=1,nleaf
+           if (sum(xion(1,1:3,i)) < 0.9) then
+              write(*,*) "wrong normalization before rtz_solve_cooling"
+              write(*,*) i
+              write(*,*) "xion:", xion(1,1:3,i)
+              write(*,*) "pos:", xg(ind_leaf(i)-iskip, 1:3)
+              write(*,*) "uold:", uold(ind_leaf(i),:)
+              write(*,*) "rtuold:", rtuold(ind_leaf(i),:)
+           end if
+        end do
+
        ! for static test, temporarily disable RTZ solver
         if (rtz_cooling) then
            call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
@@ -730,6 +741,15 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
                               )
         end if
+
+        do i=1,nleaf
+           if (sum(xion(1,1:3,i)) < 0.9) then
+              write(*,*) "wrong normalization after rtz_solve_cooling"
+              write(*,*) i
+              write(*,*) "xion:", xion(1,1:3,i)
+              err_idx = i
+           end if
+        end do
 
 #ifdef CALIMA
         do i=1,nleaf
@@ -749,9 +769,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         if (err_idx > 0) then
 #endif
            write(*,*) 'This is raised in `coolfine1`'
-           write(*,*) '  myid:', myid
-           write(*,*) 'ilevel:', ilevel
-           ! write(*,*) 'ind_leaf:', ind_leaf(err_idx)
+           write(*,*) '    myid:', myid
+           write(*,*) '  ilevel:', ilevel
+           write(*,*) 'ind_leaf:', ind_leaf(err_idx)
            
            write(*,*) 'error cell, before the update'
            write(*,*) '  uold:', uold(ind_leaf(err_idx),:)
@@ -767,6 +787,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) '    H2:', uold(ind_leaf(err_idx),iIons+counter-1)/uold(ind_leaf(err_idx),1)
            write(*,*) '    CO:', uold(ind_leaf(err_idx),iCO)/uold(ind_leaf(err_idx),1)
            write(*,*) '  ions:', uold(ind_leaf(err_idx),iIons:iIons+counter-2)/uold(ind_leaf(err_idx),1)
+
+           write(*,*) "(raw `xg` array)"
+           write(*,*) "pos:", xg(ind_leaf(err_idx)-iskip, 1:3)
            ! write(*,*) 'for comparison, adjacent cells'
            ! write(*,*) 'uold:', uold(ind_leaf(err_idx)-1, neul)
            ! write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
