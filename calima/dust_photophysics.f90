@@ -1249,11 +1249,7 @@ module dust_optics
         integer :: species, ion
         integer :: isize
 
-        if (npah > 0) then
-            isize = species - npah*2
-        else
-            isize = species
-        end if
+        isize = species
 
         if (isize < 1 .or. isize > ndust) then
             flaLambda_dust = huge(1d0)
@@ -1399,7 +1395,7 @@ module dust_optics
         integer :: species, ion
         integer :: isize
 
-        isize = species - npah*2
+        isize = species
         fRATLambda_dust = f * lambda * getRATCrosssection(lambda,isize)
     END FUNCTION fRATLambda_dust
 

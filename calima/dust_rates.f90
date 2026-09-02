@@ -368,7 +368,7 @@ module dust_rates
 #ifdef RTZ
         nO = y_gas(8,1) / elements(8)%atomic_mass_g
 #else
-        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+        nO = y_gas(8,1) / el_atomic_masses_g(8)
 #endif
 
         speciesloop: do jj = 1, ndchemtype
@@ -458,7 +458,7 @@ module dust_rates
 #ifdef RTZ
         nO = y_gas(8,1) / elements(8)%atomic_mass_g
 #else
-        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+        nO = y_gas(8,1) / el_atomic_masses_g(8)
 #endif
 
         speciesloop: do jj = 1, ndchemtype

@@ -1319,11 +1319,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_isIR) then
          do ii = 1, ndust
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
-                  group_egy_erg(iIR)
+                  one_over_egy_IR_erg
          end do
          do ii = 1, npah
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
-                  group_egy_erg(iIR)
+                  one_over_egy_IR_erg
          end do
       end if
 #else

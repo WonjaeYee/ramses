@@ -165,7 +165,10 @@ module dust_init
                     Z_interest = Z_interest + myq(imetal + dustbins_props(jj1)%el_index(jj) - 1)
                 end do
             end do
-            if (Z_interest .eq. 0d0) myforce = .true.; GD = 0d0
+            if (Z_interest .eq. 0d0) then
+                myforce = .true.
+                GD = 0d0
+            end if
             if ((GD.ne.0d0).and. (.not.myforce)) then
                 if (GD.lt.1d0/Z_interest) then
                     GD = 1d0/Z_interest
@@ -454,6 +457,7 @@ module dust_init
     subroutine init_dust_processes
         use dust_rates
         implicit none
+        integer :: ii
 
         ! 1. We begin by counting how many dust processes will be included based on
         ! on the namelist parameters, and allocate the array of dust_processes_list
@@ -550,6 +554,7 @@ module dust_init
                     dust_processes_list(ndust_processes)%name = 'ratd'
                     dust_processes_list(ndust_processes)%source = .false.
                     dust_processes_list(ndust_processes)%sink = .true.
+                    ! comp_rate not yet implemented for RATD; guard below will abort.
                 end if
             end if
         end if
@@ -583,6 +588,7 @@ module dust_init
                 if (pah_accretion) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'accretion'
+                    ! comp_rate not yet implemented for PAH accretion; guard below will abort.
                 end if
                 if (pah_sputtering) then
                     npah_processes = npah_processes + 1
@@ -618,6 +624,7 @@ module dust_init
                 if (pah_desorption) then
                     npah_processes = npah_processes + 1
                     pah_processes_list(npah_processes)%name = 'desorption'
+                    ! comp_rate not yet implemented for PAH desorption; guard below will abort.
                 end if
                 if (pah_cluster_evaporation) then
                     npah_processes = npah_processes + 1
@@ -642,6 +649,30 @@ module dust_init
                     end if
                 end if
             end if
+        end if
+
+        ! 3. Guard: abort at startup if any registered process has no comp_rate.
+        !    This catches stub entries ('ratd', PAH 'accretion', PAH 'desorption')
+        !    before they trigger a null procedure-pointer call at runtime.
+        if (allocated(dust_processes_list)) then
+            do ii = 1, ndust_processes
+                if (.not. associated(dust_processes_list(ii)%comp_rate)) then
+                    write(*,'(a,a,a)') 'ERROR: dust process "', &
+                        trim(dust_processes_list(ii)%name), &
+                        '" has no comp_rate implementation (not yet supported).'
+                    call clean_stop()
+                end if
+            end do
+        end if
+        if (allocated(pah_processes_list)) then
+            do ii = 1, npah_processes
+                if (.not. associated(pah_processes_list(ii)%comp_rate)) then
+                    write(*,'(a,a,a)') 'ERROR: PAH process "', &
+                        trim(pah_processes_list(ii)%name), &
+                        '" has no comp_rate implementation (not yet supported).'
+                    call clean_stop()
+                end if
+            end do
         end if
     end subroutine init_dust_processes
 
@@ -721,7 +752,9 @@ module dust_init
             if (allocated(dustbins_props(ii)%el_atomic_masses_amu)) deallocate(dustbins_props(ii)%el_atomic_masses_amu)
             if (allocated(dustbins_props(ii)%el_atomic_masses_g)) deallocate(dustbins_props(ii)%el_atomic_masses_g)
             if (allocated(dustbins_props(ii)%el_conv_factors)) deallocate(dustbins_props(ii)%el_conv_factors)
+#ifdef RTZ
             if (allocated(dustbins_props(ii)%el_nions)) deallocate(dustbins_props(ii)%el_nions)
+#endif
             if (allocated(dustbins_props(ii)%el_names)) deallocate(dustbins_props(ii)%el_names)
             if (allocated(dustbins_props(ii)%el_atomic_number)) deallocate(dustbins_props(ii)%el_atomic_number)
             allocate(dustbins_props(ii)%el_index(1:n_el), &
@@ -730,9 +763,11 @@ module dust_init
                      dustbins_props(ii)%el_atomic_masses_amu(1:n_el), &
                      dustbins_props(ii)%el_atomic_masses_g(1:n_el), &
                      dustbins_props(ii)%el_conv_factors(1:n_el), &
-                     dustbins_props(ii)%el_nions(1:n_el), &
                      dustbins_props(ii)%el_names(1:n_el), &
                      dustbins_props(ii)%el_atomic_number(1:n_el))
+#ifdef RTZ
+            allocate(dustbins_props(ii)%el_nions(1:n_el))
+#endif
             kk = 0
             do jj = 1, n_elements
                 if (dust_composition(ichemtype,jj) > 0d0) then

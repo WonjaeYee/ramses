@@ -162,20 +162,20 @@ module dust_commons
 
     ! ==== Element parameters in the case of no RTZ module ====
 #ifndef RTZ
-    real(dp),dimension(1:n_elements) :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
+    real(dp),dimension(1:n_elements),parameter :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
                                                                 10.811d0, 12.0107d0, 14.0067d0, 15.9994d0, 18.9984032d0, &
                                                                 20.1797d0, 22.98976928d0, 24.3050d0, 26.9815386d0, &
                                                                 28.0855d0, 30.973762d0, 32.065d0, 35.453d0, &
                                                                 39.948d0, 39.0983d0, 40.078d0, 44.955910d0, &
                                                                 47.867d0, 50.9415d0, 51.9961d0, 54.938044d0, &
                                                                 55.845d0, 58.933195d0/)
-    real(dp),dimension(1:n_elements) :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
-    character(LEN=2),dimension(1:n_elements) :: el_names = (/'H','He','Li','Be','B', &
-                                                                'C','N','O','F','Ne', &
+    real(dp),dimension(1:n_elements),parameter :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
+    character(LEN=2),dimension(1:n_elements),parameter :: el_names = (/'H ','He','Li','Be','B ', &
+                                                                'C ','N ','O ','F ','Ne', &
                                                                 'Na','Mg','Al','Si', &
-                                                                'P','S','Cl','Ar', &
-                                                                'K','Ca','Sc','Ti', &
-                                                                'V','Cr','Mn','Fe', &
+                                                                'P ','S ','Cl','Ar', &
+                                                                'K ','Ca','Sc','Ti', &
+                                                                'V ','Cr','Mn','Fe', &
                                                                 'Co'/)
 #endif
 
@@ -390,12 +390,14 @@ module dust_commons
                         do ii=1,ndust
                             total_dust_mass_species(npah+ii) = total_dust_mass_species(npah+ii) + (uold(ind_cell(i),idust+ii-1) * dx_loc**3)
                         end do
-                        ! Add total metal mass
-                        do ii=1,n_elements
+                        ! Add total metal mass (only the nmetals slots that exist in uold)
+                        do ii=1,nmetals
                             total_metal_mass(ii) = total_metal_mass(ii) + (uold(ind_cell(i),imetal+ii-1) * dx_loc**3)
                         end do
                         ! Add total CO mass
+#ifdef CO
                         total_CO_mass = total_CO_mass + (uold(ind_cell(i),ico) * dx_loc**3)
+#endif
                     end if
                   end do
                end do
