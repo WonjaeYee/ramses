@@ -127,47 +127,76 @@ module dust_init
 
     end function check_params_dust
 
-    subroutine init_dust_depletion(myq,Hfrac,force_zero)
-        ! NOTE (RTZ): this routine takes dust mass OUT of the element slots
-        ! (see the "Deplete carbon" / "Deplete the elements" lines below) but
-        ! leaves the ion slots untouched. Under RTZ an ion slot holds the mass
-        ! density of that ion, i.e. a fraction of its OWN element, so after
-        ! this routine sum(ion states) exceeds the element density by the dust
-        ! fraction. hydro/cooling_fine.f90 renormalizes x_ion on read, so the
-        ! first cooling step absorbs it mass-consistently -- but it rewrites
-        ! the ionization state to do so. A caller (patch condinit) that wants
-        ! consistent initial conditions should rescale each element's ion
-        ! slots, and the H2 slot, by the factor its element density changed by.
-        ! Not fixed here: dust_init.o is compiled before rt_parameters.o (see
-        ! MODOBJ in the bin_*/Makefile), so iIons/isH2_rtz are not reachable
-        ! from this file, and adding an argument would break existing callers.
-        !
+    subroutine init_dust_depletion(myq,Hfrac,force_zero,iIons_in,isH2_rtz_in)
         ! This routine is used for initialising isolated galaxy simulations
         ! following the fractional contributions of the BARE-GR-S model
         ! from Zubko et al. (2004) - see Table 6
         ! (https://ui.adsabs.harvard.edu/abs/2004ApJS..152..211Z/abstract)
         ! and Dopita et al. (2000) - see Table 1
         ! (https://ui.adsabs.harvard.edu/abs/2000ApJ...539..742D/abstract)
+        !
+        ! Under RTZ, element depletion onto dust also requires rescaling the
+        ! ion passive scalars: each ion slot stores x_ion * rho_element, so
+        ! when rho_element decreases the ion slots must shrink by the same
+        ! factor to keep x_ion unchanged. Pass iIons_in (= the iIons index
+        ! from rt_parameters) and isH2_rtz_in (= the isH2_rtz flag) to
+        ! enable this rescaling. Without them the ion slots are left at their
+        ! pre-depletion values; the first cooling step will then silently clip
+        ! sum(x_ion) > 1 back to 1, overwriting the initial ionization state.
+        !
+        ! NOTE on compilation order: dust_init.o is compiled before
+        ! rt_parameters.o (see MODOBJ in the bin_*/Makefile), so iIons and
+        ! isH2_rtz cannot be USE-associated here; they must be passed as
+        ! arguments by the caller.
         use amr_commons, only: myid
         use hydro_commons, only: smallr,nvar,imetal
         implicit none
         real(dp),dimension(1:nvar),intent(inout) :: myq
         real(dp),intent(in) :: Hfrac
         logical,intent(in),optional :: force_zero
+        integer,intent(in),optional :: iIons_in
+        logical,intent(in),optional :: isH2_rtz_in
         integer :: ii,jj,jj1,jj2,kk,ilim
+        integer :: ie,ion_offset
+        integer,dimension(1:n_elements) :: el_slot
         logical :: myforce
         real(dp) :: GD,GDfactor,DTMfactor
         real(dp) :: dustC,dustPAH,dustMass,Z_interest
-        real(dp) :: ftot,metalM
+        real(dp) :: ftot,metalM,scale_ion
         real(dp),dimension(:),allocatable :: M_el
+        real(dp),dimension(1:n_elements) :: rho_el_old
 
         myforce = .false.
         if (present(force_zero)) myforce = force_zero
 
+        ! The `elements` table is sparse and indexed by atomic number (H=1,
+        ! He=2, C=6, ..., Fe=26), whereas the uold element block is COMPACTED
+        ! to one slot per ACTIVE element (see read_hydro_params.f90, which sets
+        ! elements(i)%u_hydro_idx = imetal + counter over active elements only).
+        ! el_slot maps the atomic-number index carried in
+        ! dustbins_props%el_index onto the actual uold column.
+        el_slot(:) = 0
+#ifdef RTZ
+        do ie = 1, n_elements
+            if (elements(ie)%atomic_number .gt. 0) el_slot(ie) = elements(ie)%u_hydro_idx
+        end do
+#else
+        do ie = 1, n_elements
+            el_slot(ie) = imetal + ie - 1
+        end do
+#endif
+
+        ! Snapshot the element densities before depletion so the ion slots can
+        ! be rescaled by the same factor their element changed by (see below).
+        rho_el_old(:) = 0d0
+        do ie = 1, n_elements
+            if (el_slot(ie) .gt. 0) rho_el_old(ie) = myq(el_slot(ie))
+        end do
+
         if (DTMinit.eq.-1d0) then
             ! OPTION A: Initialise based on G/D for the MW
             if (GDinit.eq.-1d0) then
-                GD = GD_RR14(myq(imetal+8-1)/mO_amu, Hfrac/mH_amu)
+                GD = GD_RR14(myq(el_slot(8))/mO_amu, Hfrac/mH_amu)
             else
                 GD = GDinit
             end if
@@ -176,10 +205,16 @@ module dust_init
             do ii = 1, ndchemtype
                 jj1 = istart_chemtype(ii)
                 do jj = 1, dustbins_props(jj1)%nelements
-                    Z_interest = Z_interest + myq(imetal + dustbins_props(jj1)%el_index(jj) - 1)
+                    Z_interest = Z_interest + myq(el_slot(dustbins_props(jj1)%el_index(jj)))
                 end do
             end do
-            if (Z_interest .eq. 0d0) myforce = .true.; GD = 0d0
+            ! NB: this was previously written as a single line with a ';'
+            ! separator, which made "GD = 0d0" unconditional and left the
+            ! GDfactor branch below permanently unreachable.
+            if (Z_interest .eq. 0d0) then
+                myforce = .true.
+                GD = 0d0
+            end if
             if ((GD.ne.0d0).and. (.not.myforce)) then
                 if (GD.lt.1d0/Z_interest) then
                     GD = 1d0/Z_interest
@@ -188,9 +223,9 @@ module dust_init
                 do jj=1,ndchemtype
                     jj1 = istart_chemtype(jj)
                     if (dustbins_props(jj1)%interact_pah .and. npah>0) then
-                        jj2 = dustbins_props(jj1)%el_index(1) - 1
+                        jj2 = el_slot(dustbins_props(jj1)%el_index(1))
                         ! In the case we follow PAHs and carbonaceous grains
-                        dustC = myq(imetal + jj2) * min(fDust_depletions(6) * GDfactor,1d0 - smallr_dust / myq(imetal + jj2))
+                        dustC = myq(jj2) * min(fDust_depletions(6) * GDfactor,1d0 - smallr_dust / myq(jj2))
                         if (dust_pahs .and. (fpah_ini.eq.-1d0)) then
                             dustPAH = fCDust_inPAH * dustC
                         elseif (dust_pahs) then
@@ -205,13 +240,13 @@ module dust_init
                             end do
                         end if
                         ! Deplete carbon
-                        myq(imetal+jj2) = max(myq(imetal+jj2) - (dustC + dustPAH),0d0)
+                        myq(jj2) = max(myq(jj2) - (dustC + dustPAH),0d0)
                     else
                         ! Now for a general dust chemistry in which we look for the limiting element
                         allocate(M_el(1:dustbins_props(jj1)%nelements))
                         do ii = 1, dustbins_props(jj1)%nelements
                             M_el(ii) = fDust_depletions(dustbins_props(jj1)%el_atomic_number(ii)) * &
-                                        myq(imetal + dustbins_props(jj1)%el_index(ii) - 1)
+                                        myq(el_slot(dustbins_props(jj1)%el_index(ii)))
                         end do
                         call cmp_lim_elem(jj1,dustbins_props(jj1)%nelements,M_el,ilim)
                         dustMass = GDfactor * M_el(ilim) / dustbins_props(jj1)%el_mfractions(ilim)
@@ -220,9 +255,10 @@ module dust_init
                         end do
                         ! Deplete the elements
                         do ii = 1, dustbins_props(jj1)%nelements
-                            myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) = max(myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) - &
+                            myq(el_slot(dustbins_props(jj1)%el_index(ii))) = max(myq(el_slot(dustbins_props(jj1)%el_index(ii))) - &
                                 (dustMass * dustbins_props(jj1)%el_mfractions(ii)),0d0)
                         end do
+                        deallocate(M_el)
                     end if
                 end do
                 if (any(myq(idust:idust+ndust-1) .lt. 0d0)) then
@@ -259,9 +295,9 @@ module dust_init
                 do jj=1,ndchemtype
                     jj1 = istart_chemtype(jj)
                     if (dustbins_props(jj1)%interact_pah .and. npah>0) then
-                        jj2 = dustbins_props(jj1)%el_index(1) - 1
+                        jj2 = el_slot(dustbins_props(jj1)%el_index(1))
                         ! In the case we follow PAHs and carbonaceous grains
-                        dustC = myq(imetal + jj2) * min(fDust_depletions(6) * DTMfactor,1d0 - smallr_dust / myq(imetal + jj2))
+                        dustC = myq(jj2) * min(fDust_depletions(6) * DTMfactor,1d0 - smallr_dust / myq(jj2))
                         if (dust_pahs .and. (fpah_ini.eq.-1d0)) then
                             dustPAH = fCDust_inPAH * dustC
                         elseif (dust_pahs) then
@@ -276,13 +312,13 @@ module dust_init
                             end do
                         end if
                         ! Deplete carbon
-                        myq(imetal+jj2) = max(myq(imetal+jj2) - (dustC + dustPAH),0d0)
+                        myq(jj2) = max(myq(jj2) - (dustC + dustPAH),0d0)
                     else
                         ! Now for a general dust chemistry in which we look for the limiting element
                         allocate(M_el(1:dustbins_props(jj1)%nelements))
                         do ii = 1, dustbins_props(jj1)%nelements
                             M_el(ii) = fDust_depletions(dustbins_props(jj1)%el_atomic_number(ii)) * &
-                                        myq(imetal + dustbins_props(jj1)%el_index(ii) - 1)
+                                        myq(el_slot(dustbins_props(jj1)%el_index(ii)))
                         end do
                         call cmp_lim_elem(jj1,dustbins_props(jj1)%nelements,M_el,ilim)
                         dustMass = DTMfactor * M_el(ilim) / dustbins_props(jj1)%el_mfractions(ilim)
@@ -291,9 +327,10 @@ module dust_init
                         end do
                         ! Deplete the elements
                         do ii = 1, dustbins_props(jj1)%nelements
-                            myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) = max(myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) - &
+                            myq(el_slot(dustbins_props(jj1)%el_index(ii))) = max(myq(el_slot(dustbins_props(jj1)%el_index(ii))) - &
                                 (dustMass * dustbins_props(jj1)%el_mfractions(ii)),0d0)
                         end do
+                        deallocate(M_el)
                     end if
                 end do
             else
@@ -308,6 +345,40 @@ module dust_init
                 end if
             end if
         end if
+
+#ifdef RTZ
+        ! Rescale each element's ion slots by the factor its element density
+        ! changed by, so that x_ion = myq(iIons+k)/myq(el_slot(e)) is preserved
+        ! across depletion. This assumes depletion onto dust is unbiased with
+        ! respect to ionization state, consistent with the accretion treatment
+        ! when carry_gas_ions=.false.
+        ! The ion block is packed over ACTIVE elements only, in increasing
+        ! atomic-number order, with the H2 slot appended after all ion states
+        ! when isH2_rtz -- this mirrors the counter walk in cooling_fine.f90.
+        if (present(iIons_in)) then
+            ion_offset = 0
+            do ie = 1, n_elements
+                if (elements(ie)%atomic_number .le. 0) cycle
+                if (rho_el_old(ie) > 0d0) then
+                    scale_ion = myq(el_slot(ie)) / rho_el_old(ie)
+                else
+                    scale_ion = 1d0
+                end if
+                if (scale_ion .ne. 1d0) then
+                    myq(iIons_in + ion_offset : iIons_in + ion_offset + elements(ie)%n_ions - 1) = &
+                        myq(iIons_in + ion_offset : iIons_in + ion_offset + elements(ie)%n_ions - 1) * scale_ion
+                end if
+                ion_offset = ion_offset + elements(ie)%n_ions
+            end do
+            ! H2 is stored as a fraction of rho_H, so it scales with hydrogen.
+            if (present(isH2_rtz_in)) then
+                if (isH2_rtz_in .and. elements(1)%atomic_number .gt. 0 .and. rho_el_old(1) > 0d0) then
+                    myq(iIons_in + ion_offset) = myq(iIons_in + ion_offset) &
+                        * myq(el_slot(1)) / rho_el_old(1)
+                end if
+            end if
+        end if
+#endif
     end subroutine init_dust_depletion
 
     subroutine init_dust_depletion_tests(nElement,rho_dust,rho_pah)
