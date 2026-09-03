@@ -153,6 +153,7 @@ contains
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
+        integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: Zel, nHI, prevD
         integer :: n_charge
 
@@ -252,16 +253,18 @@ contains
                 else
                     ! We want the PAH PEH also have rt, so we use the full model
                     do ii = 1, dinfo%npah
+                        i_neutral = 2*ii - 1  ! row for neutral PAH cross-sections in csa_pah
+                        i_charged = 2*ii      ! row for charged PAH cross-sections in csa_pah
                         ! Consider the contribution from the UV background first
                         call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
                                                             ne,Tk,dinfo%fcharge_pah(:,ii),&
                                                             dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
                         ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
+                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
+                                                            dinfo%csa_pah(i_neutral,:),&
+                                                            dinfo%csa_pah(i_charged,:),&
+                                                            dinfo%csa_pah(i_charged,:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                             Np(:),dinfo%group_eV(:),&
                                                             dinfo%local_c,Tk,ne,dinfo%fcharge_pah(:,ii),&
@@ -280,10 +283,12 @@ contains
             else if (present(Np)) then
                 ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
                 do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
+                    i_neutral = 2*ii - 1
+                    i_charged = 2*ii
+                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
+                                                        dinfo%csa_pah(i_neutral,:),&
+                                                        dinfo%csa_pah(i_charged,:),&
+                                                        dinfo%csa_pah(i_charged,:),&
                                                         dinfo%nGroups,dinfo%local_solid_angle(:),&
                                                         Np(:),dinfo%group_eV(:),dinfo%local_c,&
                                                         Tk,ne,dinfo%fcharge_pah(:,ii))
@@ -327,17 +332,6 @@ contains
         ! total_col_power --> output total collisional cooling power from dust (erg/s/cm^3)
         ! H2_formation_rate --> output H2 formation rate on dust grains (cm^3/s)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
-        use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_dust_charge_dist, compute_Coulomb_focusing
-        use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
-                                            compute_dust_peh_rate
-        use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
-                                            compute_pah_peh_equilibrium,&
-                                            interpolate_pah_peh_equilibrium,&
-                                            compute_pah_charge_equilibrium
-        use dust_radiation, only: update_T_dust
-        use dust_surface_chemistry, only: grain_h2_formation_rate
-
         implicit none
         ! ---- Inputs ----
         class(DustChemistryInfo), intent(inout) :: dinfo
@@ -348,181 +342,33 @@ contains
         real(dp), intent(out) :: H2_formation_rate
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
 
-        ! ---- Local variables ----
-        integer :: ii,j,idx_g,idx_T
-        real(dp) :: nHI
-        real(dp), dimension(1:dinfo%ndust) :: T_dust
-        real(dp), dimension(1:dinfo%ncharge_pah_max,1:dinfo%npah) :: fcharge_pah
-        real(dp), dimension(1:dinfo%ndust):: Pinj_dust, Prec_dust, Pcoll_dust, Prad_dust
-        real(dp), dimension(1:dinfo%npah) :: Pinj_pah, Prec_pah, Prad_pah
-        real(dp), dimension(1:dinfo%npah,1:dinfo%nGroups) :: Pabs_pah
 
-
-        if (dinfo%use_precomp) then
-            ! In this case we use the rates computed during the pre-cool step
-            total_rec_power = 0d0
-            total_inj_power = 0d0
-            total_col_power = 0d0
-            H2_formation_rate = -1d0
-            if (dinfo%ndust > 0) then
-                total_rec_power = sum(dinfo%Prec_dust)
-                total_inj_power = sum(dinfo%Pinj_dust)
-                total_col_power = sum(dinfo%Pcoll_dust)
-                if (H2ondust) then
-                    H2_formation_rate = dinfo%H2_formation_rate
-                end if
-            end if
-            if (dinfo%npah  > 0) then
-                total_rec_power = total_rec_power + sum(dinfo%Prec_pah)
-                total_inj_power = total_inj_power + sum(dinfo%Pinj_pah)
-            end if
-            dinfo%use_precomp = .false. ! Reset the flag for next time
-            return
+        ! If precomputed rates are not already in dinfo (i.e. compute_dust_precool was not
+        ! called before us this step), delegate to it now.  This eliminates ~148 lines
+        ! of duplicated physics that previously lived in the non-precomp branch here.
+        if (.not. dinfo%use_precomp) then
+            call compute_dust_precool(dinfo, G0_total, Tk, ne, nElement, xelem_ions, nH2, nCO, Np=Np)
         end if
 
+        ! Read the precomputed rates from dinfo (populated either just above or by an
+        ! external compute_dust_precool call earlier in the RTZ step).
         total_rec_power = 0d0
         total_inj_power = 0d0
         total_col_power = 0d0
         H2_formation_rate = -1d0
-        T_dust = 0d0
-        fcharge_pah = 0d0
-        Pinj_dust = 0d0
-        Prec_dust = 0d0
-        Pcoll_dust = 0d0
-        Prad_dust = 0d0
-        Pinj_pah = 0d0
-        Prec_pah = 0d0
-        Prad_pah = 0d0
-        Pabs_pah = 0d0
-
         if (dinfo%ndust > 0) then
-            ! 1. Compute the equilibrium dust photoelectric heating and recombination cooling rates
-            if (dust_pe_heating .and. present(Np)) then
-                do ii = 1, dinfo%ndust
-                    if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
-                        call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
-                                                        &Pinj_dust(ii),&
-                                                        &Prec_dust(ii))
-                    else
-                        call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii))
-                        ! Consider the contribution from the UV background
-                        call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
-                                                        &Pinj_dust(ii),Prec_dust(ii))
-                        ! Now consider the contribution from the local radiation field
-                        call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
-                                                    dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
-                                                    dinfo%local_solid_angle(:),Np(:),&
-                                                    dinfo%group_eV(:),dinfo%Z_dust(ii),dinfo%Z_sigma(ii),Tk,ne,&
-                                                    Pinj_dust(ii),Prec_dust(ii))
-                    end if
-                end do
-            elseif (dust_pe_heating) then
-                do ii = 1, dinfo%ndust
-                    call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
-                                                    &Pinj_dust(ii),&
-                                                    &Prec_dust(ii))
-                end do
-            end if
-
-            ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
-            if (present(Np)) then
-                call update_T_dust(dinfo%G0_background,Pcoll_dust(:),Prec_dust(:),Pinj_dust(:),Prad_dust(:),&
-                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
-                                    Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:))
-            else
-                call update_T_dust(dinfo%G0_background,Pcoll_dust(:),Prec_dust(:),Pinj_dust(:),Prad_dust(:),&
-                                    T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:))
-            end if
-
-            ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
-            do ii = 1, dinfo%ndust
-                Pcoll_dust(ii) = Pcoll_dust(ii) * dinfo%n_dust(ii)
-                Prec_dust(ii) = Prec_dust(ii) * dinfo%n_dust(ii)
-                Pinj_dust(ii) = Pinj_dust(ii) * dinfo%n_dust(ii)
-                Prad_dust(ii) = Prad_dust(ii) * dinfo%n_dust(ii)
-            end do
-
-            total_rec_power = total_rec_power + sum(Prec_dust)
-            total_inj_power = total_inj_power + sum(Pinj_dust)
-            total_col_power = total_col_power + sum(Pcoll_dust)
-
-            ! 6. Compute the H2 formation rate on dust grains
+            total_rec_power = sum(dinfo%Prec_dust)
+            total_inj_power = sum(dinfo%Pinj_dust)
+            total_col_power = sum(dinfo%Pcoll_dust)
             if (H2ondust) then
-                nHI = nElement(1) * xelem_ions(1,1)
-                H2_formation_rate = grain_h2_formation_rate(nHI,nElement(1),Tk,dinfo%rho_dust(:),T_dust(:))
-            endif
-        end if
-
-        if (dinfo%npah > 0) then
-            ! 7. Compute the PAH PEH model
-            if (pah_pe_heating .and. present(Np)) then
-                if (pah_pe_heating_isrf) then
-                    ! We have rt, but we want to just use the ISRF-averaged model
-                        do ii = 1, dinfo%npah
-                            call interpolate_pah_peh_equilibrium(ii,G0_total,&
-                                                                ne,Tk,fcharge_pah(:,ii),&
-                                                                Pabs_pah(ii,1),Pinj_pah(ii),&
-                                                                Prad_pah(ii),Prec_pah(ii))
-                        end do
-                else
-                    ! We want the PAH PEH also have rt, so we use the full model
-                    do ii = 1, dinfo%npah
-                        ! Consider the contribution from the UV background first
-                        call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
-                                                            ne,Tk,fcharge_pah(:,ii),&
-                                                            Pabs_pah(ii,1),Pinj_pah(ii),&
-                                                            Prad_pah(ii),Prec_pah(ii))
-                        ! And now the full model for the local radiation field
-                        call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(1+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
-                                                            dinfo%csa_pah(2+2*(ii-1),:),&
-                                                            dinfo%nGroups,dinfo%local_solid_angle(:),&
-                                                            Np(:),dinfo%group_eV(:),&
-                                                            dinfo%local_c,Tk,ne,fcharge_pah(:,ii),&
-                                                            Pabs_pah(ii,:),Pinj_pah(ii),&
-                                                            Prad_pah(ii),Prec_pah(ii))
-                    end do
-                end if
-            else if (pah_pe_heating) then
-                ! We want PAH PEH but don't have rt
-                do ii = 1, dinfo%npah
-                    call interpolate_pah_peh_equilibrium(ii,dinfo%G0_background,&
-                                                        ne,Tk,fcharge_pah(:,ii),&
-                                                        Pabs_pah(ii,1),Pinj_pah(ii),&
-                                                        Prad_pah(ii),Prec_pah(ii))
-                end do
-            else if (present(Np)) then
-                ! We don't want PAH PEH but have rt, so we still want to compute the PAH charge distribution
-                do ii = 1, dinfo%npah
-                    call compute_pah_charge_equilibrium(ii,dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(1+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
-                                                        dinfo%csa_pah(2+2*(ii-1),:),&
-                                                        dinfo%nGroups,dinfo%local_solid_angle(:),&
-                                                        Np(:),dinfo%group_eV(:),dinfo%local_c,&
-                                                        Tk,ne,fcharge_pah(:,ii))
-                end do
-            else
-                ! We don't want PAH PEH but don't have rt, so we just interpolate
-                ! the ISRF-averaged PAH charge tables
-                do ii = 1, dinfo%npah
-                    call interpolate_pah_charge_equilibrium(ii,dinfo%G0_background,ne,Tk,&
-                       &fcharge_pah(:,ii))
-                end do
+                H2_formation_rate = dinfo%H2_formation_rate
             end if
-
-            ! 8. Now convert from erg/s to erg/s/cm3
-            do ii = 1, dinfo%npah
-                Pabs_pah(ii,:) = Pabs_pah(ii,:) * dinfo%n_pah(ii)
-                Pinj_pah(ii) = Pinj_pah(ii) * dinfo%n_pah(ii)
-                Prad_pah(ii) = Prad_pah(ii) * dinfo%n_pah(ii)
-                Prec_pah(ii) = Prec_pah(ii) * dinfo%n_pah(ii)
-            end do
-
-            total_rec_power = total_rec_power + sum(Prec_pah)
-            total_inj_power = total_inj_power + sum(Pinj_pah)
         end if
+        if (dinfo%npah > 0) then
+            total_rec_power = total_rec_power + sum(dinfo%Prec_pah)
+            total_inj_power = total_inj_power + sum(dinfo%Pinj_pah)
+        end if
+        dinfo%use_precomp = .false.
     end subroutine compute_dust_coolrates
 
     subroutine compute_dust_update(dinfo,nElement,xelem_ions,dt,Np,step_ok, dUU)
@@ -546,15 +392,29 @@ contains
         logical, intent(out) :: step_ok
 
         ! --- Local variables ----
-        integer :: ii, ndust_total
+        integer :: ii, jj, ndust_total
         real(dp) :: sum_check
         real(dp), pointer :: y_gas(:,:), y_gas_out(:,:)
         real(dp), pointer :: y_dust(:), y_dust_out(:)
+        real(dp) :: mass_g(n_elements)   ! element atomic masses — populated once via #ifdef, used throughout
+        real(dp) :: h_init_val           ! substep hint for integrate_dust_ode
+        ! Cache the last accepted substep's recommended next-step size across calls.
+        ! On re-entry with the same (or similar) conditions this skips the firstcall
+        ! 1/kmax reduction, cutting substep count at equilibrium for explicit solvers.
+        real(dp), save :: last_h_ode = 0.0_dp
 
-        integer :: jj
         real(dp), intent(out) :: dUU
 
         dUU = 0.0_dp ! should I keep previous values?
+
+        ! Populate mass_g once so the pack/unpack loops below are #ifdef-free.
+#ifdef RTZ
+        do ii = 1, n_elements
+            mass_g(ii) = elements(ii)%atomic_mass_g
+        end do
+#else
+        mass_g(:) = el_atomic_masses_g(1:n_elements)
+#endif
 
         ! If no dust or PAH process is active, just return
         if (ndust_processes.eq.0 .and. npah_processes.eq.0) then
@@ -595,23 +455,16 @@ contains
 
         if (carry_gas_ions) then
             do ii = 1, n_elements
-#ifdef RTZ
-                y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
-                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * elements(ii)%atomic_mass_g
-#else
-                y_gas(ii,1) = nElement(ii) * el_atomic_masses_g(ii)
-                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * el_atomic_masses_g(ii)
-#endif
+                y_gas(ii,1) = nElement(ii) * mass_g(ii)
+                y_gas(ii,2:n_elements+1) = nElement(ii) * xelem_ions(ii,:) * mass_g(ii)
             end do
         else
             do ii = 1, n_elements
-#ifdef RTZ
-                y_gas(ii,1) = nElement(ii) * elements(ii)%atomic_mass_g
-#else
-                y_gas(ii,1) = nElement(ii) * el_atomic_masses_g(ii)
-#endif
+                y_gas(ii,1) = nElement(ii) * mass_g(ii)
             end do
         end if
+        ! Pack y_dust: PAH bins first [1:npah], then grain bins [npah+1:npah+ndust].
+        ! This convention is mirrored in the unpack block below and in integrate_dust_ode.
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
             y_dust(dinfo%npah+1:dinfo%npah+dinfo%ndust) = dinfo%rho_dust(1:dinfo%ndust)
@@ -621,60 +474,40 @@ contains
             y_dust(1:dinfo%npah) = dinfo%rho_pah(1:dinfo%npah)
         end if
 
-        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution
+        ! 3. Now we are ready to call the ODE solver to integrate the dust evolution.
+        ! Guard against an uninitialised procedure pointer (set by init_dust_solver based
+        ! on dust_solver_type); a null dereference here would be a silent SIGSEGV.
+        if (.not. associated(dust_solver_step)) then
+            print *, "FATAL ERROR: dust_solver_step is not associated. Check dust_solver_type in namelist."
+            call clean_stop
+        end if
         step_ok = .true.
+        h_init_val = dt
+        if (last_h_ode > 0.0_dp) h_init_val = last_h_ode
         call integrate_dust_ode(dinfo,dt,y_gas,y_dust,dust_rhs,dust_solver_step,&
-                                y_gas_out,y_dust_out,dt,0d0,dt,debug_flag=dust_log,step_ok=step_ok)
+                                y_gas_out,y_dust_out,h_init_val,0d0,dt,&
+                                debug_flag=dust_debug,step_ok=step_ok,h_last=last_h_ode)
 
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then
             do ii = 1, n_elements
-#ifdef RTZ
-                nElement(ii) = y_gas_out(ii,1) / elements(ii)%atomic_mass_g
+                nElement(ii) = y_gas_out(ii,1) / mass_g(ii)
                 if (nElement(ii) > 1d-30) then
-                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / elements(ii)%atomic_mass_g
+                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / mass_g(ii)
                     ! Make sure that xelem_ions add up to 1 for each element
                     sum_check = sum(xelem_ions(ii,:))
                     if (sum_check > 1d-30) then
                         xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
                     end if
                 end if
-#else
-                nElement(ii) = y_gas_out(ii,1) / el_atomic_masses_g(ii)
-                if (nElement(ii) > 1d-30) then
-                    xelem_ions(ii,:) = y_gas_out(ii,2:n_elements+1) / nElement(ii) / el_atomic_masses_g(ii)
-                    ! Make sure that xelem_ions add up to 1 for each element
-                    sum_check = sum(xelem_ions(ii,:))
-                    if (sum_check > 1d-30) then
-                        xelem_ions(ii,:) = xelem_ions(ii,:) / sum_check
-                    end if
-                end if
-#endif
             end do
         else
             do ii = 1, n_elements
-#ifdef RTZ
-                nElement(ii) = y_gas_out(ii,1) / elements(ii)%atomic_mass_g
-#else
-                nElement(ii) = y_gas_out(ii,1) / el_atomic_masses_g(ii)
-#endif
+                nElement(ii) = y_gas_out(ii,1) / mass_g(ii)
             end do
         end if
 
-        ! test trial: very small value, ignore evolution
-        ! this can be very problematic in other cases...
-        ! 1d-28 seems to be fine, 1d-31 cannot prevents the error
-        ! do ii = 1, dinfo%npah
-        !     if (y_dust(ii)<1d-28.and.y_dust_out(ii)<1d-28) then
-        !         y_dust_out(ii) = y_dust(ii)
-        !     end if
-        ! end do
-        ! do ii = 1, dinfo%ndust
-        !     if (y_dust(dinfo%npah+ii)<1d-28.and.y_dust_out(dinfo%npah+ii)<1d-28) then
-        !         y_dust_out(dinfo%npah+ii) = y_dust(dinfo%npah+ii)
-        !     end if
-        ! end do
-
+        ! Unpack y_dust_out: PAH bins first [1:npah], grain bins [npah+1:npah+ndust].
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
             dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
             dinfo%rho_dust(1:dinfo%ndust) = y_dust_out(dinfo%npah+1:dinfo%npah+dinfo%ndust)
@@ -685,23 +518,20 @@ contains
         end if
 
 #ifdef RTZ
-        ! check fractional change
-        ! for this moment, only for cases with RTZ
-
-        ! 10% rule is there very inside of anninos_step...
-        ! but that is actually never triggered with anninos solver (step_ok_presents is .true.)
-        ! and extracting that info seems to be very complicated
-        ! as an temporary way, compute dUU here again
+        ! Compute dUU: the maximum fractional change in any gas or dust species over this step.
+        ! dUU is returned *unscaled* (pure fractional change, dimensionless).
+        ! The caller (rtz_cool_step in rtz_cooling_module.f90) multiplies by one_over_x_FRAC
+        ! before comparing against the RTZ convergence criterion.
 
         ! check for gas
         do ii = 1, n_elements
             if (elements(ii)%atomic_number > 0) then
-                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1)+1.0d-40))
+                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1)+y_min))
 
                 ! if not, ion part is zero
                 if (carry_gas_ions) then
                     do jj=1,elements(ii)%n_ions
-                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj)+1.0d-40))
+                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj)+y_min))
                     end do
                 end if
 
@@ -711,7 +541,7 @@ contains
         ! check for dust
         if (dinfo%ndust > 0 .or. dinfo%npah > 0) then
             do ii = 1, dinfo%npah+dinfo%ndust
-                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+1.0d-40))
+                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+y_min))
             end do
         end if
 #endif

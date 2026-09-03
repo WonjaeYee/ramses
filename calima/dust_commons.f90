@@ -15,7 +15,8 @@ module dust_commons
 
     ! ==== Flags and logicals (read from nml) ====
     logical, parameter ::dust=.true.             ! CALIMA always includes dust
-    logical ::dust_log=.false.                   ! Activate dust logging
+    logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
+    logical ::dust_debug=.false.                 ! Activate detailed dust mass-budget logging (per-process dM/dt; heavier overhead)
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
     logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
@@ -161,20 +162,20 @@ module dust_commons
 
     ! ==== Element parameters in the case of no RTZ module ====
 #ifndef RTZ
-    real(dp),dimension(1:n_elements) :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
+    real(dp),dimension(1:n_elements),parameter :: el_atomic_masses_amu = (/1.00794d0, 4.002602d0, 6.941d0, 9.012182d0, &
                                                                 10.811d0, 12.0107d0, 14.0067d0, 15.9994d0, 18.9984032d0, &
                                                                 20.1797d0, 22.98976928d0, 24.3050d0, 26.9815386d0, &
                                                                 28.0855d0, 30.973762d0, 32.065d0, 35.453d0, &
                                                                 39.948d0, 39.0983d0, 40.078d0, 44.955910d0, &
                                                                 47.867d0, 50.9415d0, 51.9961d0, 54.938044d0, &
                                                                 55.845d0, 58.933195d0/)
-    real(dp),dimension(1:n_elements) :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
-    character(LEN=2),dimension(1:n_elements) :: el_names = (/'H','He','Li','Be','B', &
-                                                                'C','N','O','F','Ne', &
+    real(dp),dimension(1:n_elements),parameter :: el_atomic_masses_g = el_atomic_masses_amu * amu2g
+    character(LEN=2),dimension(1:n_elements),parameter :: el_names = (/'H ','He','Li','Be','B ', &
+                                                                'C ','N ','O ','F ','Ne', &
                                                                 'Na','Mg','Al','Si', &
-                                                                'P','S','Cl','Ar', &
-                                                                'K','Ca','Sc','Ti', &
-                                                                'V','Cr','Mn','Fe', &
+                                                                'P ','S ','Cl','Ar', &
+                                                                'K ','Ca','Sc','Ti', &
+                                                                'V ','Cr','Mn','Fe', &
                                                                 'Co'/)
 #endif
 
@@ -389,12 +390,14 @@ module dust_commons
                         do ii=1,ndust
                             total_dust_mass_species(npah+ii) = total_dust_mass_species(npah+ii) + (uold(ind_cell(i),idust+ii-1) * dx_loc**3)
                         end do
-                        ! Add total metal mass
-                        do ii=1,n_elements
+                        ! Add total metal mass (only the nmetals slots that exist in uold)
+                        do ii=1,nmetals
                             total_metal_mass(ii) = total_metal_mass(ii) + (uold(ind_cell(i),imetal+ii-1) * dx_loc**3)
                         end do
                         ! Add total CO mass
+#ifdef CO
                         total_CO_mass = total_CO_mass + (uold(ind_cell(i),ico) * dx_loc**3)
+#endif
                     end if
                   end do
                end do
@@ -487,24 +490,26 @@ module dust_commons
         ndust_cells = ndust_cells_all
 #endif
 #ifndef WITHOUTMPI
-        ! 3. If MPI, reduce SN mass changes and ODE per-process mass changes
+        ! 3. If MPI, reduce SN mass changes and (when dust_debug) ODE per-process mass changes
         call MPI_ALLREDUCE(dM_SNIId,dM_SNIId_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
         dM_SNIId=dM_SNIId_all
         call MPI_ALLREDUCE(dM_SNIad,dM_SNIad_all,NDUST+NPAH,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,mpi_err)
         dM_SNIad=dM_SNIad_all
-        if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
-            if (.not. allocated(dM_ode_dust_all)) &
-                allocate(dM_ode_dust_all(ndust+npah, ndust_processes))
-            call MPI_ALLREDUCE(dM_ode_dust, dM_ode_dust_all, (ndust+npah)*ndust_processes, &
-                MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
-            dM_ode_dust = dM_ode_dust_all
-        end if
-        if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
-            if (.not. allocated(dM_ode_pah_all)) &
-                allocate(dM_ode_pah_all(ndust+npah, npah_processes))
-            call MPI_ALLREDUCE(dM_ode_pah, dM_ode_pah_all, (ndust+npah)*npah_processes, &
-                MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
-            dM_ode_pah = dM_ode_pah_all
+        if (dust_debug) then
+            if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
+                if (.not. allocated(dM_ode_dust_all)) &
+                    allocate(dM_ode_dust_all(ndust+npah, ndust_processes))
+                call MPI_ALLREDUCE(dM_ode_dust, dM_ode_dust_all, (ndust+npah)*ndust_processes, &
+                    MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+                dM_ode_dust = dM_ode_dust_all
+            end if
+            if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
+                if (.not. allocated(dM_ode_pah_all)) &
+                    allocate(dM_ode_pah_all(ndust+npah, npah_processes))
+                call MPI_ALLREDUCE(dM_ode_pah, dM_ode_pah_all, (ndust+npah)*npah_processes, &
+                    MPI_DOUBLE_PRECISION, MPI_SUM, MPI_COMM_WORLD, mpi_err)
+                dM_ode_pah = dM_ode_pah_all
+            end if
         end if
 #endif
 #ifndef WITHOUTMPI
@@ -630,19 +635,21 @@ module dust_commons
             else
                 write(*,*) '  No Tdust solver calls this step.'
             end if
-            ! 8. Print per-process ODE mass change rates [Msun/yr per bin]
-            write(*,*) ' --- ODE process dM/dt [Msun/yr per bin] ---'
-            if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
-                do ii = 1, ndust_processes
-                    write(*,format_str) 'dust '//trim(dust_processes_list(ii)%name)//' =', &
-                        dM_ode_dust(:, ii) / (dt*scale_t) / M_sun * yr2sec
-                end do
-            end if
-            if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
-                do ii = 1, npah_processes
-                    write(*,format_str) 'pah  '//trim(pah_processes_list(ii)%name)//' =', &
-                        dM_ode_pah(:, ii) / (dt*scale_t) / M_sun * yr2sec
-                end do
+            ! 8. Print per-process ODE mass change rates [Msun/yr per bin] (dust_debug only)
+            if (dust_debug) then
+                write(*,*) ' --- ODE process dM/dt [Msun/yr per bin] ---'
+                if (ndust_processes > 0 .and. allocated(dM_ode_dust)) then
+                    do ii = 1, ndust_processes
+                        write(*,format_str) 'dust '//trim(dust_processes_list(ii)%name)//' =', &
+                            dM_ode_dust(:, ii) / (dt*scale_t) / M_sun * yr2sec
+                    end do
+                end if
+                if (npah_processes > 0 .and. allocated(dM_ode_pah)) then
+                    do ii = 1, npah_processes
+                        write(*,format_str) 'pah  '//trim(pah_processes_list(ii)%name)//' =', &
+                            dM_ode_pah(:, ii) / (dt*scale_t) / M_sun * yr2sec
+                    end do
+                end if
             end if
             ! 9. Print SN destruction statistics
             if (dust_SNdest) then
@@ -657,10 +664,12 @@ module dust_commons
 
         dM_SNIId          = 0.0d0; dM_SNIId_all          = 0.0d0
         dM_SNIad          = 0.0d0; dM_SNIad_all          = 0.0d0
-        if (allocated(dM_ode_dust))     dM_ode_dust     = 0.0d0
-        if (allocated(dM_ode_dust_all)) dM_ode_dust_all = 0.0d0
-        if (allocated(dM_ode_pah))      dM_ode_pah      = 0.0d0
-        if (allocated(dM_ode_pah_all))  dM_ode_pah_all  = 0.0d0
+        if (dust_debug) then
+            if (allocated(dM_ode_dust))     dM_ode_dust     = 0.0d0
+            if (allocated(dM_ode_dust_all)) dM_ode_dust_all = 0.0d0
+            if (allocated(dM_ode_pah))      dM_ode_pah      = 0.0d0
+            if (allocated(dM_ode_pah_all))  dM_ode_pah_all  = 0.0d0
+        end if
         ndust_cells       = 0;     ndust_cells_all       = 0
         tdust_solver_calls = 0_8;       tdust_solver_calls_all = 0_8
         tdust_solver_iter_sum = 0_8;    tdust_solver_iter_sum_all = 0_8

@@ -1407,11 +1407,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_isIR) then
          do ii = 1, ndust
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
-                  group_egy_erg(iIR)
+                  one_over_egy_IR_erg
          end do
          do ii = 1, npah
             dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
-                  group_egy_erg(iIR)
+                  one_over_egy_IR_erg
          end do
       end if
 #else
@@ -1647,6 +1647,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dust_step_ok = .true.
       end if
 
+      ! Scale dUU from a raw fractional change (returned by compute_dust_update in
+      ! dust_interface.f90) to the RTZ convergence metric (divided by x_FRAC).
       dUU = dUU * one_over_x_FRAC
       fracMax = max(fracMax, dUU)
 
@@ -1682,13 +1684,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                end if
          end do
-         ! opps... compute_dust_update does not return trial solution...
-         ! temporarily forced integrate_dust_ode to set
-         ! - y_gas_temp to y_gas_new
-         ! - y_dust_temp to y_dust_new
-         ! so that problematic solution can also be printed out
-         ! if dust_step_ok is .false. anyway that solution will be discarded
-         
+         ! dust_step_ok=.false. means the anninos solver detected a negative species
+         ! density after the full RTZ dt.  RTZ will reduce dt and retry this cell.
+         ! The proposed (bad) dust state is discarded; rho_dust/rho_pah are unchanged.
+
          ! if the trial solution is not negative but does not satisfy 10% rule,
          ! that will only count up loopCodes, not loopCodes10
 

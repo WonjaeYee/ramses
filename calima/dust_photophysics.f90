@@ -1249,11 +1249,7 @@ module dust_optics
         integer :: species, ion
         integer :: isize
 
-        if (npah > 0) then
-            isize = species - npah*2
-        else
-            isize = species
-        end if
+        isize = species
 
         if (isize < 1 .or. isize > ndust) then
             flaLambda_dust = huge(1d0)
@@ -1399,7 +1395,7 @@ module dust_optics
         integer :: species, ion
         integer :: isize
 
-        isize = species - npah*2
+        isize = species
         fRATLambda_dust = f * lambda * getRATCrosssection(lambda,isize)
     END FUNCTION fRATLambda_dust
 
@@ -1980,8 +1976,12 @@ module dust_radiation
                     ! Collisional heating dominates the initial guess
                     call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
                 else if (abs(H_coll_at_Tgas) < 1d-4 * P_abs) then
-                    ! Radiative heating is much larger than collisional, so we can just assume that
+                    ! Radiative heating is much larger than collisional.
+                    ! At pure radiative equilibrium P_emit = P_abs; evaluate the
+                    ! emission at the equilibrium temperature from the tabulated
+                    ! Planck power so P_rad is consistent with T_dust.
                     T_dust(j) = max(T0, Tmin)
+                    call dust_emission_power(j, T_dust(j), P_rad(j))
                     cycle
                 end if                
             else

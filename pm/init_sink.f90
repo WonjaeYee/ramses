@@ -7,9 +7,9 @@ subroutine init_sink
   use mpi_mod
 #ifdef INDIVIDUAL_SINK_STARS
   use use_mist
+#endif
 #ifdef RT
   use rt_parameters, only:ngroups
-#endif
 #endif
   implicit none
 #ifndef WITHOUTMPI
@@ -49,9 +49,10 @@ subroutine init_sink
   allocate(evolution_flag(1:nsinkmax))
   allocate(main_sequence_time(1:nsinkmax))
   msink_actual=0.d0; sink_metallicity=0.d0; evolution_flag=1; main_sequence_time=0.d0
+#endif
 #ifdef RT
   allocate(sink_ioni_flux(1:nsinkmax,1:ngroups))
-#endif
+  sink_ioni_flux=0.d0
 #endif
 
   allocate(xsink_graddescent(1:nsinkmax,1:ndim))
