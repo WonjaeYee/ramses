@@ -695,11 +695,14 @@ SUBROUTINE init_SED_table()
            end if
         end do
         
-        ! Deal with molecules separately
+        ! Deal with molecules separately -- use the same 3+counter offset
+        ! convention as the atomic-species loop above (this used to be
+        ! 2+counter, which collided with the last atomic species' slot and
+        ! left H2's own cse slot never written).
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-           tbl(ia,iz,2+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
+           tbl(ia,iz,3+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
            counter = counter + 1
-           tbl(ia,iz,2+counter) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
+           tbl(ia,iz,3+counter) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
            counter = counter + 1
         end if
 #else
@@ -2160,7 +2163,13 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
 
      ! Fill out the X and Y arrays for integration
      lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-     lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+     ! group_L1==0 is the sentinel for an unbounded (infinite upper energy)
+     ! group; the corresponding wavelength limit is 0, not a division by zero.
+     if (group_L1(ip) .ne. 0d0) then
+        lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+     else
+        lambda_min = 0.d0
+     end if
      delta_lambda = (lambda_max - lambda_min) / 999.d0
 
      ! Initialize X and Y arrays and fill them out
@@ -2172,27 +2181,37 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
      end do
 
      ! Loop over elements
-     do ii=1, n_elements 
+     do ii=1, n_elements
         ! Check if we actually use the element
-        if (elements(ii)%atomic_number.gt.0) then 
+        if (elements(ii)%atomic_number.gt.0) then
            ! Loop over ionization states
            do jj=1,elements(ii)%n_ions-1 !loop over ionization states
-              group_csn(ip,ii,jj) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
-              group_cse(ip,ii,jj) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
+              ! Do not clobber a value already set by the user's namelist or
+              ! by initialize_cross_sections() -- the blackbody spectrum is
+              ! only meant to fill in defaults for entries nobody else set.
+              if (group_csn(ip,ii,jj) .eq. 0d0) &
+                   & group_csn(ip,ii,jj) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
+              if (group_cse(ip,ii,jj) .eq. 0d0) &
+                   & group_cse(ip,ii,jj) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
            end do ! End loop over ionization states
         end if
      end do ! End loop over elements
 
      ! Deal with molecules separately
      if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-        group_csn(ip,1,3) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
-        group_cse(ip,1,3) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
+        if (group_csn(ip,1,3) .eq. 0d0) &
+             & group_csn(ip,1,3) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
+        if (group_cse(ip,1,3) .eq. 0d0) &
+             & group_cse(ip,1,3) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
      end if
 
 #ifdef RTZ
-     group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 0)
-     group_csn_dust(ip,2) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 2, 0)
-     group_csn_dust(ip,3) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 3, 0)
+     if (group_csn_dust(ip,1) .eq. 0d0) &
+          & group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 0)
+     if (group_csn_dust(ip,2) .eq. 0d0) &
+          & group_csn_dust(ip,2) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 2, 0)
+     if (group_csn_dust(ip,3) .eq. 0d0) &
+          & group_csn_dust(ip,3) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 3, 0)
 #endif
 
   end do ! End loop over groups
@@ -2222,7 +2241,13 @@ SUBROUTINE initialize_group_energies_from_blackbody(T, group_L0, group_L1, group
 
      ! Fill out the X and Y arrays for integration
      lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-     lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+     ! group_L1==0 is the sentinel for an unbounded (infinite upper energy)
+     ! group; the corresponding wavelength limit is 0, not a division by zero.
+     if (group_L1(ip) .ne. 0d0) then
+        lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+     else
+        lambda_min = 0.d0
+     end if
      delta_lambda = (lambda_max - lambda_min) / 1000.0
 
      ! Initialize X and Y arrays and fill them out
@@ -2233,7 +2258,10 @@ SUBROUTINE initialize_group_energies_from_blackbody(T, group_L0, group_L1, group
         Y(ii) = blackbody(T, X(ii))
      end do
 
-     group_egy(ip) = getSEDEgy(X, Y, 1000, group_L0(ip), group_L1(ip))
+     ! Do not clobber a value already set by the user's namelist -- the
+     ! blackbody spectrum only fills in a default for groups nobody set.
+     if (group_egy(ip) .eq. 0d0) &
+          & group_egy(ip) = getSEDEgy(X, Y, 1000, group_L0(ip), group_L1(ip))
 
   end do
 
@@ -2285,7 +2313,13 @@ SUBROUTINE init_popII_table(group_L0, group_L1)
 
            ! Fill out the X and Y arrays for integration
            lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-           lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+           ! group_L1==0 is the sentinel for an unbounded (infinite upper
+           ! energy) group; the wavelength limit is 0, not a division by zero.
+           if (group_L1(ip) .ne. 0d0) then
+              lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+           else
+              lambda_min = 0.d0
+           end if
            delta_lambda = (lambda_max - lambda_min) / 100000.0
 
            ! Initialize X and Y arrays and fill them out
@@ -2339,7 +2373,13 @@ SUBROUTINE init_popIII_table(group_L0, group_L1)
 
         ! Fill out the X and Y arrays for integration
         lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-        lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+        ! group_L1==0 is the sentinel for an unbounded (infinite upper
+        ! energy) group; the wavelength limit is 0, not a division by zero.
+        if (group_L1(ip) .ne. 0d0) then
+           lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+        else
+           lambda_min = 0.d0
+        end if
         delta_lambda = (lambda_max - lambda_min) / 100000.0
 
         ! Initialize X and Y arrays and fill them out

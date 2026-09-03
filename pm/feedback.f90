@@ -449,6 +449,16 @@ subroutine feedbk(ind_grid,ind_part,ind_grid_part,ng,np,ilevel)
   end do
 
   ! Add metals
+  ! NOTE (RTZ): imetal is NOT a metallicity slot when RTZ is compiled in -- it
+  ! is the density of the first tracked element, i.e. HYDROGEN. So the metal
+  ! injections in this routine dump the ejected metal mass into hydrogen, and
+  ! they update no ion state at all, which also breaks the RTZ invariant
+  ! sum(ion states of an element) == that element's density. This routine is
+  ! only reached when star formation with eta_sn>0 is enabled
+  ! (amr/amr_step.f90), so it is dormant in the sink-based RTZ setups; it must
+  ! be ported to per-element yields (see the injection in
+  ! pm/sink_particle.f90, "Update the metals" / "Update ion fractions")
+  ! before classic star-particle feedback is used with RTZ.
   if(metal)then
      do j=1,np
         unew(indp(j),imetal)=unew(indp(j),imetal)+mzloss(j)
@@ -980,6 +990,8 @@ subroutine Sedov_blast(xSN,vSN,mSN,sSN,ZSN,indSN,vol_gas,dq,ekBlast,nSN)
                        ! Compute the mass density in the cell
                        uold(ind_cell(i),1)=uold(ind_cell(i),1)+d_gas(iSN)
                        ! Compute the metal density in the cell
+                       ! NOTE (RTZ): imetal is hydrogen's density under RTZ, and no
+                       ! ion state is updated here -- see the note in thermal_feedback.
                        if(metal)uold(ind_cell(i),imetal)=uold(ind_cell(i),imetal)+d_metal(iSN)
                        ! Velocity at a given dr_SN linearly interpolated between zero and uSedov
                        u=uSedov(iSN)*(dxx/rmax-dq(iSN,1))+vSN(iSN,1)
@@ -1014,6 +1026,8 @@ subroutine Sedov_blast(xSN,vSN,mSN,sSN,ZSN,indSN,vol_gas,dq,ekBlast,nSN)
            uold(indSN(iSN),3)=uold(indSN(iSN),3)+d_gas(iSN)*v
            uold(indSN(iSN),4)=uold(indSN(iSN),4)+d_gas(iSN)*w
            uold(indSN(iSN),5)=uold(indSN(iSN),5)+d_gas(iSN)*0.5d0*(u*u+v*v+w*w)+p_gas(iSN)
+           ! NOTE (RTZ): imetal is hydrogen's density under RTZ, and no ion state
+           ! is updated here -- see the note in thermal_feedback.
            if(metal)uold(indSN(iSN),imetal)=uold(indSN(iSN),imetal)+d_metal(iSN)
         endif
      endif

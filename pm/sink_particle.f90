@@ -1059,7 +1059,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
   real(dp)::ijm, ije, sn_e_code_units
   logical::is_hn, is_sn, is_central_cloud_particle
-  integer::counter, iElement, pre_accretion_evolution_flag
+  integer::counter, iElement, pre_accretion_evolution_flag, elem_k
   real(dp)::star_met_fe
   integer::ielem,jelem
   real(dp)::fchem
@@ -1234,7 +1234,12 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
            m_acc     =max(m_acc,0.0_dp)
            m_acc_smbh=max(m_acc_smbh,0.0_dp)
 
-           if(unew(indp(j,ind),1).le.(m_acc+m_acc_smbh)/vol_loc) then
+           ! Use uold (the actual, ghost-filled gas density) for this floor check,
+           ! not unew: unew is deliberately zeroed on MPI reception (ghost) cells
+           ! by set_unew and only accumulates the source term being computed here,
+           ! so checking unew would always trip this floor at any boundary cell
+           ! that happens to be a ghost cell, silently zeroing all accretion there.
+           if(uold(indp(j,ind),1).le.(m_acc+m_acc_smbh)/vol_loc) then
               ! temporal trial
               ! if the sink tries to accrete more than the cell mass, simply make no accretion
               ! ... this should be sophisticated more
@@ -1515,12 +1520,17 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  
                  ! Update ion fractions
                  counter = 0
+                 elem_k = 0
                  do iElement= 1, n_elements
                     if (elements(iElement)%atomic_number .gt. 0) then
+                       elem_k = elem_k + 1
                        ! only neutrals are dumped
                        ! it will not work for other passive scalars!
                        ! also this might cause problems if putting ionized materials is important
-                       unew(indp(j,ind),iIons+counter) = unew(indp(j,ind),iIons+counter) + ijm
+                       ! Each element's own yield goes into its own neutral-ion slot
+                       ! (not the aggregate injected mass summed over all metals).
+                       unew(indp(j,ind),iIons+counter) = unew(indp(j,ind),iIons+counter) + &
+                             & ((loc_metal_yield(elem_k) / (scale_m/M_sun)) * (weight/volume) / vol_loc)
                        counter = counter + elements(iElement)%n_ions
                     end if
                  end do
@@ -3691,16 +3701,17 @@ subroutine synchronize_sink_info
   !----------------------------------------------------------------------------
   integer::info
 
-  call MPI_BCAST(msink,      nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(msmbh,      nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(dmfsink,    nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(xsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(vsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(lsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(delta_mass, nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(idsink,     nsinkmax, MPI_INTEGER,          1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(tsink,      nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(new_born,   nsinkmax, MPI_LOGICAL,          1, MPI_COMM_WORLD, info)
+  ! root=0 is the master (myid==1); MPI communicator ranks are 0-indexed
+  call MPI_BCAST(msink,      nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(msmbh,      nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(dmfsink,    nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(xsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(vsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(lsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(delta_mass, nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(idsink,     nsinkmax, MPI_INTEGER,          0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(tsink,      nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(new_born,   nsinkmax, MPI_LOGICAL,          0, MPI_COMM_WORLD, info)
 
 end subroutine synchronize_sink_info
 #endif

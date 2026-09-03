@@ -128,6 +128,20 @@ module dust_init
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)
+        ! NOTE (RTZ): this routine takes dust mass OUT of the element slots
+        ! (see the "Deplete carbon" / "Deplete the elements" lines below) but
+        ! leaves the ion slots untouched. Under RTZ an ion slot holds the mass
+        ! density of that ion, i.e. a fraction of its OWN element, so after
+        ! this routine sum(ion states) exceeds the element density by the dust
+        ! fraction. hydro/cooling_fine.f90 renormalizes x_ion on read, so the
+        ! first cooling step absorbs it mass-consistently -- but it rewrites
+        ! the ionization state to do so. A caller (patch condinit) that wants
+        ! consistent initial conditions should rescale each element's ion
+        ! slots, and the H2 slot, by the factor its element density changed by.
+        ! Not fixed here: dust_init.o is compiled before rt_parameters.o (see
+        ! MODOBJ in the bin_*/Makefile), so iIons/isH2_rtz are not reachable
+        ! from this file, and adding an argument would break existing callers.
+        !
         ! This routine is used for initialising isolated galaxy simulations
         ! following the fractional contributions of the BARE-GR-S model
         ! from Zubko et al. (2004) - see Table 6

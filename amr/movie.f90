@@ -774,6 +774,11 @@ subroutine output_frame()
                                      ! Metallicity map
                                   else if(movie_vars(kk).eq.i_mv_metallicity)then
                                      ok_frame=.true.
+                                     ! NOTE (RTZ): imetal is the first tracked element's
+                                     ! density, i.e. HYDROGEN, not a metallicity -- so this
+                                     ! movie field is the hydrogen mass fraction in RTZ runs.
+                                     ! Not fixed; build Z from the element slots (e.g. O/H) if
+                                     ! a real metallicity map is needed.
                                      uvar = uold(ind_cell(i),imetal)/max(uold(ind_cell(i),1),smallr)
 
                                      ! Any scalars map
@@ -852,8 +857,11 @@ subroutine output_frame()
                                               nElement(iii) = uold(ind_cell(i),imetal+e_counter) * scale_nH / elements(iii)%atomic_mass
                                            end if
 
-                                           ! Store the ion fraction
-                                           xion(iii,jjj) = uold(ind_cell(i),iIons+counter)/uold(ind_cell(i),1)
+                                           ! Store the ion fraction. Ion slots hold the
+                                           ! mass density of the ion itself, so normalize
+                                           ! by the element density, not by rho.
+                                           xion(iii,jjj) = uold(ind_cell(i),iIons+counter) &
+                                                & / MAX(uold(ind_cell(i),imetal+e_counter),1d-30)
 
                                            ! Update the electron density
                                            electron_density = electron_density + (nElement(iii) * real(jjj-1,kind=dp) * xion(iii,jjj))
@@ -875,7 +883,8 @@ subroutine output_frame()
 
                                   ! deal with molecules separately
                                   if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-                                     xion(1,3) = uold(ind_cell(i),iIons+counter)/uold(ind_cell(i),1)
+                                     xion(1,3) = uold(ind_cell(i),iIons+counter) &
+                                          & / MAX(uold(ind_cell(i),imetal),1d-30)
                                      m_bar = m_bar + (nElement(1) * xion(1,3) * elements(1)%atomic_mass)
                                      n_hat = n_hat + (0.5d0 * nElement(1) * xion(1,3))
                                      counter = counter + 1

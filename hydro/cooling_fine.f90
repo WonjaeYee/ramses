@@ -128,6 +128,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp), dimension(1:nvector):: dx_SS_H2
   integer:: counter, e_counter, jj
   real(dp),dimension(1:nvector):: rho_total_check
+  real(dp):: rho_cell
+  real(dp):: xion_sum
+  logical:: rho_total_checked, store_elem
+  ! Tolerance of the total-mass consistency check. The floor is set by the
+  ! atomic masses used here being nuclear masses (bound electrons are not
+  ! counted), which is a ~5d-4 relative effect for hydrogen.
+  real(dp),parameter::rho_total_tol=1d-3
+  real(dp),parameter::x_element_floor=1d-30 ! floor on element density used to normalize ion fractions
 #endif
 #ifdef CALIMA
   real(dp) :: sigma2
@@ -215,6 +223,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      end do
      if(nleaf.eq.0)cycle
 
+#ifdef RTZ
+     ! Bookkeeping for the total-mass consistency check further below. The sum
+     ! is only complete (and hence only checked) if the per-element densities
+     ! are actually gathered, which happens in the neq_chem branch.
+     rho_total_check(1:nleaf) = 0d0
+     rho_total_checked = .false.
+#endif
+
 #ifdef RTZ_ONE_CELL_TEST
      ! force to read first row
      do i=1,ngrid
@@ -244,6 +260,28 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            Zsolar(i)=z_ave
         end do
      endif
+#else
+     ! In RTZ, imetal holds HYDROGEN's density and not a metallicity, so
+     ! derive Z/Zsun from the oxygen-to-hydrogen number ratio -- the same
+     ! definition the RTZ solver uses internally (12+log10(O/H) = 8.69 for the
+     ! Sun), including the oxygen locked up in CO. Zsolar is consumed by the
+     ! IR-trapping terms further below; it used to be assigned only in the
+     ! non-RTZ branch, so those terms read an undefined (saved) array.
+     if (elements(8)%atomic_number.gt.0) then
+        do i=1,nleaf
+           Zsolar(i) = uold(ind_leaf(i),elements(8)%u_hydro_idx) / elements(8)%atomic_mass_g
+#ifdef CO
+           if (isCO_rtz) Zsolar(i) = Zsolar(i) + uold(ind_leaf(i),iCO) / mCO
+#endif
+           Zsolar(i) = Zsolar(i) / &
+                & MAX(uold(ind_leaf(i),elements(1)%u_hydro_idx)/elements(1)%atomic_mass_g, &
+                &     x_element_floor) / 4.8978d-4
+        end do
+     else
+        do i=1,nleaf
+           Zsolar(i)=z_ave
+        end do
+     end if
 #endif
 
 #ifdef RT
@@ -293,7 +331,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            endif
            kIR = kIR*scale_d*scale_l           !  Convert to code units
            flux = rtuold(il,iNp+1:iNp+ndim)
+#ifdef RTZ
+           ! Hydrogen's ion states are iIons (HI) and iIons+1 (HII), stored as
+           ! mass densities of the ion itself -> divide by the hydrogen element
+           ! density, not by the total gas density. (ixHII is not set in RTZ.)
+           xHII = uold(il,iIons+1)/MAX(uold(il,imetal),x_element_floor)
+#else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
+#endif
            f_dust = (1d0-xHII)                     ! No dust in ionised gas
            work = scale_v/c_cgs * kIR * sum(uold(il,2:ndim+1)*flux) &
                 * Zsolar(i) * f_dust * dtnew(ilevel) !               Eq A6
@@ -419,18 +464,21 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         counter = 0
         e_counter = 0
         nElement = 0d0
-        rho_total_check = 0d0
+        rho_total_checked = .true.
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
+              elements(ii)%scale_n = scale_d / elements(ii)%atomic_mass_g
               do jj=1,elements(ii)%n_ions ! loop over ions
                  do i=1,nleaf !loop over leaf cells
-                    xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
                     if (jj.eq.1) then
                        ! This gives us a number density [Atoms/cm^3]
-                       elements(ii)%scale_n = scale_d / elements(ii)%atomic_mass_g
                        nElement(ii,i) = uold(ind_leaf(i),imetal+e_counter) * elements(ii)%scale_n
                        rho_total_check(i) = rho_total_check(i) + nElement(ii,i) * elements(ii)%atomic_mass_g
                     end if
+                    ! An ion is a fraction of its OWN element's density, not of the
+                    ! total gas density (e.g. HI is a fraction of nH, not of rho_total).
+                    xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter) / &
+                         & MAX(uold(ind_leaf(i),imetal+e_counter),x_element_floor)
                  end do ! end loop over leaf cells
                  counter = counter + 1 ! increment ionization counter
               end do ! end loop over ions
@@ -441,15 +489,42 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         ! deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            do i=1,nleaf !loop over leaf cells
-              xion(1,3,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
+              ! H2 is a fraction of the hydrogen element density (imetal+0), not of rho_total
+              xion(1,3,i) = uold(ind_leaf(i),iIons+counter) / &
+                   & MAX(uold(ind_leaf(i),imetal),x_element_floor)
            end do ! end loop over leaf cells
            counter = counter + 1
         endif
 
+        ! The Godunov step limits every ion density independently of its own
+        ! element density (hydro/umuscl.f90 works on u/rho per variable), so
+        ! sum(ion states) can drift slightly above the element density near
+        ! discontinuities. Rescale where that happened; a sum below one is
+        ! legitimate (mass locked in dust or in CO).
+        do ii=1,n_elements
+           if (elements(ii)%atomic_number.gt.0) then
+              do i=1,nleaf
+                 xion_sum = SUM(xion(ii,1:elements(ii)%n_ions,i))
+                 if (ii.eq.1 .and. isH2_rtz) xion_sum = xion_sum + xion(1,3,i)
+                 if (xion_sum .gt. 1d0) then
+                    xion(ii,1:elements(ii)%n_ions,i) = &
+                         & xion(ii,1:elements(ii)%n_ions,i) / xion_sum
+                    if (ii.eq.1 .and. isH2_rtz) xion(1,3,i) = xion(1,3,i) / xion_sum
+                 end if
+              end do
+           end if
+        end do
+
 #ifdef CO
+        ! Always define nCO: it is handed to the solver (and enters getMu_RTZ)
+        ! whenever CO is compiled in, whether or not isCO_rtz is set.
+        nCO(1:nleaf) = 0d0
         if (isCO_rtz) then
            do i=1,nleaf !loop over leaf cells
               nCO(i) = uold(ind_leaf(i),iCO) * scale_d / mCO
+              ! Carbon and oxygen locked in CO are removed from the element
+              ! densities by the chemistry, so CO carries its own mass here
+              rho_total_check(i) = rho_total_check(i) + nCO(i) * mCO
            end do
         endif
 #endif
@@ -544,15 +619,31 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      end if
 #endif
 #ifdef RTZ
-     ! Check that the total densities are consistent with the sum of the individual species densities
-     do i=1,nleaf
-        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / uold(ind_leaf(i),1)*scale_d .gt. 1d-3) then
-           write(*,*) 'Total density check failed in cell ', ind_leaf(i)
-           write(*,*) 'Total density: ', uold(ind_leaf(i),1)*scale_d
-           write(*,*) 'Sum of species densities: ', rho_total_check(i)
-           call clean_stop
-        end if
-     end do
+     ! Check that the total gas density is consistent with the sum of the
+     ! individual species densities. Everything that carries mass and is
+     ! stored outside the per-element densities has to be in this sum:
+     ! CO (whose C and O are removed from the element densities) and, with
+     ! CALIMA, the dust and PAH bins.
+     if (rho_total_checked) then
+        do i=1,nleaf
+           rho_cell = MAX(uold(ind_leaf(i),1),smallr) * scale_d
+           if (abs(rho_total_check(i) - rho_cell) / rho_cell .gt. rho_total_tol) then
+              write(*,*) 'Total density check failed in cell ', ind_leaf(i)
+              write(*,*) 'Total density            [g/cm^3]: ', rho_cell
+              write(*,*) 'Sum of species densities [g/cm^3]: ', rho_total_check(i)
+              write(*,*) 'Relative error                   : ', &
+                   & (rho_total_check(i) - rho_cell) / rho_cell
+#ifdef CO
+              if (isCO_rtz) write(*,*) 'of which CO   [g/cm^3]: ', nCO(i) * mCO
+#endif
+#ifdef CALIMA
+              write(*,*) 'of which dust [g/cm^3]: ', sum(rho_dust(i,:))
+              write(*,*) 'of which PAHs [g/cm^3]: ', sum(rho_pah(i,:))
+#endif
+              call clean_stop
+           end if
+        end do
+     end if
 #endif
 
      ! grackle tabular cooling
@@ -763,10 +854,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) '     e:', uold(ind_leaf(err_idx),2+ndim)/uold(ind_leaf(err_idx),1)*scale_v**2
            write(*,*) '    T2:', T2(err_idx)
            ! write(*,*) '   uold*scale_T2:', uold(ind_leaf(err_idx),neul)*scale_T2
-           write(*,*) '  chem:', uold(ind_leaf(err_idx),imetal:imetal+e_counter-1)/uold(ind_leaf(err_idx),1)
-           write(*,*) '    H2:', uold(ind_leaf(err_idx),iIons+counter-1)/uold(ind_leaf(err_idx),1)
-           write(*,*) '    CO:', uold(ind_leaf(err_idx),iCO)/uold(ind_leaf(err_idx),1)
-           write(*,*) '  ions:', uold(ind_leaf(err_idx),iIons:iIons+counter-2)/uold(ind_leaf(err_idx),1)
+           ! Element, molecule and ion slots all hold mass densities (code
+           ! units); an ion is a fraction of its own element, not of rho, so
+           ! dividing these by rho would not give ionization fractions.
+           write(*,*) '  chem [code d]:', uold(ind_leaf(err_idx),imetal:imetal+e_counter-1)
+           write(*,*) '    H2 [code d]:', uold(ind_leaf(err_idx),iIons+counter-1)
+           write(*,*) '    CO [code d]:', uold(ind_leaf(err_idx),iCO)
+           write(*,*) '  ions [code d]:', uold(ind_leaf(err_idx),iIons:iIons+counter-2)
            ! write(*,*) 'for comparison, adjacent cells'
            ! write(*,*) 'uold:', uold(ind_leaf(err_idx)-1, neul)
            ! write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
@@ -905,47 +999,78 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      if(neq_chem) then
         ! Update ionization fraction
 #ifdef RTZ
+#ifdef CO
+        ! In the case of CO, we have to update mass densities
+        if (isCO_rtz) then
+           do i=1,nleaf !loop over leaf cells
+              uold(ind_leaf(i),iCO) = nCO(i) * mCO / scale_d
+           end do
+        end if
+#endif
+
+        ! Store the element densities the chemistry hands back. This has to
+        ! happen BEFORE the ion states below, which are derived from them, so
+        ! that sum(ion states) == element density stays exact.
+        !  - With CO, carbon and oxygen change because the chemistry moves
+        !    them in and out of CO (which carries its own mass in iCO).
+        !  - With CALIMA, EVERY element can change: compute_dust_update takes
+        !    nElement as intent(inout) and exchanges gas-phase metals with the
+        !    dust bins (calima/dust_interface.f90:544,643-660), and that change
+        !    is exported through dnElement (rtz/rtz_cooling_module.f90:1628).
+        !    Keeping only C and O would leave the accreted mass in the gas
+        !    phase while rho_dust grows, i.e. create mass out of nothing.
+        ! Without CALIMA nothing but C and O changes, so the write-back is
+        ! restricted there and every other element stays bit-for-bit identical.
+        e_counter = 0
+        do ii=1,n_elements ! loop over elements
+           if (elements(ii)%atomic_number.gt.0) then
+              store_elem = .false.
+#ifdef CO
+              ! Check if it's carbon or exygen species
+              if (elements(ii)%atomic_number.eq.6.or.elements(ii)%atomic_number.eq.8) &
+                   & store_elem = .true.
+#endif
+#ifdef CALIMA
+              store_elem = .true.
+#endif
+              if (store_elem) then
+                 do i=1,nleaf !loop over leaf cells
+                    uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
+                 end do ! end loop over leaf cells
+              end if
+              e_counter = e_counter + 1 ! increment element counter
+           end if
+        end do ! end loop over elements
+
+        ! An ion state is stored as the mass density of that ion, i.e. as a
+        ! fraction of its OWN element's density -- never of the total gas
+        ! density. Storing rho*x_ion would make the hydro conserve the
+        ! meaningless quantity int(rho*x_ion)dV instead of the ion mass
+        ! int(rho*X_element*x_ion)dV, so mixing two cells with different
+        ! element mass fractions would create or destroy ion mass.
         counter = 0
+        e_counter = 0
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
                  do i=1,nleaf !loop over leaf cells
-                    uold(ind_leaf(i),iIons+counter) = xion(ii,jj,i)*nH(i)
+                    uold(ind_leaf(i),iIons+counter) = &
+                         & xion(ii,jj,i) * uold(ind_leaf(i),imetal+e_counter)
                  end do ! end loop over leaf cells
                  counter = counter + 1
               end do ! end loop over ions
+              e_counter = e_counter + 1 ! increment element counter
            end if
         end do ! end loop over elements
 
         ! deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            do i=1,nleaf !loop over leaf cells
-              uold(ind_leaf(i),iIons+counter) = xion(1,3,i)*nH(i)
+              ! H2 is a fraction of the hydrogen element density (imetal+0)
+              uold(ind_leaf(i),iIons+counter) = xion(1,3,i) * uold(ind_leaf(i),imetal)
            end do ! end loop over leaf cells
            counter = counter + 1
         endif
-#ifdef CO
-        ! In the case of CO, we have to update mass densities
-        do i=1,nleaf !loop over leaf cells
-           uold(ind_leaf(i),iCO) = nCO(i) * mCO / scale_d
-        end do
-
-        e_counter = 0
-        do ii=1,n_elements ! loop over elements
-           if (elements(ii)%atomic_number.gt.0) then
-              ! Check if it's carbon or exygen species
-              if (elements(ii)%atomic_number.eq.6.or.elements(ii)%atomic_number.eq.8) then
-                 do i=1,nleaf !loop over leaf cells
-                    if (jj.eq.1) then
-                       ! This gives us a number density [Atoms/cm^3]
-                       uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
-                    end if
-                 end do ! end loop over leaf cells
-              end if
-              e_counter = e_counter + 1 ! increment element counter
-           end if
-        end do ! end loop over elements
-#endif
 #else
         do ii=0,nIons-1
            do i=1,nleaf
