@@ -11,7 +11,7 @@ module dust_radpressure_module
     use rt_parameters, only: nGroups, iGroups, group_egy, rt_pressBoost, &
                             rt_isoPress, rt_isIR, iIR, rt_c, group_csn, &
                             isH2_rtz, iIons, isLW, rtz_UV_background_G0, rt_advect, rt_c_cgs, &
-                            rt_n_source
+                            rt_n_source, rt_isIRtrap, iIRtrapVar, rt_c_fraction
     use rtz_module, only: elements, n_elements
     use hydro_parameters, only: ndust, npah, idust, ipah, imetal, smallr, smallc, gamma, &
                                 neul, nener, gamma_rad, nhydro
@@ -20,6 +20,7 @@ module dust_radpressure_module
 #endif
     use dust_commons, only: dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
+    use dust_optics, only: get_IR_mean_cross_sections
     use rtz_module, only: getNe, getMu_RTZ
     use molecules_module, only: comp_Sd, comp_SH2
 
@@ -30,15 +31,23 @@ module dust_radpressure_module
 
 contains
 
-    subroutine compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc)
+    subroutine compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, irtrap_share)
         implicit none
         real(dp), dimension(:), intent(in) :: cell_state
         real(dp), dimension(:), intent(in) :: cell_rt_state
         integer, intent(in) :: ilevel
         real(dp), intent(in) :: dx
         real(dp), dimension(1:ndim), intent(out) :: gas_acc
-        real(dp), dimension(1:ndim, max(1, ndust)), intent(out) :: dust_acc
-        real(dp), dimension(1:ndim, max(1, npah)), intent(out) :: pah_acc
+        ! Shapes match the caller's a_rad_d/a_rad_pah sections, which are
+        ! declared (...,1:ndust,1:ndim) / (...,1:npah,1:ndim) in dust_dynamics
+        ! and read back as (jbin,idim). Declaring these (ndim,nbin) transposed
+        ! them for any run with ndim>1 and ndust>1.
+        real(dp), dimension(max(1, ndust), 1:ndim), intent(out) :: dust_acc
+        real(dp), dimension(max(1, npah), 1:ndim), intent(out) :: pah_acc
+        ! Fraction of the trapped-IR Rosseland extinction carried by each dust
+        ! bin, chi_R,k / chi_R,tot. Zero unless rt_isIR (see Part D of the
+        ! trapped-IR scheme). Optional so non-TVA callers need not supply it.
+        real(dp), dimension(max(1, ndust)), intent(out), optional :: irtrap_share
 
         ! Local variables for cell state extraction
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
@@ -53,6 +62,9 @@ contains
         real(dp), dimension(1:ndim, max(1, ndust)) :: dust_force
         real(dp), dimension(1:ndim, max(1, npah)) :: pah_force
         real(dp) :: rho_loc, P_gas, eps_tot, rho_gas, mu
+        real(dp) :: E_IR_tot_cgs, T_rad_loc, chi_R_tot
+        real(dp), dimension(max(1, ndust))  :: sig_R_dust, sig_P_dust, chi_R_dust
+        real(dp), dimension(max(1, 2*npah)) :: sig_R_pah,  sig_P_pah
         integer :: id, iion, counter, e_counter, jbin
 #ifdef CO
         real(dp) :: nCO
@@ -142,8 +154,40 @@ contains
            end do
         end if
 
+        ! 6b. Total IR energy density [erg/cm^3], streaming + trapped, on the
+        ! same footing as dNp in rtz_cooling_module (i.e. the code value, still
+        ! inflated by 1/f_c). Outside cooling_fine the two components are stored
+        ! separately: streaming in rtuold, trapped in the NENER slot. Np2Ep
+        ! folded f_c and rt_pressBoost into the stored trapped energy, so divide
+        ! them back out before adding.
+        E_IR_tot_cgs = 0.0_dp
+        if (rt_isIR) then
+           E_IR_tot_cgs = cell_rt_state(iGroups(iIR)) * scale_Np &
+                        * group_egy(iIR) * eV2erg
+#if NENER>0
+           if (rt_isIRtrap) then
+              E_IR_tot_cgs = E_IR_tot_cgs + cell_state(iIRtrapVar) &
+                           * scale_d * scale_v**2                 &
+                           / max(rt_c_fraction(ilevel) * rt_pressBoost, 1d-40)
+           end if
+#endif
+        end if
+
+        ! 6c. IR-group mean cross sections at the local radiation temperature.
+        ! Computed once here and handed to both the streaming force below and
+        ! the trapped-IR share in step 9, so the two channels cannot disagree
+        ! at the tau_c ~ 1 crossover.
+        sig_R_dust = 0d0; sig_P_dust = 0d0
+        sig_R_pah  = 0d0; sig_P_pah  = 0d0
+        T_rad_loc  = 0d0
+        if (rt_isIR) then
+           call get_IR_mean_cross_sections(E_IR_tot_cgs, rt_c_fraction(ilevel), &
+                                           sig_R_dust, sig_P_dust,              &
+                                           sig_R_pah,  sig_P_pah, T_rad_loc)
+        end if
+
         ! 7. Call compute_gas_dust_radpressure_force
-        call compute_gas_dust_radpressure_force(cell_rt_state, ilevel, &
+        call compute_gas_dust_radpressure_force(cell_rt_state, ilevel, sig_R_dust, sig_R_pah, &
             gas_force, dust_force, pah_force, &
             nElement, xion, rho_dust, rho_pah, &
             Tk, ne, G0, f_shd)
@@ -154,9 +198,9 @@ contains
         if (ndust > 0) then
            do jbin = 1, ndust
               if (rho_dust(jbin) > 0d0) then
-                 dust_acc(:, jbin) = dust_force(:, jbin) / rho_dust(jbin)
+                 dust_acc(jbin, :) = dust_force(:, jbin) / rho_dust(jbin)
               else
-                 dust_acc(:, jbin) = 0d0
+                 dust_acc(jbin, :) = 0d0
               end if
            end do
         end if
@@ -165,17 +209,50 @@ contains
         if (npah > 0) then
            do jbin = 1, npah
               if (rho_pah(jbin) > 0d0) then
-                 pah_acc(:, jbin) = pah_force(:, jbin) / rho_pah(jbin)
+                 pah_acc(jbin, :) = pah_force(:, jbin) / rho_pah(jbin)
               else
-                 pah_acc(:, jbin) = 0d0
+                 pah_acc(jbin, :) = 0d0
               end if
            end do
         end if
 #endif
 
+        ! 9. Trapped-IR opacity share per dust bin, s_k = chi_R,k / chi_R,tot.
+        ! In the diffusion limit the force density on species k is
+        ! -(chi_k/chi_tot) grad(E_t)/3 (RT15 eq. 48 summed over species gives
+        ! -grad(P_trap)), so s_k is the fraction of the trapped-IR pressure
+        ! gradient that bin k feels. PAHs contribute to chi_tot but do not
+        ! drift, so their share simply stays with the barycenter; the TVA
+        ! closure conserves barycentric momentum regardless.
+        if (present(irtrap_share)) then
+           irtrap_share = 0d0
+           if (rt_isIR .and. ndust > 0) then
+              chi_R_tot = 0d0
+              do jbin = 1, ndust
+                 chi_R_dust(jbin) = sig_R_dust(jbin) * rho_dust(jbin) * scale_d &
+                                  / dustbins_props(jbin)%mgrain
+                 chi_R_tot = chi_R_tot + chi_R_dust(jbin)
+              end do
+#if NPAH>0
+              ! Charge-state mean, as in the trapping optical depth in
+              ! cooling_fine; PAH IR opacity is a small correction.
+              do jbin = 1, npah
+                 chi_R_tot = chi_R_tot                                        &
+                    + 0.5d0 * (sig_R_pah(2*(jbin-1)+1) + sig_R_pah(2*(jbin-1)+2)) &
+                    * rho_pah(jbin) * scale_d / pahbins_props(jbin)%mpah
+              end do
+#endif
+              if (chi_R_tot > 1d-40) then
+                 do jbin = 1, ndust
+                    irtrap_share(jbin) = chi_R_dust(jbin) / chi_R_tot
+                 end do
+              end if
+           end if
+        end if
+
     end subroutine compute_gas_dust_radpressure_acc
 
-    subroutine compute_gas_dust_radpressure_force(cell_rt_state, ilevel, &
+    subroutine compute_gas_dust_radpressure_force(cell_rt_state, ilevel, sig_R_dust, sig_R_pah, &
         gas_force_code, dust_force_code, pah_force_code, &
         nElement, dXion, rho_dust, rho_pah, &
         Tk, ne, G0, f_shd)
@@ -183,6 +260,11 @@ contains
         ! Input/Output declarations
         real(dp), dimension(:), intent(in) :: cell_rt_state
         integer, intent(in) :: ilevel
+        ! IR-group Rosseland mean cross sections [cm^2] at the local radiation
+        ! temperature, supplied by the caller so the streaming and trapped
+        ! channels are guaranteed to use the same opacity.
+        real(dp), dimension(:), intent(in) :: sig_R_dust  ! (1:ndust)
+        real(dp), dimension(:), intent(in) :: sig_R_pah   ! (1:2*npah), interlaced
         
         real(dp), dimension(1:ndim), intent(out) :: gas_force_code
         real(dp), dimension(:,:), intent(out) :: dust_force_code
@@ -210,6 +292,8 @@ contains
         real(dp) :: mom_fact_gas, mom_fact_dust, mom_fact_pah
         real(dp) :: pah_ion_fraction
         real(dp), dimension(max(1, ncharge_pah_max), max(1, npah)) :: fcharge_pah_local
+        real(dp) :: cs_loc, cs_loc_n, cs_loc_i
+        integer  :: idx_n, idx_i
 
         ! 1. Initialize forces to 0
         gas_force_code = 0d0
@@ -255,10 +339,21 @@ contains
         ! 4. Calculate dust/PAH opacities in code units
         opacity_dust_code = 0d0
         opacity_pah_code = 0d0
+
+        ! For the IR group the flux-mean opacity is the Rosseland mean at the
+        ! local radiation temperature, not the band-weighted group_csr value
+        ! (RT15 eqs. 12, 21). It must match the cross section used for the
+        ! barycentric force in rtz_cooling_module, or the a_rad_mix subtraction
+        ! in the TVA driver would no longer cancel.
         if (ndust > 0) then
             do igroup = 1, nGroups
                 do ii = 1, ndust
-                    opacity_dust_code(ii, igroup) = group_csr_dust(ii, igroup) * rho_dust(ii) * &
+                    if (rt_isIR .and. igroup == iIR) then
+                        cs_loc = sig_R_dust(ii)
+                    else
+                        cs_loc = group_csr_dust(ii, igroup)
+                    end if
+                    opacity_dust_code(ii, igroup) = cs_loc * rho_dust(ii) * &
                                                     scale_d * scale_l / dustbins_props(ii)%mgrain
                 end do
             end do
@@ -271,9 +366,22 @@ contains
                 ! Use PAH photoelectric heating solver for charge state
                 call interpolate_pah_charge_equilibrium(ii, G0, ne, Tk, fcharge_pah_local(:,ii))
                 pah_ion_fraction = fcharge_pah_local(2, ii)
+                ! group_cs*_pah is laid out interlaced, neutral then ion for
+                ! each bin (see initialize_cross_sections_from_blackbody_dust_pah
+                ! and rad_pah_rate). The previous (ii)/(npah+ii) block indexing
+                ! only coincided with that for npah==1.
+                idx_n = 2*(ii-1) + 1
+                idx_i = 2*(ii-1) + 2
                 do igroup = 1, nGroups
-                    opacity_pah_code(ii, igroup) = (group_csr_pah(ii, igroup) * (1d0 - pah_ion_fraction) + &
-                                                    group_csr_pah(npah+ii, igroup) * pah_ion_fraction) * &
+                    if (rt_isIR .and. igroup == iIR) then
+                        cs_loc_n = sig_R_pah(idx_n)
+                        cs_loc_i = sig_R_pah(idx_i)
+                    else
+                        cs_loc_n = group_csr_pah(idx_n, igroup)
+                        cs_loc_i = group_csr_pah(idx_i, igroup)
+                    end if
+                    opacity_pah_code(ii, igroup) = (cs_loc_n * (1d0 - pah_ion_fraction) + &
+                                                    cs_loc_i * pah_ion_fraction) * &
                                                    rho_pah(ii) * scale_d * scale_l / &
                                                    pahbins_props(ii)%mpah
                 end do

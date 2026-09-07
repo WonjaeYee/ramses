@@ -83,6 +83,9 @@ module dust_init
         ! This function goes through the hydro and compilation parameters
         ! to make sure that it is compliant with the required dust settings
         use hydro_parameters
+#ifdef RT
+        use rt_parameters, only: rt_isIRtrap, rt_isIR, rt_use_hll
+#endif
         implicit none
         logical :: check_params_dust
         integer,intent(in) :: myid
@@ -184,6 +187,33 @@ module dust_init
                           'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'
             end if
         end if
+#ifdef RT
+        ! Trapped-IR radiation pressure on the dust
+        if (dust_tva .and. rt_isIRtrap) then
+            if (nener <= 0) then
+                if(myid==1)write(*,*)'Error: rt_isIRtrap needs a non-thermal energy ', &
+                                     'variable; recompile with NENER>=1 (and NVAR+1)'
+                check_params_dust=.false.
+            end if
+            if (.not. rt_isIR) then
+                if(myid==1)write(*,*)'Error: rt_isIRtrap requires rt_isIR=.true. ', &
+                                     '(the trapped variable is the IR group)'
+                check_params_dust=.false.
+            end if
+            if (ndust <= 0) then
+                if(myid==1)write(*,*)'Error: trapped-IR pressure on dust requires NDUST>0'
+                check_params_dust=.false.
+            end if
+            if (rt_use_hll) then
+                ! Rosdahl & Teyssier 2015, footnote 3: the trapped/streaming
+                ! partition is matched to the numerical diffusion of the GLF
+                ! flux, so it is only consistent with rt_flux_scheme='glf'.
+                if(myid==1)write(*,*)'Error: rt_isIRtrap is only consistent with ', &
+                                     "rt_flux_scheme='glf', not 'hll'"
+                check_params_dust=.false.
+            end if
+        end if
+#endif
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)
@@ -743,11 +773,21 @@ module dust_init
         case ('dustyblast1d'); tva_test_mode = TVA_TEST_BLAST1D
         case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
         case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
+        case ('dustyirtrap');  tva_test_mode = TVA_TEST_IRTRAP
         case default;          tva_test_mode = TVA_TEST_NONE
         end select
         if (myid == 1 .and. tva_test_mode /= TVA_TEST_NONE) then
-            write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
-                       'branch: the stopping time and/or thermodynamics are hardcoded, not physical.'
+            if (tva_test_mode == TVA_TEST_IRTRAP) then
+                ! This one keeps the real Epstein drag and real thermodynamics;
+                ! it only freezes the analytic trapped-IR profile from condinit
+                ! by skipping the re-partition in cooling_fine.
+                write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                           'branch: the trapped-IR energy is held at its analytic profile ', &
+                           '(no trapped/streaming re-partition). Drag and thermodynamics are physical.'
+            else
+                write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                           'branch: the stopping time and/or thermodynamics are hardcoded, not physical.'
+            end if
         end if
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts

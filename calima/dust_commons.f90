@@ -83,7 +83,8 @@ module dust_commons
     ! solver loops carry an integer compare instead of a character(60) one -- and so an
     ! innocently named IC cannot silently switch the physics to a test branch.
     integer,parameter ::TVA_TEST_NONE=0, TVA_TEST_DIFFUSE=1, TVA_TEST_SHOCK=2, &
-                      & TVA_TEST_BLAST1D=3, TVA_TEST_SPRESS=4, TVA_TEST_GAUSS=5
+                      & TVA_TEST_BLAST1D=3, TVA_TEST_SPRESS=4, TVA_TEST_GAUSS=5, &
+                      & TVA_TEST_IRTRAP=6
     integer ::tva_test_mode=TVA_TEST_NONE
     ! ==== Dust dynamics diagnostics (not in nml) ====
     integer(kind=8) ::tva_nclip=0                ! Faces/cells whose drift was clipped since last report

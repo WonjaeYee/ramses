@@ -18,6 +18,7 @@ module rtz_cooling_module
                            group_csa_pah, group_css_pah, group_csr_pah,&
                            att_len_dust
    use dust_init, only: init_dust_depletion_tests
+   use dust_optics, only: get_IR_mean_cross_sections
 #endif
    implicit none
 
@@ -834,6 +835,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp),dimension(nGroups):: recRad, phAbs, phSc, dustAbs
       real(dp),dimension(nGroups):: dustSc, kAbs_loc, kSc_loc,dustRp
       real(dp):: TR, one_over_C_v, E_rad, dE_T
+#ifdef CALIMA
+      ! IR-group mean cross sections at the local radiation temperature [cm^2]
+      real(dp),dimension(max(1,ndust))  :: sigR_IR_dust, sigP_IR_dust
+      real(dp),dimension(max(1,2*npah)) :: sigR_IR_pah,  sigP_IR_pah
+      real(dp):: E_IR_loc, T_rad_loc
+#endif
       !  real(dp):: G0, eff_peh
       real(dp):: fluxMag, mom_fact
 #endif
@@ -1016,6 +1023,31 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_advect) then
          dust_helper%local_c = rt_c_cgs(ilevel)
          dust_helper%group_eV(:) = group_egy(:)
+         ! For the IR group the band-weighted group_cs*_dust/pah values are
+         ! the wrong spectral weight (they are averaged over the group band
+         ! with a hot blackbody or the stellar SED). Replace that one column
+         ! with the T_rad-dependent mean opacities: Rosseland for the flux /
+         ! momentum channel and Planck for absorption and emission, following
+         ! the kappa_R / kappa_F vs kappa_P split of Rosdahl & Teyssier 2015
+         ! (eqs. 12, 21). Done here, inside cool_step, so the opacity tracks
+         ! dNp(iIR) on every substep -- the same place RAMSES-RT recomputes
+         ! kAbs_loc(iIR) in its non-CALIMA branch. At this point dNp(iIR) is
+         ! the total IR, since cooling_fine de-partitioned the trapped photons
+         ! back in before the solve.
+         if (rt_isIR) then
+            E_IR_loc = group_egy_erg(iIR) * dNp(iIR)
+            call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel), &
+                                            sigR_IR_dust, sigP_IR_dust,      &
+                                            sigR_IR_pah,  sigP_IR_pah, T_rad_loc)
+            if (ndust > 0) then
+               dust_helper%csr_dust(:,iIR) = sigR_IR_dust(1:ndust) * rt_c_cgs(ilevel)
+               dust_helper%csa_dust(:,iIR) = sigP_IR_dust(1:ndust) * rt_c_cgs(ilevel)
+            end if
+            if (npah > 0) then
+               dust_helper%csr_pah(:,iIR) = sigR_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
+               dust_helper%csa_pah(:,iIR) = sigP_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
+            end if
+         end if
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
@@ -1224,13 +1256,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (ndust > 0) then
             do ii = 1, ndust
                dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
-                     group_egy_erg(iIR)
+                     one_over_egy_IR_erg
             end do
          end if
          if (npah > 0) then
             do ii = 1, npah
                dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
-                     group_egy_erg(iIR)
+                     one_over_egy_IR_erg
             end do
          end if
       end if
@@ -2104,13 +2136,12 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    real(dp), dimension(1:ndim, 1:nvector) :: p_gas_1
 #endif
 #ifdef CALIMA
+   ! Declared unconditionally: rtz_solve_cooling takes rho_dust/rho_pah as
+   ! non-optional intent(inout) arguments, so they must exist and be passed
+   ! whatever NDUST/NPAH are. Zero-size arrays are fine.
    real(dp), dimension(1:nvector) :: sigma_1
-#if NDUST>0
    real(dp), dimension(1:nvector, 1:ndust) :: rho_dust_1
-#endif
-#if NPAH>0
    real(dp), dimension(1:nvector, 1:npah) :: rho_pah_1
-#endif
 #endif
 
    real(dp) :: aexp_r, dt_r, dx_SS_H2_r, rt_c_cgs_r, ddt_r, tleft_r
@@ -2193,13 +2224,13 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
         dt_r, 1, dx_SS_H2_r, err_idx_out &
 #ifdef CALIMA
+        ! rho_dust/rho_pah are intent(inout), not optional, so they must be
+        ! passed whatever NDUST/NPAH are (zero-size arrays are fine). Guarding
+        ! them made every NPAH=0 CALIMA+RTZ build fail to compile. Matches the
+        ! call in hydro/cooling_fine.f90.
         , sigma=sigma_1 &
-#if NDUST>0
         , rho_dust=rho_dust_1 &
-#endif
-#if NPAH>0
         , rho_pah=rho_pah_1 &
-#endif
 #endif
         , ddt_initial=ddt_r &
         , tleft_initial=tleft_r &

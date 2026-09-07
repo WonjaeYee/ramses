@@ -78,8 +78,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
   use constants, only: a_r, Myr2sec, mH, rhoc, twopi
 #ifdef CALIMA
-  use dust_commons, only: dust,comp_sigma_turb
+  use dust_commons, only: dust,comp_sigma_turb,dustbins_props,pahbins_props, &
+                          tva_test_mode,TVA_TEST_IRTRAP
   use dust_utils, only: cmp_sigma_turb
+  use dust_optics, only: get_IR_mean_cross_sections
 #endif
   use mpi_mod
   implicit none
@@ -137,6 +139,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp),dimension(1:nvector,1:ndust) :: rho_dust
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
   integer :: jbin
+  ! IR trapping from the actual CALIMA Rosseland extinction
+  real(dp) :: chi_R_IR, E_IR_loc, T_rad_loc
+  real(dp),dimension(max(1,ndust))  :: sigR_IR_dust, sigP_IR_dust
+  real(dp),dimension(max(1,2*npah)) :: sigR_IR_pah,  sigP_IR_pah
 #endif
 
    integer::err_idx
@@ -283,10 +289,38 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            endif
            kIR = kIR*scale_d*scale_l           !  Convert to code units
            flux = rtuold(il,iNp+1:iNp+ndim)
+#ifdef CALIMA
+           ! kIR*Zsolar*f_dust is the effective dust opacity per gram of gas,
+           ! in code units. CALIMA knows that quantity directly as
+           ! chi_R_IR/rho_cgs, so substitute it and leave every other factor
+           ! alone. Needed because Zsolar is never assigned in an RTZ build
+           ! (its loop is #ifndef RTZ), which silently zeroed this term.
+           ! rho_dust is not filled yet at this point in coolfine1, so read the
+           ! dust densities straight out of uold.
+           E_IR_loc = group_egy(iIR) * eV2erg * max(NIRtot,smallNp) * scale_Np
+           call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel), &
+                                           sigR_IR_dust, sigP_IR_dust,      &
+                                           sigR_IR_pah,  sigP_IR_pah, T_rad_loc)
+           chi_R_IR = 0d0
+           do jbin = 1, ndust
+              chi_R_IR = chi_R_IR + sigR_IR_dust(jbin)                      &
+                       * max(uold(il,idust+jbin-1),0d0) * scale_d           &
+                       / dustbins_props(jbin)%mgrain
+           end do
+           do jbin = 1, npah
+              chi_R_IR = chi_R_IR + 0.5d0 * (sigR_IR_pah(2*(jbin-1)+1)      &
+                                           + sigR_IR_pah(2*(jbin-1)+2))     &
+                       * max(uold(il,ipah+jbin-1),0d0) * scale_d            &
+                       / pahbins_props(jbin)%mpah
+           end do
+           work = scale_v/c_cgs * (chi_R_IR * scale_l / max(uold(il,1),smallr)) &
+                * sum(uold(il,2:ndim+1)*flux) * dtnew(ilevel) !         Eq A6
+#else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
            f_dust = (1d0-xHII)                     ! No dust in ionised gas
            work = scale_v/c_cgs * kIR * sum(uold(il,2:ndim+1)*flux) &
                 * Zsolar(i) * f_dust * dtnew(ilevel) !               Eq A6
+#endif
 
            uold(il,neul) = uold(il,neul) &    ! Add work to gas energy
                 + work * group_egy(iIR) &
@@ -947,9 +981,44 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #else
            f_dust = 1d0-xion(ixHII,i)              ! No dust in ionised gas
 #endif
+#ifdef CALIMA
+           ! CALIMA carries real per-bin dust densities, so build the
+           ! cell-crossing optical depth from the actual Rosseland extinction
+           ! rather than the nH*Zsolar*(1-xHII) proxy. That proxy was in fact
+           ! dead in an RTZ build: the Zsolar loop above is inside #ifndef RTZ,
+           ! so Zsolar was never assigned, tau was 0 and nothing was ever
+           ! trapped. tau here is (3/2)*tau_c, so f_trap = exp(-1/tau) is
+           ! exp(-2/(3 tau_c)) -- RT15 eq. 50, unchanged.
+           E_IR_loc = group_egy(iIR) * eV2erg * NIRtot * scale_Np
+           call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel), &
+                                           sigR_IR_dust, sigP_IR_dust,      &
+                                           sigR_IR_pah,  sigP_IR_pah, T_rad_loc)
+           chi_R_IR = 0d0
+           do jbin = 1, ndust
+              chi_R_IR = chi_R_IR + sigR_IR_dust(jbin) * rho_dust(i,jbin) &
+                                  / dustbins_props(jbin)%mgrain
+           end do
+           ! PAHs: the local charge fraction is not available here, so take the
+           ! mean of the two charge states. Their IR opacity is a small
+           ! correction (PAHs are far smaller than IR wavelengths).
+           do jbin = 1, npah
+              chi_R_IR = chi_R_IR + 0.5d0 * (sigR_IR_pah(2*(jbin-1)+1)      &
+                                           + sigR_IR_pah(2*(jbin-1)+2))     &
+                                  * rho_pah(i,jbin) / pahbins_props(jbin)%mpah
+           end do
+           tau = 1.5d0 * dx_loc * scale_l * chi_R_IR
+#else
            tau = nH(i) * Zsolar(i) * f_dust * unit_tau * kIR
+#endif
            f_trap = 0d0             ! Fraction IR photons that are trapped
            if(tau .gt. 0d0) f_trap = min(max(exp(-1d0/tau), 0d0), 1d0)
+#ifdef CALIMA
+           ! dustyirtrap test: hold the analytic E_trap profile imposed in
+           ! condinit instead of re-deriving it from the RT field, so
+           ! grad(P_trap) stays known. Same idea as TVA_TEST_SPRESS, which
+           ! overrides the advected flux with the prescribed source.
+           if (tva_test_mode == TVA_TEST_IRTRAP) cycle
+#endif
            ! Update streaming photons, trapped photons, and tot energy:
            rtuold(il,iNp) = max(smallnp,(1d0-f_trap) * NIRtot) ! Streaming
            rtuold(il,iNp+1:iNp+ndim) = &            ! Limit streaming flux

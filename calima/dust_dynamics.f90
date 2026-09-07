@@ -315,6 +315,7 @@ module dust_dynamics
 #ifdef RT
         use rt_hydro_commons, only: rtuold, nrtvar
         use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
+        use rt_parameters, only: rt_isIR, rt_isIRtrap, iIRtrapVar
 #endif
         use mpi_mod
         implicit none
@@ -370,7 +371,16 @@ module dust_dynamics
         real(dp) :: eps_tot_L, eps_tot_R, eps_tot_face
         real(dp) :: eps_face_bin, c_s_face
         real(dp) :: grad_P, t_s_face, avg_ts_face, u_drift, D_i
-        real(dp) :: eken, rho_gas_cell
+        real(dp) :: eken, rho_gas_cell, erad_cell
+        integer  :: irad
+        ! Trapped-IR radiation pressure and per-bin Rosseland opacity share.
+        ! Declared unconditionally: the drift driver below references them
+        ! outside the #ifdef RT guards (they stay zero without RT).
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), save :: s_IRtrap
+        real(dp) :: Ptrap_L, Ptrap_R, grad_Ptrap
+        real(dp), dimension(1:ndust) :: s_IRtrap_face
+        logical  :: do_irtrap
         real(dp) :: a_rad_g_face, a_rad_mix, w_g, w_d_val, sum_eps_ts_D
         real(dp) :: w_cap, wmax_all
         integer(kind=8) :: nclip_all
@@ -492,7 +502,8 @@ module dust_dynamics
                                                                         ilevel,dx,& 
                                                                         a_rad_g(ind_exist(i),i3,j3,k3,:),&
                                                                         a_rad_d(ind_exist(i),i3,j3,k3,:,:),&
-                                                                        a_rad_pah(ind_exist(i),i3,j3,k3,:,:))
+                                                                        a_rad_pah(ind_exist(i),i3,j3,k3,:,:),&
+                                                                        s_IRtrap(ind_exist(i),i3,j3,k3,:))
                             end do
                             do i=1,nbuffer
                                 call compute_gas_dust_radpressure_acc(uloc(ind_nexist(i),i3,j3,k3,:),&
@@ -500,7 +511,8 @@ module dust_dynamics
                                                                         ilevel,dx,& 
                                                                         a_rad_g(ind_nexist(i),i3,j3,k3,:),&
                                                                         a_rad_d(ind_nexist(i),i3,j3,k3,:,:),&
-                                                                        a_rad_pah(ind_nexist(i),i3,j3,k3,:,:))
+                                                                        a_rad_pah(ind_nexist(i),i3,j3,k3,:,:),&
+                                                                        s_IRtrap(ind_nexist(i),i3,j3,k3,:))
                             end do
                         end if
 #endif
@@ -530,17 +542,46 @@ module dust_dynamics
                     end do
                     eken = half * eken / rho_mix(l,i,j,k)**2
 
+                    ! Same NENER subtraction as the flux routines (see comment there).
+                    erad_cell = 0.0_dp
+#if NENER>0
+                    do irad = 1, nener
+                        erad_cell = erad_cell + uloc(l,i,j,k,nhydro+irad) / rho_mix(l,i,j,k)
+                    end do
+#endif
+
                     if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         Pg(l,i,j,k)  = (1.0_dp - eps_tot_arr(l,i,j,k)) * rho_mix(l,i,j,k)
                         c_s(l,i,j,k) = 1.0_dp
                     else
                         Pg(l,i,j,k)  = max((gamma-1.0_dp) * rho_gas_cell * &
-                            max(uloc(l,i,j,k,neul)/rho_mix(l,i,j,k) - eken, &
+                            max(uloc(l,i,j,k,neul)/rho_mix(l,i,j,k) - eken - erad_cell, &
                                 smallc**2/gamma/(gamma-1.0_dp)), &
                             smallr * smallc**2)
                         c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / max(rho_gas_cell, smallr))
                     end if
                 end do; end do; end do; end do
+
+                ! Trapped-IR pressure, same definition as the flux routine so
+                ! this CFL bound applies to the drift actually taken.
+                do_irtrap = .false.
+#if defined(RT) && NENER>0
+                do_irtrap = rt_isIR .and. rt_isIRtrap .and. ndust > 0
+#endif
+                Ptrap = 0.0_dp
+#ifndef RT
+                ! Without RT nothing fills the share array; it is a save
+                ! variable, so zero it rather than read it uninitialised.
+                s_IRtrap = 0.0_dp
+#endif
+#if defined(RT) && NENER>0
+                if (do_irtrap) then
+                    do k=ku1,ku2; do j=ju1,ju2; do i=iu1,iu2; do l=1,ngrid
+                        Ptrap(l,i,j,k) = (gamma_rad(iIRtrapVar-nhydro) - 1.0_dp) &
+                                       * max(uloc(l,i,j,k,iIRtrapVar), 0.0_dp)
+                    end do; end do; end do; end do
+                end if
+#endif
 
                 ! ============================================================
                 ! STEP 2: Face CFL from true pressure gradient
@@ -554,6 +595,8 @@ module dust_dynamics
                             ! --- Gather left/right cell quantities at this face ---
                             if (idim == 1) then
                                 Pg_L      = Pg(l,i-1,j,k);       Pg_R      = Pg(l,i,j,k)
+                                Ptrap_L   = Ptrap(l,i-1,j,k);    Ptrap_R   = Ptrap(l,i,j,k)
+                                s_IRtrap_face(1:ndust) = half * (s_IRtrap(l,i-1,j,k,1:ndust) + s_IRtrap(l,i,j,k,1:ndust))
                                 rho_L     = rho_mix(l,i-1,j,k);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i-1,j,k); eps_tot_R = eps_tot_arr(l,i,j,k)
                                 c_s_face  = half * (c_s(l,i-1,j,k) + c_s(l,i,j,k))
@@ -573,6 +616,8 @@ module dust_dynamics
 #endif
                             else if (idim == 2) then
                                 Pg_L      = Pg(l,i,j-1,k);       Pg_R      = Pg(l,i,j,k)
+                                Ptrap_L   = Ptrap(l,i,j-1,k);    Ptrap_R   = Ptrap(l,i,j,k)
+                                s_IRtrap_face(1:ndust) = half * (s_IRtrap(l,i,j-1,k,1:ndust) + s_IRtrap(l,i,j,k,1:ndust))
                                 rho_L     = rho_mix(l,i,j-1,k);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i,j-1,k); eps_tot_R = eps_tot_arr(l,i,j,k)
                                 c_s_face  = half * (c_s(l,i,j-1,k) + c_s(l,i,j,k))
@@ -592,6 +637,8 @@ module dust_dynamics
 #endif
                             else
                                 Pg_L      = Pg(l,i,j,k-1);       Pg_R      = Pg(l,i,j,k)
+                                Ptrap_L   = Ptrap(l,i,j,k-1);    Ptrap_R   = Ptrap(l,i,j,k)
+                                s_IRtrap_face(1:ndust) = half * (s_IRtrap(l,i,j,k-1,1:ndust) + s_IRtrap(l,i,j,k,1:ndust))
                                 rho_L     = rho_mix(l,i,j,k-1);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i,j,k-1); eps_tot_R = eps_tot_arr(l,i,j,k)
                                 c_s_face  = half * (c_s(l,i,j,k-1) + c_s(l,i,j,k))
@@ -612,6 +659,7 @@ module dust_dynamics
                             end if
 
                             grad_P       = (Pg_R - Pg_L) / dx
+                            grad_Ptrap   = (Ptrap_R - Ptrap_L) / dx
                             Pg_face      = half * (Pg_L + Pg_R)
                             rho_face     = half * (rho_L + rho_R)
                             eps_tot_face = half * (eps_tot_L + eps_tot_R)
@@ -666,6 +714,12 @@ module dust_dynamics
                                 end if
                                 eps_face_bin = max(eps_face_bin, 0.0_dp)
                                 D_bin(jbin) = grad_P / max(rho_face, smallr) + a_rad_d_face(jbin) - a_rad_mix
+                                if (do_irtrap) then
+                                    D_bin(jbin) = D_bin(jbin) - grad_Ptrap *          &
+                                        ( s_IRtrap_face(jbin)                         &
+                                          / max(eps_face_bin * rho_face, smallr)      &
+                                          - 1.0_dp / max(rho_face, smallr) )
+                                end if
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
                             end do
 
@@ -998,7 +1052,8 @@ module dust_dynamics
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: slope_rhod, slope_wd, rhod_pred
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, slope_wg, wg_pred
         
-        real(dp) :: eken, rho_gas_cell, grad_P_cell
+        real(dp) :: eken, rho_gas_cell, grad_P_cell, erad_cell
+        integer  :: irad
         real(dp) :: dlft, drgt, dcen, theta
         real(dp) :: rhod_state_L, rhod_state_R, w_state_L, w_state_R, w_face
         real(dp) :: wg_state_L, wg_state_R, wg_face, Pg_upwind, H_gdnv
@@ -1039,7 +1094,18 @@ module dust_dynamics
             end do
             eken = half * eken / rho_mix(l,i,j,k)**2
             
-            eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken, smallc**2/gamma/(gamma-one))
+            ! Non-thermal (NENER) energy must come out before the thermal
+            ! pressure, exactly as ctoprim does (hydro/umuscl.f90). With
+            ! rt_isIRtrap the trapped IR lives in uold(:,inener) and is inside
+            ! uold(:,neul), so without this it would be counted as gas thermal
+            ! pressure and double-count against the trapped-IR drift term.
+            erad_cell = 0.0_dp
+#if NENER>0
+            do irad = 1, nener
+                erad_cell = erad_cell + uloc(l,i,j,k,nhydro+irad) / rho_mix(l,i,j,k)
+            end do
+#endif
+            eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken - erad_cell, smallc**2/gamma/(gamma-one))
             
             if (tva_test_mode == TVA_TEST_DIFFUSE) then
                 Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
@@ -1374,6 +1440,8 @@ module dust_dynamics
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndim),save::a_rad_g
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust,1:ndim),save::a_rad_d
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:npah,1:ndim),save::a_rad_pah
+        ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust),save::s_IRtrap
         
         integer,dimension(1:nvector),save::ind_cell, ind_father, igrid_nbor, ind_exist, ind_nexist, ind_buffer
         integer,dimension(1:nvector,1:threetondim)::nbors_father_cells
@@ -1486,7 +1554,8 @@ module dust_dynamics
                                                             ilevel,dx,& 
                                                             a_rad_g(ind_exist(i),i3,j3,k3,:),&
                                                             a_rad_d(ind_exist(i),i3,j3,k3,:,:),&
-                                                            a_rad_pah(ind_exist(i),i3,j3,k3,:,:))
+                                                            a_rad_pah(ind_exist(i),i3,j3,k3,:,:),&
+                                                            s_IRtrap(ind_exist(i),i3,j3,k3,:))
                 end do
 
                 do i=1,nbuffer
@@ -1495,7 +1564,8 @@ module dust_dynamics
                                                             ilevel,dx,& 
                                                             a_rad_g(ind_nexist(i),i3,j3,k3,:),&
                                                             a_rad_d(ind_nexist(i),i3,j3,k3,:,:),&
-                                                            a_rad_pah(ind_nexist(i),i3,j3,k3,:,:))
+                                                            a_rad_pah(ind_nexist(i),i3,j3,k3,:,:),&
+                                                            s_IRtrap(ind_nexist(i),i3,j3,k3,:))
                 end do
 
                 do i=1,nexist;  ok(ind_exist(i),i3,j3,k3)=son(ind_cell(i))>0; end do
@@ -1505,7 +1575,7 @@ module dust_dynamics
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
         call calculate_drag_rad_fluxes(uloc,dflux,eflux,mflux,dx,dt,ncache,&
-                                        a_rad_g,a_rad_d,agrain_code,sgrain_code)
+                                        a_rad_g,a_rad_d,s_IRtrap,agrain_code,sgrain_code)
 
         ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
         ! zero out the flux; the finer level handles it and restricts it down later
@@ -1641,12 +1711,13 @@ module dust_dynamics
     end subroutine dust_upwind_correct2
 
     subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, mflux, dx, dt, ngrid, &
-                                        & a_rad_g, a_rad_d, &
+                                        & a_rad_g, a_rad_d, s_IRtrap, &
                                         & agrain_code, sgrain_code)
         use amr_parameters
         use hydro_parameters
         use const
         use amr_commons, only: nstep
+        use rt_parameters, only: rt_isIR, rt_isIRtrap, iIRtrapVar
         implicit none
 
         ! ========================================================================
@@ -1663,6 +1734,8 @@ module dust_dynamics
         ! Radiation acceleration arrays [code units]
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndim), intent(in) :: a_rad_g
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust, 1:ndim), intent(in) :: a_rad_d
+        ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), intent(in) :: s_IRtrap
         ! Grain properties (sizes and material densities) [code units]
         real(dp), dimension(1:ndust), intent(in)   :: agrain_code, sgrain_code
 
@@ -1675,13 +1748,18 @@ module dust_dynamics
         ! Cell-centered primitive caches across the localized block
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: eps
+        ! Trapped-IR radiation pressure, exactly as the Riemann solver sees it
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
+        real(dp) :: grad_Ptrap_cell
+        logical  :: do_irtrap
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: rhod_cell, w_d_cell
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: slope_rhod, slope_wd, rhod_pred
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, slope_wg
         
-        real(dp) :: eken, rho_gas_cell, grad_P_cell
+        real(dp) :: eken, rho_gas_cell, grad_P_cell, erad_cell
+        integer  :: irad
         real(dp) :: dlft, drgt, dcen, theta
         real(dp) :: rhod_state_L, rhod_state_R, w_state_L, w_state_R, w_face
         real(dp) :: wg_state_L, wg_state_R, wg_face, Pg_upwind, H_gdnv, flux_mass_bin
@@ -1727,7 +1805,18 @@ module dust_dynamics
             end do
             eken = half * eken / rho_mix(l,i,j,k)**2
             
-            eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken, smallc**2/gamma/(gamma-one))
+            ! Non-thermal (NENER) energy must come out before the thermal
+            ! pressure, exactly as ctoprim does (hydro/umuscl.f90). With
+            ! rt_isIRtrap the trapped IR lives in uold(:,inener) and is inside
+            ! uold(:,neul), so without this it would be counted as gas thermal
+            ! pressure and double-count against the trapped-IR drift term.
+            erad_cell = 0.0_dp
+#if NENER>0
+            do irad = 1, nener
+                erad_cell = erad_cell + uloc(l,i,j,k,nhydro+irad) / rho_mix(l,i,j,k)
+            end do
+#endif
+            eint_cell(l,i,j,k) = max((uloc(l,i,j,k,neul) / rho_mix(l,i,j,k)) - eken - erad_cell, smallc**2/gamma/(gamma-one))
             
             if (tva_test_mode == TVA_TEST_DIFFUSE) then
                 Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
@@ -1737,6 +1826,31 @@ module dust_dynamics
                 c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / rho_gas_cell)
             end if
         end do; end do; end do; end do
+
+        ! ========================================================================
+        ! STEP 1b: TRAPPED-IR RADIATION PRESSURE (CELL-CENTERED)
+        ! ------------------------------------------------------------------------
+        ! In optically thick cells the IR is stored in a NENER slot and behaves
+        ! as a fluid pressure, so the Godunov solver already applies
+        ! -grad(P_trap)/rho_mix to the mixture barycenter. Physically the force
+        ! acts on the dust, which carries the IR opacity, so TVA needs the
+        ! differential part. Use exactly the same expression the Riemann solver
+        ! uses, (gamma_rad-1)*E_trap, so the barycentric term cancels exactly
+        ! whatever the rt_c_fraction normalisation turns out to be.
+        ! ========================================================================
+        do_irtrap = .false.
+#if NENER>0
+        do_irtrap = rt_isIR .and. rt_isIRtrap .and. ndust > 0
+#endif
+        Ptrap = 0.0_dp
+#if NENER>0
+        if (do_irtrap) then
+            do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
+                Ptrap(l,i,j,k) = (gamma_rad(iIRtrapVar-nhydro) - 1.0_dp) &
+                               * max(uloc(l,i,j,k,iIRtrapVar), 0.0_dp)
+            end do; end do; end do; end do
+        end if
+#endif
 
         ! ========================================================================
         ! MAIN DIRECTION SWEEP LOOP (idim = 1: X-sweep, 2: Y-sweep, 3: Z-sweep)
@@ -1771,6 +1885,38 @@ module dust_dynamics
                         grad_P_cell = (Pg(l,i,j,k) - Pg(l,i,j,k-1)) / dx
                     else
                         grad_P_cell = (Pg(l,i,j,k+1) - Pg(l,i,j,k-1)) / (2.0_dp * dx)
+                    end if
+                end if
+
+                ! 2a-bis. Same difference stencil for the trapped-IR pressure:
+                ! central in the interior, one-sided on the outermost stencil
+                ! planes where no ghost data exists.
+                grad_Ptrap_cell = 0.0_dp
+                if (do_irtrap) then
+                    if (idim == 1) then
+                        if (i == iu1) then
+                            grad_Ptrap_cell = (Ptrap(l,i+1,j,k) - Ptrap(l,i,j,k)) / dx
+                        else if (i == iu2) then
+                            grad_Ptrap_cell = (Ptrap(l,i,j,k) - Ptrap(l,i-1,j,k)) / dx
+                        else
+                            grad_Ptrap_cell = (Ptrap(l,i+1,j,k) - Ptrap(l,i-1,j,k)) / (2.0_dp * dx)
+                        end if
+                    else if (idim == 2) then
+                        if (j == ju1) then
+                            grad_Ptrap_cell = (Ptrap(l,i,j+1,k) - Ptrap(l,i,j,k)) / dx
+                        else if (j == ju2) then
+                            grad_Ptrap_cell = (Ptrap(l,i,j,k) - Ptrap(l,i,j-1,k)) / dx
+                        else
+                            grad_Ptrap_cell = (Ptrap(l,i,j+1,k) - Ptrap(l,i,j-1,k)) / (2.0_dp * dx)
+                        end if
+                    else
+                        if (k == ku1) then
+                            grad_Ptrap_cell = (Ptrap(l,i,j,k+1) - Ptrap(l,i,j,k)) / dx
+                        else if (k == ku2) then
+                            grad_Ptrap_cell = (Ptrap(l,i,j,k) - Ptrap(l,i,j,k-1)) / dx
+                        else
+                            grad_Ptrap_cell = (Ptrap(l,i,j,k+1) - Ptrap(l,i,j,k-1)) / (2.0_dp * dx)
+                        end if
                     end if
                 end if
 
@@ -1809,7 +1955,33 @@ module dust_dynamics
                     sum_eps_ts_D = 0.0_dp
                     do jbin = 1, ndust
                         D_bin(jbin) = grad_P_cell / max(rho_mix(l,i,j,k), smallr) + a_rad_d_cell(jbin) - a_rad_mix
+                        ! Trapped-IR differential acceleration:
+                        !   a_k    = -(s_k/rho_k) grad(P_trap)   (force on bin k)
+                        !   a_bary = -(1/rho_mix) grad(P_trap)   (already applied by godunov)
+                        !   D_k   += a_k - a_bary
+                        if (do_irtrap) then
+                            D_bin(jbin) = D_bin(jbin) - grad_Ptrap_cell *            &
+                                ( s_IRtrap(l,i,j,k,jbin)                             &
+                                  / max(rhod_cell(l,i,j,k,jbin), smallr)             &
+                                  - 1.0_dp / max(rho_mix(l,i,j,k), smallr) )
+                        end if
                         sum_eps_ts_D = sum_eps_ts_D + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_bin(jbin)
+                        ! dustyirtrap test diagnostic: report the trapped-IR
+                        ! drift on the first step, while the state is still the
+                        ! analytic one set by condinit, so plot-dustyirtrap.py
+                        ! can check it against the closed-form prediction.
+                        if (do_irtrap .and. tva_test_mode == TVA_TEST_IRTRAP .and. &
+                            (i == 1 .or. i == 2) .and. j == 1 .and. k == 1 .and.   &
+                            idim == 1 .and. nstep <= 1) then
+                            write(*,'(A,I3,A,I2,6(A,ES14.6))') 'IRTRAP_DIAG step=',nstep, &
+                              ' bin=',jbin,                                            &
+                              ' grad_Ptrap=',grad_Ptrap_cell,                          &
+                              ' share=',s_IRtrap(l,i,j,k,jbin),                        &
+                              ' rho_d=',rhod_cell(l,i,j,k,jbin),                       &
+                              ' D=',D_bin(jbin),                                       &
+                              ' t_s=',t_s_intrinsic(jbin),                             &
+                              ' ts_D=',t_s_intrinsic(jbin)*D_bin(jbin)
+                        end if
                     end do
 
                     w_g_cell(l,i,j,k) = -sum_eps_ts_D

@@ -684,7 +684,7 @@ module dust_optics
         use amr_commons,only:myid
         implicit none
         character(len=*), intent(in) :: sed_dir_in
-        character(len=256) :: sed_dir_loc,dustlabel
+        character(len=256) :: sed_dir_loc,dustlabel,pahlabel
         real(dp) :: log_Tmin, log_Tmax, log_step, T_val
         real(dp) :: dplanck_abs_dT, P_emit, dP_emit_dT
         real(dp) :: logP_min, logP_max, logP_step, logP_k, logT_k, x0, x1, y0, y1, weight
@@ -824,6 +824,22 @@ module dust_optics
             call dustbins_props(i)%Tdust_tab%init()
         end do
 
+        ! 2.f Same mean cross sections for the PAH bins, per charge state.
+        ! Needed for the IR photon group: group_cs*_pah are weighted over the
+        ! group band by a hot (1e5 K) blackbody or the stellar SED, which is the
+        ! wrong spectral weight for IR radiation in near-LTE with the grains.
+        do i = 1, npah
+            write(pahlabel, '(A,I2.2)') 'PAHBin_', i
+            call build_pah_mean_tabs(pahbins_props(i)%cs_abs_tab_n,            &
+                                     pahbins_props(i)%Rosseland_tab_n,         &
+                                     pahbins_props(i)%Planck_tab_n,            &
+                                     trim(pahlabel)//'_n', nbins, log_Tmin, log_step)
+            call build_pah_mean_tabs(pahbins_props(i)%cs_abs_tab_i,            &
+                                     pahbins_props(i)%Rosseland_tab_i,         &
+                                     pahbins_props(i)%Planck_tab_i,            &
+                                     trim(pahlabel)//'_i', nbins, log_Tmin, log_step)
+        end do
+
         ! 3. Write the tables to files for verification
         if (myid==1) then
             ! Resolve SED directory: prefer provided argument, then envvar
@@ -857,8 +873,145 @@ module dust_optics
                 close(50+i)
                 close(60+i)
             end do
+
+            ! Same dump for the PAH mean cross sections, per charge state
+            do i = 1, npah
+                write(i_str, '(I2.2)') i
+                open(unit=100+i,file=trim(sed_dir_loc)//'/rosseland_mean_PAHBin_'//trim(i_str)//'_n.list',status='unknown')
+                open(unit=110+i,file=trim(sed_dir_loc)//'/planck_mean_PAHBin_'//   trim(i_str)//'_n.list',status='unknown')
+                open(unit=120+i,file=trim(sed_dir_loc)//'/rosseland_mean_PAHBin_'//trim(i_str)//'_i.list',status='unknown')
+                open(unit=130+i,file=trim(sed_dir_loc)//'/planck_mean_PAHBin_'//   trim(i_str)//'_i.list',status='unknown')
+                do j = 1, nbins
+                    write(100+i,'(2e14.6)') pahbins_props(i)%Rosseland_tab_n%tab1d(j,1), pahbins_props(i)%Rosseland_tab_n%tab1d(j,2)
+                    write(110+i,'(2e14.6)') pahbins_props(i)%Planck_tab_n%tab1d(j,1),    pahbins_props(i)%Planck_tab_n%tab1d(j,2)
+                    write(120+i,'(2e14.6)') pahbins_props(i)%Rosseland_tab_i%tab1d(j,1), pahbins_props(i)%Rosseland_tab_i%tab1d(j,2)
+                    write(130+i,'(2e14.6)') pahbins_props(i)%Planck_tab_i%tab1d(j,1),    pahbins_props(i)%Planck_tab_i%tab1d(j,2)
+                end do
+                close(100+i)
+                close(110+i)
+                close(120+i)
+                close(130+i)
+            end do
         end if
     end subroutine init_dust_mean_cross_sections
+
+    subroutine get_IR_mean_cross_sections(E_IR_code_cgs, f_c,                &
+                                         sig_R_dust, sig_P_dust,             &
+                                         sig_R_pah, sig_P_pah, T_rad)
+        ! Per-bin Rosseland (flux) and Planck (absorption) mean cross sections
+        ! [cm^2] for the IR photon group, evaluated at the local radiation
+        ! temperature. This is CALIMA's equivalent of RAMSES-RT's is_kIR_T
+        ! (Rosdahl & Teyssier 2015 eq. 79), but taken from the real grain
+        ! optical constants instead of a kappa ~ T_rad^2 power law.
+        !
+        ! E_IR_code_cgs -> IR radiation energy density [erg/cm^3] as carried by
+        !                  the code, i.e. inflated by 1/f_c in the streaming
+        !                  limit (RT15 eqs. 2-4, 8).
+        ! f_c           -> rt_c_fraction, the reduced light speed fraction.
+        !
+        ! T_rad follows rtz_cooling_module: T_rad = (E_IR*f_c/a_r)^(1/4), the
+        ! f_c undoing the reduced-light-speed inflation. Unlike RT15 we do not
+        ! add the sum over non-IR groups weighted by kappa_i/kappa_IR: that term
+        ! stands in for UV/optical energy awaiting reprocessing, which CALIMA
+        ! feeds into the IR group explicitly through dust thermal emission, so
+        ! including it here would double count. We also omit RT15's
+        ! exp(-T_rad/1000K) sublimation cutoff, since CALIMA sublimates grains
+        ! explicitly and the dust density itself already drops.
+        implicit none
+        real(dp), intent(in)  :: E_IR_code_cgs, f_c
+        real(dp), dimension(:), intent(out) :: sig_R_dust, sig_P_dust ! (1:ndust)
+        real(dp), dimension(:), intent(out) :: sig_R_pah,  sig_P_pah  ! (1:2*npah)
+        real(dp), intent(out) :: T_rad
+
+        real(dp) :: logT
+        integer  :: k, idx_n, idx_i
+
+        ! Clamp to the tabulated range [1 K, Td_max]; the tables are built on
+        ! log_Tmin = 0 (i.e. 1 K) up to log10(Td_max).
+        T_rad = (max(E_IR_code_cgs, 0.0_dp) * f_c / a_r)**0.25_dp
+        T_rad = min(max(T_rad, 1.0_dp), Td_max)
+        logT  = log10(T_rad)
+
+        do k = 1, ndust
+            call dustbins_props(k)%Rosseland_tab%interpolate(logT, sig_R_dust(k))
+            call dustbins_props(k)%Planck_tab%interpolate(logT, sig_P_dust(k))
+        end do
+
+        ! PAHs are returned per charge state, interlaced exactly as
+        ! group_cs*_pah / dust_helper%cs*_pah are laid out (neutral then ion
+        ! for each bin), so callers such as rad_pah_rate can apply their own
+        ! charge mixing. Taking the mean per charge state and mixing afterwards
+        ! is an approximation for the Rosseland (harmonic) mean, but PAHs are
+        ! far smaller than IR wavelengths so their IR opacity is a small
+        ! correction.
+        do k = 1, npah
+            idx_n = 2*(k-1) + 1
+            idx_i = 2*(k-1) + 2
+            call pahbins_props(k)%Rosseland_tab_n%interpolate(logT, sig_R_pah(idx_n))
+            call pahbins_props(k)%Rosseland_tab_i%interpolate(logT, sig_R_pah(idx_i))
+            call pahbins_props(k)%Planck_tab_n%interpolate(logT, sig_P_pah(idx_n))
+            call pahbins_props(k)%Planck_tab_i%interpolate(logT, sig_P_pah(idx_i))
+        end do
+    end subroutine get_IR_mean_cross_sections
+
+    subroutine alloc_mean_tab(tab, tabname, nbins)
+        ! Allocate a 1D (log10 T -> mean cross section) table.
+        implicit none
+        type(DustTable), intent(inout) :: tab
+        character(len=*), intent(in)   :: tabname
+        integer, intent(in)            :: nbins
+
+        if (allocated(tab%npts))  deallocate(tab%npts)
+        allocate(tab%npts(1:1))
+        tab%name = tabname
+        tab%ndim = 1
+        tab%npts(1) = nbins
+        if (allocated(tab%tab1d)) deallocate(tab%tab1d)
+        allocate(tab%tab1d(1:nbins,1:2))
+    end subroutine alloc_mean_tab
+
+    subroutine build_pah_mean_tabs(cs_tab, ross_tab, planck_tab, tablabel, &
+                                   nbins, log_Tmin, log_step)
+        ! Build Rosseland- and Planck-mean cross-section tables for one PAH
+        ! charge state from its wavelength-resolved absorption table, on the
+        ! same log10(T) grid used for the dust bins.
+        !
+        ! Cross sections are carried through in whatever units cs_tab uses, so
+        ! the result is consistent with group_cs*_pah, which is built from the
+        ! same tables with no geometric factor applied.
+        implicit none
+        type(DustTable), intent(in)    :: cs_tab
+        type(DustTable), intent(inout) :: ross_tab, planck_tab
+        character(len=*), intent(in)   :: tablabel
+        integer, intent(in)            :: nbins
+        real(dp), intent(in)           :: log_Tmin, log_step
+
+        real(dp), dimension(:), allocatable :: wav_tmp, cs_tmp
+        real(dp) :: T_val
+        integer  :: j, kk, k
+
+        k = cs_tab%npts(1)
+        allocate(wav_tmp(1:k), cs_tmp(1:k))
+        do kk = 1, k
+            wav_tmp(kk) = exp(cs_tab%tab1d(kk,1) * ln10) * 1.0d-8 ! Angstrom -> cm
+            cs_tmp(kk)  = exp(cs_tab%tab1d(kk,2) * ln10)
+        end do
+
+        call alloc_mean_tab(ross_tab,   'rosseland_mean_'//trim(tablabel), nbins)
+        call alloc_mean_tab(planck_tab, 'planck_mean_'//trim(tablabel),    nbins)
+
+        do j = 1, nbins
+            T_val = 10**(log_Tmin + log_step * (j - 1))
+            ross_tab%tab1d(j,1)   = log10(T_val)
+            planck_tab%tab1d(j,1) = log10(T_val)
+            call rosseland_mean(wav_tmp, cs_tmp, T_val, ross_tab%tab1d(j,2))
+            call planck_mean   (wav_tmp, cs_tmp, T_val, planck_tab%tab1d(j,2))
+        end do
+        deallocate(wav_tmp, cs_tmp)
+
+        call ross_tab%init()
+        call planck_tab%init()
+    end subroutine build_pah_mean_tabs
 
     subroutine initialize_cross_sections_from_blackbody_dust_pah(T, group_L0, group_L1, nGroups)
         ! This subroutine initializes per-group dust and PAH cross-sections

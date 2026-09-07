@@ -232,6 +232,11 @@ module dustbin_types
         type(DustTable),dimension(:),allocatable :: fcharge_tab ! Charging states distribution tables for PAHs
         type(DustTable) :: cs_abs_tab_n, cs_scat_tab_n, cs_ext_tab_n ! Absorption, scattering and extinction cross-section tables for neutral PAHs
         type(DustTable) :: cs_abs_tab_i, cs_scat_tab_i, cs_ext_tab_i ! Absorption, scattering and extinction cross-section tables for ionised PAHs
+        ! Rosseland (flux) and Planck (absorption) mean cross sections vs dust
+        ! temperature, per charge state. Used for the IR photon group, where the
+        ! band-weighted group_cs*_pah values are the wrong spectral weight.
+        type(DustTable) :: Rosseland_tab_n, Planck_tab_n ! Mean cross-section tables for neutral PAHs
+        type(DustTable) :: Rosseland_tab_i, Planck_tab_i ! Mean cross-section tables for ionised PAHs
         type(DustTable) :: dissociation_tab ! PAH dissociation tables
     end type PAHBin
 
