@@ -278,6 +278,7 @@ contains
 
         ! Local variables
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
+        real(dp) :: c_code
         real(dp) :: scale_Np, scale_Fp
         real(dp) :: scale_E, rt_c_code
         integer :: igroup, idim, iNp, ii, jj
@@ -306,6 +307,15 @@ contains
         scale_E = scale_d * (scale_l**2) / (scale_t**2)
 
         rt_c_code = rt_c(ilevel)
+        ! TRUE c in code units. RT15 eq. 27's momentum transfer is
+        ! chi * E_gamma * Fp / c with the TRUE speed of light. The cooling path
+        ! in rtz_cooling_module gets this right because its rate already carries
+        ! a factor rt_c_cgs (sigcr_dust = group_csr_dust*rt_c_cgs) which the
+        ! extra one_over_rt_c_cgs cancels. Here opacity_*_code is a RAW opacity
+        ! with no rt_c_cgs in it, so dividing by rt_c_code made the force
+        ! 1/rt_c_fraction too large -- 333x at rt_c_fraction = 3e-3.
+        ! (Np_code below still uses rt_c_code: Np = F/c_red is correct there.)
+        c_code = c_cgs / scale_v
 
         ! 3. Calculate gas opacities (CGS)
         opacity_gas_cgs = 0d0
@@ -419,7 +429,7 @@ contains
                     mom_fact_gas = 0d0
                 end if
             else
-                mom_fact_gas = mom_fact_gas / rt_c_code
+                mom_fact_gas = mom_fact_gas / c_code
             end if
 
             do idim = 1, ndim
@@ -438,7 +448,7 @@ contains
                             mom_fact_dust = 0d0
                         end if
                     else
-                        mom_fact_dust = mom_fact_dust / rt_c_code
+                        mom_fact_dust = mom_fact_dust / c_code
                     end if
 
                     do idim = 1, ndim
@@ -460,7 +470,7 @@ contains
                             mom_fact_pah = 0d0
                         end if
                     else
-                        mom_fact_pah = mom_fact_pah / rt_c_code
+                        mom_fact_pah = mom_fact_pah / c_code
                     end if
 
                     do idim = 1, ndim

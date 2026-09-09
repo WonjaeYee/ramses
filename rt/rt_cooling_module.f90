@@ -17,7 +17,7 @@ module rt_cooling_module
          , getMu, is_mu_H2, X, Y, T2_min_fix                             &
          , signc, sigec, PHrate, UVrates, rt_isIR, kappaAbs, kappaSc     &
          , is_kIR_T, iIR, rt_isIRtrap, iIRtrapVar, rt_pressBoost         &
-         , rt_isoPress, rt_T_rad, rt_vc, iPEH_group
+         , rt_isoPress, rt_T_rad, rt_vc, iPEH_group, rt_kIR_RT15
 
   ! NOTE: T2=T/mu
   ! Np = photon density, Fp = photon flux,
@@ -43,6 +43,12 @@ module rt_cooling_module
   logical::rt_isIR=.false.             ! Using IR scattering on dust?
   logical::rt_isIRtrap=.false.         ! IR trapping in NENER variable?
   logical::is_kIR_T=.false.            ! k_IR propto T^2?
+  ! Reproduce RT15 eq. 79 exactly, as their sec. 3.7 patch did:
+  ! kappa_IR = kappa(iIR)*(TK/10K)^2 with the GAS temperature and NO
+  ! exp(-T_R/1000K) sublimation cutoff (both added later). Default .false., so
+  ! nothing else changes. Declared here rather than in rt_parameters because
+  ! that file's copies of is_kIR_T/rt_T_rad sit inside #ifdef RTZ.
+  logical::rt_kIR_RT15=.false.
   logical::rt_T_rad=.false.            ! Use T_gas = T_rad
   logical::rt_vc=.false.               ! (semi-) relativistic RT
   real(dp)::Tmu_dissoc=1d3             ! Dissociation temperature [K]
@@ -399,8 +405,19 @@ contains
              dT2 = TR/mu ;   TK = TR
           endif
           ! Set the IR opacities according to the rad. temperature:
-          kAbs_loc(iIR) = kappaAbs(iIR) * (TR/10d0)**2 * exp(-TR/1d3)
-          kSc_loc(iIR)  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+          if(rt_kIR_RT15) then
+             ! RT15 eq. 79 exactly: their version reads
+             !   kAbs_loc(iIR) = kappaAbs(iIR) * (TK/10d0)**2
+             !   kSc_loc(iIR)  = kappaSc(iIR)  * (TK/10d0)**2
+             ! i.e. the GAS temperature, no sublimation cutoff, no multi-group
+             ! weighting (a no-op for nGroups=1). rt_T_rad, if set, has already
+             ! replaced TK by the radiation temperature just above.
+             kAbs_loc(iIR) = kappaAbs(iIR) * (TK/10d0)**2
+             kSc_loc(iIR)  = kappaSc(iIR)  * (TK/10d0)**2
+          else
+             kAbs_loc(iIR) = kappaAbs(iIR) * (TR/10d0)**2 * exp(-TR/1d3)
+             kSc_loc(iIR)  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+          endif
        endif ! if(is_kIR_T)
        ! Set dust absorption and scattering rates [s-1]:
        dustAbs(:)  = kAbs_loc(:) *rho*Zsolar(icell)*f_dust*rt_c_cgs(ilevel)
@@ -851,7 +868,10 @@ SUBROUTINE display_coolinfo(stopRun, loopcnt, i, dtDone, dt, ddt, nH    &
 
 111 format(' Stopping because of large number of timestesps in', &
            ' rt_solve_cooling (', I6, ')')
-900 format (I3, '  myid=', I2, ' code=', I2, ' i=', I5, ' t=', 1pe12.3,xs&
+! 'xs' below was a typo -- an invalid edit descriptor, so this diagnostic
+! crashed with "Missing comma between descriptors" instead of printing the
+! reason rt_solve_cooling had given up.
+900 format (I3, '  myid=', I2, ' code=', I2, ' i=', I5, ' t=', 1pe12.3, &
             '/', 1pe12.3, ' ddt=', 1pe12.3, ' c=', 1pe12.3, &
             ' nH=', 1pe12.3, ' ilevel=', I3)
 901 format ('  U      =', 20(1pe12.3))

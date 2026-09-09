@@ -863,7 +863,12 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
   use amr_parameters
   use hydro_parameters
   use const
+#ifdef CALIMA
+  ! dust_tva/ndust are only referenced from #ifdef CALIMA branches below, so
+  ! this use must be guarded too -- otherwise a CALIMA=0 build fails with
+  ! "Cannot open module file 'dust_commons.mod'".
   use dust_commons, only: dust_tva, ndust
+#endif
   implicit none
 
   integer ::ngrid

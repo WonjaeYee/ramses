@@ -108,6 +108,52 @@ SUBROUTINE update_rt_c
 END SUBROUTINE update_rt_c
 
 !*************************************************************************
+SUBROUTINE rt_ramp_lightspeed
+
+! Walk the reduced light speed down from rt_c_ramp_start towards the target
+! rt_c_fraction_tgt, exponentially, over rt_c_ramp_nstep RHD steps. This is
+! Rosdahl & Teyssier 2015 sec. 3.7: they start at the full light speed and
+! converge exponentially towards c~ over 3e4 RHD time-steps, specifically so
+! that the short-lived pile-up of trapped photons in the bottom layer of cells
+! is captured -- at a reduced c the incoming flux cannot fill that reservoir
+! before the gas moves, so the early acceleration is underestimated.
+!
+!   f(n) = f_tgt * (f_start/f_tgt)**(1 - n/N)
+!
+! which is f_start at n=0 and exactly f_tgt at n=N, i.e. c decays exponentially
+! with step number. Called once per RHD step; a no-op once converged, and a
+! no-op entirely unless rt_c_ramp_nstep > 0.
+!
+! Everything downstream picks this up automatically: rt_c/rt_c2 via
+! update_rt_c, the group cooling constants via updateRTGroups_CoolConstants
+! (called at the top of rt_solve_cooling / rtz_solve_cooling), and Np2Ep
+! because cooling_fine recomputes it per call from rt_c_cgs(ilevel).
+!-------------------------------------------------------------------------
+  use rt_parameters
+  use amr_commons
+  implicit none
+  integer,save::nramp=0
+  integer::ilevel
+  real(dp)::w
+!-------------------------------------------------------------------------
+  if(rt_c_ramp_nstep .le. 0) return
+  if(nramp .gt. rt_c_ramp_nstep) return              ! already converged
+  w = 1d0 - dble(min(nramp, rt_c_ramp_nstep)) / dble(rt_c_ramp_nstep)
+  do ilevel=1,nlevelmax
+     rt_c_fraction(ilevel) = rt_c_fraction_tgt(ilevel)                       &
+          * (rt_c_ramp_start/rt_c_fraction_tgt(ilevel))**w
+     rt_c_fraction(ilevel) = min(max(rt_c_fraction(ilevel),                  &
+          rt_c_fraction_tgt(ilevel)), 1d0)
+     rt_c_cgs(ilevel) = c_cgs * rt_c_fraction(ilevel)
+  end do
+  call update_rt_c
+  if(myid==1 .and. (nramp==0 .or. nramp==rt_c_ramp_nstep)) write(*,115)      &
+       nramp, rt_c_fraction(nlevelmax)
+  nramp = nramp + 1
+115 format(' Light-speed ramp: RHD step ',I8,'  f_c= ',1pe12.4)
+END SUBROUTINE rt_ramp_lightspeed
+
+!*************************************************************************
 SUBROUTINE read_rt_params(nml_ok)
 
 ! Read rt_params namelist
@@ -133,6 +179,7 @@ SUBROUTINE read_rt_params(nml_ok)
   namelist/rt_params/rt_star, rt_esc_frac, rt_flux_scheme, rt_smooth     &
        & ,rt_is_outflow_bound, rt_TConst, rt_courant_factor              &
        & ,rt_c_fraction, rt_nsubcycle, rt_otsa, sedprops_update          &
+       & ,rt_c_ramp_nstep, rt_c_ramp_start                               &
        & ,sed_dir, uv_file, rt_UVsrc_nHmax, nSEDgroups                   &
 #ifndef RTZ
        & ,nUVgroups, is_mu_H2, iPEH_group                                &
@@ -142,6 +189,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rt_err_grad_cn, rt_floor_cn, rt_err_grad_xHII, rt_floor_xHII   &
        & ,rt_err_grad_xHI, rt_floor_xHI, rt_refine_aexp, isHe            &
        & ,isH2, rt_isIR, is_kIR_T, rt_T_rad, rt_vc, rt_pressBoost        &
+       & ,rt_kIR_RT15                                                    &
        & ,rt_isoPress, rt_isIRtrap, heat_unresolved_HII                  &
        & ,cosmic_rays                                                    &
 #ifdef RTZ
@@ -228,6 +276,28 @@ SUBROUTINE read_rt_params(nml_ok)
      rt_c_cgs(ilevel) = c_cgs * rt_c_fraction(ilevel)
   end do
 
+  ! Light-speed ramp (RT15 sec. 3.7). Remember the TARGET fractions, then start
+  ! from rt_c_ramp_start and let rt_ramp_lightspeed walk down to the target over
+  ! rt_c_ramp_nstep RHD steps. This is only well posed because gamma_rad(1) for
+  ! the trapped-IR slot is now 4/3, i.e. independent of the light speed -- with
+  ! the old rt_c_fraction/3+1 a time-varying c would have needed a time-varying
+  ! gamma_rad, the incompatibility noted below.
+  rt_c_fraction_tgt(:) = rt_c_fraction(:)
+  if(rt_c_ramp_nstep .gt. 0) then
+     if(rt_c_ramp_start .lt. maxval(rt_c_fraction_tgt(levelmin:nlevelmax))) then
+        if(myid==1) write(*,*) 'WARNING: rt_c_ramp_start is below the target '  &
+             //'rt_c_fraction; the ramp only ramps DOWN. Disabling it.'
+        rt_c_ramp_nstep = 0
+     else
+        do ilevel=1,nlevelmax
+           rt_c_fraction(ilevel) = rt_c_ramp_start
+           rt_c_cgs(ilevel) = c_cgs * rt_c_ramp_start
+        end do
+        if(myid==1) write(*,114) rt_c_ramp_start,                              &
+             rt_c_fraction_tgt(nlevelmax), rt_c_ramp_nstep
+     endif
+  endif
+
   ! Print a message if using level-variable speed of light
   do ilevel=levelmin,nlevelmax-1
      if(rt_c_fraction(ilevel) .ne. rt_c_fraction(nlevelmax)) then
@@ -238,11 +308,24 @@ SUBROUTINE read_rt_params(nml_ok)
   end do
   if(.not. rt_vsla .and. myid==1) write(*,113) rt_c_fraction(levelmin)
 
-  ! Trapped IR pressure closure as in Rosdahl & Teyssier 2015, eq 43:
-  ! NOTE: Because of gamma_rad, IR trapping and the variable speed of light
-  ! are mutually incompatible. For those two to work together at the same time
-  ! gamma_rad must be level-dependent, i.e. gamma_rad(iNENER,iLevel)
-  if(rt_isIRtrap) gamma_rad(1) = rt_c_fraction(nlevelmax) / 3d0 + 1d0
+  ! Trapped IR pressure closure, Rosdahl & Teyssier 2015 eq. 46: P = E_t/3 with
+  ! E_t the PHYSICAL trapped energy density, so gamma_rad = 4/3.
+  !
+  ! This used to read rt_c_fraction(nlevelmax)/3 + 1, which was correct while
+  ! Np2Ep (hydro/cooling_fine.f90) did NOT contain the c_red/c conversion:
+  ! uold(iIRtrapVar) then held the code variable Np*e_gamma and
+  ! (gamma_rad-1) = c_red/c/3 supplied RT15 eq. 46's conversion. Upstream commit
+  ! 7f8712f0 ("Addition of variable speed of light to ramses-rt") moved that
+  ! conversion into Np2Ep -- see its diff -- but left this line alone, so
+  ! c_red/c was applied TWICE and the trapped radiation pressure came out a
+  ! factor rt_c_fraction too small (verified: 3.0000e-03 and 3.0000e-04 at
+  ! rt_c_fraction = 3e-3 and 3e-4, in tests/dust_tva/dustylevatm).
+  !
+  ! Fixing it here rather than in Np2Ep also removes the incompatibility that
+  ! commit's own note warned about: with 4/3 the index is level-independent,
+  ! and the level dependence lives in Np2Ep's rt_c_cgs(ilevel), where it
+  ! belongs. IR trapping and a variable speed of light are now compatible.
+  if(rt_isIRtrap) gamma_rad(1) = 1d0 / 3d0 + 1d0
 
   if(rt_Tconst .ge. 0d0) rt_isTconst=.true.
 
@@ -310,6 +393,8 @@ SUBROUTINE read_rt_params(nml_ok)
 
   call read_rt_groups()
 112 format (' Using a level-variable speed of light, with f_c= '20(1pe12.3))
+114 format(' Light-speed ramp: f_c from ',1pe10.3,' to ',1pe10.3,   &
+          ' over ',I8,' RHD steps (RT15 sec. 3.7)')
 113 format (' Using a uniform reduced speed of light fraction of f_c='1pe10.3)
 END SUBROUTINE read_rt_params
 

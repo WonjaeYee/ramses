@@ -1042,6 +1042,7 @@ module dust_dynamics
         ! ========================================================================
         integer  :: l, i, j, k, jbin, idim
         integer  :: ilo, ihi, jlo, jhi, klo, khi
+        integer  :: ilo_f, ihi_f, jlo_f, jhi_f, klo_f, khi_f
         
         ! Cell-Centered Base Primitives
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
@@ -1068,6 +1069,18 @@ module dust_dynamics
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
+        ! Transverse ranges for the FACE loop, clamped to the flux arrays.
+        ! dflux/eflux/mflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
+        ! but ilo/jlo/klo above are MIN(1,iu1+1) = 0 in any active dimension
+        ! (iu1 = ju1 = -1), so the transverse index started at 0 and every 2D or
+        ! 3D run died with "Index '0' ... below lower bound of 1". RAMSES's own
+        ! umuscl uses MIN(1,iu1+2) for exactly this loop. Only indices 1..3 are
+        ! ever read back (i3 <= 2 and i3+i0 <= 3 in the update loops), so the
+        ! clamp discards nothing. In 1D ju1=ju2=ku1=ku2=1, so jlo=jhi=klo=khi=1
+        ! already and this is a no-op.
+        ilo_f = MAX(ilo, if1); ihi_f = MIN(ihi, if2)
+        jlo_f = MAX(jlo, jf1); jhi_f = MIN(jhi, jf2)
+        klo_f = MAX(klo, kf1); khi_f = MIN(khi, kf2)
 
         ! ========================================================================
         ! STEP 1: BASE PRIMITIVE EXTRACTION
@@ -1293,9 +1306,9 @@ module dust_dynamics
             ! ====================================================================
             ! STEP 5: POINTS 2, 3 & 4 - INTERFACE RECONSTRUCTION & UPWIND FLUX
             ! ====================================================================
-            do k = ifind_klo(idim, klo, kf1), ifind_khi(idim, khi, kf2)
-            do j = ifind_jlo(idim, jlo, jf1), ifind_jhi(idim, jhi, jf2)
-            do i = ifind_ilo(idim, ilo, if1), ifind_ihi(idim, ihi, if2)
+            do k = ifind_klo(idim, klo_f, kf1), ifind_khi(idim, khi_f, kf2)
+            do j = ifind_jlo(idim, jlo_f, jf1), ifind_jhi(idim, jhi_f, jf2)
+            do i = ifind_ilo(idim, ilo_f, if1), ifind_ihi(idim, ihi_f, if2)
                 do l = 1, ngrid
                     
                     ! --- A. GAS ENTHALPY FLUX ---
@@ -1744,6 +1757,7 @@ module dust_dynamics
         ! ========================================================================
         integer  :: l, i, j, k, jbin, idim
         integer  :: ilo, ihi, jlo, jhi, klo, khi
+        integer  :: ilo_f, ihi_f, jlo_f, jhi_f, klo_f, khi_f
         
         ! Cell-centered primitive caches across the localized block
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
@@ -1779,6 +1793,18 @@ module dust_dynamics
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
+        ! Transverse ranges for the FACE loop, clamped to the flux arrays.
+        ! dflux/eflux/mflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
+        ! but ilo/jlo/klo above are MIN(1,iu1+1) = 0 in any active dimension
+        ! (iu1 = ju1 = -1), so the transverse index started at 0 and every 2D or
+        ! 3D run died with "Index '0' ... below lower bound of 1". RAMSES's own
+        ! umuscl uses MIN(1,iu1+2) for exactly this loop. Only indices 1..3 are
+        ! ever read back (i3 <= 2 and i3+i0 <= 3 in the update loops), so the
+        ! clamp discards nothing. In 1D ju1=ju2=ku1=ku2=1, so jlo=jhi=klo=khi=1
+        ! already and this is a no-op.
+        ilo_f = MAX(ilo, if1); ihi_f = MIN(ihi, if2)
+        jlo_f = MAX(jlo, jf1); jhi_f = MIN(jhi, jf2)
+        klo_f = MAX(klo, kf1); khi_f = MIN(khi, kf2)
 
         ! ========================================================================
         ! STEP 1: PRIMITIVE VARIABLE & GAS DENSITY EXTRACTION (CELL-CENTERED)
@@ -2093,9 +2119,9 @@ module dust_dynamics
             ! ====================================================================
             ! STEP 5: INTERFACE RECONSTRUCTION & UPWIND FLUX
             ! ====================================================================
-            do k = ifind_klo(idim, klo, kf1), ifind_khi(idim, khi, kf2)
-            do j = ifind_jlo(idim, jlo, jf1), ifind_jhi(idim, jhi, jf2)
-            do i = ifind_ilo(idim, ilo, if1), ifind_ihi(idim, ihi, if2)
+            do k = ifind_klo(idim, klo_f, kf1), ifind_khi(idim, khi_f, kf2)
+            do j = ifind_jlo(idim, jlo_f, jf1), ifind_jhi(idim, jhi_f, jf2)
+            do i = ifind_ilo(idim, ilo_f, if1), ifind_ihi(idim, ihi_f, if2)
                 do l = 1, ngrid
                     
                     ! --- A. GAS ENTHALPY FLUX ---

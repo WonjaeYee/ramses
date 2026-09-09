@@ -462,9 +462,23 @@ else:
 rep("   direct UV acceleration collapses", a_uv[i_in] / max(a_uv[i_out], 1e-300) > 10,
     "a_UV(face)/a_UV(back) = %.3e" % (a_uv[i_in] / max(a_uv[i_out], 1e-300)))
 
-# 3. IR is produced where the UV is absorbed, i.e. inside the slab
-x_pk = x[np.abs(Fir).argmax()]
-rep("3. IR peaks inside the slab", x_lo <= x_pk <= x_hi, "peak at x = %.2f pc" % x_pk)
+# 3. IR is produced where the UV is absorbed, i.e. inside the slab.
+# Test the IR ENERGY DENSITY (rt_c*Np), not the flux: the slab is optically
+# thin in the IR, so once the IR streams properly the flux is flat outside the
+# slab and its argmax carries no information. (Before the cooling_fine `fred`
+# fix -- the inlined reduce_flux clamped the IR to a reduced flux of
+# 1/rt_c(ilevel)**2 -- the IR barely streamed and the flux tracked the energy
+# density, which is what this check used to key on.)
+E_ir_arb = np.asarray(R["photon_flux_01"])          # = rt_c*Np, code units
+x_pk = x[E_ir_arb.argmax()]
+rep("3. IR energy density peaks inside the slab", x_lo <= x_pk <= x_hi,
+    "peak at x = %.2f pc" % x_pk)
+# ...and it must stream AWAY from the slab on both sides, which only holds if
+# the IR flux is not being clamped.
+F_up = np.median(Fir[(x > 0.5) & (x < x_lo - 0.5)])
+F_dn = np.median(Fir[x > x_hi + 0.5])
+rep("   IR streams away from the slab both ways", F_up < 0.0 < F_dn,
+    "F_IR(upstream) = %.3e, F_IR(downstream) = %.3e erg/cm2/s" % (F_up, F_dn))
 
 # 4. trapped IR
 i_pk = int(np.argmax(E_trap))

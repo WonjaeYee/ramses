@@ -61,7 +61,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef RT
 #ifdef RTZ
   use rt_parameters, only: nGroups, iGroups, rt_vc, iIR &
-                          ,iIRtrapVar
+                          ,iIRtrapVar, rt_kIR_RT15
   use rtz_cooling_module, only: rtz_solve_cooling, T2_min_fix
   use rtz_module, only: n_elements, elements
 #else
@@ -71,7 +71,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifndef RTZ
   use cooling_module
   use rt_cooling_module, only: rt_solve_cooling,iIR,rt_isIRtrap &
-       ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc
+       ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc,rt_kIR_RT15
 #endif
 #else
    use cooling_module, only: X, T2_min_fix,solve_cooling
@@ -105,6 +105,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   integer::ii,ig,iNp,il
   real(kind=8),dimension(1:nvector),save:: ekk_new,T2_new
   logical,dimension(1:nvector),save::cooling_on=.true.
+  integer::ilast
   real(dp)::scale_Np,scale_Fp,work,Npc,Npnew,fred,kIR,E_rad,TR
   real(dp),dimension(1:ndim)::Fpnew
 #ifdef RTZ
@@ -240,6 +241,18 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            Zsolar(i)=z_ave
         end do
      endif
+#else
+     ! RTZ tracks each element separately, so there is no single "metallicity in
+     ! solar units" to compute -- but Zsolar is still USED further down, for the
+     ! photon-trapping optical depth (:1022) and the rt_vc radiation work term
+     ! (:334). It was never assigned in an RTZ build (the block above is
+     ! #ifndef RTZ), so both were silently dead: tau = 0 gave f_trap = 0 and
+     ! nothing was ever trapped. Fall back to z_ave, which is what the
+     ! non-metal branch above does. The CALIMA build does not use this: it
+     ! substitutes the real Rosseland extinction (see the #ifdef CALIMA blocks).
+     do i=1,nleaf
+        Zsolar(i)=z_ave
+     end do
 #endif
 
 #ifdef RT
@@ -285,7 +298,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
               end do
               TR = max(0d0,(E_rad*rt_c_cgs(ilevel)/c_cgs/a_r)**0.25d0)! Rad. temp.
               ! Set the IR opacity according to the rad. temperature:
-              kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              ! RT15's version has no sublimation cutoff here (their
+              ! cooling_fine reads kScIR = kappaSc(iIR)*(TR/10d0)**2), so
+              ! rt_kIR_RT15 drops it.
+              if(rt_kIR_RT15) then
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2
+              else
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              endif
            endif
            kIR = kIR*scale_d*scale_l           !  Convert to code units
            flux = rtuold(il,iNp+1:iNp+ndim)
@@ -329,8 +349,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            rtuold(il,iNp) = rtuold(il,iNp) - work !Remove from rad density
            rtuold(il,iNp) = max(rtuold(il,iNp),smallnp)
            ! Reduce the flux to c*Np if necessary:
+           ! rt_c(ilevel) DIVIDES here: the reduced flux is |Fp|/(c*Np). Upstream
+           ! 7f8712f0 inlined reduce_flux(Fp, Np*rt_c) as ".../Np*rt_c", which
+           ! Fortran evaluates as (|Fp|/Np)*rt_c, i.e. rt_c(ilevel)**2 too big,
+           ! so every cell got clamped to a reduced flux of 1/rt_c(ilevel)**2
+           ! and the streaming IR carried essentially no momentum.
            fred = sqrt(sum(rtuold(il,iNp+1:iNp+ndim)**2)) &
-                / rtuold(il,iNp)*rt_c(ilevel)
+                / rtuold(il,iNp)/rt_c(ilevel)
            if(fred .gt. 1.d0) &
                 rtuold(il,iNp+1:iNp+ndim) = rtuold(il,iNp+1:iNp+ndim)/fred
         enddo
@@ -750,13 +775,18 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) '         density:', uold(ind_leaf(err_idx),1)
            write(*,*) '          energy:', uold(ind_leaf(err_idx),neul)
            write(*,*) '   uold*scale_T2:', uold(ind_leaf(err_idx),neul)*scale_T2
-           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx),iIons:iIons+53) ! /uold(ind_leaf(err_idx),1)
-           write(*,*) 'chemicals (xion):', uold(ind_leaf(err_idx),iIons:iIons+53)/uold(ind_leaf(err_idx),1)
+           ! Clamp to the ions this build actually has: the hardcoded +53 assumed
+           ! at least 54 ion variables, so on a reduced network (e.g. NIONS=12,
+           ! H/H2/He/C only) this diagnostic itself died with "Index ... of
+           ! array 'uold' outside of expected range", hiding the real failure.
+           ilast = min(iIons+nIons-1, nvar)
+           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx),iIons:ilast)
+           write(*,*) 'chemicals (xion):', uold(ind_leaf(err_idx),iIons:ilast)/uold(ind_leaf(err_idx),1)
            write(*,*) 'for comparison, adjacent cells'
            !write(*,*) 'uold:', uold(ind_leaf(err_idx)-1, neul)
-           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:iIons+53)
+           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)-1,iIons:ilast)
            !write(*,*) 'uold:', uold(ind_leaf(err_idx)+1, neul)
-           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:iIons+53)
+           write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:ilast)
 #ifdef CALIMA
 #if NDUST>0
            write(*,*) 'rho_dust:', rho_dust(err_idx,:)
@@ -974,7 +1004,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
               end do
               TR = max(0d0,(E_rad*rt_c_cgs(ilevel)/c_cgs/a_r)**0.25d0)! Rad. temp.
               ! Set the IR opacity according to the rad. temperature:
-              kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              ! RT15's version has no sublimation cutoff here (their
+              ! cooling_fine reads kScIR = kappaSc(iIR)*(TR/10d0)**2), so
+              ! rt_kIR_RT15 drops it.
+              if(rt_kIR_RT15) then
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2
+              else
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              endif
            endif
 #ifdef RTZ
            f_dust = 1d0-xion(1,2,i)                ! No dust in ionised gas
@@ -1030,8 +1067,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            uold(il,iIRtrapVar) = EIR_trapped
 
            ! Reduce the flux to c*Np if necessary:
+           ! rt_c(ilevel) DIVIDES here: the reduced flux is |Fp|/(c*Np). Upstream
+           ! 7f8712f0 inlined reduce_flux(Fp, Np*rt_c) as ".../Np*rt_c", which
+           ! Fortran evaluates as (|Fp|/Np)*rt_c, i.e. rt_c(ilevel)**2 too big,
+           ! so every cell got clamped to a reduced flux of 1/rt_c(ilevel)**2
+           ! and the streaming IR carried essentially no momentum.
            fred = sqrt(sum(rtuold(il,iNp+1:iNp+ndim)**2)) &
-                / rtuold(il,iNp)*rt_c(ilevel)
+                / rtuold(il,iNp)/rt_c(ilevel)
            if(fred .gt. 1.d0) &
                 rtuold(il,iNp+1:iNp+ndim) = rtuold(il,iNp+1:iNp+ndim)/fred
         end do ! i=1,nleaf

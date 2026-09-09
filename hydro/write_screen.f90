@@ -24,10 +24,13 @@ subroutine write_screen
   integer::irad
   real(qdp),dimension(:,:),allocatable::prad_all,prad
 #endif
-#ifdef CALIMA
-  real(qdp),dimension(:,:),allocatable::dust_dens,dust_dens_all
+  ! hdr is built unconditionally below (the column header), so it must be
+  ! declared unconditionally: it used to sit inside this #ifdef CALIMA block,
+  ! which made any CALIMA=0 build fail with "Symbol 'hdr' has no IMPLICIT type".
   character(len=500)::hdr
   character(len=20)::temp_str
+#ifdef CALIMA
+  real(qdp),dimension(:,:),allocatable::dust_dens,dust_dens_all
   integer::kbin
 #endif
 

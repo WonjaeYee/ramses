@@ -626,7 +626,7 @@ end subroutine amr_step
 #ifdef RT
 subroutine rt_step(ilevel)
   use amr_parameters, only: dp
-  use amr_commons,    only: t, dtnew, myid
+  use amr_commons,    only: t, dtnew, myid, levelmin
   use rt_hydro_commons
 #ifndef RTZ
   use rt_cooling_module, only: update_UVrates
@@ -646,6 +646,10 @@ subroutine rt_step(ilevel)
 
   real(dp) :: dt_hydro, t_left, dt_rt, t_save
   integer  :: i_substep, ivar
+
+  ! RT15 sec. 3.7 light-speed ramp: advance it once per RHD step, at the
+  ! coarsest active level. A no-op unless rt_c_ramp_nstep > 0.
+  if(ilevel .eq. levelmin) call rt_ramp_lightspeed
 
   dt_hydro = dtnew(ilevel)                   ! Store hydro timestep length
   t_left = dt_hydro

@@ -73,6 +73,14 @@ module rt_parameters
   real(dp)::rt_floor_xHI=1d-10         ! Ionization state floor for refinement           !
   real(dp)::rt_floor_xHII=1d-10        ! Ionization state floor for refinement           !
   real(dp),dimension(1:MAXLEVEL)::rt_c_fraction=1d0  ! Lightspeed fraction for RT        !
+  ! Light-speed ramp, Rosdahl & Teyssier 2015 sec. 3.7: "We start the experiment
+  ! at a full light speed and converge exponentially towards c~ over 3e4 RHD
+  ! time-steps. We do this specifically to capture the sudden and short lived
+  ! pile-up of trapped photons by the gas". rt_c_ramp_nstep <= 0 disables it, so
+  ! runs that do not ask for it are unaffected.
+  integer ::rt_c_ramp_nstep=0                        ! RHD steps to converge over
+  real(dp)::rt_c_ramp_start=1d0                      ! initial lightspeed fraction
+  real(dp),dimension(1:MAXLEVEL)::rt_c_fraction_tgt=1d0 ! target, saved at init
   integer::rt_nsubcycle=1              ! Maximum number of RT-steps during one hydro/    !
                                        ! gravity/etc timestep                            !
   logical::rt_otsa=.true.              ! Use on-the-spot approximation                   !
@@ -193,6 +201,14 @@ module rt_parameters
   logical::rt_isIR=.false.             ! Using IR scattering on dust?
   logical::rt_isIRtrap=.false.         ! IR trapping in NENER variable?
   logical::is_kIR_T=.false.            ! k_IR propto T^2?
+  ! Reproduce Rosdahl & Teyssier 2015 eq. 79 EXACTLY, as their sec. 3.7 patch
+  ! did: kappa_IR = kappa(iIR)*(T/10K)^2 with NO exp(-T_R/1000K) sublimation
+  ! cutoff (that was added later), and, in rt_cooling_module, with the GAS
+  ! temperature rather than the radiation temperature -- which is what their
+  ! version used, and what rt_T_rad=.false. selects there. cooling_fine's
+  ! trapping optical depth uses T_rad in their version either way. Default
+  ! .false., so nothing else changes.
+  logical::rt_kIR_RT15=.false.
   logical::rt_T_rad=.false.            ! Use T_gas = T_rad
   real(dp),dimension(nGroups)::kappaAbs=0! Dust absorption opacity
   real(dp),dimension(nGroups)::kappaSc=0 ! Dust scattering opacity
