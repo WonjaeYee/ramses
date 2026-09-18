@@ -557,14 +557,6 @@ SUBROUTINE read_rt_groups()
   ! Initialize group energies for the same black body
   call initialize_group_energies_from_blackbody(1.d5, groupL0, groupL1, group_egy)
 
-#ifdef CALIMA
-  ! Initialise the CALIMA dust and PAH optical properties
-   call init_dust_efficiency_tables(nGroups)
-   if (dust_pe_heating) call init_dust_dielectric_tables
-   ! Initialize per-group dust/PAH cross-sections after dust tables exist.
-   call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
-   call init_dust_mean_cross_sections(sed_dir)
-#endif
 
 #ifdef INDIVIDUAL_SINK_STARS
 ! <<WJ>> temporarily disable popII routines
@@ -580,6 +572,22 @@ SUBROUTINE read_rt_groups()
   call init_popIII_table(groupL0, groupL1)
 #endif
 
+#endif
+
+#ifdef CALIMA
+  ! Initialise the CALIMA dust and PAH optical properties. This lives OUTSIDE the
+  ! #ifdef RTZ above: these are the only call sites in the tree, and without them
+  ! group_cs{a,s,r}_{dust,pah} are never allocated and dustbins_props%Rosseland_tab /
+  ! %Planck_tab are never built -- so get_IR_mean_cross_sections (used by
+  ! cooling_fine and dust_radpressure) would read unallocated tables in any
+  ! RT+CALIMA build without RTZ. None of these four routines touches group_egy, so
+  ! running them here rather than before the INDIVIDUAL_SINK_STARS block leaves the
+  ! RTZ ordering unchanged.
+  call init_dust_efficiency_tables(nGroups)
+  if (dust_pe_heating) call init_dust_dielectric_tables
+  ! Initialize per-group dust/PAH cross-sections after dust tables exist.
+  call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
+  call init_dust_mean_cross_sections(sed_dir)
 #endif
 
   if(minval(group_egy) .le. 0d0 .and. myid==1) then

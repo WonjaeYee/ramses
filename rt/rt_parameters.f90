@@ -175,6 +175,33 @@ module rt_parameters
   real(dp),dimension(1:NGROUPS)::isLW = 0d0
 #endif
 
+  ! RT dust / IR parameters -------------------------------------------------------------
+  ! Declared unconditionally. These are plain-RT quantities, not RTZ ones: they were
+  ! inside the #ifdef RTZ below and duplicated verbatim in rt_cooling_module, because
+  ! rt_cooling_module.f90 is not compiled in an RTZ build (MODOBJ adds it only under
+  ! RT=1). That duplication blocked an RT+CALIMA-without-RTZ build and had already caused
+  ! one "has no IMPLICIT type" error. rt_cooling_module now re-exports these names via its
+  ! public list instead of redeclaring them, so every existing consumer is unaffected.
+  logical::rt_isoPress=.false.         ! Use cE, not F, for rad. pressure
+  real(dp)::rt_pressBoost=1d0          ! Boost on RT pressure
+  logical::rt_isIR=.false.             ! Using IR scattering on dust?
+  logical::rt_isIRtrap=.false.         ! IR trapping in NENER variable?
+  logical::is_kIR_T=.false.            ! k_IR propto T^2?
+  ! Reproduce Rosdahl & Teyssier 2015 eq. 79 EXACTLY, as their sec. 3.7 patch
+  ! did: kappa_IR = kappa(iIR)*(T/10K)^2 with NO exp(-T_R/1000K) sublimation
+  ! cutoff (that was added later), and, in rt_cooling_module, with the GAS
+  ! temperature rather than the radiation temperature -- which is what their
+  ! version used, and what rt_T_rad=.false. selects there. cooling_fine's
+  ! trapping optical depth uses T_rad in their version either way. Default
+  ! .false., so nothing else changes.
+  logical::rt_kIR_RT15=.false.
+  logical::rt_T_rad=.false.            ! Use T_gas = T_rad
+  real(dp),dimension(nGroups)::kappaAbs=0! Dust absorption opacity
+  real(dp),dimension(nGroups)::kappaSc=0 ! Dust scattering opacity
+  logical::rt_vc=.false.               ! (semi-) relativistic RT
+  integer::iIRtrapVar=1                !  Trapped IR energy variable index
+  integer,parameter::iIR=1             !                    IR group index
+
 #ifdef RTZ
   ! RTZ parameters -----------------------------------------------------------------------
   logical::rtz_cooling=.false. ! RTZ Non-equilibrium cooling ------------
@@ -196,25 +223,6 @@ module rt_parameters
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
-  logical::rt_isoPress=.false.         ! Use cE, not F, for rad. pressure
-  real(dp)::rt_pressBoost=1d0          ! Boost on RT pressure
-  logical::rt_isIR=.false.             ! Using IR scattering on dust?
-  logical::rt_isIRtrap=.false.         ! IR trapping in NENER variable?
-  logical::is_kIR_T=.false.            ! k_IR propto T^2?
-  ! Reproduce Rosdahl & Teyssier 2015 eq. 79 EXACTLY, as their sec. 3.7 patch
-  ! did: kappa_IR = kappa(iIR)*(T/10K)^2 with NO exp(-T_R/1000K) sublimation
-  ! cutoff (that was added later), and, in rt_cooling_module, with the GAS
-  ! temperature rather than the radiation temperature -- which is what their
-  ! version used, and what rt_T_rad=.false. selects there. cooling_fine's
-  ! trapping optical depth uses T_rad in their version either way. Default
-  ! .false., so nothing else changes.
-  logical::rt_kIR_RT15=.false.
-  logical::rt_T_rad=.false.            ! Use T_gas = T_rad
-  real(dp),dimension(nGroups)::kappaAbs=0! Dust absorption opacity
-  real(dp),dimension(nGroups)::kappaSc=0 ! Dust scattering opacity
-  logical::rt_vc=.false.               ! (semi-) relativistic RT
-  integer::iIRtrapVar=1                !  Trapped IR energy variable index
-  integer,parameter::iIR=1             !                    IR group index
 #endif
 
 end module rt_parameters

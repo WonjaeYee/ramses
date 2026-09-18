@@ -800,7 +800,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &
-                             ,nleaf, ilevel)
+                             ,nleaf, ilevel                              &
+#ifdef CALIMA
+                             ! sigma / rho_dust / rho_pah are gathered above,
+                             ! outside #ifdef RTZ, so they are already available
+                             ! in an RT+CALIMA build without RTZ.
+                             ,sigma, rho_dust, rho_pah                   &
+#endif
+                             )
 #endif
         delta_T2(1:nleaf) = T2_new(1:nleaf) - T2(1:nleaf)
      endif

@@ -1346,7 +1346,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
       endif
 
-#ifdef RT
+! In a CALIMA build the IR<->dust energy exchange comes from the explicit dust
+! temperature instead: compute_dust_precool solves T_dust and fills %Prad_dust,
+! which is added into dNp(iIR) above. This one-temperature (T_dust = T_gas) block
+! is the NON-CALIMA closure and must not also run, or IR absorption and re-emission
+! are counted twice. It is also unsafe under CALIMA as written: kAbs_loc is a plain
+! local of rtz_cool_step, assigned ONLY in the #else (non-CALIMA) arm of the opacity
+! fork above, so the test below read stack garbage at -O3 (no -finit-real).
+#if defined(RT) && !defined(CALIMA)
       if(rt_isIR) then
          if(kAbs_loc(iIR) .gt. 0d0 .and. .not. rt_T_rad) then
             ! Evolve IR-Dust equilibrium temperature------------------------

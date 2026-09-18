@@ -9,6 +9,19 @@ module rt_cooling_module
   use rt_parameters
   use coolrates_module
   use constants
+#ifdef CALIMA
+  ! CALIMA dust coupling for an RT build without RTZ. The dust objects are
+  ! linked before this one (see MODOBJ), and nothing in calima/ uses
+  ! rt_cooling_module, so there is no circular dependency.
+  use hydro_parameters, only: ndust, npah, n_elements
+  use dust_commons,  only: dust_helper, sigca_dust, sigcs_dust, sigcr_dust,   &
+                           sigca_pah, sigcs_pah, sigcr_pah,                   &
+                           group_csa_dust, group_css_dust, group_csr_dust,    &
+                           group_csa_pah, group_css_pah, group_csr_pah
+  use dust_interface, only: compute_dust_rad_rates, compute_dust_precool,     &
+                            compute_local_anisotropy_factor
+  use dust_optics,    only: get_IR_mean_cross_sections
+#endif
   implicit none
 
   private   ! default
@@ -33,27 +46,15 @@ module rt_cooling_module
   real(dp)::T_min, T_frac, x_min, x_fm, x_frac
   real(dp)::Np_min, Np_frac, Fp_min, Fp_frac
 
-  integer,parameter::iIR=1             !                    IR group index
   integer::iPEH_group=0                ! Photoelectric heating group index
-  integer::iIRtrapVar=1                !  Trapped IR energy variable index
   ! Namelist parameters:
   logical::is_mu_H2=.false.
-  logical::rt_isoPress=.false.         ! Use cE, not F, for rad. pressure
-  real(dp)::rt_pressBoost=1d0          ! Boost on RT pressure
-  logical::rt_isIR=.false.             ! Using IR scattering on dust?
-  logical::rt_isIRtrap=.false.         ! IR trapping in NENER variable?
-  logical::is_kIR_T=.false.            ! k_IR propto T^2?
-  ! Reproduce RT15 eq. 79 exactly, as their sec. 3.7 patch did:
-  ! kappa_IR = kappa(iIR)*(TK/10K)^2 with the GAS temperature and NO
-  ! exp(-T_R/1000K) sublimation cutoff (both added later). Default .false., so
-  ! nothing else changes. Declared here rather than in rt_parameters because
-  ! that file's copies of is_kIR_T/rt_T_rad sit inside #ifdef RTZ.
-  logical::rt_kIR_RT15=.false.
-  logical::rt_T_rad=.false.            ! Use T_gas = T_rad
-  logical::rt_vc=.false.               ! (semi-) relativistic RT
   real(dp)::Tmu_dissoc=1d3             ! Dissociation temperature [K]
-  real(dp),dimension(nGroups)::kappaAbs=0! Dust absorption opacity
-  real(dp),dimension(nGroups)::kappaSc=0 ! Dust scattering opacity
+  ! iIR, iIRtrapVar, rt_isoPress, rt_pressBoost, rt_isIR, rt_isIRtrap, is_kIR_T,
+  ! rt_kIR_RT15, rt_T_rad, rt_vc, kappaAbs and kappaSc used to be declared here as
+  ! well, duplicating rt_parameters. They now live unconditionally in rt_parameters
+  ! and are re-exported by the public list above, so consumers that take them from
+  ! this module keep working verbatim. See the comment at their declaration.
   ! Note to users: if photoelectric heating is activated with iPEH_group,
   !                the value or expression used for kappaAbs should
   !                not include PEH absorption, as this is done separately.
@@ -157,7 +158,11 @@ END SUBROUTINE update_UVrates
 
 !XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 SUBROUTINE rt_solve_cooling(T2, xion, Np, Fp, p_gas, dNpdt, dFpdt        &
-                           ,nH, c_switch, Zsolar, dt, a_exp, nCell,ilevel)
+                           ,nH, c_switch, Zsolar, dt, a_exp, nCell,ilevel  &
+#ifdef CALIMA
+                           ,sigma, rho_dust, rho_pah                       &
+#endif
+                           )
 ! Semi-implicitly solve for new temperature, ionization states,
 ! photon density/flux, and gas velocity in a number of cells.
 ! Parameters:
@@ -188,7 +193,16 @@ SUBROUTINE rt_solve_cooling(T2, xion, Np, Fp, p_gas, dNpdt, dFpdt        &
   real(dp),dimension(1:nvector):: nH, Zsolar
   logical,dimension(1:nvector):: c_switch
   real(dp)::dt, a_exp
-  integer::ncell, ilevel !------------------------------------------------
+  integer::ncell, ilevel
+#ifdef CALIMA
+  real(dp),dimension(1:nvector),intent(in):: sigma
+  ! intent(in), unlike rtz_solve_cooling's intent(inout): this path does not run
+  ! the dust chemistry ODE (compute_dust_update is out of scope), so the dust and
+  ! PAH densities are read but never modified.
+  real(dp),dimension(1:nvector,1:ndust),intent(in):: rho_dust
+  real(dp),dimension(1:nvector,1:npah), intent(in):: rho_pah
+#endif
+  !------------------------------------------------------------------------
   real(dp),dimension(1:nvector):: tLeft, ddt
   logical:: dt_ok
   real(dp)::dt_rec
@@ -343,6 +357,28 @@ contains
     real(dp),save:: rho, TR, one_over_C_v, E_rad, dE_T, fluxMag, mom_fact
     real(dp),save:: G0, eff_peh, cdex, ncr
     logical::newAtomicCons=.true.
+    ! calima_IR selects the CALIMA grain-optics closure for the IR band:
+    !   .false. -> RAMSES-RT's own treatment: kappaAbs/kappaSc (x (T/10)^2 when
+    !              is_kIR_T), dust rates folded into phAbs/phSc, and the
+    !              one-temperature IR-dust equilibrium block further down. In a
+    !              CALIMA build the only change is that the REAL dust-to-gas
+    !              ratio replaces the Zsolar*(1-xHII) proxy.
+    !   .true.  -> per-bin Rosseland/Planck means from the grain tables, dust
+    !              rates kept separate (dustRp drives the momentum transfer),
+    !              and an explicit per-bin dust temperature whose thermal
+    !              emission Prad_dust sources the IR band.
+    ! Selected by rt_kIR_RT15 so the opacity law and the closure always agree.
+    logical:: calima_IR
+#ifdef CALIMA
+    real(dp),dimension(nGroups),save:: dustRp, dustAbs_den, dustSc_den
+    real(dp),dimension(max(1,ndust)),save  :: sigR_IR_dust, sigP_IR_dust
+    real(dp),dimension(max(1,2*npah)),save :: sigR_IR_pah,  sigP_IR_pah
+    real(dp),dimension(nGroups),save:: pahAbs, pahSc, pahRp
+    real(dp),dimension(1:n_elements),save:: nElement_ad
+    real(dp),dimension(1:n_elements,1:n_elements),save:: xion_ad
+    real(dp),save:: E_IR_loc, T_rad_loc, rho_dust_tot, f_dg, G0_dust
+    integer,save:: idb
+#endif
     !---------------------------------------------------------------------
     dt_ok=.false.
     nHe=0.25*nH(icell)*Y/X  !         Helium number density
@@ -384,6 +420,17 @@ contains
     ss_factor=1d0                    ! UV background self_shielding factor
     if(self_shielding) ss_factor = exp(-nH(icell)/1d-2)
     rho = nH(icell) / X * mH
+    calima_IR = .false.
+#ifdef CALIMA
+    ! Include the dust mass in rho, as rtz_cool_step does: rho is what the
+    ! opacity per gram and the heat capacity are referred to.
+    rho_dust_tot = 0d0
+    do idb = 1, ndust
+       rho_dust_tot = rho_dust_tot + rho_dust(icell,idb)
+    end do
+    rho = rho + rho_dust_tot
+    calima_IR = rt_isIR .and. (.not. rt_kIR_RT15)
+#endif
 #if NGROUPS>0
     ! Set dust opacities--------------------------------------------------
     if(rt .and. nGroups .gt. 0) then
@@ -420,8 +467,87 @@ contains
           endif
        endif ! if(is_kIR_T)
        ! Set dust absorption and scattering rates [s-1]:
+#ifdef CALIMA
+       dustRp(:) = 0d0
+       if(calima_IR) then
+          ! Fill the shared CALIMA workspace for this cell, as rtz_cool_step
+          ! does once per substep.
+          call dust_helper%reset()
+          dust_helper%G0_background = 0d0   ! no plain-RT rtz_UV_background_G0
+          dust_helper%local_sigma   = sigma(icell)
+          dust_helper%smallNp       = smallNp
+          dust_helper%local_c       = rt_c_cgs(ilevel)
+          dust_helper%group_eV(:)   = group_egy(:)
+          dust_helper%local_mu      = mu
+          dust_helper%local_Tk      = TK
+          dust_helper%local_nH      = nH(icell)
+          dust_helper%local_rho     = rho
+          dust_helper%local_ne      = ne
+          dust_helper%local_nCO     = 0d0
+          dust_helper%local_dx      = 0d0
+          dust_helper%local_vol     = 0d0
+          dust_helper%local_Jeans   = 0d0
+          dust_helper%rho_dust(1:ndust) = rho_dust(icell,1:ndust)
+          dust_helper%csa_dust(:,:) = sigca_dust(:,:)
+          dust_helper%css_dust(:,:) = sigcs_dust(:,:)
+          dust_helper%csr_dust(:,:) = sigcr_dust(:,:)
+          if(npah .gt. 0) then
+             dust_helper%rho_pah(1:npah) = rho_pah(icell,1:npah)
+             dust_helper%csa_pah(:,:) = sigca_pah(:,:)
+             dust_helper%css_pah(:,:) = sigcs_pah(:,:)
+             dust_helper%csr_pah(:,:) = sigcr_pah(:,:)
+          endif
+          ! Per-bin Rosseland (flux/momentum) and Planck (absorption/emission)
+          ! means at the local radiation temperature.
+          E_IR_loc = group_egy_erg(iIR) * dNp(iIR)
+          call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel),  &
+                    sigR_IR_dust, sigP_IR_dust, sigR_IR_pah, sigP_IR_pah,   &
+                    T_rad_loc)
+          dust_helper%csr_dust(1:ndust,iIR) =                               &
+                    sigR_IR_dust(1:ndust) * rt_c_cgs(ilevel)
+          dust_helper%csa_dust(1:ndust,iIR) =                               &
+                    sigP_IR_dust(1:ndust) * rt_c_cgs(ilevel)
+          if(npah .gt. 0) then
+             dust_helper%csr_pah(1:2*npah,iIR) =                            &
+                    sigR_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
+             dust_helper%csa_pah(1:2*npah,iIR) =                            &
+                    sigP_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
+          endif
+          ! Habing-band flux for the PAH charge equilibrium. The iPEH_group G0
+          ! below is formed later and for a different purpose, so build it here.
+          G0_dust = 0d0
+          do igroup=1,nGroups
+             if(group_egy(igroup) .gt. 5.6d0 .and.                          &
+                group_egy(igroup) .lt. 13.6d0)                              &
+                  G0_dust = G0_dust + group_egy_erg(igroup) * dNp(igroup)   &
+                                    * rt_c_cgs(ilevel) / 1.6d-3
+          end do
+          dustAbs = 0d0 ; dustSc = 0d0 ; dustRp = 0d0
+          pahAbs  = 0d0 ; pahSc  = 0d0 ; pahRp  = 0d0
+          call compute_dust_rad_rates(dust_helper, G0_dust, TK, ne,         &
+                    dustAbs, dustSc, dustRp, pahAbs, pahSc, pahRp)
+       else
+          ! RT15 mode: the reference treatment, but with the REAL dust-to-gas
+          ! ratio in place of the Zsolar*(1-xHII) proxy.
+          f_dg = rho_dust_tot / max(rho, tiny(1d0))
+          dustAbs(:)  = kAbs_loc(:) *rho*f_dg*rt_c_cgs(ilevel)
+          dustSc(iIR) = kSc_loc(iIR)*rho*f_dg*rt_c_cgs(ilevel)
+       endif
+#else
        dustAbs(:)  = kAbs_loc(:) *rho*Zsolar(icell)*f_dust*rt_c_cgs(ilevel)
        dustSc(iIR) = kSc_loc(iIR)*rho*Zsolar(icell)*f_dust*rt_c_cgs(ilevel)
+#endif
+#ifdef CALIMA
+       ! Extra sink terms for the Np/Fp updates below. Non-zero only when the
+       ! dust rates are kept out of phAbs/phSc, i.e. in CALIMA grain-optics mode.
+       if(calima_IR) then
+          dustAbs_den(:) = dustAbs(:)
+          dustSc_den(:)  = dustSc(:)
+       else
+          dustAbs_den(:) = 0d0
+          dustSc_den(:)  = 0d0
+       endif
+#endif
 
     endif
 
@@ -456,12 +582,17 @@ contains
           phAbs(igroup) = SUM(nN(:)*signc(igroup,:)*ssh2(igroup)) ! s-1
        end do
        ! IR, optical and UV depletion by dust absorption: ----------------
-       if(rt_isIR) & !IR scattering/abs on dust (abs after T update)
-            phSc(iIR)  = phSc(iIR) + dustSc(iIR)
-       do igroup=1,nGroups        ! Deplete photons, since they go into IR
-          if( .not. (rt_isIR .and. igroup.eq.iIR) ) &  ! IR done elsewhere
-               phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
-       end do
+       ! In CALIMA grain-optics mode the dust rates are NOT folded in here:
+       ! they enter the dNp/dFp denominators directly via dustAbs_den/dustSc_den
+       ! and dustRp drives the momentum transfer, as in rtz_cool_step.
+       if(.not. calima_IR) then
+          if(rt_isIR) & !IR scattering/abs on dust (abs after T update)
+               phSc(iIR)  = phSc(iIR) + dustSc(iIR)
+          do igroup=1,nGroups     ! Deplete photons, since they go into IR
+             if( .not. (rt_isIR .and. igroup.eq.iIR) ) &  ! IR done elsewhere
+                  phAbs(igroup) = phAbs(igroup) + dustAbs(igroup)
+          end do
+       endif
 
        if(iPEH_group .gt. 0) then
           ! Photoelectric absorption: the effective PEH cross section
@@ -485,7 +616,12 @@ contains
           dNp(igroup)= MAX(smallNp,                                      &
                         (ddt(icell)*(recRad(igroup)+dNpdt(igroup,icell)) &
                                     +dNp(igroup))                        &
+#ifdef CALIMA
+                        / (1d0+ddt(icell)*(phAbs(igroup)                  &
+                                           +dustAbs_den(igroup))))
+#else
                         / (1d0+ddt(icell)*phAbs(igroup)))
+#endif
 
           dUU = ABS(dNp(igroup)-Np(igroup,icell))                        &
                 /(Np(igroup,icell)+Np_MIN) * one_over_Np_FRAC
@@ -497,7 +633,12 @@ contains
           do idim=1,nDim
              dFp(idim,igroup) = &
                   (ddt(icell)*dFpdt(idim,igroup,icell)+dFp(idim,igroup)) &
+#ifdef CALIMA
+                  /(1d0+ddt(icell)*(phAbs(igroup)+phSc(igroup)            &
+                                    +dustAbs_den(igroup)+dustSc_den(igroup)))
+#else
                   /(1d0+ddt(icell)*(phAbs(igroup)+phSc(igroup)))
+#endif
           end do
           call reduce_flux(dFp(:,igroup),dNp(igroup)*rt_c_cgs(ilevel))
 
@@ -513,8 +654,17 @@ contains
        end do
 
        do igroup=1,nGroups ! -------Momentum transfer from photons to gas:
+          ! dustRp is the radiation-PRESSURE weighted dust rate; it is zero
+          ! unless calima_IR, where the dust momentum is not already inside
+          ! phAbs/phSc from the folding above.
+#ifdef CALIMA
+          mom_fact = ddt(icell) * (phAbs(igroup) + phSc(igroup)             &
+                                   + dustRp(igroup))                        &
+               * group_egy_erg(igroup) * one_over_c_cgs
+#else
           mom_fact = ddt(icell) * (phAbs(igroup) + phSc(igroup)) &
                * group_egy_erg(igroup) * one_over_c_cgs
+#endif
 
           if(rt_isoPress .and. .not. (rt_isIR .and. igroup==iIR)) then
              ! rt_isoPress: assume f=1, where f is reduced flux.
@@ -535,12 +685,46 @@ contains
        dp_gas = dp_gas + dmom * rt_pressBoost        ! update gas momentum
 
        ! Add absorbed UV/optical energy to IR:----------------------------
-       if(rt_isIR) then
+       if(rt_isIR .and. .not. calima_IR) then
           do igroup=iIR+1,nGroups
              dNp(iIR) = dNp(iIR) + dustAbs(igroup) * ddt(icell)          &
                   * dNp(igroup) * group_egy_ratio(igroup)
           end do
        endif
+#ifdef CALIMA
+       if(calima_IR) then
+          ! Explicit dust temperature: compute_dust_precool solves the grain
+          ! charge / heating balance, filling %T_dust and the thermal emission
+          ! %Prad_dust, which then sources the IR band. This REPLACES both the
+          ! crude UV->IR reprocessing above and the one-temperature IR-dust
+          ! equilibrium block below. Mirrors rtz_cool_step's CALIMA branch.
+          call compute_local_anisotropy_factor(dust_helper, dFp, dNp)
+          ! ixHeII/ixHeIII are 0 when helium is not tracked, so guard the
+          ! whole argument list rather than indexing dXion(0).
+          if(isHe) then
+             call rt_calima_gas_state(nH(icell), nHe, xHI, xH2,             &
+                                      dXion(ixHII), xHeI,                   &
+                                      dXion(ixHeII), dXion(ixHeIII),        &
+                                      nElement_ad, xion_ad)
+          else
+             call rt_calima_gas_state(nH(icell), nHe, xHI, xH2,             &
+                                      dXion(ixHII), 0d0, 0d0, 0d0,          &
+                                      nElement_ad, xion_ad)
+          endif
+          call compute_dust_precool(dust_helper, G0_dust, TK, ne,           &
+                                    nElement_ad, xion_ad,                   &
+                                    xH2*nH(icell), 0d0, dNp)
+          do idb = 1, ndust
+             dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(idb)               &
+                                 * ddt(icell) * one_over_egy_IR_erg
+          end do
+          do idb = 1, npah
+             dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(idb)                &
+                                 * ddt(icell) * one_over_egy_IR_erg
+          end do
+          dNp(iIR) = max(dNp(iIR), smallNp)
+       endif
+#endif
        ! -----------------------------------------------------------------
     endif !if(rt)
 #endif
@@ -616,7 +800,10 @@ contains
     endif
 
 #if NGROUPS>0
-    if(rt_isIR) then
+    ! Skipped in CALIMA grain-optics mode: there the IR<->dust exchange comes
+    ! from the explicit dust temperature (Prad_dust, above), and running both
+    ! would count IR absorption and re-emission twice.
+    if(rt_isIR .and. .not. calima_IR) then
        if(kAbs_loc(iIR) .gt. 0d0 .and. .not. rt_T_rad) then
           ! Evolve IR-Dust equilibrium temperature------------------------
           ! Delta (Cv T)= ( c_red/lambda E - c/lambda a T^4)
@@ -1027,6 +1214,13 @@ SUBROUTINE rt_evol_single_cell(astart,aend,dasura,h,omegab,omega0,omegaL &
   real(dp),dimension(1:ndim, 1:nvector):: p_gas
   real(dp),dimension(1:nvector)::nH=0., Zsolar=0.
   logical,dimension(1:nvector)::c_switch=.true.
+#ifdef CALIMA
+  ! Dust-free single-cell diagnostic: pass a zeroed dust state so the CALIMA
+  ! branch of rt_solve_cooling is simply inert here.
+  real(dp),dimension(1:nvector)::sigma_dum=0d0
+  real(dp),dimension(1:nvector,1:ndust)::rho_dust_dum=0d0
+  real(dp),dimension(1:nvector,1:npah)::rho_pah_dum=0d0
+#endif
 !-------------------------------------------------------------------------
   aexp = astart
   T2_com = 2.726d0 / aexp * aexp**2 / mu_mol
@@ -1056,7 +1250,11 @@ SUBROUTINE rt_evol_single_cell(astart,aend,dasura,h,omegab,omega0,omegaL &
      nH(1) = nH_com/aexp**3
      T2(1) = T2(1)/aexp**2
      call rt_solve_cooling(T2,xion,Np,Fp,p_gas,dNpdt,dFpdt,nH,c_switch   &
-                           ,Zsolar,dt_cool,aexp,1,levelmin)
+                           ,Zsolar,dt_cool,aexp,1,levelmin                &
+#ifdef CALIMA
+                           ,sigma_dum, rho_dust_dum, rho_pah_dum          &
+#endif
+                           )
      T2(1)=T2(1)*aexp**2
      aexp = aexp + daexp
      if (if_write_result) write(*,'(4(1pe10.3))')                        &
@@ -1212,6 +1410,44 @@ subroutine rt_cmp_metals(T2,nH,mu,metal_tot,metal_prime,aexp)
 end subroutine rt_cmp_metals
 
 !*************************************************************************
+#ifdef CALIMA
+SUBROUTINE rt_calima_gas_state(nH_c, nHe_c, xHI_c, xH2_c, xHII_c,           &
+                               xHeI_c, xHeII_c, xHeIII_c, nEl, xEl)
+! Map the plain-RT gas state onto the (n_elements) and (n_elements,n_elements)
+! arrays CALIMA's grain physics expects.
+!
+! HYDROGEN AND HELIUM ONLY. A plain-RT build carries no metal abundances, so
+! every heavy element is left at zero. Two consequences, both deliberate and
+! both biasing in a known direction:
+!   * grain collisional heating (Pcoll_dust) sees no heavy species, so T_dust
+!     comes out LOW relative to an equivalent RTZ run;
+!   * grain charging sees no metal-donated electrons -- in cold neutral gas the
+!     RTZ network gets most of its free electrons from C+ (~1.4e-4 n_H).
+! dust_cooling.f90:100-104 already falls back to reading only ion column 1 for
+! the heavy elements when RTZ is off, which is consistent with leaving them
+! zero here. THIS ROUTINE IS THE SINGLE PLACE TO CHANGE if a solar-pattern
+! metal abundance scaled by Zsolar is wanted later.
+!-------------------------------------------------------------------------
+  implicit none
+  real(dp),intent(in) :: nH_c, nHe_c, xHI_c, xH2_c, xHII_c
+  real(dp),intent(in) :: xHeI_c, xHeII_c, xHeIII_c
+  real(dp),dimension(1:n_elements),intent(out) :: nEl
+  real(dp),dimension(1:n_elements,1:n_elements),intent(out) :: xEl
+!-------------------------------------------------------------------------
+  nEl = 0d0 ;  xEl = 0d0
+  nEl(1) = nH_c
+  nEl(2) = nHe_c
+  xEl(1,1) = xHI_c
+  xEl(1,2) = xHII_c
+  if(isH2) xEl(1,3) = xH2_c
+  if(isHe) then
+     xEl(2,1) = xHeI_c
+     xEl(2,2) = xHeII_c
+     xEl(2,3) = xHeIII_c
+  endif
+END SUBROUTINE rt_calima_gas_state
+#endif
+
 FUNCTION getMu(xion, Tmu)
 ! Returns the mean particle mass, in units of the proton mass.
 ! xion => Hydrogen and helium ionisation fractions
@@ -1247,6 +1483,15 @@ SUBROUTINE updateRTGroups_CoolConstants(ilevel)
 !------------------------------------------------------------------------
   use rt_cooling_module
   use rt_parameters
+#ifdef CALIMA
+  ! This is an EXTERNAL subroutine, so it does not inherit rt_cooling_module's
+  ! own (private) CALIMA imports and must name them itself.
+  use hydro_parameters, only: ndust, npah
+  use dust_commons, only: sigca_dust, sigcs_dust, sigcr_dust,               &
+                          sigca_pah, sigcs_pah, sigcr_pah,                  &
+                          group_csa_dust, group_css_dust, group_csr_dust,   &
+                          group_csa_pah, group_css_pah, group_csr_pah
+#endif
   implicit none
   integer::ilevel,iP, iI
 !------------------------------------------------------------------------
@@ -1259,6 +1504,23 @@ SUBROUTINE updateRTGroups_CoolConstants(ilevel)
         PHrate(iP,iI) = max(PHrate(iP,iI),0d0) !      No negative heating
      end do
   end do
+
+#ifdef CALIMA
+  ! Per-level CALIMA dust/PAH cross sections [cm3 s-1]. rtz_cooling_module does
+  ! exactly this in its own rtz_updateRTGroups_CoolConstants; without RTZ that
+  ! routine never runs, so the sig*_dust / sig*_pah arrays would stay zero.
+  if(ndust .gt. 0) then
+     sigca_dust(:,:) = group_csa_dust(:,:) * rt_c_cgs(ilevel)
+     sigcs_dust(:,:) = group_css_dust(:,:) * rt_c_cgs(ilevel)
+     sigcr_dust(:,:) = group_csr_dust(:,:) * rt_c_cgs(ilevel)
+  endif
+  if(npah .gt. 0) then
+     sigca_pah(:,:)  = group_csa_pah(:,:)  * rt_c_cgs(ilevel)
+     sigcs_pah(:,:)  = group_css_pah(:,:)  * rt_c_cgs(ilevel)
+     sigcr_pah(:,:)  = group_csr_pah(:,:)  * rt_c_cgs(ilevel)
+  endif
+#endif
+
 END SUBROUTINE updateRTGroups_CoolConstants
 
 !************************************************************************

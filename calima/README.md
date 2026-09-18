@@ -552,3 +552,88 @@ agreement.
 - Requires `NENER>=1`, `rt_isIR`, `NDUST>0` and `rt_flux_scheme='glf'` (RT15 footnote 3 — the
   trapped/streaming partition is matched to the GLF numerical diffusion, so HLL is inconsistent).
   `check_params_dust` enforces all four.
+
+## Building CALIMA without RTZ (`RT=1 RTZ=0 CALIMA=1`)
+
+Historically CALIMA could only be compiled alongside the full RTZ metal-chemistry network:
+`RTZ=1` emits `-DRT -DRTZ`, and every dust hook was called from `rtz_cooling_module`. That is
+expensive when all you want is dust *dynamics*, and the RTZ chemistry does not converge at the
+densities some tests need. `RT=1 RTZ=0 CALIMA=1` is now a supported configuration; see
+`tests/dust_tva/levgas_rt15_dust_nortz`.
+
+### What works
+
+Dust drift (TVA), dust radiation pressure, IR trapping, per-bin dust temperature, and IR
+Rosseland/Planck opacities from the grain tables. The radiative dust hooks
+(`compute_dust_rad_rates`, `compute_local_anisotropy_factor`, `compute_dust_precool`) are driven
+from `rt/rt_cooling_module.f90`'s `cool_step`, mirroring what `rtz_cool_step` does.
+
+### The two IR modes, selected by `rt_kIR_RT15`
+
+`rt_kIR_RT15` now picks a *coherent* pair of opacity law and thermal closure, so the two can never
+disagree:
+
+| `rt_kIR_RT15` | IR opacity | Dust temperature | IR -> gas heating |
+| --- | --- | --- | --- |
+| `.true.` | RT15 eq. 79 `kappa*(T/10)^2`, with the REAL dust-to-gas ratio in place of the `Zsolar*(1-xHII)` proxy | one-temperature, `T_dust = T_gas` | yes, via the equilibrium block in `cool_step` |
+| `.false.` | per-bin Rosseland (flux/momentum) and Planck (absorption/emission) means at the local radiation temperature | explicit, from `update_T_dust` | **none** -- see below |
+
+In CALIMA mode the dust rates are deliberately NOT folded into `phAbs`/`phSc`: they enter the
+`dNp`/`dFp` denominators directly and `dustRp` (the radiation-*pressure* weighted rate) drives the
+momentum transfer, exactly as in `rtz_cool_step`. In RT15 mode the reference folding is used, so
+the momentum transfer keeps the same form as `tests/dust_tva/levgas_rt15`.
+
+### Two limitations, both deliberate and both warned about at startup
+
+1. **No dust -> gas thermal coupling.** `compute_dust_precool` fills `%Pcoll_dust`, `%Pinj_dust`
+   and `%Prec_dust`, but the routine that applies them to the gas (`compute_dust_coolrates`) is
+   reached only from `rtz_coolrates_module`'s `all_cooling`, which does not exist in this build.
+   Dust absorbs IR, heats up and re-emits into the IR band via `Prad_dust`, but dust recombination
+   cooling, photoelectric heating and dust-gas collisional cooling do not reach `T_gas`. This is
+   why the one-temperature block is guarded by `rt_kIR_RT15` rather than deleted: removing it
+   unconditionally would leave the gas with no IR heating channel at all and break the RT15
+   reproduction.
+2. **Hydrogen and helium only.** `rt_calima_gas_state` (in `rt_cooling_module.f90`) maps the
+   plain-RT state onto the 27-element arrays the grain physics expects, leaving every metal at
+   zero. `T_dust` is therefore biased LOW (no heavy-species collisional heating) and grain charging
+   sees no metal-donated electrons -- in cold neutral gas the RTZ network gets most of its free
+   electrons from C+, ~1.4e-4 n_H. That routine is the single place to change if a solar-pattern
+   metal abundance scaled by `Zsolar` is wanted later.
+
+### Things that had to be fixed to make the configuration exist
+
+- The 12 RT dust/IR parameters (`rt_isIR`, `iIR`, `rt_isIRtrap`, `iIRtrapVar`, `rt_pressBoost`,
+  `rt_isoPress`, `is_kIR_T`, `rt_kIR_RT15`, `rt_T_rad`, `rt_vc`, `kappaAbs`, `kappaSc`) were
+  declared identically in `rt_parameters.f90` (inside `#ifdef RTZ`) and again in
+  `rt_cooling_module.f90`. They are now declared once, unconditionally, in `rt_parameters`, and
+  re-exported by `rt_cooling_module`'s `public` list so no consumer changed.
+- The whole CALIMA optics init (`init_dust_efficiency_tables`,
+  `initialize_cross_sections_from_blackbody_dust_pah`, `init_dust_mean_cross_sections`, ...) sat
+  inside `#ifdef RTZ` in `rt_init.f90`. Those are the only call sites in the tree, so without RTZ
+  `group_cs*_dust/_pah` were never allocated and `Rosseland_tab`/`Planck_tab` never built.
+- `dust_radpressure.f90` needed `#ifdef RTZ` forks for `elements(:)`, `getNe`, `getMu_RTZ`,
+  `comp_Sd`/`comp_SH2`, `isH2_rtz`, `rtz_UV_background_G0`, and for the rank of `group_csn`
+  (3-index under RTZ, 2-index without). Worth knowing: `ne`, `Tk` and `G0` in that file are used
+  *only* for the PAH charge equilibrium, and `f_shd` only for the LW gas opacity, so with
+  `NPAH=0` the entire RTZ gas-state block there is dead code.
+- `updateRTGroups_CoolConstants` gained the per-level `sig*_dust`/`sig*_pah` scaling that
+  `rtz_updateRTGroups_CoolConstants` does; without it those arrays stay zero.
+- `movie.f90` declared `vol` inside `#ifdef RTZ`, and `irad` inside `#if NENER>0`, but used both
+  in CALIMA blocks guarded by neither. The second only bites at `NENER=0`, which no CALIMA test
+  used until `tests/rt/stromgren2d_calima`.
+- `dust_radpressure.f90`'s new non-RTZ `mu` expression indexed `xion_rt(ixHeII)` unguarded.
+  `ixHeII`/`ixHeIII` are 0 when helium is not tracked, so any `isHe=.false.` run died with an
+  out-of-bounds access. The helium fractions are now read once under the `isHe` guard and cached.
+  Caught by `tests/rt/stromgren2d_calima`, which runs `isHe=.false.`.
+- `MODOBJ` emitted `rt_parameters.o`/`rt_hydro_commons.o` *after* the dust objects that need them.
+
+### Makefile gotchas for this configuration
+
+- Set `NIONS` by hand (the computed branch is RTZ-only), and set `NMETALS = 0` and `CO = 0`:
+  `-DNMETALS` and `-DCO` are only emitted inside the RTZ branch of `DEFINES`, but the `NVAR` sum
+  adds both unconditionally, so leaving them non-zero budgets variables Fortran never sees.
+- **Never put a trailing `#` comment on these assignments.** The trailing whitespace leaks
+  straight into `-DNVAR` and the compile fails with "linker input file not found".
+- `make` does not recompile when only `DEFINES` change. After editing the Makefile, `rm -f *.o
+  *.mod` -- otherwise the binary keeps the old `NVAR` and the variable layout silently disagrees
+  with the Makefile.

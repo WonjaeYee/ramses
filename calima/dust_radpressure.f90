@@ -8,21 +8,37 @@ module dust_radpressure_module
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO
+    ! rt_pressBoost / rt_isoPress / rt_isIR / iIR / rt_isIRtrap / iIRtrapVar are
+    ! declared unconditionally in rt_parameters (see the note at their declaration),
+    ! so they need no RTZ fork. isH2_rtz, rtz_UV_background_G0 and the rank of
+    ! group_csn do: group_csn is (nGroups,1:27,1:27) under RTZ and (nGroups,nIons)
+    ! without it.
     use rt_parameters, only: nGroups, iGroups, group_egy, rt_pressBoost, &
                             rt_isoPress, rt_isIR, iIR, rt_c, group_csn, &
-                            isH2_rtz, iIons, isLW, rtz_UV_background_G0, rt_advect, rt_c_cgs, &
+                            iIons, isLW, rt_advect, rt_c_cgs, &
                             rt_n_source, rt_isIRtrap, iIRtrapVar, rt_c_fraction
-    use rtz_module, only: elements, n_elements
+    ! n_elements is the same entity either way: rtz_module re-exports
+    ! hydro_parameters' parameter (rtz_module.f90:3).
     use hydro_parameters, only: ndust, npah, idust, ipah, imetal, smallr, smallc, gamma, &
-                                neul, nener, gamma_rad, nhydro
+                                neul, nener, gamma_rad, nhydro, n_elements
+#ifdef RTZ
+    use rt_parameters, only: isH2_rtz, rtz_UV_background_G0
+    use rtz_module, only: elements, getNe, getMu_RTZ
+    use molecules_module, only: comp_Sd, comp_SH2
+#else
+    ! Plain RT: no element network, no RTZ H2/CO chemistry, no packed metal block.
+    ! mu and ne are formed inline below from the H/He ionisation fractions rather
+    ! than via rt_cooling_module's getMu, because rt_cooling_module.o is linked
+    ! after this file (see MODOBJ) so its .mod is not available here.
+    use rt_parameters, only: isH2, isHe, nIons, ixHI, ixHII, ixHeII, ixHeIII
+    use cooling_module, only: X, Y
+#endif
 #ifdef CO
     use hydro_parameters, only: iCO
 #endif
     use dust_commons, only: dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
     use dust_optics, only: get_IR_mean_cross_sections
-    use rtz_module, only: getNe, getMu_RTZ
-    use molecules_module, only: comp_Sd, comp_SH2
 
     implicit none
 
@@ -66,6 +82,11 @@ contains
         real(dp), dimension(max(1, ndust))  :: sig_R_dust, sig_P_dust, chi_R_dust
         real(dp), dimension(max(1, 2*npah)) :: sig_R_pah,  sig_P_pah
         integer :: id, iion, counter, e_counter, jbin
+#ifndef RTZ
+        real(dp), dimension(max(1,nIons)) :: xion_rt
+        real(dp) :: nH_loc, nHe_loc, xHI_loc, xH2_loc
+        real(dp) :: xHeI_loc, xHeII_loc, xHeIII_loc
+#endif
 #ifdef CO
         real(dp) :: nCO
 #endif
@@ -76,6 +97,7 @@ contains
 
         rho_loc = max(cell_state(1), smallr)
 
+#ifdef RTZ
         ! 1. Extract elements and ionization fractions
         counter = 0
         e_counter = 0
@@ -97,6 +119,14 @@ contains
            xion(1,3) = cell_state(iIons+counter) / rho_loc
            counter = counter + 1
         end if
+#else
+        ! 1. Plain RT: no element network. Read the H/He ionisation fractions
+        !    here; the species densities the gas-opacity sum needs are packed
+        !    below, once rho_gas is known.
+        xion     = 0d0
+        nElement = 0d0
+        xion_rt(1:nIons) = cell_state(iIons:iIons+nIons-1) / rho_loc
+#endif
 
         ! 2. Extract dust and PAH densities
         eps_tot = 0.0_dp
@@ -115,17 +145,59 @@ contains
 #endif
         eps_tot = min(max(eps_tot, 0.0_dp), 1.0_dp - smallr)
         rho_gas = max((1.0_dp - eps_tot) * rho_loc, smallr)
+#ifndef RTZ
+        ! Pre-ionized ("neutral") species densities in ion-slot order -- the same
+        ! nN(:) vector rt_cooling_module builds for phAbs. group_csn is
+        ! (nGroups,nIons) without RTZ, so the gas opacity in _force is simply
+        ! SUM(nElement(1:nIons)*group_csn(igroup,1:nIons)). nElement keeps its
+        ! RTZ shape so the _force interface is unchanged; only slots 1..nIons are
+        ! meaningful and xion stays zero (unused without RTZ).
+        nH_loc  = rho_gas * scale_nH
+        nHe_loc = 0.25d0 * nH_loc * Y / X
+        xHI_loc = max(1d0 - xion_rt(ixHII), 0d0)
+        xH2_loc = 0d0
+        if (isH2) then
+           xHI_loc = max(xion_rt(ixHI), 0d0)
+           xH2_loc = max(0.5d0*(1d0 - xion_rt(ixHI) - xion_rt(ixHII)), 0d0)
+           nElement(ixHI) = nH_loc * xH2_loc                       !    nH2
+        end if
+        nElement(ixHII) = nH_loc * xHI_loc                         !    nHI
+        ! ixHeII/ixHeIII are 0 when helium is not tracked (isHe=.false.), so the
+        ! helium fractions must be read ONLY under the guard and cached here --
+        ! indexing xion_rt(0) further down is an out-of-bounds access.
+        xHeI_loc   = 0d0
+        xHeII_loc  = 0d0
+        xHeIII_loc = 0d0
+        if (isHe) then
+           xHeII_loc  = xion_rt(ixHeII)
+           xHeIII_loc = xion_rt(ixHeIII)
+           xHeI_loc   = max(1d0 - xHeII_loc - xHeIII_loc, 0d0)
+           nElement(ixHeII)  = nHe_loc * xHeI_loc                  !   nHeI
+           nElement(ixHeIII) = nHe_loc * xHeII_loc                 !  nHeII
+        end if
+#endif
 
         ! 3. H2 shielding
         f_shd = 1.d0
+#ifdef RTZ
         if (isH2_rtz) then
            dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
            f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3),dx) * &
                    comp_Sd(nElement(1)*xion(1,1),0.5d0*nElement(1)*xion(1,3),dx,dtg_mw)
         end if
+#else
+        ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
+        ! LW-band gas opacity in _force, which is inert unless isH2 and some
+        ! group is flagged LW.
+#endif
 
         ! 4. Electron density
+#ifdef RTZ
         ne = getNe(xion, nElement)
+#else
+        ne = nH_loc * xion_rt(ixHII)
+        if (isHe) ne = ne + nHe_loc*(xHeII_loc + 2d0*xHeIII_loc)
+#endif
 
         ! 5. Temperature
         P_gas = (gamma - 1) * (cell_state(neul) - 0.5_dp * sum(cell_state(2:ndim+1)**2) / cell_state(1))
@@ -136,16 +208,28 @@ contains
 #endif
         P_gas = max(P_gas, rho_gas * (smallc**2/gamma))
 
+#ifdef RTZ
 #ifdef CO
         nCO = cell_state(iCO) * scale_d / mCO
         mu = getMu_RTZ(ne, nElement, xion, isH2_rtz, nCO)
 #else
         mu = getMu_RTZ(ne, nElement, xion, isH2_rtz)
 #endif
+#else
+        ! Same H/He expression as rt_cooling_module's getMu, without its
+        ! is_kIR_T/is_mu_H2 molecular correction (Tmu_dissoc is private there).
+        ! mu feeds Tk, which is used only for the PAH charge equilibrium below.
+        mu = 1d0/(X*(0.5d0+0.5d0*xHI_loc+1.5d0*xion_rt(ixHII)) &
+                + 0.25d0*Y*(1d0+xHeII_loc+2d0*xHeIII_loc))
+#endif
         Tk = P_gas / rho_loc * scale_T2 * mu
 
         ! 6. Habing band radiation field G0
+#ifdef RTZ
         G0 = rtz_UV_background_G0
+#else
+        G0 = 0d0   ! no plain-RT equivalent of rtz_UV_background_G0
+#endif
         if (rt_advect) then
            do id = 1, nGroups
               if (group_egy(id).gt.5.6d0 .and. group_egy(id).lt.13.6d0) then
@@ -321,6 +405,7 @@ contains
         opacity_gas_cgs = 0d0
 
         ! Calculate opacity_gas_cgs for gas directly using group_csn (in cm2)
+#ifdef RTZ
         do ii=1,n_elements
             if (elements(ii)%atomic_number.gt.0) then
                 do jj=1,elements(ii)%n_ions-1
@@ -330,7 +415,19 @@ contains
                 end do
             end if
         end do
+#else
+        ! Plain RT: group_csn is (nGroups,nIons) and nElement(1:nIons) holds the
+        ! pre-ionized species densities packed by _acc. Same sum rt_cooling_module
+        ! forms for phAbs. dXion is unused here.
+        do ii=1,nIons
+            do igroup=1,nGroups
+                opacity_gas_cgs(igroup) = opacity_gas_cgs(igroup) &
+                     + nElement(ii) * group_csn(igroup, ii)
+            end do
+        end do
+#endif
 
+#ifdef RTZ
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
             do igroup=1,nGroups
                 if (isLW(igroup).eq.1) then
@@ -340,6 +437,7 @@ contains
                 end if
             end do
         end if
+#endif
 
         ! Convert gas opacity to code units
         do igroup=1,nGroups

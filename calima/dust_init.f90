@@ -214,6 +214,31 @@ module dust_init
             end if
         end if
 #endif
+#if defined(RT) && !defined(RTZ)
+        ! RT + CALIMA without RTZ. The radiative dust coupling is ported into
+        ! rt_cooling_module, but the dust<->gas THERMAL coupling is not: it
+        ! lives in rtz_coolrates_module's all_cooling, which does not exist in
+        ! this build. Warn rather than fail -- the configuration is useful and
+        ! deliberate -- but do not let the limitation pass silently.
+        if (myid == 1) then
+            write(*,*)'------------------------------------------------------------'
+            write(*,*)'WARNING: CALIMA is compiled without RTZ.'
+            write(*,*)'  ACTIVE : per-bin dust temperature, IR Rosseland/Planck'
+            write(*,*)'           opacities, dust radiation pressure, dust drift.'
+            write(*,*)'  MISSING: dust->gas thermal coupling. Dust recombination'
+            write(*,*)'           cooling, photoelectric heating and dust-gas'
+            write(*,*)'           collisional cooling are computed but NOT applied'
+            write(*,*)'           to the gas temperature.'
+            write(*,*)'  MISSING: metal abundances. The gas state handed to the'
+            write(*,*)'           grain physics carries H and He only, so T_dust is'
+            write(*,*)'           biased LOW (no heavy-species collisional heating)'
+            write(*,*)'           and grain charging sees no metal-donated'
+            write(*,*)'           electrons. See rt_calima_gas_state.'
+            write(*,*)'  With rt_kIR_RT15=.true. the one-temperature RT15 closure'
+            write(*,*)'  is used instead and the gas DOES receive IR heating.'
+            write(*,*)'------------------------------------------------------------'
+        end if
+#endif
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)
