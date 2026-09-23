@@ -199,7 +199,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rtz_include_dust_recombination, rtz_include_HM12_UVB           &
        & ,isH2_rtz, isCO_rtz, rtz_UV_background_G0, rtz_H2_clumping      &
        & ,rtz_primary_cosmic_ray_ionization_rate, rtz_max_cool_timestep  &
-       & ,rtz_eqm_min_its                                                &
+       & ,rtz_eqm_min_its, rtz_source_temperature                        &
        & ,rtz_single_cell_test, rtz_single_cell_test_file               &
 #endif
        ! RT regions (for initialization)                                 &
@@ -551,11 +551,11 @@ SUBROUTINE read_rt_groups()
   ! Frist initialize the cross sections data
   call initialize_cross_sections()
 
-  ! Initialize cross sections to be a blackbody at 1e5 K
-  call initialize_cross_sections_from_blackbody(1.d5, groupL0, groupL1, group_csn, group_cse, group_csn_dust, .true.)
+  ! Initialize cross sections to be a blackbody at rtz_source_temperature
+  call initialize_cross_sections_from_blackbody(rtz_source_temperature, groupL0, groupL1, group_csn, group_cse, group_csn_dust, .true.)
 
   ! Initialize group energies for the same black body
-  call initialize_group_energies_from_blackbody(1.d5, groupL0, groupL1, group_egy)
+  call initialize_group_energies_from_blackbody(rtz_source_temperature, groupL0, groupL1, group_egy)
 
 
 #ifdef INDIVIDUAL_SINK_STARS

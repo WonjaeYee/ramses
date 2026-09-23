@@ -220,6 +220,11 @@ module rt_parameters
   real(dp)::rtz_primary_cosmic_ray_ionization_rate=0.d0
   real(dp)::rtz_max_cool_timestep=1.d11
   integer::rtz_eqm_min_its=50
+  ! Temperature of the blackbody that group_csn, group_cse, group_egy and
+  ! group_csn_dust are integrated over in rt_init.  Defaults to the value that
+  ! used to be hardcoded there.  Set it to the source temperature so that the
+  ! group properties describe the spectrum the run is actually driven by.
+  real(dp)::rtz_source_temperature=1.d5
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
