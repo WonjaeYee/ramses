@@ -958,6 +958,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       !-----------------------------------------------------------------------
       real(dp)::alpha
+      real(dp),dimension(nGroups)::recrad_f
 
       ! RTZ variable initialization
       if (rtz_equilibrium_test.gt.0) then
@@ -986,6 +987,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! knee alpha_H = 1, so D/G is proportional to Z and this correctly returns 1.
          dust_to_metal_over_mw = max(min(dust_to_gas_mass_ratio_over_mw &
                                          / max(Z_over_Zsun, 1.d-30), 1.d0), 0.d0)
+         ! Diagnostic switch: run the metals with no dust at all.  Zeroing both
+         ! ratios removes the grain opacity (dustAbs/dustSc/dustRp below) and,
+         ! consistently, the depletion of metals onto those grains -- in this
+         ! model they are the same quantity, so they must be turned off together.
+         if (.not. rtz_include_dust) then
+            dust_to_gas_mass_ratio_over_mw = 0.d0
+            dust_to_metal_over_mw = 0.d0
+         end if
          do iElement=1,n_elements
 ! we don't need to distinguish C and O from other elements...?
 !            if (iElement .eq. 6 .or. iElement .eq. 8) then
@@ -1223,31 +1232,36 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
          ! HKnote: OTSA is required with RTZ (for now)
 
-         ! try to mimic emission from gas under rt_solve_cooling
-         if (.not.rt_OTSA .and. rt_advect) then ! actually rt_advect does not need to be checked
-            do igroup=1,nGroups
-               ! photons from recombination should be spreaded on multiple radiation bins
-               ! but... at this moment dump on one bin
+         ! Emission from recombining gas, re-entering the radiation field.
+         !
+         ! The emission is spread over the groups using the table built at
+         ! startup (recombination_module::init_recrad_table): recombinations
+         ! straight to the ground state give a photon at the ionization edge,
+         ! the rest cascade and fluoresce to lower energies.  Some of the
+         ! helium fluorescence (He I 584 A at 21.2 eV, He II Ly-alpha at
+         ! 40.8 eV, the He II n=2 continuum at 13.6 eV) lands above the
+         ! hydrogen edge and ionizes hydrogen; the previous single-bin
+         ! treatment discarded all of it.
+         !
+         ! The rate is the case-A total, the same alpha the chemistry uses, so
+         ! emission and destruction are consistent by construction.
+         if (.not.rt_OTSA .and. rt_advect) then
+            call recrad_fractions(TK, 1, nGroups, recrad_f)
+            alpha = recombination(TK, 2, 1)                     ! H II -> H I
+            recRad(1:nGroups) = recRad(1:nGroups) &
+                 + alpha * nElement_dep(1)*dXion(1,2) * ne * recrad_f(1:nGroups)
 
-               ! H II -> H I
-               if ((groupL0(igroup) <= 13.60).and.(13.60 < groupL1(igroup))) then
-                  alpha = old_recombination_HII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(1)*dXion(1,2) * ne
-               end if
+            if (elements(2)%atomic_number > 0) then
+               call recrad_fractions(TK, 2, nGroups, recrad_f)
+               alpha = recombination(TK, 2, 2)                  ! He II -> He I
+               recRad(1:nGroups) = recRad(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * recrad_f(1:nGroups)
 
-               ! He II -> He I
-               if ((groupL0(igroup) <= 24.590).and.(24.590 < groupL1(igroup))) then
-                  alpha = old_recombination_HeII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,2) * ne
-               end if
-
-               ! He III -> He II
-               if ((groupL0(igroup) <= 54.420).and.(54.420 < groupL1(igroup))) then
-                  alpha = old_recombination_HeIII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,3) * ne
-               end if
-
-            end do
+               call recrad_fractions(TK, 3, nGroups, recrad_f)
+               alpha = recombination(TK, 3, 2)                  ! He III -> He II
+               recRad(1:nGroups) = recRad(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_f(1:nGroups)
+            end if
          end if
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS

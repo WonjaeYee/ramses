@@ -6,6 +6,32 @@ module recombination_module
 
   private  ! everything is private by default
   public :: recombination, load_recombination_data, old_recombination_HII, old_recombination_HeII, old_recombination_HeIII
+  public :: init_recrad_table, recrad_fractions
+
+  !---------------------------------------------------------------------------
+  ! Spectral redistribution of recombination emission.
+  !
+  ! Under rt_OTSA = .false. the photons emitted when an ion recombines re-enter
+  ! the radiation field.  They do NOT all come out above the ionization edge:
+  ! only recombinations straight to the ground state do that, and the rest
+  ! cascade, fluorescing into lower-energy lines and continua.  For helium some
+  ! of that fluorescence lands ABOVE 13.6 eV and so ionizes hydrogen -- the
+  ! He I 584 A resonance line at 21.2 eV in particular.  Dropping it, as the
+  ! single-bin treatment did, removes a real hydrogen-ionizing source.
+  !
+  ! The group boundaries do not change during a run, so the fraction of the
+  ! emission landing in each group is a function of temperature alone and is
+  ! tabulated once at startup on a log-T grid.
+  !---------------------------------------------------------------------------
+  integer, parameter :: nT_recrad = 200
+  real(dp), parameter :: lgT_recrad_min = 2.0d0, lgT_recrad_max = 6.0d0
+  real(dp), allocatable :: recrad_frac(:,:,:)      ! (nGroups, nT_recrad, 3)
+  logical :: recrad_ready = .false.
+  ! Fraction of case-B He I recombinations whose cascade yields one
+  ! hydrogen-ionizing photon (584 A at 21.2 eV, plus the 2^3S 19.8 eV channel).
+  ! PARAMETERISED -- He I is not hydrogenic and its 584 A photons are resonantly
+  ! scattered, so their fate depends on optical depth.  Cloudy solves a
+  ! multi-level atom here; this is a single effective yield.
 
   ! Cloudy radiative recombination tables
   real(dp), dimension(30,30,2) :: rrec = 0.d0
@@ -737,61 +763,240 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
 
 END FUNCTION recombination
 
+!************************************************************************
+INTEGER FUNCTION group_of(E, L0, L1, n)
+   ! Index of the photon group containing energy E [eV], or 0 if none does
+   ! (a photon outside every group is simply not tracked).
+   implicit none
+   real(dp), intent(in) :: E, L0(n), L1(n)
+   integer, intent(in) :: n
+   integer :: i
+   group_of = 0
+   do i = 1, n
+      if (E >= L0(i) .and. E < L1(i)) then
+         group_of = i
+         return
+      end if
+   end do
+END FUNCTION group_of
+
+!************************************************************************
+INTEGER FUNCTION group_at_edge(E, L0, L1, n)
+   ! Index of the group that STARTS at ionization edge E, i.e. the first group
+   ! at or above it.  Continuum emission from recombination piles up within
+   ! ~kT of the edge and the near-threshold cross section is the large one, so
+   ! those photons belong in the group whose lower boundary is the edge.
+   !
+   ! Two traps this avoids.  The physical edge and the namelist boundary differ
+   ! in the last digits (13.598 vs 13.60), so a plain containment test puts the
+   ! photon in the group BELOW the edge, where it cannot ionize at all.  And
+   ! adding kT to the edge overshoots into the next group whenever the group is
+   ! narrower than kT -- group 5 here is 1.6 eV wide against kT = 1.9 eV at
+   ! 22000 K -- dumping the photons where sigma is far smaller.
+   implicit none
+   real(dp), intent(in) :: E, L0(n), L1(n)
+   integer, intent(in) :: n
+   integer :: i
+   real(dp), parameter :: tol = 0.05d0        ! eV
+   group_at_edge = 0
+   do i = 1, n
+      if (L0(i) >= E - tol) then
+         group_at_edge = i
+         return
+      end if
+   end do
+   ! edge above every group boundary: fall back to containment
+   group_at_edge = group_of(E, L0, L1, n)
+END FUNCTION group_at_edge
+
+!************************************************************************
+SUBROUTINE init_recrad_table(L0, L1, n)
+   ! Tabulate, per ion and per temperature, the number of photons emitted into
+   ! each group per recombination (case A total rate as the normalisation, so
+   ! the chemistry and the emission use the same alpha by construction).
+   !
+   ! Principled: H I and He II are hydrogenic -- ground-state continuum at the
+   ! edge, case-B continuum at the n=2 edge, and the cascade's Lyman-alpha with
+   ! the standard ~0.68 yield per case-B recombination.
+   ! Parameterised: the He I cascade, via rtz_He_fluor_yield (namelist).
+   !
+   ! Note photon NUMBER is what recRad carries, and a recombination can emit
+   ! more than one photon (a continuum photon plus cascade lines), so these
+   ! fractions may sum above 1.  Energy is only approximately conserved,
+   ! because each group absorbs at its own mean group_egy.
+   use amr_commons, only: myid
+   use rt_parameters, only: helium_fluor_yield => rtz_He_fluor_yield
+   implicit none
+   real(dp), intent(in) :: L0(n), L1(n)
+   integer, intent(in) :: n
+   integer :: iT, g
+   real(dp) :: T, aA, aB, f1, fB, dlg
+
+   if (allocated(recrad_frac)) deallocate(recrad_frac)
+   allocate(recrad_frac(n, nT_recrad, 3))
+   recrad_frac = 0.d0
+   dlg = (lgT_recrad_max - lgT_recrad_min)/real(nT_recrad-1, dp)
+
+   do iT = 1, nT_recrad
+      T  = 10.d0**(lgT_recrad_min + dlg*real(iT-1, dp))
+
+      ! ---- H II -> H I (hydrogenic, Z=1, edge 13.598 eV) ------------------
+      call ab_HII(T, aA, aB)
+      f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
+      g = group_at_edge(13.598d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + f1      ! ground-state continuum
+      g = group_at_edge(3.40d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + fB      ! n>=2 continuum (at n=2 edge)
+      g = group_of(10.199d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + 0.68d0*fB   ! Ly-alpha
+      g = group_of(1.89d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + 0.45d0*fB   ! Balmer-alpha
+
+      ! ---- He II -> He I (NOT hydrogenic; cascade parameterised) ----------
+      call ab_HeII(T, aA, aB)
+      f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
+      g = group_at_edge(24.587d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + f1      ! ground-state continuum
+      g = group_at_edge(4.0d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + fB      ! n=2 continua
+      g = group_of(21.218d0, L0, L1, n)                              ! 584 A -- ionizes H
+      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + helium_fluor_yield*fB
+      g = group_of(10.0d0, L0, L1, n)                                ! 2-photon, non-ionizing
+      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) &
+                                     + 2.d0*(1.d0-helium_fluor_yield)*fB
+
+      ! ---- He III -> He II (hydrogenic, Z=2, edge 54.418 eV) --------------
+      call ab_HeIII(T, aA, aB)
+      f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
+      g = group_at_edge(54.418d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + f1      ! ground-state continuum
+      g = group_at_edge(13.598d0, L0, L1, n)                          ! n=2 edge -- ionizes H
+      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + fB
+      g = group_of(40.813d0, L0, L1, n)                              ! He II Ly-alpha -- ionizes H
+      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + 0.68d0*fB
+      g = group_of(6.4d0, L0, L1, n)
+      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + 0.45d0*fB
+   end do
+
+   recrad_ready = .true.
+   if (myid == 1) then
+      write(*,*) 'Recombination emission redistribution table built'
+      write(*,'(A,I4,A,F5.1,A,F5.1)') '   nT = ', nT_recrad, '  over log10 T = ', &
+           lgT_recrad_min, ' to ', lgT_recrad_max
+      write(*,'(A,F5.2)') '   He I cascade H-ionizing yield (rtz_He_fluor_yield) = ', &
+           helium_fluor_yield
+   end if
+END SUBROUTINE init_recrad_table
+
+!************************************************************************
+SUBROUTINE recrad_fractions(T, ion, n, frac)
+   ! Photons emitted into each group per recombination of `ion`
+   ! (1 = H II->H I, 2 = He II->He I, 3 = He III->He II) at temperature T.
+   implicit none
+   real(dp), intent(in) :: T
+   integer, intent(in) :: ion, n
+   real(dp), intent(out) :: frac(n)
+   integer :: iT
+   real(dp) :: x, dlg, w
+
+   frac = 0.d0
+   if (.not. recrad_ready) return
+   dlg = (lgT_recrad_max - lgT_recrad_min)/real(nT_recrad-1, dp)
+   x = (log10(max(T, 1.d0)) - lgT_recrad_min)/dlg + 1.d0
+   iT = min(max(int(x), 1), nT_recrad-1)
+   w = min(max(x - real(iT, dp), 0.d0), 1.d0)
+   frac(1:n) = (1.d0-w)*recrad_frac(1:n,iT,ion) + w*recrad_frac(1:n,iT+1,ion)
+END SUBROUTINE recrad_fractions
+
+!************************************************************************
+SUBROUTINE ab_HII(T, aA, aB)
+   implicit none
+   real(dp), intent(in) :: T
+   real(dp), intent(out) :: aA, aB
+   real(dp) :: lam, f
+   lam = 315614.d0/T
+   f = 1d0+(lam/0.522d0)**0.47d0 ; aA = 1.269d-13 * lam**1.503d0 / f**1.923d0
+   f = 1d0+(lam/2.74d0)**0.407d0 ; aB = 2.753d-14 * lam**1.5d0  / f**2.242d0
+END SUBROUTINE ab_HII
+
+SUBROUTINE ab_HeII(T, aA, aB)
+   implicit none
+   real(dp), intent(in) :: T
+   real(dp), intent(out) :: aA, aB
+   real(dp) :: lam
+   lam = 570670.d0/T
+   aA = 3d-14 * lam**0.654d0
+   aB = 1.26d-14 * lam**0.75d0
+END SUBROUTINE ab_HeII
+
+SUBROUTINE ab_HeIII(T, aA, aB)
+   implicit none
+   real(dp), intent(in) :: T
+   real(dp), intent(out) :: aA, aB
+   real(dp) :: lam, f
+   lam = 1263030.d0/T
+   f = 1d0+(lam/0.522d0)**0.47d0 ; aA = 2.538d-13 * lam**1.503d0 / f**1.923d0
+   f = 1d0+(lam/2.74d0)**0.407d0 ; aB = 5.506d-14 * lam**1.5d0  / f**2.242d0
+END SUBROUTINE ab_HeIII
+
+! The three functions below return the rate of recombinations DIRECTLY TO THE
+! GROUND STATE, i.e. the ones that emit an ionizing photon.  Under rt_OTSA =
+! .false. rtz_cool_step feeds them into recRad so those photons re-enter the
+! radiation field.
+!
+! They must be consistent with the recombination rate the chemistry actually
+! uses, which is cloudy_rad_rec (Verner & Ferland) -- otherwise photons are
+! returned at a rate unrelated to the recombinations that produced them.  The
+! published case A / case B fit pairs below are therefore used only for their
+! RATIO, the ground-state fraction (alpha_A - alpha_B)/alpha_A, which is a
+! smooth 0.27-0.52 over 5000-50000 K and is far more robust than either
+! absolute value; that fraction then multiplies cloudy_rad_rec.
+!
+! Taking the fit difference directly, as was done before, left He+ -> He0 13%
+! inconsistent with its own chemistry rate (the fit pair there is purely
+! radiative while cloudy_rad_rec is Verner & Ferland); H+ and He++ were off by
+! 2-3% the other way.
+
 function old_recombination_HII(T) result(rate)
   implicit none
-  real(dp)::T, lambda, f, rate_A, rate_B, rate
+  real(dp)::T, lambda, f, rate_A, rate_B, frac, rate
 
-  ! case A
   lambda = 315614./T
   f = 1d0+(lambda/0.522)**0.47
   rate_A = 1.269d-13 * lambda**1.503 / f**1.923
-
-  ! case B
-  lambda = 315614./T
   f = 1d0+(lambda/2.74)**(0.407)
   rate_B = 2.753d-14 * lambda**1.5 / f**2.242
 
-  rate = rate_A - rate_B
-
-  rate = max(rate, 0.0d0)
+  frac = max(min(1d0 - rate_B/rate_A, 1d0), 0d0)
+  rate = frac * cloudy_rad_rec(1, 1, T)
 
 end function old_recombination_HII
 
 function old_recombination_HeII(T) result(rate)
   implicit none
-  real(dp)::T, lambda, rate_A, rate_B, rate
+  real(dp)::T, lambda, rate_A, rate_B, frac, rate
 
-  ! case A
   lambda = 570670./T
   rate_A = 3d-14 * lambda**0.654
-
-  ! case B
-  lambda = 570670./T
   rate_B = 1.26d-14 * lambda**0.75
 
-  rate = rate_A - rate_B
-
-  rate = max(rate, 0.0d0)
+  frac = max(min(1d0 - rate_B/rate_A, 1d0), 0d0)
+  rate = frac * cloudy_rad_rec(2, 2, T)
 
 end function old_recombination_HeII
 
 function old_recombination_HeIII(T) result(rate)
   implicit none
-  real(dp)::T, lambda, f, rate_A, rate_B, rate
+  real(dp)::T, lambda, f, rate_A, rate_B, frac, rate
 
-  ! case A
   lambda = 1263030./T
   f = 1d0+(lambda/0.522)**0.47
   rate_A = 2.538d-13 * lambda**1.503 / f**1.923
-
-  ! case B
-  lambda = 1263030./T
   f = 1d0+(lambda/2.74)**0.407
   rate_B = 5.506d-14 * lambda**1.5 / f**2.242
 
-  rate = rate_A - rate_B
-
-  rate = max(rate, 0.0d0)
+  frac = max(min(1d0 - rate_B/rate_A, 1d0), 0d0)
+  rate = frac * cloudy_rad_rec(2, 1, T)
 
 end function old_recombination_HeIII
 

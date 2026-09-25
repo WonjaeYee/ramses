@@ -226,11 +226,21 @@ module rt_parameters
   real(dp)::rtz_primary_cosmic_ray_ionization_rate=0.d0
   real(dp)::rtz_max_cool_timestep=1.d11
   integer::rtz_eqm_min_its=50
+  ! Diagnostic: set .false. to run with metals but no dust at all -- removes the
+  ! grain opacity AND, consistently, the depletion of metals onto grains.  In
+  ! this model both derive from dust_to_gas_scale_RR14, so they go together.
+  logical::rtz_include_dust=.true.
   ! Temperature of the blackbody that group_csn, group_cse, group_egy and
   ! group_csn_dust are integrated over in rt_init.  Defaults to the value that
   ! used to be hardcoded there.  Set it to the source temperature so that the
   ! group properties describe the spectrum the run is actually driven by.
   real(dp)::rtz_source_temperature=1.d5
+  ! Fraction of He I case-B recombinations whose cascade ends in a photon able
+  ! to ionize H (the 584 A resonance line converting on H0 rather than being
+  ! degraded to the 2-photon continuum).  Osterbrock & Ferland (2006) give
+  ! ~2/3 for an optically thick, H-rich nebula; the true value depends on the
+  ! 584 A optical depth and on n(H0)/n(He0), so it is exposed here.
+  real(dp)::rtz_He_fluor_yield=0.66d0
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
