@@ -23,6 +23,10 @@ subroutine run_dust_solver_test()
     character(len=64) :: log_filename
     integer :: n_active
 
+    real(dp) :: dummy_dUU
+
+    dummy_dUU = 0.0_dp
+
     ! Only run on processor 1 to avoid duplicate/interfering outputs and files
     if (myid /= 1) return
 
@@ -211,7 +215,7 @@ subroutine run_dust_solver_test()
         dust_helper%local_ne = test_ne
 
         ! Call the dust solver interface
-        call compute_dust_update(dust_helper, nElement, xelem_ions, dt, step_ok=step_ok)
+        call compute_dust_update(dust_helper, nElement, xelem_ions, dt, step_ok=step_ok, dUU=dummy_dUU)
         
         t_yr = t_yr + test_dt
 

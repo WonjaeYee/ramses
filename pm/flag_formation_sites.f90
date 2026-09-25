@@ -81,7 +81,7 @@ subroutine flag_formation_sites
   do j=1,nsink
 #ifdef INDIVIDUAL_SINK_STARS
      ! Only block if sinks are actively accreting
-     if (evolution_flag(j).ne.1) then
+     if (abs(evolution_flag(j)).ne.1) then
         cycle
      end if
 #endif
@@ -192,6 +192,7 @@ subroutine flag_formation_sites
      else
         ! Clump has to be peaky enough
         ok=ok.and.relevance(jj)>0
+        ! temporarily skip this to simplify the formation
         ! Clump has to contain at least one cell
         ok=ok.and.n_cells(jj)>0
         ! Clmup must have no existing (accreting) sink
@@ -201,7 +202,11 @@ subroutine flag_formation_sites
 #ifdef INDIVIDUAL_SINK_STARS
         ok=ok.and.max_dens(jj)>n_sink * mH / scale_d
         ! Jeans length criterion
-        ok=ok.and.dx_min**2 > (pi/factG) * thermal_support(jj)/3.d0/clump_vol(jj) / max_dens(jj)**2
+        if (ok) then
+           ! check jeans length only if the n_cell > 0
+           ok=ok.and.(resolve_jeans_by*dx_min)**2 > (pi/factG) * thermal_support(jj)/3.d0/clump_vol(jj) / max_dens(jj)**2
+           ! notice that thermal_support is total pressure over the clump...
+        end if
 #endif
         ! Clump has to be massive enough
         ok=ok.and.clump_mass4(jj)>mass_sink_seed*M_sun/(scale_d*scale_l**3)

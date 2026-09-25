@@ -5,7 +5,7 @@ module recombination_module
   implicit none
 
   private  ! everything is private by default
-  public :: recombination, load_recombination_data
+  public :: recombination, load_recombination_data, old_recombination_HII, old_recombination_HeII, old_recombination_HeIII
 
   ! Cloudy radiative recombination tables
   real(dp), dimension(30,30,2) :: rrec = 0.d0
@@ -736,5 +736,63 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
   rate = MAX(rate,1.d-100)
 
 END FUNCTION recombination
+
+function old_recombination_HII(T) result(rate)
+  implicit none
+  real(dp)::T, lambda, f, rate_A, rate_B, rate
+
+  ! case A
+  lambda = 315614./T
+  f = 1d0+(lambda/0.522)**0.47
+  rate_A = 1.269d-13 * lambda**1.503 / f**1.923
+
+  ! case B
+  lambda = 315614./T
+  f = 1d0+(lambda/2.74)**(0.407)
+  rate_B = 2.753d-14 * lambda**1.5 / f**2.242
+
+  rate = rate_A - rate_B
+
+  rate = max(rate, 0.0d0)
+
+end function old_recombination_HII
+
+function old_recombination_HeII(T) result(rate)
+  implicit none
+  real(dp)::T, lambda, rate_A, rate_B, rate
+
+  ! case A
+  lambda = 570670./T
+  rate_A = 3d-14 * lambda**0.654
+
+  ! case B
+  lambda = 570670./T
+  rate_B = 1.26d-14 * lambda**0.75
+
+  rate = rate_A - rate_B
+
+  rate = max(rate, 0.0d0)
+
+end function old_recombination_HeII
+
+function old_recombination_HeIII(T) result(rate)
+  implicit none
+  real(dp)::T, lambda, f, rate_A, rate_B, rate
+
+  ! case A
+  lambda = 1263030./T
+  f = 1d0+(lambda/0.522)**0.47
+  rate_A = 2.538d-13 * lambda**1.503 / f**1.923
+
+  ! case B
+  lambda = 1263030./T
+  f = 1d0+(lambda/2.74)**0.407
+  rate_B = 5.506d-14 * lambda**1.5 / f**2.242
+
+  rate = rate_A - rate_B
+
+  rate = max(rate, 0.0d0)
+
+end function old_recombination_HeIII
 
 end module recombination_module

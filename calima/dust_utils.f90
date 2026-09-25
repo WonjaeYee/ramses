@@ -22,7 +22,13 @@ module dust_utils
         ncell = 1 ! we just want the neighbors of that cell
         ind_cell2(1)=icell
         d=uold(icell,1)
+
+#ifdef RTZ_ONE_CELL_TEST
+        ind_nbor = 1
+#else
         call getnbor(ind_cell2,ind_nbor,ncell,ilevel)
+#endif
+
         d1           = uold(ind_nbor(1,1),1) ; d2 = uold(ind_nbor(1,2),1) ; d3 = uold(ind_nbor(1,3),1)
         d4           = uold(ind_nbor(1,4),1) ; d5 = uold(ind_nbor(1,5),1) ; d6 = uold(ind_nbor(1,6),1)
         sigma2       = 0d0 ; sigma2_comp = 0d0 ; sigma2_sole = 0d0

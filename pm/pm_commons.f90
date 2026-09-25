@@ -49,6 +49,10 @@ module pm_commons
   real(dp),allocatable,dimension(:,:)  ::sink_metallicity
   integer,allocatable,dimension(:)     ::evolution_flag ! 1: pre main-sequence, 0: main-sequence
   real(dp),allocatable,dimension(:)    ::main_sequence_time
+
+#endif
+#ifdef RT
+  real(dp),allocatable,dimension(:,:):: sink_ioni_flux
 #endif
 
   ! Particles related arrays

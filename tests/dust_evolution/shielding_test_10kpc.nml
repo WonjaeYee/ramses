@@ -1,0 +1,202 @@
+&RUN_PARAMS
+hydro=.true.
+static=.true.
+nrestart=0
+rt=.true.
+nstepmax=1
+verbose=.false.
+/
+
+&INIT_PARAMS
+nregion=1
+region_type(1)='square'
+x_center=0.5
+y_center=0.5
+z_center=0.5
+length_x=100.0
+length_y=100.0
+exp_region=10.0
+d_region=1.d-3			! cm-3
+p_region= 8.69869d-8		! =10^4 K
+/
+
+&AMR_PARAMS
+levelmin=6
+levelmax=6
+ngridmax=50000
+boxlen=640.d0			! 640 kpc  ->  dx_SS_H2 = 640/64 kpc = 10 kpc
+/
+
+&OUTPUT_PARAMS
+noutput=5
+tout=10,30,100,200,500
+/
+
+&HYDRO_PARAMS
+gamma=1.4
+courant_factor=0.8
+scheme='muscl'
+slope_type=1
+data_dir='../../rtzdata_for_public_ramses/'
+/
+
+&COOLING_PARAMS
+cooling=.false.
+metal=.true.
+z_ave=1d0
+/
+
+&UNITS_PARAMS
+units_density=1.66d-24		! gram per proton
+units_time=3.1557d13		! 1 Myr in seconds
+units_length=3.0857d21		! 1 kpc in cm
+/
+
+&REFINE_PARAMS
+err_grad_d=0.1
+/
+
+&RT_PARAMS
+rt_flux_scheme='glf'
+rt_c_fraction=0.01
+rt_otsa=.true.
+rt_is_init_xion=.false.
+!----------- RTZ params -----------!
+rtz_cooling=.true.
+rtz_equilibrium_test=3		! Mode 3: density sweep with shielding active (old vs new)
+rtz_include_collisional_ionization=.true.
+rtz_include_photoionization=.true.
+rtz_include_cosmic_ray_ionization=.true.
+rtz_include_charge_exchange=.true.
+rtz_include_dust_recombination=.true.
+rtz_include_HM12_UVB=.false.
+isH2_rtz=.true.
+isCO_rtz=.true.
+rtz_UV_background_G0=1.d0
+rtz_primary_cosmic_ray_ionization_rate=1.d-16
+rtz_eqm_min_its=10000
+rtz_max_cool_timestep=1.d20
+! dx_SS_H2 = boxlen/2^levelmin * units_length = (640/64) * 3.0857e21 cm
+!          = 10 kpc * 3.0857e21 cm/kpc = 3.0857e22 cm  (~10 kpc)
+! N_H range: 10^-3 * dx to 10^10 * dx = 3e19 to 3e32 cm^-2
+! Interesting shielding range (N_H = 1e18-1e24) -> nH = 3e-5 to 3e1 cm^-3
+/
+
+&CALIMA_PARAMS
+!----------- Global CALIMA parameters -----------!
+dust_log=.false.
+dust_eq_test=.true.
+dust_solver_type=2
+
+!----------- Dust evolution switches -----------!
+dust_coagulation=.true.
+dust_shattering=.true.
+dust_accretion=.true.
+dust_sputtering=.true.
+dust_sublimation=.true.
+dust_sputtering_charge=.true.
+dust_acc_coulomb=.false.
+dust_coll_cooling=.true.
+dust_coll_lowT=.true.
+dust_coll_charge=.true.
+dust_pe_heating=.true.
+dust_pe_heating_isrf=.true.
+poppe_ice_enhancement=.true.
+H2ondust=.true.
+
+!----------- PAH evolution switches -----------!
+pah_coalescence=.true.
+pah_freezing=.true.
+pah_photolysis=.true.
+pah_cluster_evaporation=.true.
+pah_sputtering=.true.
+pah_pe_heating=.true.
+pah_pe_heating_isrf=.true.
+pah_pe_nolyman=.false.
+H2onpah=.false.
+
+!----------- Dust modelling choices -----------!
+sputtering_model='RM2026'
+accretion_model='LeBourlot2012'
+shattering_model='Smoluchowski1916'
+coagulation_model='Smoluchowski1916'
+dust_velocity_model='Hirashita2019'
+charging_model='RM2026'
+ice_model='Hollenbach2019'
+nZmix=3
+
+!----------- PAH modelling choices -----------!
+photolysis_model='RM2026'
+peh_attach_model='Berne'
+coalescence_model='Totton2012'
+pah_h2_model='RM2026'
+pah_growth_model='Omont2025_sg'
+pah_sputtering_model='RM2026'
+cluster_evaporation_model='Montillaud2014'
+
+!----------- Efficiency parameters -----------!
+Sconstant=0.333333333d0
+nhmax_coa=1d10,1d10
+nhmax_sha=1d10,1d10
+Coulomb_enhance=1d0,1d0
+
+!----------- Grain material parameters -----------!
+tensile_strength=2d8,1.5d9
+Youngs_modulus=1.0d11,5.4d11
+Poisson_ratio=0.32,0.17
+surf_energy=75d0,25d0
+work_function=4.4d0,8.0d0
+band_gap=0.0d0,5.0d0
+e_escape_length=1d-7,1d-7
+separate_refractive_index=.true.,.false.
+slope_frag_func=0.4333d0
+
+!----------- Initialisation parameters -----------!
+DTMinit=0.4d0
+fpah_ini=0.1d0
+
+!----------- DustBin properties (MW-like initial conditions) -----------!
+! Chemtype 1: C
+dust_composition(1,6) = 1d0
+
+! Chemtype 2: O4MgSiFe
+dust_composition(2,8)  = 4d0
+dust_composition(2,12) = 1d0
+dust_composition(2,14) = 1d0
+dust_composition(2,26) = 1d0
+dustbins_per_chemtype=2,2
+asize=0.01d0,0.1d0,0.005d0,0.1d0
+sgrain=2.2d0,2.2d0,3.3d0,3.3d0
+amin = 4d-3,3d-2,1d-3,2d-2
+amax = 3d-2,1d0,2d-2,1d0
+fmass_ej = 0.1,0.9,0.1,0.9
+
+!----------- PAHBin properties -----------!
+pah_nc = 54,418
+pah_nc_min = 12,101
+pah_nc_max = 101,29952
+spah = 2d0,2d0
+pah_SNdest_eff = 1d0,1d0
+fpah_inwind = 0.1,0.1d0
+pah_ncharge_states = 4, 4
+pah_is_cluster = .false.,.true.
+
+!----------- Data files -----------!
+dust_tables_dir='../../rtzdata_for_public_ramses/calima_data/'
+/
+
+&RT_GROUPS
+groupL0 = 13.6d0
+groupL1 = 500.d0
+/
+
+&BOUNDARY_PARAMS
+nboundary=6
+ibound_min=-1,+1,-1,-1,-1,-1
+ibound_max=-1,+1,+1,+1,+1,+1
+jbound_min= 0, 0,-1,+1,-1,-1
+jbound_max= 0, 0,-1,+1,+1,+1
+kbound_min= 0, 0, 0, 0,-1,+1
+kbound_max= 0, 0, 0, 0,-1,+1
+bound_type= 1, 2, 1, 2, 1, 2
+/

@@ -25,6 +25,8 @@ subroutine rt_init_hydro
   logical::ok
   integer,parameter::tag=1130
 
+  real(dp),dimension(1:nrtvar)::reload_rtuold
+
   if(verbose)write(*,*)'Entering init_rt'
   !------------------------------------------------------
   ! Allocate conservative, cell-centered variables arrays
@@ -37,6 +39,25 @@ subroutine rt_init_hydro
   if(verbose)write(*,*)'Allocate done for nrtvar'
 
   call rt_init
+
+#ifdef RTZ_ONE_CELL_TEST
+  ! manual read and set uold for debugging
+  ! one-cell test should start as a new run, not as restart
+  open(unit=2900, file='./reload_rtuold.txt', status='old', action='read')
+  read(2900,*) reload_rtuold
+  close(2900)
+
+  do i=1,ncell
+     do ivar=1,nrtvar
+        rtuold(i,ivar) = reload_rtuold(ivar)
+     end do
+  end do
+  
+  if (myid==1) then
+     write(*,*) "check after reading rtuold:"
+     write(*,*) rtuold(1, :)
+  end if
+#endif
 
   if(nrestart .eq. 0) return
 

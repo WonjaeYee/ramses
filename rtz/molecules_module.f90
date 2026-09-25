@@ -242,11 +242,11 @@ FUNCTION beta_H2(T, nH, xHI, xH2, xHe, ne, nHI, nH2, nHeI) result(rate)
 
 END FUNCTION beta_H2
 
-FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, xO, nH) result(rate)
+FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, nOI) result(rate)
   ! see glover 2012
   implicit none
 
-  real(dp), intent(in):: G0, xi_cr_H2, nCII, nH2, xO, nH
+  real(dp), intent(in):: G0, xi_cr_H2, nCII, nH2, nOI
   real(dp):: rate
   real(dp):: k0, k1, gammaCHx_cr, gammaCHx, beta
 
@@ -257,7 +257,7 @@ FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, xO, nH) result(rate)
   gammaCHx_cr = 8.88d-15 * (xi_cr_H2 / 1d-16) ! Cosmic rays
   gammaCHx = (1.41d-10 * G0) + gammaCHx_cr
 
-  beta = k1 * xO/(k1*xO + gammaCHx/(nH + 1d-40))
+  beta = k1 * nOI/(k1*nOI + gammaCHx)
   rate = k0 * nCII * nH2 * beta
 
   rate = MAX(rate,1.d-100)
@@ -282,18 +282,18 @@ FUNCTION beta_CO(G0, xi_cr_H2) result(rate)
 END FUNCTION beta_CO
 
 FUNCTION comp_Sd(nHI, nH2, dx_SS, Z) result(ss_factor)
-  ! Returns the self shielding factor for dust
+  ! Returns the dust LW self-shielding factor.
+  ! Uses a fixed MW grain cross-section; with CALIMA the caller should use
+  ! compute_lw_dust_optical_depth (dust_photophysics.f90) instead.
   ! see section 2.2 http://iopscience.iop.org/0004-637X/697/1/55/pdf/apj_697_1_55.pdf
   implicit none
-  real(dp), intent(in)::nHI, nH2, dx_SS, Z
-  real(dp):: ss_factor
-  real(dp):: Sdeff, cNHI, cNH2
-  ! TODO: This needs to be updated to use the actual dust properties
-  Sdeff = 2.34d-21    ! dust cross section cm^2 ! Updated for bare-gr-s
-  cNHI = nHI*dx_SS    ! HI column density
-  cNH2 = nH2*dx_SS    ! H2 column density
-
-  ss_factor = safe_exp(-Sdeff*Z*(cNHI + (2.d0*cNH2)))
+  real(dp), intent(in) :: nHI, nH2, dx_SS, Z
+  real(dp)             :: ss_factor
+  real(dp)             :: Sdeff, cNHI, cNH2
+  Sdeff = 2.34d-21    ! dust cross section cm^2 — bare graphite-silicate at MW
+  cNHI = nHI * dx_SS
+  cNH2 = nH2 * dx_SS
+  ss_factor = safe_exp(-Sdeff * Z * (cNHI + (2.d0 * cNH2)))
 END FUNCTION comp_Sd
 
 FUNCTION comp_SH2(nH2, dx_SS) result(ss_factor)

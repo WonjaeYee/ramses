@@ -187,7 +187,9 @@ subroutine adaptive_loop
      tt2=MPI_WTIME()
      if(mod(nstep_coarse,ncontrol)==0)then
         call getmem(real_mem)
-        call MPI_ALLREDUCE(real_mem,real_mem_tot,1,MPI_REAL,MPI_MAX,MPI_COMM_WORLD,info)
+        ! call MPI_ALLREDUCE(real_mem,real_mem_tot,1,MPI_REAL,MPI_MAX,MPI_COMM_WORLD,info)
+        ! test purpose: print memory usage by this MPI rank and total
+        call MPI_ALLREDUCE(real_mem,real_mem_tot,1,MPI_REAL,MPI_SUM,MPI_COMM_WORLD,info)
         if(myid==1)then
            if (tot_pt==0) muspt=0 ! dont count first timestep
            n_step = int(numbtot(1,levelmin),kind=8)*twotondim
@@ -199,6 +201,7 @@ subroutine adaptive_loop
            tot_pt = tot_pt + 1
            write(*,'(a,f8.2,a,f12.2,a,f12.2,a)')' Time elapsed since last coarse step:', &
                 & tt2-tt1,' s',muspt_this_step,' mus/pt',muspt/max(tot_pt,1),' mus/pt (av)'
+           call writemem(real_mem)
            call writemem(real_mem_tot)
            write(*,*)'Total running time:', NINT((tt2-tstart)*100.0)*0.01,'s'
         endif

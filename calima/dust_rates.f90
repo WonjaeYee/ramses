@@ -364,7 +364,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -378,7 +378,7 @@ module dust_rates
 #ifdef RTZ
         nO = y_gas(8,1) / elements(8)%atomic_mass_g
 #else
-        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+        nO = y_gas(8,1) / el_atomic_masses_g(8)
 #endif
 
         speciesloop: do jj = 1, ndchemtype
@@ -417,7 +417,13 @@ module dust_rates
                         kmax = max(kmax, abs(rate))
                     end if
                     rate = rate * y_dust(ii+dust_info%npah) ! [g cm-3 s-1]
-                    dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate  ! [g cm-3 s-1]
+
+                    if (rate > 0.0) then
+                        dydt_dust(ii+dust_info%npah, 1) = dydt_dust(ii+dust_info%npah, 1) + rate  ! [g cm-3 s-1]
+                    else
+                        dydt_dust(ii+dust_info%npah, 2) = dydt_dust(ii+dust_info%npah, 2) - rate  ! [g cm-3 s-1]
+                    end if
+
                     total_rate_type = total_rate_type + rate
                 end do
             ! 6. Update gas phase once per chemical type
@@ -443,7 +449,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -462,7 +468,7 @@ module dust_rates
 #ifdef RTZ
         nO = y_gas(8,1) / elements(8)%atomic_mass_g
 #else
-        nO = y_gas(8,1) / el_atomic_masses_amu(8) * amu2g
+        nO = y_gas(8,1) / el_atomic_masses_g(8)
 #endif
 
         speciesloop: do jj = 1, ndchemtype
@@ -498,7 +504,12 @@ module dust_rates
                         ! Final mass growth rate for this dust bin [g cm-3 s-1]
                         rate = min_growth_rate * y_dust(ii+dust_info%npah)
                         rate = min(rate, max_accretion_rate)
-                        dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate
+
+                        if (rate > 0.0) then
+                            dydt_dust(ii+dust_info%npah, 1) = dydt_dust(ii+dust_info%npah, 1) + rate
+                        else
+                            dydt_dust(ii+dust_info%npah, 2) = dydt_dust(ii+dust_info%npah, 2) - rate
+                        end if
 
                         if (present(kmax)) then
                             kmax = max(kmax, abs(min_growth_rate))
@@ -554,7 +565,12 @@ module dust_rates
                         ! Final mass growth rate for this dust bin [g cm-3 s-1]
                         rate = min_growth_rate * y_dust(ii+dust_info%npah)
                         rate = min(rate, max_accretion_rate)
-                        dydt_dust(ii+dust_info%npah) = dydt_dust(ii+dust_info%npah) + rate
+
+                        if (rate > 0.0) then
+                            dydt_dust(ii+dust_info%npah, 1) = dydt_dust(ii+dust_info%npah, 1) + rate
+                        else
+                            dydt_dust(ii+dust_info%npah, 2) = dydt_dust(ii+dust_info%npah, 2) - rate
+                        end if
 
                         if (present(kmax)) then
                             kmax = max(kmax, abs(min_growth_rate))
@@ -598,7 +614,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -624,8 +640,8 @@ module dust_rates
                     kmax = max(kmax, rate1)
                 end if
                 rate2 = rate1 * y_dust(index) ! [g cm-3 s-1]
-                dydt_dust(index) = dydt_dust(index) - rate2 ! [g cm-3 s-1]
-                dydt_dust(index+1) = dydt_dust(index+1) + rate2 ! [g cm-3 s-1]
+                dydt_dust(index, 2) = dydt_dust(index, 2) + rate2 ! [g cm-3 s-1]
+                dydt_dust(index+1, 1) = dydt_dust(index+1, 1) + rate2 ! [g cm-3 s-1]
             end do
         end do speciesloop
     end subroutine Aoyama2017_coagulation_rate
@@ -644,7 +660,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -672,9 +688,9 @@ module dust_rates
                 if (present(kmax)) then
                     kmax = max(kmax, rate1)
                 end if
-                rate2 = rate1 * y_dust(index) ! [g cm-3 s-1]
-                dydt_dust(index) = dydt_dust(index) - rate2 ! [g cm-3 s-1]
-                dydt_dust(index+1) = dydt_dust(index+1) + rate2 ! [g cm-3 s-1]
+                rate2 = 0.5d0 * rate1 * y_dust(index) ! [g cm-3 s-1]; factor 1/2 for identical-grain self-collisions
+                dydt_dust(index, 2) = dydt_dust(index, 2) + rate2 ! [g cm-3 s-1]
+                dydt_dust(index+1, 1) = dydt_dust(index+1, 1) + rate2 ! [g cm-3 s-1]
             end do
         end do speciesloop
 
@@ -694,7 +710,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -742,9 +758,9 @@ module dust_rates
                     loss_kk = rate2 * (mk / msum)
 
                     ! Three-term update for each pair: two sinks (ii, kk) and one gain (idest).
-                    dydt_dust(index) = dydt_dust(index) - loss_ii
-                    dydt_dust(kk+dust_info%npah) = dydt_dust(kk+dust_info%npah) - loss_kk
-                    dydt_dust(idest+dust_info%npah) = dydt_dust(idest+dust_info%npah) + (loss_ii + loss_kk)
+                    dydt_dust(index, 2) = dydt_dust(index, 2) + loss_ii
+                    dydt_dust(kk+dust_info%npah, 2) = dydt_dust(kk+dust_info%npah, 2) + loss_kk
+                    dydt_dust(idest+dust_info%npah, 1) = dydt_dust(idest+dust_info%npah, 1) + (loss_ii + loss_kk)
                 end do
             end do
         end do speciesloop
@@ -765,7 +781,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -798,7 +814,7 @@ module dust_rates
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
             mass_loss = rate1 * y_dust(index)
-            dydt_dust(index) = dydt_dust(index) - mass_loss ! [g cm-3 s-1]
+            dydt_dust(index, 2) = dydt_dust(index, 2) + mass_loss ! [g cm-3 s-1]
             do iel = 1, dustbins_props(ii)%nelements
                 dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
                     mass_loss * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
@@ -824,7 +840,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -856,7 +872,7 @@ module dust_rates
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
             mass_loss = rate1 * y_dust(index)
-            dydt_dust(index) = dydt_dust(index) - mass_loss ! [g cm-3 s-1]
+            dydt_dust(index,2) = dydt_dust(index,2) + mass_loss ! [g cm-3 s-1]
             do iel = 1, dustbins_props(ii)%nelements
                 dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
                     mass_loss * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
@@ -878,7 +894,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -927,7 +943,7 @@ module dust_rates
 
             ! 4. Now compute the mass rates [g cm-3 s-1]
             mass_loss = rate1 * y_dust(index) ! [g cm-3 s-1]
-            dydt_dust(index) = dydt_dust(index) - mass_loss ! [g cm-3 s-1]
+            dydt_dust(index, 2) = dydt_dust(index, 2) + mass_loss ! [g cm-3 s-1]
             do iel = 1, dustbins_props(ii)%nelements
                 dydt_gas(dustbins_props(ii)%el_index(iel),1) = dydt_gas(dustbins_props(ii)%el_index(iel),1) + &
                     mass_loss * dustbins_props(ii)%el_mfractions(iel) ! [g cm-3 s-1]
@@ -949,7 +965,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -995,18 +1011,22 @@ module dust_rates
                     kmax = max(kmax, abs(rate1))
                 end if
 
+                ! Factor of 1/2 for identical-grain self-collisions (avoids double-counting).
+                ! kmax is kept un-halved above for conservative step-size control.
+                rate1 = 0.5d0 * rate1
+
                 ! 5. Update the dust derivatives for all fragments
-                dydt_dust(index) = dydt_dust(index) - rate1 * y_dust(index) ! [g cm-3 s-1]
+                dydt_dust(index, 2) = dydt_dust(index, 2) + rate1 * y_dust(index) ! [g cm-3 s-1]
 
                 ! 5a. Combined update for fragment dust bins and PAH bins
                 ! Loop over all destination bins in a single pass for better cache efficiency
                 do ll = ii1, ii2
-                    dydt_dust(ll + dust_info%npah) = dydt_dust(ll + dust_info%npah) + rate1 * chi_frag(ll) * y_dust(index)
+                    dydt_dust(ll + dust_info%npah, 1) = dydt_dust(ll + dust_info%npah, 1) + rate1 * chi_frag(ll) * y_dust(index)
                 end do
 
                 if (interact_pah_flag) then
                     do pp = 1, dust_info%npah
-                        dydt_dust(pp) = dydt_dust(pp) + rate1 * chi_frag_pah(pp) * y_dust(index)
+                        dydt_dust(pp, 1) = dydt_dust(pp, 1) + rate1 * chi_frag_pah(pp) * y_dust(index)
                     end do
                 end if
 
@@ -1041,7 +1061,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1103,15 +1123,15 @@ module dust_rates
                     end if
 
                     ! 5a. Apply destruction and fragmentation for target ii.
-                    dydt_dust(index_i) = dydt_dust(index_i) - mass_rate ! [g cm-3 s-1]
+                    dydt_dust(index_i, 2) = dydt_dust(index_i, 2) + mass_rate ! [g cm-3 s-1]
 
                     do ll = ii1, ii2
-                        dydt_dust(ll + dust_info%npah) = dydt_dust(ll + dust_info%npah) + mass_rate * chi_frag(ll)
+                        dydt_dust(ll + dust_info%npah, 1) = dydt_dust(ll + dust_info%npah, 1) + mass_rate * chi_frag(ll)
                     end do
 
                     if (interact_pah_flag) then
                         do pp = 1, dust_info%npah
-                            dydt_dust(pp) = dydt_dust(pp) + mass_rate * chi_frag_pah(pp)
+                            dydt_dust(pp, 1) = dydt_dust(pp, 1) + mass_rate * chi_frag_pah(pp)
                         end do
                     end if
 
@@ -1140,15 +1160,15 @@ module dust_rates
                         mass_rate = 0.5d0 * coll_factor * y_dust(index_i) / dustbins_props(ii)%mgrain * y_dust(index_j)
                     end if
 
-                    dydt_dust(index_j) = dydt_dust(index_j) - mass_rate ! [g cm-3 s-1]
+                    dydt_dust(index_j, 2) = dydt_dust(index_j, 2) + mass_rate ! [g cm-3 s-1]
 
                     do ll = ii1, ii2
-                        dydt_dust(ll + dust_info%npah) = dydt_dust(ll + dust_info%npah) + mass_rate * chi_frag(ll)
+                        dydt_dust(ll + dust_info%npah, 1) = dydt_dust(ll + dust_info%npah, 1) + mass_rate * chi_frag(ll)
                     end do
 
                     if (interact_pah_flag) then
                         do pp = 1, dust_info%npah
-                            dydt_dust(pp) = dydt_dust(pp) + mass_rate * chi_frag_pah(pp)
+                            dydt_dust(pp, 1) = dydt_dust(pp, 1) + mass_rate * chi_frag_pah(pp)
                         end do
                     end if
 
@@ -1367,7 +1387,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1413,7 +1433,7 @@ module dust_rates
                     kmax = max(kmax, abs(rate1))
                 end if
                 rate2 = rate1 * y_dust(pp) / pahbins_props(pp)%mpah * dust_info%el_atomic_mass_g(pahbins_props(pp)%C_index) ! [g cm-3 s-1]
-                dydt_dust(pp) = dydt_dust(pp) - rate2 ! [g cm-3 s-1]
+                dydt_dust(pp, 2) = dydt_dust(pp, 2) + rate2 ! [g cm-3 s-1]
 
                 ! 6. Return sputtered material (carbon) to the gas phase
                 dydt_gas(pahbins_props(pp)%C_index, 1) = dydt_gas(pahbins_props(pp)%C_index, 1) + rate2 ! [g cm-3 s-1]
@@ -1438,7 +1458,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1466,7 +1486,7 @@ module dust_rates
                     kmax = max(kmax, abs(rate1))
                 end if
                 rate2 = rate1 * y_dust(pp) / pahbins_props(pp)%mpah * (2d0*dust_info%el_atomic_mass_g(pahbins_props(pp)%C_index)) ! [g cm-3 s-1]
-                dydt_dust(pp) = dydt_dust(pp) - rate2 ! [g cm-3 s-1]
+                dydt_dust(pp, 2) = dydt_dust(pp, 2) + rate2 ! [g cm-3 s-1]
 
                 ! 2. Return photolysed material (carbon) to the gas phase
                 dydt_gas(pahbins_props(pp)%C_index, 1) = dydt_gas(pahbins_props(pp)%C_index, 1) + rate2 ! [g cm-3 s-1]
@@ -1489,7 +1509,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1501,8 +1521,8 @@ module dust_rates
         log_T = log10(dust_info%local_Tk)
         log_nH = log10(dust_info%local_nH)
 
-        ! 1. Loop over PAH sizes
-        pahloop: do pp = 1, dust_info%npah
+        ! 1. Loop over PAH sizes; start at 2 because the product bin is pp-1
+        pahloop: do pp = 2, dust_info%npah
             if (.not. pahbins_props(pp)%is_cluster) cycle ! Cluster evaporation is only for PAH clusters
             k_single = dust_info%local_G0 / 0.19306d0
             k_multi = 1d0 / exp((-3.1692061d0 * log10(dust_info%local_G0) + 13.5642486d0) * ln10)
@@ -1513,10 +1533,10 @@ module dust_rates
                     kmax = max(kmax, abs(rate1))
                 end if
                 rate2 = rate1 * y_dust(pp) / pahbins_props(pp)%mpah * pahbins_props(pp-1)%mpah ! [g cm-3 s-1]
-                dydt_dust(pp) = dydt_dust(pp) - rate2 ! [g cm-3 s-1]
+                dydt_dust(pp, 2) = dydt_dust(pp, 2) + rate2 ! [g cm-3 s-1]
 
                 ! 2. Return evaporated molecule to the PAH bin below (pp-1)
-                dydt_dust(pp-1) = dydt_dust(pp-1) + rate2 ! [g cm-3 s-1]
+                dydt_dust(pp-1, 1) = dydt_dust(pp-1, 1) + rate2 ! [g cm-3 s-1]
             end if
         end do pahloop
     end subroutine pah_cluster_evaporation_rate
@@ -1535,7 +1555,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1560,8 +1580,8 @@ module dust_rates
                     kmax = max(kmax, abs(rate1))
                 end if
                 rate2 = rate1 * y_dust(pp)
-                dydt_dust(pp) = dydt_dust(pp) - rate2
-                dydt_dust(pp+1) = dydt_dust(pp+1) + rate2
+                dydt_dust(pp, 2) = dydt_dust(pp, 2) + rate2
+                dydt_dust(pp+1, 1) = dydt_dust(pp+1, 1) + rate2
             end if
         end do pahloop
     end subroutine Totton2012_pah_coalescence_rate
@@ -1580,7 +1600,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1616,8 +1636,8 @@ module dust_rates
                     kmax = max(kmax, abs(rate1))
                 end if
                 rate2 = rate1 * y_dust(pp)
-                dydt_dust(pp) = dydt_dust(pp) - rate2
-                dydt_dust(pp+1) = dydt_dust(pp+1) + rate2
+                dydt_dust(pp, 2) = dydt_dust(pp, 2) + rate2
+                dydt_dust(pp+1, 1) = dydt_dust(pp+1, 1) + rate2
             end if
         end do pahloop
     end subroutine Tielens2021_pah_coalescence_rate
@@ -1636,7 +1656,7 @@ module dust_rates
         ! ---- Input/Output variables ----
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: y_gas(:,:), y_dust(:)
-        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:)
+        real(dp), intent(inout) :: dydt_gas(:,:), dydt_dust(:,:)
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
@@ -1697,8 +1717,8 @@ module dust_rates
 
                 ! 6. Transfer PAH mass to the interacting carbonaceous dust bin.
                 rate2 = rate1 * y_dust(pp)
-                dydt_dust(pp) = dydt_dust(pp) - rate2
-                dydt_dust(index_dust) = dydt_dust(index_dust) + rate2
+                dydt_dust(pp, 2) = dydt_dust(pp, 2) + rate2
+                dydt_dust(index_dust, 1) = dydt_dust(index_dust, 1) + rate2
             end do
         end do pahloop
 #endif

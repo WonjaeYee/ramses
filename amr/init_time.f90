@@ -374,6 +374,8 @@ subroutine init_time
 
 #endif
 
+  if (movie)call set_movie_vars
+
 end subroutine init_time
 
 subroutine init_file
