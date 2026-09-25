@@ -150,7 +150,8 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rtz_include_dust_recombination, rtz_include_HM12_UVB           &
        & ,isH2_rtz, isCO_rtz, rtz_UV_background_G0, rtz_H2_clumping      &
        & ,rtz_primary_cosmic_ray_ionization_rate, rtz_max_cool_timestep  &
-       & ,rtz_eqm_min_its, rtz_source_temperature                        &
+       & ,rtz_eqm_min_its, rtz_source_temperature, rtz_include_dust      &
+       & ,rtz_He_fluor_yield                                              &
        & ,rtz_single_cell_test, rtz_single_cell_test_file               &
 #endif
        ! RT regions (for initialization)                                 &
@@ -300,6 +301,9 @@ END SUBROUTINE read_rt_params
 
 !*************************************************************************
 SUBROUTINE read_rt_groups()
+#ifdef RTZ
+  use recombination_module, only: init_recrad_table
+#endif
 
 ! Read rt_groups namelist
 !-------------------------------------------------------------------------
@@ -465,6 +469,12 @@ SUBROUTINE read_rt_groups()
    call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
    call init_dust_mean_cross_sections(sed_dir)
 #endif
+
+  ! Tabulate how recombination emission is distributed over the groups.  The
+  ! boundaries are final at this point and do not change during the run, so the
+  ! distribution is a function of temperature alone and is computed once here.
+  call init_recrad_table(groupL0, groupL1, nGroups)
+
 
 #ifdef INDIVIDUAL_SINK_STARS
 ! <<WJ>> temporarily disable popII routines
