@@ -1265,7 +1265,7 @@ module dust_init
         end if
 
         ! 8. Read the dust thermal sputtering tables
-        if (sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables
+        if (dust_sputtering .and. sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables
 
         ! 8b. Read the dust thermal sublimation tables
         if (dust_sublimation) call init_dust_sublimation_tables

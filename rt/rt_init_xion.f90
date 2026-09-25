@@ -125,7 +125,16 @@ SUBROUTINE rt_init_xion_vsweep(ind_grid, ngrid)
             end if
          end do ! end loop over elements
 #else
-        call cmp_Equilibrium_Abundances(T2,nH,pHI_rates,mu,nSpec,Zsolar)
+        ! At low T (T/mu < 1e4 K), H2 collisional dissociation rates → 0
+        ! and D_H2 = 0 exactly (no UV photons at init). With any C_H2 > 0
+        ! (gas-phase formation via n_E_min floor), f_H2 → ∞ → all H in H2
+        ! → mu ≈ 2.67 > mu_right=2.3 → bisection diverges. The physical
+        ! initial state for cold neutral ISM is fully neutral atomic H.
+        if (T2 .lt. 1d4) then
+           nSpec = 0d0 ; nSpec(3) = nH   ! all H neutral atomic
+        else
+           call cmp_Equilibrium_Abundances(T2,nH,pHI_rates,mu,nSpec,Zsolar)
+        endif
 
         ! UPDATE IONIZATION STATES
         if(isH2) then

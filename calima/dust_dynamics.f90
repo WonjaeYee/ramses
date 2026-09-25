@@ -343,7 +343,7 @@ module dust_dynamics
 #ifdef RT
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndim), save :: a_rad_g
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust, 1:ndim), save :: a_rad_d
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:npah, 1:ndim), save :: a_rad_pah
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, max(1,npah), 1:ndim), save :: a_rad_pah
 
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nrtvar), save :: rt_uloc
         real(dp), dimension(1:nvector, 0:twondim, 1:nrtvar) :: rt_u1
@@ -1452,7 +1452,7 @@ module dust_dynamics
         real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndim),save::mflux
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndim),save::a_rad_g
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust,1:ndim),save::a_rad_d
-        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:npah,1:ndim),save::a_rad_pah
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,max(1,npah),1:ndim),save::a_rad_pah
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust),save::s_IRtrap
         

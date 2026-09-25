@@ -90,7 +90,7 @@ SUBROUTINE rt_set_model(h,omegab, omega0, omegaL, astart_sim, T2_sim)
   if(myid==1 .and. rt_isIRtrap) write(*,*) &
        '=========IR trapping is turned ON=============='
   ! do initialization
-  isHe=.true. ; if(Y .le. 0.) isHe=.false.
+  if(Y .le. 0.) isHe=.false.
   T_MIN           = 0.1                  !                      Minimum T2
   T_FRAC          = 0.1
 
