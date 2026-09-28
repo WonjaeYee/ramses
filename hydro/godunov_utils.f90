@@ -141,6 +141,7 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
 #endif
 
 ! To allow refinement according to the ionization fractions
+#ifdef RTZ
 #if NVAR>NHYDRO+NENER
   ! recycle the variable ^_^
   do irad=1,NVAR-NHYDRO-NENER
@@ -156,6 +157,7 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
         end do
       end if
    end do
+#endif
 #endif
 
 end subroutine hydro_refine

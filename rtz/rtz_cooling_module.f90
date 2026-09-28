@@ -1716,6 +1716,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
 #endif
 
+#ifdef RTZ_ONE_CELL_TEST
+         write(*,*) "before H2 update:", dXion(1, 1:3)
+#endif
          ! Update xH2 and store in dXion
          if (de_H2 * ddt(icell) < 1.d-6) then
             xH2_loc = (xH2_loc + cr_H2 * ddt(icell)) / (1.d0 + de_H2 * ddt(icell))
@@ -1725,6 +1728,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
          dXion(1,3) = 2.d0 * min(max(xH2_loc,x_MIN),0.5d0)
 
+#ifdef RTZ_ONE_CELL_TEST
+         write(*,*) " after h2 update:", dXion(1, 1:3)
+#endif
          ! Check for convergence
          if (xion(1,3,icell).gt.1.d-10) then 
             dUU = ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
@@ -2251,10 +2257,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      ! print out evolution of problematic ionizations
                      write(*,"(2(A10, X, I6))") "loopcnt:", loopcnt, "code:", code
                      write(*,"(2(A10, X, I6))") "iElement:", iElement, "iIon:", iIon
-                     write(*,"(3(A10, X, E22.15))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
-                     write(*,"(A10, *(X, E22.15))") "xion:", xion(iElement, 1:7, icell)
-                     write(*,"(A10, *(X, E22.15))") "dXion:", dXion(iElement, 1:7)
-                     write(*,"(2(A10, X, E22.15))") "TK:", TK, "dT2:", dT2
+                     write(*,"(3(A10, X, 1PE23.15E3))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+                     write(*,"(A10, *(X, 1PE23.15E3))") "xion:", xion(iElement, 1:7, icell)
+                     write(*,"(A10, *(X, 1PE23.15E3))") "dXion:", dXion(iElement, 1:7)
+                     write(*,"(2(A10, X, 1PE23.15E3))") "TK:", TK, "dT2:", dT2
                      write(*,*) ''
 #endif
 
@@ -2318,9 +2324,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                         write(*,*) '        iIon:', iIon
                         write(*,*) '      neInit:', neInit
                         write(*,*) '          ne:', ne
-                        write(*,*) '        xion:', xion(:, :, i)
-                        write(*,*) '       dXion:', dXion(:, :)
-                        write(*,*) 'nElement_dep:', nElement_dep(:)
+                        write(*,*) ' xion, dXion:'
+                        do ii=1,n_elements
+                           if (elements(ii)%atomic_number > 0) then
+                              write(*,"(A3, *(X, 1PE22.15))") elements(ii)%symbol, nElement(ii, icell), nElement_dep(ii)
+                              write(*,"(A3, *(X, 1PE22.15))") "", xion(ii, 1:elements(ii)%n_ions, icell)
+                              write(*,"(A3, *(X, 1PE22.15))") "", dXion(ii, 1:elements(ii)%n_ions)
+                           end if
+                        end do
                         ! write(*,*) ':', 
                      end if
                      
@@ -2333,31 +2344,50 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
             ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
 
-            if (iElement.le.2) then 
-                  current_mass_frac = sum(dXion(iElement,2:ion_fracs))
-
-                  dXion(iElement,1) = 0.d0
-
-                  if (current_mass_frac.ge.0.d0) then
-                     if (current_mass_frac.le.1.d0) then
-                        dXion(iElement,1) = 1.d0 - current_mass_frac
-                     else
-                        do iIon=1,ion_fracs
-                           dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
-                        end do
-                     end if
-                  else
-                     dXion(iElement,1) = 1.d0
-                     dXion(iElement,2:ion_fracs) = 0.d0
-                  end if
-               ! end if
-            else 
+#ifdef RTZ_ONE_CELL_TEST
+            if (iElement==1) then
+               write(*,*) "before renormalization:"
+               ! write(*,"(3(A10, X, 1PE23.15E3))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+               write(*,"(A10, *(X, 1PE23.15E3))") "xion:", xion(iElement, 1:3, icell)
+               write(*,"(A10, *(X, 1PE23.15E3))") "dXion:", dXion(iElement, 1:3)
+               ! write(*,"(2(A10, X, 1PE23.15E3))") "TK:", TK, "dT2:", dT2
+            end if
+#endif
+!             if (iElement.le.2) then 
+!                   current_mass_frac = sum(dXion(iElement,2:ion_fracs))
+! 
+!                   dXion(iElement,1) = 0.d0
+! 
+!                   if (current_mass_frac.ge.0.d0) then
+!                      if (current_mass_frac.le.1.d0) then
+!                         dXion(iElement,1) = 1.d0 - current_mass_frac
+!                      else
+!                         do iIon=1,ion_fracs
+!                            dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
+!                         end do
+!                      end if
+!                   else
+!                      dXion(iElement,1) = 1.d0
+!                      dXion(iElement,2:ion_fracs) = 0.d0
+!                   end if
+!                ! end if
+!             else 
                current_mass_frac = sum(dXion(iElement,1:ion_fracs))
                do iIon=1,ion_fracs
                   !  dXion(iElement,iIon) = dXion(iElement,iIon) + ((1.d0 - current_mass_frac) * (dXion(iElement,iIon) / current_mass_frac))
                   dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
                end do
+!             end if
+
+#ifdef RTZ_ONE_CELL_TEST
+            if (iElement==1) then
+               write(*,*) " after renormalization:"
+               ! write(*,"(3(A10, X, 1PE23.15E3))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+               write(*,"(A10, *(X, 1PE23.15E3))") "xion:", xion(iElement, 1:3, icell)
+               write(*,"(A10, *(X, 1PE23.15E3))") "dXion:", dXion(iElement, 1:3)
+               ! write(*,"(2(A10, X, 1PE23.15E3))") "TK:", TK, "dT2:", dT2
             end if
+#endif
          end if
       end do ! END ELEMENT LOOP
 

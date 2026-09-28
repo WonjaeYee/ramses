@@ -224,7 +224,7 @@ SUBROUTINE gather_ioni_flux(dt,ilevel)
         else
            ! get_stellar_properties from use_mist returns photon counts for all bins in once
            ! so this part does not need loop over ig
-           star_met_fe = LOG10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1) * 55.854d0)) - LOG10(3.16E-05)
+           star_met_fe = LOG10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1) * 55.845d0)) - LOG10(3.16E-05)
            ! get [alpha/Fe]
            ! hard-coded! should be modified to handle general cases
            star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560

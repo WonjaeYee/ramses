@@ -270,8 +270,8 @@ subroutine stromgren_radius_refine(ind_cell,ok,ncell,ilevel)
   real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
 #if NENER>0
   integer::irad
-  real(dp)::err
 #endif
+  real(dp)::err
 ! #ifdef SOLVERmhd
   real(dp)::emag
 ! #endif

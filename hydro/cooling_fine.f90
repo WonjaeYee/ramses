@@ -73,8 +73,11 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use rt_cooling_module, only: rt_solve_cooling,iIR,rt_isIRtrap &
        ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc
 #endif
-  use constants, only: a_r, Myr2sec, pi, twopi
+
+#else
+   use cooling_module
 #endif
+  use constants
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb
   use dust_utils, only: cmp_sigma_turb
@@ -700,7 +703,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         do ii=1,n_elements
            if (elements(ii)%atomic_number > 0) then
               write(*,"(A3, X, 1PE22.15)") elements(ii)%symbol, nElement(ii, 1)
-              write(*,"(A3, *(X, 1PE22.15))") "", xion(ii, 1:elements(ii)%n_ions, 1)
+              write(*,"(A3, *(X, 1PE22.15))") "", xion(ii, 1:elements(ii)%n_ions+elements(ii)%n_mol, 1)
            end if
         end do
         write(*,*) "      nCO:", nCO(1)
@@ -756,6 +759,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) 'error cell, before the update'
            write(*,*) '  uold:', uold(ind_leaf(err_idx),:)
            write(*,*) 'rtuold:', rtuold(ind_leaf(err_idx),:)
+
+           write(*,*) 'grid position'
+           write(*,*) xg(ind_leaf(err_idx)-iskip, :)
            
            write(*,*) 'in physical units'
            write(*,*) '     d:', uold(ind_leaf(err_idx),1)*scale_d

@@ -823,7 +823,7 @@ subroutine grow_sink(ilevel,on_creation)
            ! Pop II case
            else
               ! Get the main-sequence lifetime 
-              star_met_fe = LOG10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1) * 55.854d0)) - LOG10(3.16E-05)
+              star_met_fe = LOG10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1) * 55.845d0)) - LOG10(3.16E-05)
               ! get [alpha/Fe]
               ! hard-coded! should be modified to handle general cases
               star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
@@ -860,7 +860,7 @@ subroutine grow_sink(ilevel,on_creation)
               ! <<WJ>> In case of main-sequence, get properties from MIST
               else
                  ! is star_met [Fe/H]? check and change below
-                 star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                 star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.845d0)) - log10(3.16e-05)
                  ! get [alpha/Fe]
                  ! hard-coded! should be modified to handle general cases
                  star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
@@ -1316,7 +1316,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  sink_metallicity_new(isink,ielem) = sink_metallicity_new(isink,ielem) + m_acc*uold(indp(j,ind), ivar)/d
               end if
 #endif
-#endif
+#endif        
               unew(indp(j,ind),ivar)=unew(indp(j,ind),ivar)-m_acc*uold(indp(j,ind),ivar)/d/vol_loc
            end do
 
@@ -1415,7 +1415,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                      ! <<WJ>> In case of main-sequence, get properties from MIST
                      else
                        ! get [Fe/H]
-                       star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
+                       star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.845d0)) - log10(3.16e-05)
 
                        ! get [alpha/Fe]
                        ! hard-coded! should be modified to handle general cases
@@ -1487,11 +1487,18 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 
                  ije = 0.5d0 * sum(ijp**2) / (ijm+tiny(0.0d0))
 
-#ifdef NO_FEEDBACK_KIN
+#ifdef NO_FEEDBACK_ALL
                  ! test purpose: temporarily set no feedback
                  sn_e_code_units = 0.0d0
                  loc_metal_yield = 0.0d0
                  ijm = 0.0d0
+                 ijp = 0.0d0
+                 ije = 0.0d0
+#endif
+
+#ifdef NO_FEEDBACK_KIN
+                 ! test purpose: temporarily set no kinetic feedback
+                 ! mass is still dumped on gas
                  ijp = 0.0d0
                  ije = 0.0d0
 #endif
