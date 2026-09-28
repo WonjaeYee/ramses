@@ -401,7 +401,9 @@ END SUBROUTINE read_rt_params
 
 !*************************************************************************
 SUBROUTINE read_rt_groups()
+#ifdef RTZ
   use recombination_module, only: init_recrad_table
+#endif
 
 ! Read rt_groups namelist
 !-------------------------------------------------------------------------
