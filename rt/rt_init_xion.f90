@@ -37,7 +37,7 @@ SUBROUTINE rt_init_xion_vsweep(ind_grid, ngrid)
 !-------------------------------------------------------------------------
   use amr_commons
   use hydro_commons
-  use rt_parameters,only:nIons,iIons,isH2,isHe,ixHI,ixHII,ixHeII,ixHeIII
+  use rt_parameters,only:nIons,iIons,isH2,isHe,ixHI,ixHII,ixHeII,ixHeIII,isH2_rtz
   use cooling_module,only:Y
 #ifdef RTZ
   use rtz_module
@@ -109,21 +109,35 @@ SUBROUTINE rt_init_xion_vsweep(ind_grid, ngrid)
         nH = nH*scale_nH
 
 #ifdef RTZ
-        ! In the case of RTZ, set everything to fully neutral
-        ! In the case of RTZ, we set everything to neutral to start
+        ! In the case of RTZ, set everything to fully neutral.
+        ! Index convention must match hydro/cooling_fine.f90 and
+        ! hydro/init_flow_fine.f90: all elements' ionization states are laid
+        ! out first (n_ions per element, molecules NOT interleaved), and only
+        ! then are molecules (H2) appended at the very end. Interleaving H2
+        ! inside hydrogen's own ion block (as before) shifts every element
+        ! from helium onward by one slot.
          counter = 1
          do iE=1,n_elements ! loop over elements
-            if (elements(iE)%atomic_number.gt.0) then 
-               do iI=1,elements(iE)%n_ions + elements(iE)%n_mol ! loop over ions + molecules
+            if (elements(iE)%atomic_number.gt.0) then
+               do iI=1,elements(iE)%n_ions ! loop over ions
                   x = 0.d0
-                  if (iI.eq.1) then 
+                  if (iI.eq.1) then
                      x = 1.d0
                   end if
-                  uold(ind_leaf(i),iIons-1+counter) = x*uold(ind_leaf(i),1)
+                  ! Ion states hold the mass density of the ion itself, i.e.
+                  ! a fraction of their OWN element's density (see the
+                  ! write-back in hydro/cooling_fine.f90), never of rho.
+                  uold(ind_leaf(i),iIons-1+counter) = &
+                       & x*uold(ind_leaf(i),elements(iE)%u_hydro_idx)
                   counter = counter + 1
-               end do  ! end loop over ions + molecules
+               end do  ! end loop over ions
             end if
          end do ! end loop over elements
+         ! Molecules (H2) come after all elements' ion blocks
+         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
+            uold(ind_leaf(i),iIons-1+counter) = 0.d0
+            counter = counter + 1
+         end if
 #else
         call cmp_Equilibrium_Abundances(T2,nH,pHI_rates,mu,nSpec,Zsolar)
 

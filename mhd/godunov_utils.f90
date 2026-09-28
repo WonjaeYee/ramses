@@ -9,6 +9,9 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   use const
 #ifdef RT
   use rt_parameters
+#ifdef RTZ
+  use rtz_module, only: elements
+#endif
 #endif
   implicit none
   ! dummy arguments
@@ -25,6 +28,10 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   real(dp),dimension(1:nvector),save::eking,ekinm,ekind
   real(dp),dimension(1:nvector),save::emagg,emagm,emagd
   real(dp)::dg,dm,dd,pg,pm,pd,vg,vm,vd,cg,cm,cd,error,emag_loc,ethres
+#ifdef RT
+  integer::ivarH
+  logical::ok_xH
+#endif
 
   ! Convert to primitive variables
   do k = 1,nn
@@ -185,12 +192,33 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   end if
 
 #ifdef RT
+#ifdef RTZ
+  ! Both criteria below are hydrogen-specific, and in RTZ an ion slot holds
+  ! the ion's own density -- so they have to be normalized by HYDROGEN's
+  ! element density, not by rho and not by some other element's density.
+  ! Hydrogen is elements(1), so its ion block starts at iIons (HI, then HII),
+  ! but its element density sits at u_hydro_idx, which coincides with imetal
+  ! only while hydrogen is the first tracked element. u_hydro_idx is -1 when
+  ! hydrogen is not tracked at all, in which case there is no xHI/xHII to
+  ! refine on and the criteria are skipped.
+  ivarH = elements(1)%u_hydro_idx
+  ok_xH = ivarH .gt. 0
+#else
+  ivarH = 0
+  ok_xH = .true.
+#endif
   ! Ionization state (only Hydrogen)
-  if(rt_err_grad_xHII >= 0.) then !---------------------------------------
+  if(rt_err_grad_xHII >= 0. .and. ok_xH) then !---------------------------
      do k=1,nn
+#ifdef RTZ
+        dg=min(1d0,max(0d0,ug(k,iIons+1)/max(ug(k,ivarH),1d-30)))
+        dm=min(1d0,max(0d0,um(k,iIons+1)/max(um(k,ivarH),1d-30)))
+        dd=min(1d0,max(0d0,ud(k,iIons+1)/max(ud(k,ivarH),1d-30)))
+#else
         dg=min(1d0,max(0d0,ug(k,iIons)))
         dm=min(1d0,max(0d0,um(k,iIons)))
         dd=min(1d0,max(0d0,ud(k,iIons)))
+#endif
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHII)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHII)) )
@@ -199,11 +227,18 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   end if
 
   ! Neutral state (only Hydrogen)
-  if(rt_err_grad_xHI  >= 0.) then !---------------------------------------
+  if(rt_err_grad_xHI  >= 0. .and. ok_xH) then !---------------------------
      do k=1,nn
+#ifdef RTZ
+        ! HI is tracked explicitly in RTZ, so use its slot rather than 1-xHII
+        dg=min(1d0,max(0d0,ug(k,iIons)/max(ug(k,ivarH),1d-30)))
+        dm=min(1d0,max(0d0,um(k,iIons)/max(um(k,ivarH),1d-30)))
+        dd=min(1d0,max(0d0,ud(k,iIons)/max(ud(k,ivarH),1d-30)))
+#else
         dg=min(1d0,max(0d0,1d0 - ug(k,iIons)))
         dm=min(1d0,max(0d0,1d0 - um(k,iIons)))
         dd=min(1d0,max(0d0,1d0 - ud(k,iIons)))
+#endif
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHI)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHI)) )

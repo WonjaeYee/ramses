@@ -269,6 +269,12 @@ subroutine interpol_hydro(u1,u2,nn)
   use amr_commons
   use hydro_commons
   use poisson_commons
+#ifdef RT
+#ifdef RTZ
+  use rt_parameters, only: iIons, isH2_rtz
+  use rtz_module, only: n_elements, elements
+#endif
+#endif
   implicit none
   integer::nn
   real(dp),dimension(1:nvector,0:twondim  ,1:nvar)::u1
@@ -298,6 +304,12 @@ subroutine interpol_hydro(u1,u2,nn)
   real(dp),dimension(1:nvector),save::erad
 #if NENER>0
   integer::irad
+#endif
+#ifdef RT
+#ifdef RTZ
+  integer::ii,jj,counter,e_counter,n_ion_tot,iH2
+  real(dp)::ion_sum,elem_dens
+#endif
 #endif
 
   ! volume fraction of a fine cell realtive to a coarse cell
@@ -388,6 +400,52 @@ subroutine interpol_hydro(u1,u2,nn)
 
   end do
   ! End loop over variables
+
+#ifdef RT
+#ifdef RTZ
+  ! The slope limiters above interpolate every variable independently, with
+  ! no notion that an ion density is physically bounded by its own element's
+  ! density. Enforce sum(ion states of element) <= element density in every
+  ! child cell, rescaling proportionally if the (per-field) limiters produced
+  ! an inconsistent state -- this can happen even when every father/neighbor
+  ! cell used in the stencil was itself fully self-consistent.
+  ! Index of the H2 slot: molecules sit after every element's ion block
+  n_ion_tot = 0
+  do ii=1,n_elements
+     if (elements(ii)%atomic_number.gt.0) n_ion_tot = n_ion_tot + elements(ii)%n_ions
+  end do
+  iH2 = iIons + n_ion_tot
+  do ind=1,twotondim
+     counter = 0
+     e_counter = 0
+     do ii=1,n_elements
+        if (elements(ii)%atomic_number.gt.0) then
+           do i=1,nn
+              ion_sum = 0d0
+              do jj=1,elements(ii)%n_ions
+                 u2(i,ind,iIons+counter+jj-1) = max(u2(i,ind,iIons+counter+jj-1),0d0)
+                 ion_sum = ion_sum + u2(i,ind,iIons+counter+jj-1)
+              end do
+              ! H2 is hydrogen mass too, so it belongs in hydrogen's sum
+              if (ii.eq.1 .and. isH2_rtz) then
+                 u2(i,ind,iH2) = max(u2(i,ind,iH2),0d0)
+                 ion_sum = ion_sum + u2(i,ind,iH2)
+              end if
+              elem_dens = max(u2(i,ind,imetal+e_counter),0d0)
+              if (ion_sum > elem_dens .and. ion_sum > 0d0) then
+                 do jj=1,elements(ii)%n_ions
+                    u2(i,ind,iIons+counter+jj-1) = u2(i,ind,iIons+counter+jj-1) * (elem_dens/ion_sum)
+                 end do
+                 if (ii.eq.1 .and. isH2_rtz) u2(i,ind,iH2) = u2(i,ind,iH2) * (elem_dens/ion_sum)
+              end if
+           end do
+           counter = counter + elements(ii)%n_ions
+           e_counter = e_counter + 1
+        end if
+     end do
+  end do
+#endif
+#endif
 
   ! If necessary, convert children internal energy into total energy
   ! and velocities back to momenta

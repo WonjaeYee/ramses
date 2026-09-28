@@ -32,7 +32,7 @@ subroutine backup_hydro(filename, filename_desc)
   integer :: info_var_count
   character(len=100) :: field_name
 #ifdef RTZ
-  integer :: counter, i_elements, i_ions
+  integer :: counter, i_elements, i_ions, ion_elem_var
 #endif
 #ifdef CALIMA
    integer :: i_dust, i_pah
@@ -201,12 +201,14 @@ subroutine backup_hydro(filename, filename_desc)
 #ifdef RTZ
                  if (ivar.ge.iIons .and. ivar.lt.iIons+nIons) then
                     counter = -1
+                    ion_elem_var = -1
                     do i_elements = 1,n_elements
                        if (elements(i_elements)%atomic_number.gt.0) then
                           do i_ions=1,elements(i_elements)%n_ions
                              counter = counter + 1
                              if (counter.eq.ivar-iIons) then 
                                 write(field_name, '(A,"_", i0.2)') trim(elements(i_elements)%symbol), i_ions
+                                ion_elem_var = elements(i_elements)%u_hydro_idx
                              end if
                           end do
                        end if
@@ -214,7 +216,21 @@ subroutine backup_hydro(filename, filename_desc)
 
                     ! Deal with molecules separately
                     if (isH2_rtz) then
-                       if (ivar.eq.counter + iIons + 1) field_name = 'H2'
+                       if (ivar.eq.counter + iIons + 1) then
+                          field_name = 'H2'
+                          ion_elem_var = elements(1)%u_hydro_idx
+                       end if
+                    end if
+
+                    ! Ion slots hold the mass density of the ion itself, so the
+                    ! generic u/rho above is a mass fraction of the total gas.
+                    ! Divide by the element density instead, so the dumped
+                    ! field is the ionization fraction of that element.
+                    if (ion_elem_var.gt.0) then
+                       do i = 1, ncache
+                          xdp(i) = uold(ind_grid(i)+iskip, ivar) &
+                               & / MAX(uold(ind_grid(i)+iskip, ion_elem_var), 1d-30)
+                       end do
                     end if
 
                  else

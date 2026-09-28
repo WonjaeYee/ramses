@@ -737,7 +737,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
                ! Guard: ddt underflow to IEEE zero — can't make progress, bail
-               if (ddt(i) < 0d0) then
+               if (ddt(i) <= 0d0) then
                   err_idx = i
                   return
                end if
@@ -1109,20 +1109,28 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! photons from recombination should be spreaded on multiple radiation bins
                ! but... at this moment dump on one bin
 
+               ! groupL1==0 is the sentinel for an unbounded (infinite upper
+               ! energy) group, i.e. it always extends past any finite
+               ! threshold below -- treat it as such rather than letting the
+               ! sentinel zero fail every "threshold < groupL1" comparison.
+
                ! H II -> H I
-               if ((groupL0(igroup) <= 13.60).and.(13.60 < groupL1(igroup))) then
+               if ((groupL0(igroup) <= 13.60).and. &
+                    & (groupL1(igroup).eq.0d0 .or. 13.60 < groupL1(igroup))) then
                   alpha = old_recombination_HII(TK)
                   recRad(igroup) = recRad(igroup) + alpha * nElement_dep(1)*dXion(1,2) * ne
                end if
 
                ! He II -> He I
-               if ((groupL0(igroup) <= 24.590).and.(24.590 < groupL1(igroup))) then
+               if ((groupL0(igroup) <= 24.590).and. &
+                    & (groupL1(igroup).eq.0d0 .or. 24.590 < groupL1(igroup))) then
                   alpha = old_recombination_HeII(TK)
                   recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,2) * ne
                end if
 
                ! He III -> He II
-               if ((groupL0(igroup) <= 54.420).and.(54.420 < groupL1(igroup))) then
+               if ((groupL0(igroup) <= 54.420).and. &
+                    & (groupL1(igroup).eq.0d0 .or. 54.420 < groupL1(igroup))) then
                   alpha = old_recombination_HeIII(TK)
                   recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,3) * ne
                end if

@@ -68,7 +68,7 @@ subroutine init_flow_fine(ilevel)
 
 #ifdef RTZ
   integer::counter,ielements,jions
-  real(dp)::total_element_mass
+  real(dp)::total_element_mass, elem_frac
 #endif
 
   if(numbtot(1,ilevel)==0)return
@@ -290,46 +290,57 @@ subroutine init_flow_fine(ilevel)
               if(ivar==4)init_array=dfact(ilevel)*vfact(1)*dx_loc/dxini(ilevel)*init_array/vfact(ilevel)
               if(ivar==5)init_array=(1.0d0+init_array)*T2_start/scale_T2
 #ifdef RTZ
+              ! Mass fraction of each tracked element (these sum to one).
+              ! Needed both for the element slots and for the ion slots below.
               total_element_mass = 0.d0
+              do ielements=1,n_elements
+                 if (elements(ielements)%atomic_number.gt.0.d0) then
+                    if (ielements.gt.2) then
+                       total_element_mass = total_element_mass + (elements(ielements)%atomic_mass * elements(ielements)%z_solar * z_ave)
+                    else
+                       total_element_mass = total_element_mass + (elements(ielements)%atomic_mass * elements(ielements)%z_solar)
+                    end if
+                 end if
+              end do
+
               if(ivar.ge.imetal.and.ivar.lt.iIons) then
                  do ielements=1,n_elements
-                    if (elements(ielements)%atomic_number.gt.0.d0) then
-                       if (ielements.gt.2) then 
-                          total_element_mass = total_element_mass + (elements(ielements)%atomic_mass * elements(ielements)%z_solar * z_ave)
-                       else
-                          total_element_mass = total_element_mass + (elements(ielements)%atomic_mass * elements(ielements)%z_solar)
-                       end if
+                    if(ivar.eq.elements(ielements)%u_hydro_idx) then
+                       elem_frac = (elements(ielements)%atomic_mass * elements(ielements)%z_solar) / total_element_mass
+                       if (ielements.gt.2) elem_frac = elem_frac * z_ave
+                       init_array = elem_frac
                     end if
                  end do
-
-                 do ielements=1,n_elements
-                    if(ivar.eq.elements(ielements)%u_hydro_idx) then
-                       if (ielements.gt.2) then 
-                          init_array = (elements(ielements)%atomic_mass * elements(ielements)%z_solar) * z_ave / total_element_mass
-                       else
-                          init_array = (elements(ielements)%atomic_mass * elements(ielements)%z_solar) / total_element_mass
-                       end if 
-                    end if 
-                 end do 
               end if
 
               ! Now set all ionization states to neutral except for hydrogen
               ! We use an initial parameter to give a small electron fraction
               ! which one should compute with recfast
+              !
+              ! An ion slot holds the mass density of that ion, so what is set
+              ! here is (element mass fraction) x (ionization fraction); the
+              ! multiplication by rho happens with the other passive scalars
+              ! further below. Setting the bare ionization fraction would make
+              ! the hydro advect rho*x_ion, which does not conserve ion mass
+              ! once the element mass fractions vary from cell to cell.
               counter = 0
               do ielements=1,n_elements
+                 elem_frac = 0.d0
+                 if (elements(ielements)%atomic_number.gt.0.d0) then
+                    elem_frac = (elements(ielements)%atomic_mass * elements(ielements)%z_solar) / total_element_mass
+                    if (ielements.gt.2) elem_frac = elem_frac * z_ave
+                 end if
                  do jions=1,elements(ielements)%n_ions
-                    if (jions.eq.1) then 
-                       if (ivar.eq.iIons+counter) then
+                    if (ivar.eq.iIons+counter) then
+                       if (jions.eq.1) then
                           if (ielements.eq.1) then
-                             init_array = 1.d0 - init_xe 
+                             init_array = (1.d0 - init_xe) * elem_frac
                           else
-                             init_array = 1.d0 ! Initialize every species to neutral
+                             init_array = elem_frac ! Initialize every species to neutral
                           endif
+                       else if (jions.eq.2 .and. ielements.eq.1) then
+                          init_array = init_xe * elem_frac
                        end if
-                    end if
-                    if (jions.eq.2 .and. ielements.eq.1 .and. ivar.eq.iIons+counter) then 
-                       init_array = init_xe 
                     end if
                     counter = counter + 1
                  end do
@@ -525,6 +536,10 @@ end subroutine init_flow_fine
 subroutine region_condinit(x,q,dx,nn)
   use amr_parameters
   use hydro_parameters
+#ifdef RTZ
+  use rt_parameters, only: iIons, isH2_rtz
+  use rtz_module, only: n_elements, elements
+#endif
   implicit none
   integer ::nn
   real(dp)::dx
@@ -533,6 +548,9 @@ subroutine region_condinit(x,q,dx,nn)
 
   integer::i,k
   real(dp)::vol,r,xn,yn,zn,en
+#ifdef RTZ
+  integer::icounter,ielem,jion
+#endif
 #if NVAR > NHYDRO
   integer::ivar
 #endif
@@ -641,6 +659,35 @@ subroutine region_condinit(x,q,dx,nn)
         end do
      end if
   end do
+
+#ifdef RTZ
+  ! An ion slot holds the mass density of that ion, i.e. once condinit
+  ! multiplies the primitives by rho it must contain
+  ! (element mass fraction) x (ionization fraction). var_region keeps its
+  ! intuitive namelist meaning -- ionization fraction relative to the element
+  ! -- so scale each ion entry by its own element's entry here. Without this,
+  ! region-based initial conditions would silently be in the old convention,
+  ! where an ion was stored as a fraction of the TOTAL gas density and the
+  ! hydro then failed to conserve ion mass wherever element fractions vary.
+  icounter = 0
+  do ielem=1,n_elements
+     if (elements(ielem)%atomic_number.gt.0) then
+        do jion=1,elements(ielem)%n_ions
+           do i=1,nn
+              q(i,iIons+icounter) = q(i,iIons+icounter) * q(i,elements(ielem)%u_hydro_idx)
+           end do
+           icounter = icounter + 1
+        end do
+     end if
+  end do
+  ! molecules sit after every element's ion block
+  if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
+     do i=1,nn
+        q(i,iIons+icounter) = q(i,iIons+icounter) * q(i,elements(1)%u_hydro_idx)
+     end do
+     icounter = icounter + 1
+  end if
+#endif
 
   return
 end subroutine region_condinit
