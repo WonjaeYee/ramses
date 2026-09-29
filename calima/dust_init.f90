@@ -74,6 +74,7 @@ module dust_init
             if (use_w_drift_test) write(*,*) '   w_drift_test      = ',w_drift_test
             write(*,*) 'tva_wmax_cs          = ',tva_wmax_cs,' (cap on |w_drift| / c_s)'
             write(*,*) 'epstein_coef         = ',epstein_coef,' = sqrt(pi*gamma/8)'
+            write(*,*) 'drag_model           = ',trim(drag_model)
         end if
         write(*,*) '=============================================================='
     end subroutine print_dust_parameters
@@ -171,6 +172,16 @@ module dust_init
         end if
         if (dust_radpressure .and. .not.dust_tva) then
             if(myid==1)write(*,*)'Error: dust_radpressure has no effect without dust_tva=.true.'
+            check_params_dust=.false.
+        end if
+        if (trim(drag_model).ne.'epstein' .and. trim(drag_model).ne.'draine2011') then
+            if(myid==1)write(*,*)'Error: drag_model must be epstein or draine2011, not ',trim(drag_model)
+            check_params_dust=.false.
+        end if
+        ! The Draine drag needs n_H, T and the grain charge, which the TVA gets
+        ! from the per-cell radiation-pressure call; the pure-drag path has none.
+        if (trim(drag_model).eq.'draine2011' .and. .not.dust_radpressure) then
+            if(myid==1)write(*,*)'Error: drag_model=draine2011 requires dust_radpressure=.true.'
             check_params_dust=.false.
         end if
         if (dust_tva .and. myid==1) then
@@ -1334,7 +1345,7 @@ module dust_init
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
                 dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,drag_coefficient,&
-                tva_wmax_cs,&
+                tva_wmax_cs,drag_model,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
                 ! PAH modelling options

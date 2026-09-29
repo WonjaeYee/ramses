@@ -2623,7 +2623,7 @@ module dust_photoelectric_heating
         real(dp) :: U_aip
 
         U_aip = autoionisation_potential(a,use_separate_refractive_index)
-        Zmin = floor(U_aip / 14.4d-8 * a) + 1d0
+        Zmin = aint(-U_aip / 14.4d-8 * a) + 1d0
     end function most_negative_allowed_charge
 
     function DS87_lambda(Z,q,a,T) result(ltilde)
@@ -2724,7 +2724,7 @@ module dust_photoelectric_heating
             Nc = 468d0 * (a/1d-7)**3d0
             s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
         else if (Z < 0d0) then
-            Zmin = most_negative_allowed_charge(a*10d0,use_separate_refractive_index)
+            Zmin = most_negative_allowed_charge(a,use_separate_refractive_index)
             if (Z > Zmin) then
                 Nc = 468d0 * (a/1d-7)**3d0
                 s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
@@ -2923,7 +2923,7 @@ module dust_photoelectric_heating
                 sigma_pdt = photodetachment_cross_section(E(i),E_pdt,Zcharge)
                 pinj_charge = pinj_charge + sigma_pdt * (E(i) - E_pdt + Emin) * pdt_pref(i)
             end do
-            Pinj = Pinj + wmix(iq) * pinj_charge
+            Pinj = Pinj + wmix(iq) * pinj_charge * eV2erg
 
             ! 4. Compute the recombination cooling rate contribution of this charge
             prec_charge = 0.0d0
@@ -2941,7 +2941,7 @@ module dust_photoelectric_heating
             if (Zcharge .eq. zmin_mix) then
                 EA = electron_afinity(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
                 Jtilde = DS87_J(dble(zmin_mix),-1d0,asize_cm,Tgas)
-                Pinj = Pinj + wmix(iq) * rec_pref * Jtilde * EA * eV2erg
+                Pinj = Pinj + wmix(iq) * rec_pref / (kB * Tgas) * Jtilde * EA * eV2erg
             end if
         end do
     end subroutine compute_dust_peh_rate

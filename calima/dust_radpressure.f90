@@ -7,7 +7,8 @@ module dust_radpressure_module
     use amr_parameters, only: dp, ndim
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS
     use amr_commons, only: cosmo, aexp
-    use constants, only: c_cgs, eV2erg, mCO
+    use constants, only: c_cgs, eV2erg, mCO, e2instatC, kB, pi
+    use dust_charging, only: compute_mean_dust_charge
     ! rt_pressBoost / rt_isoPress / rt_isIR / iIR / rt_isIRtrap / iIRtrapVar are
     ! declared unconditionally in rt_parameters (see the note at their declaration),
     ! so they need no RTZ fork. isH2_rtz, rtz_UV_background_G0 and the rank of
@@ -36,7 +37,7 @@ module dust_radpressure_module
 #ifdef CO
     use hydro_parameters, only: iCO
 #endif
-    use dust_commons, only: dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
+    use dust_commons, only: drag_model, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
     use dust_optics, only: get_IR_mean_cross_sections
 
@@ -47,7 +48,8 @@ module dust_radpressure_module
 
 contains
 
-    subroutine compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, irtrap_share)
+    subroutine compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, irtrap_share, &
+                                                drag_state)
         implicit none
         real(dp), dimension(:), intent(in) :: cell_state
         real(dp), dimension(:), intent(in) :: cell_rt_state
@@ -64,6 +66,11 @@ contains
         ! bin, chi_R,k / chi_R,tot. Zero unless rt_isIR (see Part D of the
         ! trapped-IR scheme). Optional so non-TVA callers need not supply it.
         real(dp), dimension(max(1, ndust)), intent(out), optional :: irtrap_share
+        ! Local state for the Draine (2011) drag (drag_model='draine2011'):
+        ! (1) n_H [cm^-3], (2) T [K], (2+k) Coulomb coefficient of dust bin k,
+        ! (n_H+/n_H) phi_k^2 ln(Lambda_k), with phi_k = Z_k e^2/(a_k kT) from
+        ! charging_model and Lambda from Draine & Salpeter (1979).
+        real(dp), dimension(1:ndust+2), intent(out), optional :: drag_state
 
         ! Local variables for cell state extraction
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
@@ -82,6 +89,7 @@ contains
         real(dp), dimension(max(1, ndust))  :: sig_R_dust, sig_P_dust, chi_R_dust
         real(dp), dimension(max(1, 2*npah)) :: sig_R_pah,  sig_P_pah
         integer :: id, iion, counter, e_counter, jbin
+        real(dp) :: nH_drag, nHp_drag, Z_drag, phi_drag, Lambda_drag
 #ifndef RTZ
         real(dp), dimension(max(1,nIons)) :: xion_rt
         real(dp) :: nH_loc, nHe_loc, xHI_loc, xH2_loc
@@ -332,6 +340,29 @@ contains
                  end do
               end if
            end if
+        end if
+
+        ! 10. Drag state for the Draine (2011) drag law
+        if (present(drag_state)) drag_state = 0d0
+        if (present(drag_state) .and. trim(drag_model) == 'draine2011') then
+#ifdef RTZ
+           nH_drag  = nElement(1)
+           nHp_drag = nElement(1) * xion(1,2)
+#else
+           nH_drag  = nH_loc
+           nHp_drag = nH_loc * xion_rt(ixHII)
+#endif
+           drag_state(1) = nH_drag
+           drag_state(2) = Tk
+           do jbin = 1, ndust
+              call compute_mean_dust_charge(jbin, G0, Tk, ne, Z_drag)
+              phi_drag = abs(Z_drag) * e2instatC / (dustbins_props(jbin)%asize_cm * kB * Tk)
+              if (phi_drag > 0d0 .and. ne > 0d0 .and. nH_drag > 0d0) then
+                 Lambda_drag = 3d0 / (2d0 * dustbins_props(jbin)%asize_cm * sqrt(e2instatC) * phi_drag) &
+                             * sqrt(kB * Tk / (pi * ne))
+                 drag_state(2+jbin) = nHp_drag / nH_drag * phi_drag**2 * log(max(Lambda_drag, 1d0))
+              end if
+           end do
         end if
 
     end subroutine compute_gas_dust_radpressure_acc

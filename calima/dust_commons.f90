@@ -76,6 +76,12 @@ module dust_commons
                                                  ! v_th = sqrt(8/(pi*gamma))*c_s, hence
                                                  ! t_s = sqrt(pi*gamma/8)*s*a/(rho_g*c_s).
                                                  ! (Laibe & Price 2012; Lebreuilly+2019.)
+    character(LEN=20)::drag_model='epstein'      ! Gas-grain drag law for the TVA stopping time:
+                                                 ! 'epstein'    -- linear Epstein drag (above);
+                                                 ! 'draine2011' -- Draine (2011) eq. (24)-(25), after
+                                                 !   Draine & Salpeter (1979): collisional + Coulomb
+                                                 !   drag with the grain charge from charging_model.
+                                                 !   Nonlinear in the drift; needs dust_radpressure.
     real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.
                                                  ! TVA assumes Stokes << 1, which fails once the drift
                                                  ! approaches c_s (typically in hot/diffuse cells, where

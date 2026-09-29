@@ -36,6 +36,53 @@ module dust_dynamics
         if (idim == 3) then; ifind_khi = f; else; ifind_khi = hi; endif
     end function ifind_khi
 
+    function draine2011_stopping_time(a, rho_s, D, nH, T, coul) result(t_s)
+        ! Effective stopping time t_s = |w|/|D| [s] of a grain under the drag of
+        ! Draine (2011) eq. (24)-(25), after Draine & Salpeter (1979): the drift
+        ! w at which F = 2 pi a^2 n_H kT G(s) balances m_d |D|, s = w/(2kT/m_H)^1/2,
+        !   G(s) = 8s/(3 sqrt(pi)) (1 + 9 pi s^2/64)^1/2 + coul s/(3 sqrt(pi)/4 + s^3),
+        ! coul = (n_H+/n_H) phi^2 ln(Lambda). With coul = 0 and s << 1 this is
+        ! Epstein drag on the hydrogen alone. G is not monotonic for large coul, so
+        ! take the smallest root, the branch a grain reaches from rest: past the local
+        ! maximum of G it jumps to the collisional branch (Draine's runaway). cgs.
+        real(dp), intent(in) :: a, rho_s, D, nH, T, coul
+        real(dp) :: t_s
+        real(dp) :: G_target, g0, s_lin, s_lo, s_hi, s_mid
+        integer  :: it
+
+        g0       = (8d0 + 4d0*coul) / (3d0*sqrt(pi))          ! dG/ds at s = 0
+        G_target = (2d0/3d0) * a * rho_s * abs(D) / (max(nH, 1d-30) * kB * T)
+        s_lin    = G_target / g0
+        if (s_lin < 1d-3) then
+            ! Linear regime, G = g0*s up to O(s^2)
+            t_s = (2d0/3d0) * a * rho_s * sqrt(2d0*kB*T/mH) / (max(nH, 1d-30) * kB * T * g0)
+            return
+        end if
+        ! Bracket the smallest root by stepping out from deep in the linear regime
+        s_lo = 1d-3 * s_lin
+        s_hi = s_lo
+        do it = 1, 400
+            s_hi = 1.2d0 * s_lo
+            if (G_draine(s_hi) >= G_target) exit
+            s_lo = s_hi
+        end do
+        do it = 1, 50
+            s_mid = 0.5d0 * (s_lo + s_hi)
+            if (G_draine(s_mid) >= G_target) then
+                s_hi = s_mid
+            else
+                s_lo = s_mid
+            end if
+        end do
+        t_s = 0.5d0 * (s_lo + s_hi) * sqrt(2d0*kB*T/mH) / abs(D)
+    contains
+        real(dp) function G_draine(s)
+            real(dp), intent(in) :: s
+            G_draine = 8d0*s/(3d0*sqrt(pi)) * sqrt(1d0 + 9d0*pi*s**2/64d0) &
+                     + coul*s/(0.75d0*sqrt(pi) + s**3)
+        end function G_draine
+    end function draine2011_stopping_time
+
     function grain_relative_velocity(model,T,rho_gas,nH,v_turb&
                                     &,local_mu,inject_L&
                                     &,target_a,projectile_a&
@@ -378,6 +425,9 @@ module dust_dynamics
         ! outside the #ifdef RT guards (they stay zero without RT).
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), save :: s_IRtrap
+        ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust+2), save :: drag_state
+        real(dp), dimension(1:ndust+2) :: drag_state_face
         real(dp) :: Ptrap_L, Ptrap_R, grad_Ptrap
         real(dp), dimension(1:ndust) :: s_IRtrap_face
         logical  :: do_irtrap
@@ -503,7 +553,8 @@ module dust_dynamics
                                                                         a_rad_g(ind_exist(i),i3,j3,k3,:),&
                                                                         a_rad_d(ind_exist(i),i3,j3,k3,:,:),&
                                                                         a_rad_pah(ind_exist(i),i3,j3,k3,:,:),&
-                                                                        s_IRtrap(ind_exist(i),i3,j3,k3,:))
+                                                                        s_IRtrap(ind_exist(i),i3,j3,k3,:),&
+                                                                        drag_state(ind_exist(i),i3,j3,k3,:))
                             end do
                             do i=1,nbuffer
                                 call compute_gas_dust_radpressure_acc(uloc(ind_nexist(i),i3,j3,k3,:),&
@@ -512,7 +563,8 @@ module dust_dynamics
                                                                         a_rad_g(ind_nexist(i),i3,j3,k3,:),&
                                                                         a_rad_d(ind_nexist(i),i3,j3,k3,:,:),&
                                                                         a_rad_pah(ind_nexist(i),i3,j3,k3,:,:),&
-                                                                        s_IRtrap(ind_nexist(i),i3,j3,k3,:))
+                                                                        s_IRtrap(ind_nexist(i),i3,j3,k3,:),&
+                                                                        drag_state(ind_nexist(i),i3,j3,k3,:))
                             end do
                         end if
 #endif
@@ -719,6 +771,21 @@ module dust_dynamics
                                         ( s_IRtrap_face(jbin)                         &
                                           / max(eps_face_bin * rho_face, smallr)      &
                                           - 1.0_dp / max(rho_face, smallr) )
+                                end if
+                                ! Draine (2011) drag is nonlinear in the drift, so its
+                                ! stopping time needs the driving acceleration D first.
+                                if (trim(drag_model) == 'draine2011' .and. (tva_test_mode == TVA_TEST_NONE &
+                                    .or. tva_test_mode >= TVA_TEST_SPRESS)) then
+                                    if (idim == 1) then
+                                        drag_state_face = half * (drag_state(l,i-1,j,k,:) + drag_state(l,i,j,k,:))
+                                    else if (idim == 2) then
+                                        drag_state_face = half * (drag_state(l,i,j-1,k,:) + drag_state(l,i,j,k,:))
+                                    else
+                                        drag_state_face = half * (drag_state(l,i,j,k-1,:) + drag_state(l,i,j,k,:))
+                                    end if
+                                    t_s_face_arr(jbin) = draine2011_stopping_time(dustbins_props(jbin)%asize_cm, &
+                                        dustbins_props(jbin)%sgrain, D_bin(jbin) * scale_v / scale_t,          &
+                                        drag_state_face(1), drag_state_face(2), drag_state_face(2+jbin)) / scale_t
                                 end if
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
                             end do
@@ -1455,6 +1522,8 @@ module dust_dynamics
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,max(1,npah),1:ndim),save::a_rad_pah
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust),save::s_IRtrap
+        ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust+2),save::drag_state
         
         integer,dimension(1:nvector),save::ind_cell, ind_father, igrid_nbor, ind_exist, ind_nexist, ind_buffer
         integer,dimension(1:nvector,1:threetondim)::nbors_father_cells
@@ -1568,7 +1637,8 @@ module dust_dynamics
                                                             a_rad_g(ind_exist(i),i3,j3,k3,:),&
                                                             a_rad_d(ind_exist(i),i3,j3,k3,:,:),&
                                                             a_rad_pah(ind_exist(i),i3,j3,k3,:,:),&
-                                                            s_IRtrap(ind_exist(i),i3,j3,k3,:))
+                                                            s_IRtrap(ind_exist(i),i3,j3,k3,:),&
+                                                            drag_state(ind_exist(i),i3,j3,k3,:))
                 end do
 
                 do i=1,nbuffer
@@ -1578,7 +1648,8 @@ module dust_dynamics
                                                             a_rad_g(ind_nexist(i),i3,j3,k3,:),&
                                                             a_rad_d(ind_nexist(i),i3,j3,k3,:,:),&
                                                             a_rad_pah(ind_nexist(i),i3,j3,k3,:,:),&
-                                                            s_IRtrap(ind_nexist(i),i3,j3,k3,:))
+                                                            s_IRtrap(ind_nexist(i),i3,j3,k3,:),&
+                                                            drag_state(ind_nexist(i),i3,j3,k3,:))
                 end do
 
                 do i=1,nexist;  ok(ind_exist(i),i3,j3,k3)=son(ind_cell(i))>0; end do
@@ -1588,7 +1659,7 @@ module dust_dynamics
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
         call calculate_drag_rad_fluxes(uloc,dflux,eflux,mflux,dx,dt,ncache,&
-                                        a_rad_g,a_rad_d,s_IRtrap,agrain_code,sgrain_code)
+                                        a_rad_g,a_rad_d,s_IRtrap,drag_state,agrain_code,sgrain_code)
 
         ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
         ! zero out the flux; the finer level handles it and restricts it down later
@@ -1724,7 +1795,7 @@ module dust_dynamics
     end subroutine dust_upwind_correct2
 
     subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, mflux, dx, dt, ngrid, &
-                                        & a_rad_g, a_rad_d, s_IRtrap, &
+                                        & a_rad_g, a_rad_d, s_IRtrap, drag_state, &
                                         & agrain_code, sgrain_code)
         use amr_parameters
         use hydro_parameters
@@ -1749,6 +1820,8 @@ module dust_dynamics
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust, 1:ndim), intent(in) :: a_rad_d
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), intent(in) :: s_IRtrap
+        ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust+2), intent(in) :: drag_state
         ! Grain properties (sizes and material densities) [code units]
         real(dp), dimension(1:ndust), intent(in)   :: agrain_code, sgrain_code
 
@@ -1990,6 +2063,14 @@ module dust_dynamics
                                 ( s_IRtrap(l,i,j,k,jbin)                             &
                                   / max(rhod_cell(l,i,j,k,jbin), smallr)             &
                                   - 1.0_dp / max(rho_mix(l,i,j,k), smallr) )
+                        end if
+                        ! Draine (2011) drag is nonlinear in the drift, so its
+                        ! stopping time needs the driving acceleration D first.
+                        if (trim(drag_model) == 'draine2011' .and. (tva_test_mode == TVA_TEST_NONE &
+                            .or. tva_test_mode >= TVA_TEST_SPRESS)) then
+                            t_s_intrinsic(jbin) = draine2011_stopping_time(dustbins_props(jbin)%asize_cm, &
+                                dustbins_props(jbin)%sgrain, D_bin(jbin) * scale_v / scale_t,          &
+                                drag_state(l,i,j,k,1), drag_state(l,i,j,k,2), drag_state(l,i,j,k,2+jbin)) / scale_t
                         end if
                         sum_eps_ts_D = sum_eps_ts_D + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_bin(jbin)
                         ! dustyirtrap test diagnostic: report the trapped-IR
