@@ -69,7 +69,6 @@ SUBROUTINE rt_init
   if(rt .and. rt_nsource .gt. 0) rt_advect=.true.
   if(rt .and. rt_nregion .gt. 0) rt_advect=.true.
   if(rt .and. rt_AGN ) rt_advect=.true.
-  if(rt .and. nboundary .gt. 0) rt_advect=.true.
   ! UV propagation is checked in set_model
   ! Star feedback is checked in amr_step
 
