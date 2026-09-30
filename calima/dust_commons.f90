@@ -80,6 +80,8 @@ module dust_commons
     character(LEN=30)::charging_model='Ibanez2019'     ! Model for the grain charge distribution
     character(LEN=30)::ice_model='Hollenbach2009'     ! Model for ice formation on dust grains
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
+    logical :: dust_rtgroups_debug=.false.             ! WDB06rt: dump per-call inputs/outputs (dust_rtgroups_debug_XXXXX.dat)
+    integer :: dust_rtgroups_debug_max=2000            ! WDB06rt: maximum number of dumped calls per rank
 
     ! ==== PAH modelling options (read from nml) ====
     character(LEN=30)::photolysis_model='RM2026'         ! Model for UV sublimation of PAHs

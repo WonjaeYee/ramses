@@ -141,6 +141,7 @@ contains
                                             compute_pah_charge_equilibrium
         use dust_radiation, only: update_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
+        use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_debug_dump
 
         implicit none
 
@@ -156,15 +157,37 @@ contains
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: Zel, nHI, prevD
         integer :: n_charge
+        logical :: use_rtg, disc
+        real(dp) :: n_Hp, n_Hep, n_Hepp, rtg_Z, rtg_S, rtg_G, rtg_L, rtg_A, rtg_Zs
+        real(dp), dimension(1:dinfo%ndust) :: rtg_Pinj, rtg_Prec
 
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
-            idx_g = -1
-            idx_T = -1
-            do ii = 1, dinfo%ndust
-                call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),idx_g,idx_T)
-                call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii),idx_g,idx_T)
-            end do
+            use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
+            if (use_rtg) then
+                ! Local-field charge balance on the RT photon groups (WDB06 yields),
+                ! which also gives the PE heating and recombination cooling
+                n_Hp = nElement(1)*xelem_ions(1,2)
+                n_Hep = nElement(2)*xelem_ions(2,2)
+                n_Hepp = nElement(2)*xelem_ions(2,3)
+                do ii = 1, dinfo%ndust
+                    call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
+                                            n_Hp, n_Hep, n_Hepp, rtg_Z, rtg_S, rtg_G, rtg_L, rtg_A, rtg_Zs, disc)
+                    dinfo%Z_dust(ii) = rtg_Z
+                    dinfo%Z_sigma(ii) = rtg_S
+                    rtg_Pinj(ii) = rtg_G
+                    rtg_Prec(ii) = rtg_L + rtg_A
+                    if (dust_rtgroups_debug) call rtgroups_debug_dump(ii, Np, dinfo%group_eV, dinfo%local_c, &
+                        Tk, ne, n_Hp, n_Hep, n_Hepp, rtg_Z, rtg_S, rtg_G, rtg_L, rtg_A, rtg_Zs, disc)
+                end do
+            else
+                idx_g = -1
+                idx_T = -1
+                do ii = 1, dinfo%ndust
+                    call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),idx_g,idx_T)
+                    call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii),idx_g,idx_T)
+                end do
+            end if
 
             ! 2. If needed, precompute the Coulomb factors
             dinfo%Coulomb_factor = 1d0
@@ -185,7 +208,10 @@ contains
             end if
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
-            if (dust_pe_heating .and. present(Np)) then
+            if (dust_pe_heating .and. use_rtg) then
+                dinfo%Pinj_dust(1:dinfo%ndust) = rtg_Pinj
+                dinfo%Prec_dust(1:dinfo%ndust) = rtg_Prec
+            elseif (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
                     if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
                         call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
