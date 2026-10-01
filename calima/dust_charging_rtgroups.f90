@@ -124,7 +124,7 @@ module dust_charging_rtgroups
     end type RTGResult
 
     ! charging_model = 'WDB06tab': per-bin tables on (log T, log psi_F, h, psi_E), pyCALIMA charging_psi_tables
-    integer, parameter :: PSI_NQ = 5 + RTG_NRI      ! Zmean, Zsigma, gamma_F, gamma_E, lambda, ln alpha_i
+    integer, parameter :: PSI_NQ = 5 + RTG_NRI      ! Zmean, Zsigma, ln gamma_F, ln gamma_E, lambda, ln alpha_i
     integer, parameter :: PSI_SOFT = 1, PSI_HARD = 2, PSI_EUV = 3
     type PsiTable
         integer :: nG = 0, nT = 0, nPF = 0, nH = 0, nPE = 0
@@ -1874,8 +1874,8 @@ module dust_charging_rtgroups
             end do
             associate(tb => pst(ii))
                 read(line, *) ver, mcode, tb%a, W, tb%nG, tb%nT, tb%nPF, tb%nH, tb%nPE, tb%T_bb, tb%F0
-                if (ver /= 2) then
-                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' has format ', ver, ', expected 2 (re-export)'
+                if (ver /= 3) then
+                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' has format ', ver, ', expected 3 (re-export)'
                     call clean_stop
                 end if
                 if (tb%nG /= nGroups) then
@@ -2004,7 +2004,7 @@ module dust_charging_rtgroups
             end do
             Zmean = c(1)
             Zsigma = c(2)
-            Gamma = G_F*c(3) + G_E*c(4)
+            Gamma = G_F*exp(c(3)) + G_E*exp(c(4))
             Lambda = ne*sq*c(5)
             alpha = exp(c(6:PSI_NQ))
         end associate
