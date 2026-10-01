@@ -82,6 +82,8 @@ module dust_commons
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
     logical :: dust_rtgroups_debug=.false.             ! WDB06rt: dump per-call inputs/outputs (dust_rtgroups_debug_XXXXX.dat)
     integer :: dust_rtgroups_debug_max=2000            ! WDB06rt: maximum number of dumped calls per rank
+    logical :: dust_rtgroups_verify=.false.            ! WDB06rt: dump (as dust_rtgroups_debug) and stop after dust_rtgroups_debug_max calls
+    logical :: dust_charging_timer=.false.             ! wall-clock time of the grain charging and PE heating (all models), printed at the end
 
     ! ==== PAH modelling options (read from nml) ====
     character(LEN=30)::photolysis_model='RM2026'         ! Model for UV sublimation of PAHs

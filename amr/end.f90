@@ -10,6 +10,9 @@ subroutine clean_end
 #endif
   character(LEN=80)::str
 
+#ifdef CALIMA
+  call report_dust_charging_timer_ext()   ! before output_timer, which closes unit 6 on rank 1
+#endif
   call output_timer(.false., str)
 
 #ifndef WITHOUTMPI
