@@ -11,6 +11,8 @@ recursive subroutine amr_step(ilevel,icount)
   use UV_module
   use coolrates_module, only: update_coolrates_tables
   use rt_cooling_module, only: update_UVrates
+#else
+  use photoionization_UVB_module, only: update_UVB
 #endif
 #endif
   use sink_feedback_parameters, only: sn_feedback_sink
@@ -489,6 +491,8 @@ recursive subroutine amr_step(ilevel,icount)
      if(cosmo .and. rt_isDiffuseUVsrc) call update_UVsrc
                                call timer('cooling','start')
      if(cosmo) call update_coolrates_tables(dble(aexp))
+#else
+     if(cosmo) call update_UVB(1d0/dble(aexp)-1d0)   ! HM12 UVB at the current redshift
 #endif
                                call timer('radiative transfer','start')
      if(ilevel==levelmin) call output_rt_stats
