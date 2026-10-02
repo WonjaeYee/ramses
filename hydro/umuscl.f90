@@ -840,6 +840,7 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
               end do
            end do
 #endif
+
            ! Normal velocity
            do l = 1, ngrid
               tmp(l,i,j,k,1) = half*(qleft(l,2)+qright(l,2))
@@ -862,6 +863,12 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
   use amr_parameters
   use hydro_parameters
   use const
+#ifdef CALIMA
+  ! dust_tva/ndust are only referenced from #ifdef CALIMA branches below, so
+  ! this use must be guarded too -- otherwise a CALIMA=0 build fails with
+  ! "Cannot open module file 'dust_commons.mod'".
+  use dust_commons, only: dust_tva, ndust
+#endif
   implicit none
 
   integer ::ngrid
@@ -879,6 +886,10 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
 #endif
 #if NENER>0
   integer ::irad
+#endif
+#ifdef CALIMA
+  real(dp)::eps_total, rho_gas
+  integer ::id
 #endif
 
   smalle = smallc**2/gamma/(gamma-one)
@@ -920,8 +931,24 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
               enddo
 #endif
               ! Compute thermal pressure
+#ifndef CALIMA
               eint = MAX(uin(l,i,j,k,neul)*oneoverrho-eken-erad,smalle)
               q(l,i,j,k,neul) = (gamma-one)*q(l,i,j,k,1)*eint
+#else
+              if (dust_tva .and. ndust>0) then
+                 eps_total = 0.0d0
+                 do id = 1, ndust
+                    eps_total = eps_total + uin(l,i,j,k,idust+id-1)/q(l,i,j,k,1)
+                 end do
+                 eps_total = min(max(eps_total, 0.0_dp), 0.999_dp)
+                 rho_gas = q(l,i,j,k,1)*(1.0d0-eps_total)
+                 eint = MAX((uin(l,i,j,k,neul)*oneoverrho-eken-erad)*q(l,i,j,k,1)/max(rho_gas,smallr),smalle)
+                 q(l,i,j,k,neul) = (gamma-one)*rho_gas*eint
+              else
+                 eint = MAX(uin(l,i,j,k,neul)*oneoverrho-eken-erad,smalle)
+                 q(l,i,j,k,neul) = (gamma-one)*q(l,i,j,k,1)*eint
+              end if
+#endif
 
               ! Compute sound speed
               c(l,i,j,k)=gamma*q(l,i,j,k,neul)
@@ -930,7 +957,15 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
                  c(l,i,j,k)=c(l,i,j,k)+gamma_rad(irad)*q(l,i,j,k,nhydro+irad)
               enddo
 #endif
+#ifndef CALIMA
               c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
+#else
+              if (dust_tva .and. ndust>0) then
+                 c(l,i,j,k)=sqrt(c(l,i,j,k)/max(rho_gas,smallr))
+              else
+                 c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
+              end if
+#endif
 
               ! Gravity predictor step
               q(l,i,j,k,2) = q(l,i,j,k,2) + gravin(l,i,j,k,1)*dtxhalf
