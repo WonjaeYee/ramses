@@ -501,9 +501,11 @@ module dust_rates
                         ! Normalize by stoichiometry and mass fraction to find the element's growth limit
                         min_growth_rate = element_pot_rate_1 * bin_prefactor / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
                         
-                        ! Final mass growth rate for this dust bin [g cm-3 s-1]
+                        ! Final mass growth rate for this dust bin [g cm-3 s-1]. max_accretion_rate
+                        ! caps the specific rate [s-1], as in LeBourlot2012_accretion_rate, so it
+                        ! applies before multiplying by the dust density.
+                        min_growth_rate = min(min_growth_rate, max_accretion_rate)
                         rate = min_growth_rate * y_dust(ii+dust_info%npah)
-                        rate = min(rate, max_accretion_rate)
 
                         if (rate > 0.0) then
                             dydt_dust(ii+dust_info%npah, 1) = dydt_dust(ii+dust_info%npah, 1) + rate
@@ -562,9 +564,11 @@ module dust_rates
                         end do
                         
                         ! --- STEP 2: Scale actual growth and deplete the gas phase ---
-                        ! Final mass growth rate for this dust bin [g cm-3 s-1]
+                        ! Final mass growth rate for this dust bin [g cm-3 s-1]. max_accretion_rate
+                        ! caps the specific rate [s-1], as in LeBourlot2012_accretion_rate, so it
+                        ! applies before multiplying by the dust density.
+                        min_growth_rate = min(min_growth_rate, max_accretion_rate)
                         rate = min_growth_rate * y_dust(ii+dust_info%npah)
-                        rate = min(rate, max_accretion_rate)
 
                         if (rate > 0.0) then
                             dydt_dust(ii+dust_info%npah, 1) = dydt_dust(ii+dust_info%npah, 1) + rate

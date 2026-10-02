@@ -581,7 +581,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       if (comp_sigma_turb) then
          do i=1,nleaf
             call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
-            sigma(i) = sqrt(sigma2)
+            sigma(i) = sqrt(sigma2) * scale_v   ! cmp_sigma_turb works in code velocity units
          end do
       endif
       ! Dust densities in g/cm^3

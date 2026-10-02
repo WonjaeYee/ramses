@@ -2991,8 +2991,10 @@ module dust_photoelectric_heating
         call dustbins_props(i_dust)%peh_tab%interpolate(log_gamma, log_T, peh_rate, idx_g, idx_T)
         Pinj = exp(peh_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
 
+        ! The tables are at G0 = 1 (Mathis) with n_e = sqrt(T)/gamma, so at fixed (gamma, T) the
+        ! recombination cooling scales with n_e, i.e. with G0, as the heating does
         call dustbins_props(i_dust)%rec_tab%interpolate(log_gamma, log_T, cool_rate, idx_g, idx_T)
-        Prec = exp(cool_rate * ln10) ! [erg/s]
+        Prec = exp(cool_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
     end subroutine interpolate_dust_peh_rate
     
 
@@ -3319,7 +3321,7 @@ module pah_photoelectric_heating
                     k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
 
         f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_0))
+                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
 
         f_total = f_anion + f_neutral + f_1 + f_2
         nstates = pahbins_props(i_pah)%ncharge_states
@@ -3454,7 +3456,7 @@ module pah_photoelectric_heating
                     k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
         
         f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_0))
+                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
 
         ! 9. Normalise the fractions
         f_total = f_anion + f_neutral + f_1 + f_2
