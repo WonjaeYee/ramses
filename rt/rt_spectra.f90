@@ -699,11 +699,12 @@ SUBROUTINE init_SED_table()
            end if
         end do
         
-        ! Deal with molecules separately
+        ! Deal with molecules separately (3+counter, as the atoms above and as read back in
+        ! update_SED_group_props and the zero-age branch)
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-           tbl(ia,iz,2+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
+           tbl(ia,iz,3+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
            counter = counter + 1
-           tbl(ia,iz,2+counter) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
+           tbl(ia,iz,3+counter) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
            counter = counter + 1
         end if
 #else
@@ -1523,10 +1524,17 @@ FUNCTION getSEDcsn(X, Y, N, e0, e1, species, ion)
   use spectrum_integrator_module
   use rt_parameters,only:ionEVs
   real(kind=8):: getSEDcsn, X(N), Y(N), e0, e1, norm
+#ifdef RTZ
+  real(kind=8):: e_cut
+#endif
   integer :: N, species, ion
 !-------------------------------------------------------------------------
 #ifdef RTZ
-  if(e1 .gt. 0. .and. e1 .le. ionEvs(species, ion)) then
+  ! The H2 slot holds LW photodissociation (11.2-13.6 eV) as well as photoionisation (from
+  ! ionEvs(1,3)), so its groups are cut below the dissociation threshold instead
+  e_cut = ionEvs(species, ion)
+  if (species .eq. 1 .and. ion .eq. 3) e_cut = 11.2d0
+  if(e1 .gt. 0. .and. e1 .le. e_cut) then
 #else
   if(e1 .gt. 0. .and. e1 .le. ionEvs(species)) then
 #endif
@@ -1548,10 +1556,17 @@ FUNCTION getSEDcse(X, Y, N, e0, e1, species, ion)
   use spectrum_integrator_module
   use rt_parameters,only:ionEVs
   real(dp):: getSEDcse, X(N), Y(N), e0, e1, norm
+#ifdef RTZ
+  real(kind=8):: e_cut
+#endif
   integer :: N, species, ion
 !-------------------------------------------------------------------------
 #ifdef RTZ
-  if(e1 .gt. 0. .and. e1 .le. ionEvs(species, ion)) then
+  ! The H2 slot holds LW photodissociation (11.2-13.6 eV) as well as photoionisation (from
+  ! ionEvs(1,3)), so its groups are cut below the dissociation threshold instead
+  e_cut = ionEvs(species, ion)
+  if (species .eq. 1 .and. ion .eq. 3) e_cut = 11.2d0
+  if(e1 .gt. 0. .and. e1 .le. e_cut) then
 #else
   if(e1 .gt. 0. .and. e1 .le. ionEvs(species)) then
 #endif

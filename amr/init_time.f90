@@ -333,8 +333,10 @@ subroutine init_time
   call load_UVB_data() 
 
   if(cosmo)then
-     call update_UVB((1.d0/dble(aexp_ini))-1.d0)
+     ! The current redshift: on a restart aexp_ini is still the starting one
+     call update_UVB((1.d0/dble(aexp))-1.d0)
   else
+     ! As in cooling_fine: aexp_ini <= 1 in the namelist selects the UVB redshift (default: none)
      call update_UVB((1.d0/dble(aexp_ini))-1.d0)
   end if
 
