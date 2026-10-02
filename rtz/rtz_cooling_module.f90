@@ -1970,7 +1970,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
 
             !! Destruction !!
-            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate) * f_shd_CO
+            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
             if (de_CO * ddt(icell) < 1.d-6) then
