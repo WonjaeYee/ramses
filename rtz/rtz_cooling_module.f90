@@ -1010,18 +1010,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%G0_background = UV_background_G0
       dust_helper%local_sigma = sigma(icell)
       dust_helper%smallNp = smallNp
-      drho_dust(:) = rho_dust(icell,1:ndust)
-      dust_helper%rho_dust = rho_dust(icell,1:ndust)
-      dust_helper%csa_dust = sigca_dust
-      dust_helper%css_dust = sigcs_dust
-      dust_helper%csr_dust = sigcr_dust
-      if (dust_ratd) dust_helper%csrat_dust = sigcrat_dust
-      if (dust_pe_heating) dust_helper%l_a = att_len_dust
-      drho_pah(:) = rho_pah(icell,1:npah)
-      dust_helper%rho_pah = rho_pah(icell,1:npah)
-      dust_helper%csa_pah = sigca_pah
-      dust_helper%css_pah = sigcs_pah
-      dust_helper%csr_pah = sigcr_pah
+      if (ndust > 0) then
+         drho_dust(:) = rho_dust(icell,1:ndust)
+         dust_helper%rho_dust = rho_dust(icell,1:ndust)
+         dust_helper%csa_dust = sigca_dust
+         dust_helper%css_dust = sigcs_dust
+         dust_helper%csr_dust = sigcr_dust
+         if (dust_ratd) dust_helper%csrat_dust = sigcrat_dust
+         if (dust_pe_heating) dust_helper%l_a = att_len_dust
+      end if
+      if (npah > 0) then
+         drho_pah(:) = rho_pah(icell,1:npah)
+         dust_helper%rho_pah = rho_pah(icell,1:npah)
+         dust_helper%csa_pah = sigca_pah
+         dust_helper%css_pah = sigcs_pah
+         dust_helper%csr_pah = sigcr_pah
+      end if
 #endif
 
       f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0
@@ -1405,14 +1409,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
       end if
       if (rt_isIR) then
-         do ii = 1, ndust
-            dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
-                  one_over_egy_IR_erg
-         end do
-         do ii = 1, npah
-            dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
-                  one_over_egy_IR_erg
-         end do
+         if (ndust > 0) then
+            do ii = 1, ndust
+               dNp(iIR) = dNp(iIR) + dust_helper%Prad_dust(ii) * ddt(icell) * &
+                     one_over_egy_IR_erg
+            end do
+         end if
+         if (npah > 0) then
+            do ii = 1, npah
+               dNp(iIR) = dNp(iIR) + dust_helper%Prad_pah(ii) * ddt(icell) * &
+                     one_over_egy_IR_erg
+            end do
+         end if
       end if
 #else
                     & )
@@ -2712,13 +2720,12 @@ SUBROUTINE rtz_run_single_cell_test(filename)
    real(dp), dimension(1:ndim, 1:nvector) :: p_gas_1
 #endif
 #ifdef CALIMA
+   ! Declared unconditionally: rtz_solve_cooling takes rho_dust/rho_pah as
+   ! non-optional intent(inout) arguments, so they must exist and be passed
+   ! whatever NDUST/NPAH are. Zero-size arrays are fine.
    real(dp), dimension(1:nvector) :: sigma_1
-#if NDUST>0
    real(dp), dimension(1:nvector, 1:ndust) :: rho_dust_1
-#endif
-#if NPAH>0
    real(dp), dimension(1:nvector, 1:npah) :: rho_pah_1
-#endif
 #endif
 
    real(dp) :: aexp_r, dt_r, rt_c_cgs_r, ddt_r, tleft_r
@@ -2801,13 +2808,13 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
         dt_r, 1, dx_SS_H2_r, err_idx_out &
 #ifdef CALIMA
+        ! rho_dust/rho_pah are intent(inout), not optional, so they must be
+        ! passed whatever NDUST/NPAH are (zero-size arrays are fine). Guarding
+        ! them made every NPAH=0 CALIMA+RTZ build fail to compile. Matches the
+        ! call in hydro/cooling_fine.f90.
         , sigma=sigma_1 &
-#if NDUST>0
         , rho_dust=rho_dust_1 &
-#endif
-#if NPAH>0
         , rho_pah=rho_pah_1 &
-#endif
 #endif
         , ddt_initial=ddt_r &
         , tleft_initial=tleft_r &

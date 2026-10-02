@@ -218,6 +218,7 @@ module dust_dynamics
             end do
         end if
 
+#if NPAH>0
         ! 2. Now do PAHs
         if (dust_pahs .and. pah_sn_destruction) then
             do ii=1,npah
@@ -237,6 +238,7 @@ module dust_dynamics
                 end if
             end do
         end if
+#endif
 
         ! 3. Check that the metals and dust/pahs are not negative
         if (any(metal_load .lt. 0d0)) then
