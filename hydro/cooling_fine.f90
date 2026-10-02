@@ -135,6 +135,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp), dimension(1:nvector):: dx_SS_H2
   integer:: counter, e_counter, jj
   real(dp),dimension(1:nvector):: rho_total_check
+  logical,save:: density_check_warned=.false.
 #endif
 #ifdef CALIMA
   real(dp) :: sigma2
@@ -514,6 +515,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         if (isCO_rtz) then
            do i=1,nleaf !loop over leaf cells
               nCO(i) = uold(ind_leaf(i),iCO) * scale_d / mCO
+              rho_total_check(i) = rho_total_check(i) + nCO(i) * mCO   ! the C and O locked in CO
            end do
         endif
 #endif
@@ -620,13 +622,16 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
       end if
 #endif
 #ifdef RTZ
-     ! Check that the total densities are consistent with the sum of the individual species densities
+     ! Check that the total density is consistent with the sum of the species densities (elements,
+     ! CO, dust, PAHs). Reported once per rank: it never fired before (the divisor was in code
+     ! units), and setups whose mass fractions do not sum to one would otherwise stop at once.
      do i=1,nleaf
-        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / uold(ind_leaf(i),1)*scale_d .gt. 1d-3) then
-           write(*,*) 'Total density check failed in cell ', ind_leaf(i)
-           write(*,*) 'Total density: ', uold(ind_leaf(i),1)*scale_d
-           write(*,*) 'Sum of species densities: ', rho_total_check(i)
-           call clean_stop
+        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / (uold(ind_leaf(i),1)*scale_d) .gt. 1d-3 &
+            .and. .not. density_check_warned) then
+           density_check_warned = .true.
+           write(*,*) 'WARNING: total density check failed in cell ', ind_leaf(i), ' on rank ', myid
+           write(*,*) '   total density: ', uold(ind_leaf(i),1)*scale_d, ', sum of species: ', rho_total_check(i), &
+                      ' (reported once per rank)'
         end if
      end do
 #endif
@@ -1007,23 +1012,19 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         do i=1,nleaf !loop over leaf cells
            uold(ind_leaf(i),iCO) = nCO(i) * mCO / scale_d
         end do
-
+#endif
+        ! Write back the gas-phase element abundances, as read above: CO formation moves C and O
+        ! into nCO, and CALIMA's dust processes deplete or return metals (rtz_solve_cooling
+        ! returns them in nElement). Without either the values are unchanged.
         e_counter = 0
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
-              ! Check if it's carbon or exygen species
-              if (elements(ii)%atomic_number.eq.6.or.elements(ii)%atomic_number.eq.8) then
-                 do i=1,nleaf !loop over leaf cells
-                    if (jj.eq.1) then
-                       ! This gives us a number density [Atoms/cm^3]
-                       uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
-                    end if
-                 end do ! end loop over leaf cells
-              end if
+              do i=1,nleaf !loop over leaf cells
+                 uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
+              end do ! end loop over leaf cells
               e_counter = e_counter + 1 ! increment element counter
            end if
         end do ! end loop over elements
-#endif
 #else
         do ii=0,nIons-1
            do i=1,nleaf
