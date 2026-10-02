@@ -5,6 +5,8 @@ subroutine backup_hydro(filename, filename_desc)
 #ifdef RTZ
   use rtz_module
   use rt_parameters, only:iIons, nIons, isCO_rtz, isH2_rtz
+#elif defined(RT)
+  use rt_parameters, only:iIons, nIons
 #endif
 #ifdef CALIMA
    use dust_commons, only:dustbins_props, pahbins_props
@@ -241,6 +243,12 @@ subroutine backup_hydro(filename, filename_desc)
                     end if
 
                  endif
+#elif defined(RT)
+                 if (ivar.ge.iIons .and. ivar.lt.iIons+nIons) then
+                    write(field_name, '("H_", i0.2)') ivar - iIons + 1
+                 else
+                    write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener
+                 end if
 #else
                     write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener
 #endif

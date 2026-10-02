@@ -61,7 +61,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef RT
 #ifdef RTZ
   use rt_parameters, only: nGroups, iGroups, rt_vc, iIR &
-                          ,iIRtrapVar
+                          ,iIRtrapVar, rt_kIR_RT15
   use rtz_cooling_module, only: rtz_solve_cooling, T2_min_fix
   use rtz_module, only: n_elements, elements
 #else
@@ -71,7 +71,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifndef RTZ
   use cooling_module
   use rt_cooling_module, only: rt_solve_cooling,iIR,rt_isIRtrap &
-       ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc
+       ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc,rt_kIR_RT15
 #endif
 #else
    use cooling_module, only: X, T2_min_fix,solve_cooling
@@ -80,8 +80,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   ! used unconditionally (the H2 self-shielding length), so it belongs here.
   use constants, only: a_r, Myr2sec, mH, pi, rhoc, twopi
 #ifdef CALIMA
-  use dust_commons, only: dust,comp_sigma_turb
+  use dust_commons, only: dust,comp_sigma_turb,dustbins_props,pahbins_props, &
+                          tva_test_mode,TVA_TEST_IRTRAP
   use dust_utils, only: cmp_sigma_turb
+  use dust_optics, only: get_IR_mean_cross_sections
 #endif
   use mpi_mod
   implicit none
@@ -139,6 +141,11 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp),dimension(1:nvector) :: sigma
   real(dp),dimension(1:nvector,1:ndust) :: rho_dust
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
+  integer :: jbin
+  ! IR trapping from the actual CALIMA Rosseland extinction
+  real(dp) :: chi_R_IR, E_IR_loc, T_rad_loc
+  real(dp),dimension(max(1,ndust))  :: sigR_IR_dust, sigP_IR_dust
+  real(dp),dimension(max(1,2*npah)) :: sigR_IR_pah,  sigP_IR_pah
 #endif
 
   real(dp)::factG
@@ -249,6 +256,18 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            Zsolar(i)=z_ave
         end do
      endif
+#else
+     ! RTZ tracks each element separately, so there is no single "metallicity in
+     ! solar units" to compute -- but Zsolar is still USED further down, for the
+     ! photon-trapping optical depth (:1022) and the rt_vc radiation work term
+     ! (:334). It was never assigned in an RTZ build (the block above is
+     ! #ifndef RTZ), so both were silently dead: tau = 0 gave f_trap = 0 and
+     ! nothing was ever trapped. Fall back to z_ave, which is what the
+     ! non-metal branch above does. The CALIMA build does not use this: it
+     ! substitutes the real Rosseland extinction (see the #ifdef CALIMA blocks).
+     do i=1,nleaf
+        Zsolar(i)=z_ave
+     end do
 #endif
 
 #ifdef RT
@@ -294,14 +313,49 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
               end do
               TR = max(0d0,(E_rad*rt_c_cgs(ilevel)/c_cgs/a_r)**0.25d0)! Rad. temp.
               ! Set the IR opacity according to the rad. temperature:
-              kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              ! RT15's version has no sublimation cutoff here (their
+              ! cooling_fine reads kScIR = kappaSc(iIR)*(TR/10d0)**2), so
+              ! rt_kIR_RT15 drops it.
+              if(rt_kIR_RT15) then
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2
+              else
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              endif
            endif
            kIR = kIR*scale_d*scale_l           !  Convert to code units
            flux = rtuold(il,iNp+1:iNp+ndim)
+#ifdef CALIMA
+           ! kIR*Zsolar*f_dust is the effective dust opacity per gram of gas,
+           ! in code units. CALIMA knows that quantity directly as
+           ! chi_R_IR/rho_cgs, so substitute it and leave every other factor
+           ! alone. Needed because Zsolar is never assigned in an RTZ build
+           ! (its loop is #ifndef RTZ), which silently zeroed this term.
+           ! rho_dust is not filled yet at this point in coolfine1, so read the
+           ! dust densities straight out of uold.
+           E_IR_loc = group_egy(iIR) * eV2erg * max(NIRtot,smallNp) * scale_Np
+           call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel), &
+                                           sigR_IR_dust, sigP_IR_dust,      &
+                                           sigR_IR_pah,  sigP_IR_pah, T_rad_loc)
+           chi_R_IR = 0d0
+           do jbin = 1, ndust
+              chi_R_IR = chi_R_IR + sigR_IR_dust(jbin)                      &
+                       * max(uold(il,idust+jbin-1),0d0) * scale_d           &
+                       / dustbins_props(jbin)%mgrain
+           end do
+           do jbin = 1, npah
+              chi_R_IR = chi_R_IR + 0.5d0 * (sigR_IR_pah(2*(jbin-1)+1)      &
+                                           + sigR_IR_pah(2*(jbin-1)+2))     &
+                       * max(uold(il,ipah+jbin-1),0d0) * scale_d            &
+                       / pahbins_props(jbin)%mpah
+           end do
+           work = scale_v/c_cgs * (chi_R_IR * scale_l / max(uold(il,1),smallr)) &
+                * sum(uold(il,2:ndim+1)*flux) * dtnew(ilevel) !         Eq A6
+#else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
            f_dust = (1d0-xHII)                     ! No dust in ionised gas
            work = scale_v/c_cgs * kIR * sum(uold(il,2:ndim+1)*flux) &
                 * Zsolar(i) * f_dust * dtnew(ilevel) !               Eq A6
+#endif
 
            uold(il,neul) = uold(il,neul) &    ! Add work to gas energy
                 + work * group_egy(iIR) &
@@ -310,8 +364,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            rtuold(il,iNp) = rtuold(il,iNp) - work !Remove from rad density
            rtuold(il,iNp) = max(rtuold(il,iNp),smallnp)
            ! Reduce the flux to c*Np if necessary:
+           ! rt_c(ilevel) DIVIDES here: the reduced flux is |Fp|/(c*Np). Upstream
+           ! 7f8712f0 inlined reduce_flux(Fp, Np*rt_c) as ".../Np*rt_c", which
+           ! Fortran evaluates as (|Fp|/Np)*rt_c, i.e. rt_c(ilevel)**2 too big,
+           ! so every cell got clamped to a reduced flux of 1/rt_c(ilevel)**2
+           ! and the streaming IR carried essentially no momentum.
            fred = sqrt(sum(rtuold(il,iNp+1:iNp+ndim)**2)) &
-                / rtuold(il,iNp)*rt_c(ilevel)
+                / rtuold(il,iNp)/rt_c(ilevel)
            if(fred .gt. 1.d0) &
                 rtuold(il,iNp+1:iNp+ndim) = rtuold(il,iNp+1:iNp+ndim)/fred
         enddo
@@ -520,37 +579,49 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 
 #ifdef CALIMA
-     ! Get the quantities necessary for CALIMA dust modelling
-     ! Compute the local velocity dispersion sigma in cm/s
-     sigma(1:nvector) = 0.0d0
-     if (comp_sigma_turb) then
-        do i=1,nleaf
-           call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
-           sigma(i) = sqrt(sigma2) * scale_v   ! cmp_sigma_turb works in code velocity units
-        end do
-     endif
-     ! Dust densities in g/cm^3
-     do i=1,nleaf
-        rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
-        rho_total_check(i) = rho_total_check(i) + sum(rho_dust(i,:))
-     end do
-     if (any(rho_dust(:,:).lt.0d0)) then
-        write(*,*) 'Negative dust density in cell ', ind_leaf(i)
-        write(*,*) 'Dust density: ', rho_dust(i,:)
-        write(*,*) 'PAH density : ', rho_pah(i,:)
-        call clean_stop
-     end if
-     ! PAH densities in g/cm^3
-     do i=1,nleaf
-        rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
-        rho_total_check(i) = rho_total_check(i) + sum(rho_pah(i,:))
-     end do
-     if (any(rho_pah(:,:).lt.0d0)) then
-        write(*,*) 'Negative PAH density in cell ', ind_leaf(i)
-        write(*,*) 'Dust density: ', rho_dust(i,:)
-        write(*,*) 'PAH density: ', rho_pah(i,:)
-        call clean_stop
-     end if
+      ! Get the quantities necessary for CALIMA dust modelling
+      ! Compute the local velocity dispersion sigma in cm/s
+      sigma(1:nvector) = 0.0d0
+      if (comp_sigma_turb) then
+         do i=1,nleaf
+            call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
+            sigma(i) = sqrt(sigma2) * scale_v   ! cmp_sigma_turb works in code velocity units
+         end do
+      endif
+      ! Dust densities in g/cm^3
+      do i=1,nleaf
+         do jbin=1,ndust
+            if (uold(ind_leaf(i),idust+jbin-1) .lt. -1d-10) then
+               write(*,*) 'Significant negative dust density in cell ', ind_leaf(i)
+               write(*,*) 'Code value: ', uold(ind_leaf(i),idust+jbin-1)
+               write(*,*) 'uold(ind_leaf(i),idust:idust-1+ndust): ',uold(ind_leaf(i),idust:idust-1+ndust)
+               call clean_stop
+            end if
+            uold(ind_leaf(i),idust+jbin-1) = max(uold(ind_leaf(i),idust+jbin-1), 0.0d0)
+         end do
+         rho_dust(i,:) = uold(ind_leaf(i),idust:idust-1+ndust) * scale_d
+#ifdef RTZ
+         ! rho_total_check is only declared (and only consumed) under RTZ
+         rho_total_check(i) = rho_total_check(i) + sum(rho_dust(i,:))
+#endif
+      end do
+      ! PAH densities in g/cm^3
+      if (npah > 0) then
+         do i=1,nleaf
+            do jbin=1,npah
+               if (uold(ind_leaf(i),ipah+jbin-1) .lt. -1d-10) then
+                  write(*,*) 'Significant negative PAH density in cell ', ind_leaf(i)
+                  write(*,*) 'Code value: ', uold(ind_leaf(i),ipah+jbin-1)
+                  call clean_stop
+               end if
+               uold(ind_leaf(i),ipah+jbin-1) = max(uold(ind_leaf(i),ipah+jbin-1), 0.0d0)
+            end do
+            rho_pah(i,:) = uold(ind_leaf(i),ipah:ipah-1+npah) * scale_d
+#ifdef RTZ
+            rho_total_check(i) = rho_total_check(i) + sum(rho_pah(i,:))
+#endif
+         end do
+      end if
 #endif
 #ifdef RTZ
      ! Check that the total density is consistent with the sum of the species densities (elements,
@@ -800,7 +871,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #else
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &
-                             ,nleaf, ilevel)
+                             ,nleaf, ilevel                              &
+#ifdef CALIMA
+                             ! sigma / rho_dust / rho_pah are gathered above,
+                             ! outside #ifdef RTZ, so they are already available
+                             ! in an RT+CALIMA build without RTZ.
+                             ,sigma, rho_dust, rho_pah                   &
+#endif
+                             )
 #endif
         delta_T2(1:nleaf) = T2_new(1:nleaf) - T2(1:nleaf)
      endif
@@ -901,13 +979,15 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      endif
 
 #ifdef CALIMA
-     ! Update dust and PAH densities for CALIMA
-     do i=1,nleaf
-        uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
-     end do
-     do i=1,nleaf
-        uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
-     end do
+      ! Update dust and PAH densities for CALIMA
+      do i=1,nleaf
+         uold(ind_leaf(i),idust:idust-1+ndust) = rho_dust(i,:) / scale_d
+      end do
+      if (npah > 0) then
+         do i=1,nleaf
+            uold(ind_leaf(i),ipah:ipah-1+npah) = rho_pah(i,:) / scale_d
+         end do
+      end if
 #endif
 #ifdef RT
      if(neq_chem) then
@@ -998,16 +1078,58 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
               end do
               TR = max(0d0,(E_rad*rt_c_cgs(ilevel)/c_cgs/a_r)**0.25d0)! Rad. temp.
               ! Set the IR opacity according to the rad. temperature:
-              kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              ! RT15's version has no sublimation cutoff here (their
+              ! cooling_fine reads kScIR = kappaSc(iIR)*(TR/10d0)**2), so
+              ! rt_kIR_RT15 drops it.
+              if(rt_kIR_RT15) then
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2
+              else
+                 kIR  = kappaSc(iIR)  * (TR/10d0)**2 * exp(-TR/1d3)
+              endif
            endif
 #ifdef RTZ
            f_dust = 1d0-xion(1,2,i)                ! No dust in ionised gas
 #else
            f_dust = 1d0-xion(ixHII,i)              ! No dust in ionised gas
 #endif
+#ifdef CALIMA
+           ! CALIMA carries real per-bin dust densities, so build the
+           ! cell-crossing optical depth from the actual Rosseland extinction
+           ! rather than the nH*Zsolar*(1-xHII) proxy. That proxy was in fact
+           ! dead in an RTZ build: the Zsolar loop above is inside #ifndef RTZ,
+           ! so Zsolar was never assigned, tau was 0 and nothing was ever
+           ! trapped. tau here is (3/2)*tau_c, so f_trap = exp(-1/tau) is
+           ! exp(-2/(3 tau_c)) -- RT15 eq. 50, unchanged.
+           E_IR_loc = group_egy(iIR) * eV2erg * NIRtot * scale_Np
+           call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel), &
+                                           sigR_IR_dust, sigP_IR_dust,      &
+                                           sigR_IR_pah,  sigP_IR_pah, T_rad_loc)
+           chi_R_IR = 0d0
+           do jbin = 1, ndust
+              chi_R_IR = chi_R_IR + sigR_IR_dust(jbin) * rho_dust(i,jbin) &
+                                  / dustbins_props(jbin)%mgrain
+           end do
+           ! PAHs: the local charge fraction is not available here, so take the
+           ! mean of the two charge states. Their IR opacity is a small
+           ! correction (PAHs are far smaller than IR wavelengths).
+           do jbin = 1, npah
+              chi_R_IR = chi_R_IR + 0.5d0 * (sigR_IR_pah(2*(jbin-1)+1)      &
+                                           + sigR_IR_pah(2*(jbin-1)+2))     &
+                                  * rho_pah(i,jbin) / pahbins_props(jbin)%mpah
+           end do
+           tau = 1.5d0 * dx_loc * scale_l * chi_R_IR
+#else
            tau = nH(i) * Zsolar(i) * f_dust * unit_tau * kIR
+#endif
            f_trap = 0d0             ! Fraction IR photons that are trapped
            if(tau .gt. 0d0) f_trap = min(max(exp(-1d0/tau), 0d0), 1d0)
+#ifdef CALIMA
+           ! dustyirtrap test: hold the analytic E_trap profile imposed in
+           ! condinit instead of re-deriving it from the RT field, so
+           ! grad(P_trap) stays known. Same idea as TVA_TEST_SPRESS, which
+           ! overrides the advected flux with the prescribed source.
+           if (tva_test_mode == TVA_TEST_IRTRAP) cycle
+#endif
            ! Update streaming photons, trapped photons, and tot energy:
            rtuold(il,iNp) = max(smallnp,(1d0-f_trap) * NIRtot) ! Streaming
            rtuold(il,iNp+1:iNp+ndim) = &            ! Limit streaming flux
@@ -1019,8 +1141,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            uold(il,iIRtrapVar) = EIR_trapped
 
            ! Reduce the flux to c*Np if necessary:
+           ! rt_c(ilevel) DIVIDES here: the reduced flux is |Fp|/(c*Np). Upstream
+           ! 7f8712f0 inlined reduce_flux(Fp, Np*rt_c) as ".../Np*rt_c", which
+           ! Fortran evaluates as (|Fp|/Np)*rt_c, i.e. rt_c(ilevel)**2 too big,
+           ! so every cell got clamped to a reduced flux of 1/rt_c(ilevel)**2
+           ! and the streaming IR carried essentially no momentum.
            fred = sqrt(sum(rtuold(il,iNp+1:iNp+ndim)**2)) &
-                / rtuold(il,iNp)*rt_c(ilevel)
+                / rtuold(il,iNp)/rt_c(ilevel)
            if(fred .gt. 1.d0) &
                 rtuold(il,iNp+1:iNp+ndim) = rtuold(il,iNp+1:iNp+ndim)/fred
         end do ! i=1,nleaf
