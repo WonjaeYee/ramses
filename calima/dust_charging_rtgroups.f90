@@ -50,7 +50,8 @@ module dust_charging_rtgroups
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup, psitab_dump
-    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, &
+    public :: dust_charge_moments
+    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, &
               RTG_RECOMB_IMPORTANT
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the (reused) fit
     integer, parameter :: RTG_ALPHA_NONE = 0, RTG_ALPHA_GAUSS = 1, RTG_ALPHA_FIT = 2
@@ -65,6 +66,7 @@ module dust_charging_rtgroups
     real(dp), parameter :: RTG_MU = 1.66053906660d-24
     real(dp), parameter :: GRAPHITE_WF = 4.4d0, SILICATE_WF = 8.0d0, SILICATE_GAP = 5.0d0
     real(dp), parameter :: U_SCALE = 0.5d0, SIGMA_DISCRETE = 3d0, DISCRETE_TAIL = 1d-5
+    integer, parameter :: SIGMA_CHORD_ITER = 3       ! at most this many chords for the width of a wide P(Z)
     integer, parameter :: MAX_DISCRETE_STATES = 121, NBUF = 3*MAX_DISCRETE_STATES + 4
     real(dp), parameter :: M_HION = 1.67262192d-24, M_HEION = 6.6446573d-24
     ! uniform-G0 table grid: identical to pyCALIMA rt_group_charging UNIF_LT / UNIF_LNE
@@ -110,6 +112,7 @@ module dust_charging_rtgroups
     type RTGState
         logical :: valid = .false., discrete = .false.
         real(dp) :: Zstar = 0d0, wlo = 0d0, whi = 0d0        ! last root; discrete window ends
+        real(dp) :: Zsigma = 0d0                             ! last width (start of the chord of a wide P(Z))
         integer :: nx = 0                                    ! recombination fit reference (0: none):
         real(dp) :: x(RTG_MAXX) = 0d0, alpha(RTG_NRI) = 0d0  ! ln inputs, alpha and Gaussian estimate
         real(dp) :: lg(RTG_NRI) = 0d0
@@ -125,13 +128,21 @@ module dust_charging_rtgroups
 
     ! charging_model = 'WDB06tab': per-bin tables on (log T, log psi_F, h, psi_E), pyCALIMA charging_psi_tables
     integer, parameter :: PSI_NQ = 5 + RTG_NRI      ! Zmean, Zsigma, ln gamma_F, ln gamma_E, lambda, ln alpha_i
-    integer, parameter :: PSI_SOFT = 1, PSI_HARD = 2, PSI_EUV = 3
+    integer, parameter :: PSI_SOFT = 1, PSI_HARD = 2, PSI_EUV = 3, PSI_EUV_HE = 4, PSI_EUV_HEP = 5
+    integer, parameter :: PSI_NIN = 5                ! cell inputs: G_F, h, G_E, h_E1, h_E2
+    ! along psi_E the lookup is cubic for Zmean, Zsigma and lambda (q 1, 2, 5), and for the
+    ! logarithms (ln gamma, ln alpha) where none of the four nodes is below PSI_LN_FLOOR_CUBIC
+    real(dp), parameter :: PSI_LN_FLOOR_CUBIC = log(1d-250)
+    ! EUV hardness segments with both nodes in (0, PSI_HE_LOG_MAX] are interpolated in log h_E
+    ! (pyCALIMA charging_psi_tables.HE_LOG_MAX)
+    real(dp), parameter :: PSI_HE_LOG_MAX = 0.15d0
     type PsiTable
-        integer :: nG = 0, nT = 0, nPF = 0, nH = 0, nPE = 0
+        integer :: nG = 0, nT = 0, nPF = 0, nH = 0, nHE1 = 0, nHE2 = 0, nPE = 0
         real(dp) :: a = 0d0, T_bb = 0d0, F0 = 0d0, bg(2) = 0d0
         integer, allocatable :: roles(:)
-        real(dp), allocatable :: w(:), L0(:), L1(:), egy(:), lT(:), lpsiF(:), h(:), psiE(:), lpsiE(:)
-        real(kind=4), allocatable :: q(:,:,:,:,:)  ! (nPE, nH, nPF, nT, PSI_NQ), as stored (float32)
+        real(dp), allocatable :: w(:), L0(:), L1(:), egy(:), lT(:), lpsiF(:), h(:), psiE(:), lpsiE(:)   ! h: sqrt(h) nodes
+        real(dp), allocatable :: hE1(:), hE2(:)    ! EUV hardness nodes: F(>= 24.59 eV)/F_EUV, F(>= 54.42)/F(>= 24.59)
+        real(kind=4), allocatable :: q(:,:,:,:,:,:,:)  ! (nPE, nHE2, nHE1, nH, nPF, nT, PSI_NQ), as stored (float32)
     end type PsiTable
     type(PsiTable), allocatable, save :: pst(:)
     integer, save :: psi_debug_unit = 0, psi_debug_count = 0
@@ -832,6 +843,40 @@ module dust_charging_rtgroups
         if (sl < 0d0) sigma = sqrt(-1d0/sl)
     end subroutine slope_at
 
+    subroutine chord_sigma(Zs, sigma, chord, have)
+        ! pyCALIMA GroupChargingTable._chord: sigma from the chord of g over the integers
+        ! floor(Z*) - k + 1 .. floor(Z*) + k, k = nint(sigma), re-centred until k is stable
+        ! (sigma in: the starting width); the secant at Z* +- 1/2 is off by up to ~3x next
+        ! to a kink of g. have: a chord with g decreasing was found (chord = lo, hi, g(lo), g(hi))
+        implicit none
+        real(dp), intent(in) :: Zs
+        real(dp), intent(inout) :: sigma
+        real(dp), intent(out) :: chord(4)
+        logical, intent(out) :: have
+        real(dp) :: Zlo, Zhi, lo, hi, glo, ghi, sl
+        integer :: it, k, kn
+        Zlo = rtg(c_bin)%Zmin
+        Zhi = rtg(c_bin)%Zmax - 1d0
+        have = .false.
+        chord = 0d0
+        k = -1
+        do it = 1, SIGMA_CHORD_ITER
+            kn = max(1, nint(sigma))
+            if (kn == k) exit
+            k = kn
+            lo = max(dble(floor(Zs)) - dble(k) + 1d0, Zlo)
+            hi = min(dble(floor(Zs)) + dble(k), Zhi)
+            if (hi <= lo) exit
+            glo = gfun(lo)
+            ghi = gfun(hi)
+            sl = (ghi - glo)/(hi - lo)
+            if (sl >= 0d0) exit
+            sigma = sqrt(-1d0/sl)
+            chord = (/ lo, hi, glo, ghi /)
+            have = .true.
+        end do
+    end subroutine chord_sigma
+
     subroutine find_root(Z_guess, st, Zs, sigma, pair)
         ! pyCALIMA GroupChargingTable._root
         implicit none
@@ -1530,10 +1575,10 @@ module dust_charging_rtgroups
         type(RTGState), intent(inout) :: st
         integer, intent(in) :: alpha_mode
         type(RTGResult), intent(out) :: r
-        real(dp) :: Zs, sigma, pair(4), h, s0, s1, Zs1, sig1
+        real(dp) :: Zs, sigma, pair(4), h, s0, s1, Zs1, sig1, chord(4)
         real(dp) :: gm1, gp1, gam1, lam1, c(NBUF), cb, dvar, je, dje, EA, arrive2, zr, lg(RTG_NRI)
         integer :: lo, hi, k, j, half, Zc
-        logical :: disc, got, want_d
+        logical :: disc, got, want_d, have_chord
 
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
@@ -1568,6 +1613,12 @@ module dust_charging_rtgroups
             disc = .true.
         else
             call find_root(Z_guess, st, Zs, sigma, pair)
+            have_chord = .false.
+            if (sigma >= SIGMA_DISCRETE) then
+                ! warm and wide: start the chord from the last width, usually one chord
+                if (st%valid .and. .not. st%discrete) sigma = st%Zsigma
+                call chord_sigma(Zs, sigma, chord, have_chord)
+            end if
             disc = sigma < SIGMA_DISCRETE
             if (disc) then
                 half = ceiling(3d0*max(sigma, 0.5d0))
@@ -1660,6 +1711,11 @@ module dust_charging_rtgroups
                 Zs1 = Zs + (pair(1) - gm1/s1) - (pair(1) - pair(3)/s0)
                 sig1 = sigma
                 if (s1 < 0d0) sig1 = sqrt(-1d0/s1)
+                if (have_chord) then
+                    s1 = (gfun(chord(2)) - gfun(chord(1)))/(chord(2) - chord(1))
+                    sig1 = sigma
+                    if (s1 < 0d0) sig1 = sqrt(-1d0/s1)
+                end if
                 call heating_cooling(Zs1 + 0.5d0, gam1, lam1)
                 call set_cell_T(T)
                 h = log1p(dlnT)
@@ -1672,6 +1728,7 @@ module dust_charging_rtgroups
         st%valid = .true.
         st%discrete = disc
         st%Zstar = Zs
+        st%Zsigma = r%Zsigma
     contains
         real(dp) function gwin(k)
             ! g increment of the window from charge k to k + 1
@@ -1794,8 +1851,8 @@ module dust_charging_rtgroups
         debug_unit = 931
         write(fname, '(A,I5.5,A)') 'dust_rtgroups_debug_', myid, '.dat'
         open(debug_unit, file=trim(fname), status='replace')
-        write(debug_unit, '(A)') '# WDB06rt calls, format 4. One line per call: icell bin path T ne n_Hp n_Hep n_Hepp '// &
-            'm_Hion m_Heion c_red G0_bg nG Np(nG) egy(nG) Z_guess | warm: valid discrete Zstar wlo whi nx x(nx) alpha(10) lg(10) | '// &
+        write(debug_unit, '(A)') '# WDB06rt calls, format 5. One line per call: icell bin path T ne n_Hp n_Hep n_Hepp '// &
+            'm_Hion m_Heion c_red G0_bg nG Np(nG) egy(nG) Z_guess | warm: valid discrete Zstar wlo whi Zsigma nx x(nx) alpha(10) lg(10) | '// &
             'Zmean Zsigma Gamma Lambda Lambda_auto Zstar discrete dZmean dZsigma dGamma dLambda nfit refined alpha(10). '// &
             'path 0: full solve, 1: uniform-G0 table, 2: from the d/dlnT of the last solve (outputs at T, ln(T/T_last) in Zstar)'
         write(debug_unit, '(A)') '# lines "R" mark a reset of the warm states (new cell vector)'
@@ -1830,8 +1887,8 @@ module dust_charging_rtgroups
         write(debug_unit, '(9(1X,ES23.15E3))', advance='no') T, ne, n_Hp, n_Hep, n_Hepp, M_HION, M_HEION, c_red, G0_bg
         write(debug_unit, '(1X,I3)', advance='no') nG
         write(debug_unit, '(*(1X,ES23.15E3))', advance='no') Np(1:nG), egy(1:nG), max(Z_guess, -1d300)
-        write(debug_unit, '(1X,L1,1X,L1,3(1X,ES23.15E3),1X,I3)', advance='no') st0%valid, st0%discrete, &
-            st0%Zstar, st0%wlo, st0%whi, st0%nx
+        write(debug_unit, '(1X,L1,1X,L1,4(1X,ES23.15E3),1X,I3)', advance='no') st0%valid, st0%discrete, &
+            st0%Zstar, st0%wlo, st0%whi, st0%Zsigma, st0%nx
         if (st0%nx > 0) write(debug_unit, '(*(1X,ES23.15E3))', advance='no') st0%x(1:st0%nx)
         write(debug_unit, '(*(1X,ES23.15E3))', advance='no') st0%alpha, st0%lg
         write(debug_unit, '(6(1X,ES23.15E3),1X,L1,4(1X,ES23.15E3),1X,I1,1X,L1)', advance='no') r%Zmean, r%Zsigma, &
@@ -1873,9 +1930,9 @@ module dust_charging_rtgroups
                 if (line(1:1) /= '#') exit
             end do
             associate(tb => pst(ii))
-                read(line, *) ver, mcode, tb%a, W, tb%nG, tb%nT, tb%nPF, tb%nH, tb%nPE, tb%T_bb, tb%F0
-                if (ver /= 3) then
-                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' has format ', ver, ', expected 3 (re-export)'
+                read(line, *) ver, mcode, tb%a, W, tb%nG, tb%nT, tb%nPF, tb%nH, tb%nHE1, tb%nHE2, tb%nPE, tb%T_bb, tb%F0
+                if (ver /= 5) then
+                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' has format ', ver, ', expected 5 (re-export)'
                     call clean_stop
                 end if
                 if (tb%nG /= nGroups) then
@@ -1883,8 +1940,8 @@ module dust_charging_rtgroups
                     call clean_stop
                 end if
                 allocate(tb%roles(tb%nG), tb%w(tb%nG), tb%L0(tb%nG), tb%L1(tb%nG), tb%egy(tb%nG), tb%lT(tb%nT), &
-                         tb%lpsiF(tb%nPF), tb%h(tb%nH), tb%psiE(tb%nPE), tb%lpsiE(tb%nPE - 1), &
-                         tb%q(tb%nPE, tb%nH, tb%nPF, tb%nT, PSI_NQ))
+                         tb%lpsiF(tb%nPF), tb%h(tb%nH), tb%hE1(tb%nHE1), tb%hE2(tb%nHE2), tb%psiE(tb%nPE), &
+                         tb%lpsiE(tb%nPE - 1), tb%q(tb%nPE, tb%nHE2, tb%nHE1, tb%nH, tb%nPF, tb%nT, PSI_NQ))
                 read(iu, *) tb%roles
                 read(iu, *) tb%w
                 read(iu, *) tb%L0
@@ -1894,6 +1951,8 @@ module dust_charging_rtgroups
                 read(iu, *) tb%lT
                 read(iu, *) tb%lpsiF
                 read(iu, *) tb%h
+                read(iu, *) tb%hE1
+                read(iu, *) tb%hE2
                 read(iu, *) tb%psiE
                 close(iu)
                 tb%lpsiE = log10(tb%psiE(2:tb%nPE))
@@ -1918,8 +1977,8 @@ module dust_charging_rtgroups
                         ' has asize = ', dustbins_props(ii)%asize_cm, ' cm'
                     call clean_stop
                 end if
-                if (myid == 1) write(*,'(A,A,A,ES12.5,A,4I4)') ' WDB06tab: read ', trim(dustlabel), ', a = ', tb%a, &
-                    ' cm, grid (T, psi_F, h, psi_E) ', tb%nT, tb%nPF, tb%nH, tb%nPE
+                if (myid == 1) write(*,'(A,A,A,ES12.5,A,6I4)') ' WDB06tab: read ', trim(dustlabel), ', a = ', tb%a, &
+                    ' cm, grid (T, psi_F, sqrt h, h_E1, h_E2, psi_E) ', tb%nT, tb%nPF, tb%nH, tb%nHE1, tb%nHE2, tb%nPE
             end associate
         end do
     end subroutine init_dust_charging_psitab
@@ -1940,12 +1999,13 @@ module dust_charging_rtgroups
         end do
     end subroutine psitab_check_egy
 
-    subroutine psitab_inputs(Np, c_red, G0_bg, egy, G_F, h, G_E)
-        ! G_FUV, FUV hardness and G_EUV of the cell (pyCALIMA charging_psi_tables.cell_inputs)
+    subroutine psitab_inputs(Np, c_red, G0_bg, egy, pin)
+        ! pin = G_FUV, FUV hardness, G_EUV and the EUV hardnesses h_E1 = F(>= 24.59 eV)/F_EUV,
+        ! h_E2 = F(>= 54.42 eV)/F(>= 24.59 eV) of the cell (pyCALIMA charging_psi_tables.cell_inputs)
         implicit none
         real(dp), intent(in) :: Np(:), c_red, G0_bg, egy(:)
-        real(dp), intent(out) :: G_F, h, G_E
-        real(dp) :: F_s, F_h, F_e
+        real(dp), intent(out) :: pin(PSI_NIN)
+        real(dp) :: F_s, F_h, F_e(3)
         integer :: g
         call psitab_check_egy(egy)
         F_s = 0d0
@@ -1954,30 +2014,42 @@ module dust_charging_rtgroups
         do g = 1, pst(1)%nG
             if (pst(1)%roles(g) == PSI_SOFT) F_s = F_s + Np(g)
             if (pst(1)%roles(g) == PSI_HARD) F_h = F_h + Np(g)
-            if (pst(1)%roles(g) == PSI_EUV) F_e = F_e + Np(g)
+            if (pst(1)%roles(g) >= PSI_EUV) F_e(pst(1)%roles(g) - PSI_EUV + 1) = F_e(pst(1)%roles(g) - PSI_EUV + 1) + Np(g)
         end do
         F_s = c_red*F_s + G0_bg*pst(1)%bg(1)
         F_h = c_red*F_h + G0_bg*pst(1)%bg(2)
-        G_F = (F_s + F_h)/pst(1)%F0
-        h = 0d0
-        if (F_s + F_h > 0d0) h = F_h/(F_s + F_h)
-        G_E = c_red*F_e/pst(1)%F0
+        pin(1) = (F_s + F_h)/pst(1)%F0
+        pin(2) = 0d0
+        if (F_s + F_h > 0d0) pin(2) = F_h/(F_s + F_h)
+        pin(3) = c_red*sum(F_e)/pst(1)%F0
+        pin(4) = 0d0
+        if (sum(F_e) > 0d0) pin(4) = (F_e(2) + F_e(3))/sum(F_e)
+        pin(5) = 0d0
+        if (F_e(2) + F_e(3) > 0d0) pin(5) = F_e(3)/(F_e(2) + F_e(3))
     end subroutine psitab_inputs
 
-    subroutine psitab_lookup(ii, T, ne, G_F, h, G_E, Zmean, Zsigma, Gamma, Lambda, alpha)
-        ! pyCALIMA charging_psi_tables.psi_lookup: quadrilinear in (log T, log psi_F, h, psi_E),
-        ! clamped; Lambda includes autoionisation
+    subroutine psitab_lookup(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha)
+        ! pyCALIMA charging_psi_tables.psi_lookup: multilinear in (log T, log psi_F, sqrt h) and
+        ! cubic in log psi_E (4-point Lagrange; linear next to psi_E = 0 and the ends; the
+        ! logarithms stay linear where a node is at the floor) at each corner of the EUV
+        ! hardness axes (not equally spaced, log segments below PSI_HE_LOG_MAX), which are then
+        ! combined linearly, the heating in gamma rather than ln gamma; clamped (an axis with one
+        ! node is not interpolated); pin from psitab_inputs; Lambda includes autoionisation
         implicit none
         integer, intent(in) :: ii
-        real(dp), intent(in) :: T, ne, G_F, h, G_E
+        real(dp), intent(in) :: T, ne, pin(PSI_NIN)
         real(dp), intent(out) :: Zmean, Zsigma, Gamma, Lambda, alpha(RTG_NRI)
-        real(dp) :: sq, u, v, x, s, pE, c(PSI_NQ), wi, wj, wm, wk
-        integer :: i, j, m, k, di, dj, dm, dk, iq
-        associate(tb => pst(ii))
+        real(dp) :: sq, u, v, x, s, pE, c(PSI_NQ), wi, wj, wm, wk, y1, y2, w1, w2, wijm
+        real(dp) :: cub(PSI_NQ), low(PSI_NQ), wc(-1:2), node, lin(PSI_NQ), gam(2)
+        integer :: i, j, m, k, di, dj, dm, dk, iq, e1, e2, d1, d2, k0, k1
+        logical :: cubic
+        associate(tb => pst(ii), G_F => pin(1), h => pin(2), G_E => pin(3))
             sq = sqrt(T)
             call grid_index(log10(T), tb%lT, tb%nT, i, u)
             call grid_index(log10(max(G_F*sq/max(ne, RTG_TINY), RTG_TINY)), tb%lpsiF, tb%nPF, j, v)
-            call grid_index(h, tb%h, tb%nH, m, x)
+            call grid_index(sqrt(max(h, 0d0)), tb%h, tb%nH, m, x)      ! the hardness axis is uniform in sqrt(h)
+            call he_index(pin(4), tb%hE1, tb%nHE1, e1, y1)
+            call he_index(pin(5), tb%hE2, tb%nHE2, e2, y2)
             pE = G_E*sq/max(ne, RTG_TINY)
             if (pE <= tb%psiE(2)) then
                 k = 1
@@ -1986,36 +2058,107 @@ module dust_charging_rtgroups
                 call grid_index(log10(pE), tb%lpsiE, tb%nPE - 1, k, s)
                 k = k + 1
             end if
+            ! weights along psi_E (pyCALIMA _psiE_weights): cubic on the logarithmic planes k-1..k+2
+            cubic = k >= 3 .and. k + 2 <= tb%nPE
+            if (cubic) then
+                k0 = -1
+                k1 = 2
+                wc(-1) = -s*(s - 1d0)*(s - 2d0)/6d0
+                wc(0) = (s + 1d0)*(s - 1d0)*(s - 2d0)/2d0
+                wc(1) = -(s + 1d0)*s*(s - 2d0)/2d0
+                wc(2) = (s + 1d0)*s*(s - 1d0)/6d0
+            else
+                k0 = 0
+                k1 = 1
+                wc(0) = 1d0 - s
+                wc(1) = s
+            end if
             c = 0d0
-            do di = 0, 1
-                wi = merge(1d0 - u, u, di == 0)
-                do dj = 0, 1
-                    wj = merge(1d0 - v, v, dj == 0)
-                    do dm = 0, 1
-                        wm = merge(1d0 - x, x, dm == 0)
-                        do dk = 0, 1
-                            wk = merge(1d0 - s, s, dk == 0)
-                            do iq = 1, PSI_NQ
-                                c(iq) = c(iq) + wi*wj*wm*wk*dble(tb%q(k + dk, m + dm, j + dj, i + di, iq))
+            gam = 0d0
+            do d1 = 0, min(1, tb%nHE1 - 1)
+                w1 = merge(1d0 - y1, y1, d1 == 0)
+                do d2 = 0, min(1, tb%nHE2 - 1)
+                    w2 = merge(1d0 - y2, y2, d2 == 0)
+                    lin = 0d0
+                    cub = 0d0
+                    low = huge(1d0)
+                    do di = 0, 1
+                        wi = merge(1d0 - u, u, di == 0)
+                        do dj = 0, 1
+                            wj = merge(1d0 - v, v, dj == 0)
+                            do dm = 0, 1
+                                wm = merge(1d0 - x, x, dm == 0)
+                                wijm = wi*wj*wm
+                                do dk = 0, 1
+                                    wk = wijm*merge(1d0 - s, s, dk == 0)
+                                    do iq = 1, PSI_NQ
+                                        lin(iq) = lin(iq) + wk*dble(tb%q(k + dk, e2 + d2, e1 + d1, m + dm, j + dj, i + di, iq))
+                                    end do
+                                end do
+                                do dk = k0, k1
+                                    wk = wijm*wc(dk)
+                                    do iq = 1, PSI_NQ
+                                        node = dble(tb%q(k + dk, e2 + d2, e1 + d1, m + dm, j + dj, i + di, iq))
+                                        cub(iq) = cub(iq) + wk*node
+                                        low(iq) = min(low(iq), node)
+                                    end do
+                                end do
                             end do
                         end do
                     end do
+                    do iq = 1, PSI_NQ
+                        if (iq == 1 .or. iq == 2 .or. iq == 5 .or. low(iq) > PSI_LN_FLOOR_CUBIC) lin(iq) = cub(iq)
+                    end do
+                    c = c + w1*w2*lin
+                    gam = gam + w1*w2*exp(lin(3:4))        ! heating: linear in gamma along h_E
                 end do
             end do
             Zmean = c(1)
             Zsigma = c(2)
-            Gamma = G_F*exp(c(3)) + G_E*exp(c(4))
+            Gamma = G_F*gam(1) + G_E*gam(2)
             Lambda = ne*sq*c(5)
             alpha = exp(c(6:PSI_NQ))
         end associate
     contains
+        subroutine he_index(xx, nodes, n, i0, f0)
+            ! 1-based node and weight on an EUV hardness axis (pyCALIMA _hE_index): not equally
+            ! spaced, clamped, log weight where both nodes are in (0, PSI_HE_LOG_MAX]
+            real(dp), intent(in) :: xx, nodes(:)
+            integer, intent(in) :: n
+            integer, intent(out) :: i0
+            real(dp), intent(out) :: f0
+            real(dp) :: xc
+            integer :: ii
+            if (n == 1) then
+                i0 = 1
+                f0 = 0d0
+                return
+            end if
+            xc = min(max(xx, nodes(1)), nodes(n))
+            i0 = 1
+            do ii = 1, n - 1
+                if (nodes(ii) <= xc) i0 = ii
+            end do
+            if (nodes(i0) > 0d0 .and. nodes(i0 + 1) <= PSI_HE_LOG_MAX) then
+                f0 = log(xc/nodes(i0))/log(nodes(i0 + 1)/nodes(i0))
+            else
+                f0 = (xc - nodes(i0))/(nodes(i0 + 1) - nodes(i0))
+            end if
+        end subroutine he_index
+
         subroutine grid_index(xx, grid, n, i0, f0)
-            ! 1-based node and weight on an equally spaced grid, clamped (pyCALIMA _index)
+            ! 1-based node and weight on an equally spaced grid, clamped (pyCALIMA _index);
+            ! a single node: weight 0 on it
             real(dp), intent(in) :: xx, grid(:)
             integer, intent(in) :: n
             integer, intent(out) :: i0
             real(dp), intent(out) :: f0
             real(dp) :: f
+            if (n == 1) then
+                i0 = 1
+                f0 = 0d0
+                return
+            end if
             f = (min(max(xx, grid(1)), grid(n)) - grid(1))/(grid(2) - grid(1))
             i0 = min(int(f), n - 2)
             f0 = f - dble(i0)
@@ -2023,12 +2166,12 @@ module dust_charging_rtgroups
         end subroutine grid_index
     end subroutine psitab_lookup
 
-    subroutine psitab_dump(ii, T, ne, G_F, h, G_E, Zmean, Zsigma, Gamma, Lambda, alpha, ndumped)
+    subroutine psitab_dump(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha, ndumped)
         ! inputs and outputs of one lookup, for compare_ramses_rtgroups.py --psitab
         use amr_commons, only: myid
         implicit none
         integer, intent(in) :: ii
-        real(dp), intent(in) :: T, ne, G_F, h, G_E, Zmean, Zsigma, Gamma, Lambda, alpha(RTG_NRI)
+        real(dp), intent(in) :: T, ne, pin(PSI_NIN), Zmean, Zsigma, Gamma, Lambda, alpha(RTG_NRI)
         integer, intent(out) :: ndumped
         character(len=32) :: fname
         ndumped = psi_debug_count
@@ -2037,11 +2180,111 @@ module dust_charging_rtgroups
             psi_debug_unit = 932
             write(fname, '(A,I5.5,A)') 'dust_psitab_debug_', myid, '.dat'
             open(psi_debug_unit, file=trim(fname), status='replace')
-            write(psi_debug_unit, '(A)') '# WDB06tab lookups (format 2): bin T ne G_F h G_E Zmean Zsigma Gamma Lambda alpha(10)'
+            write(psi_debug_unit, '(A)') '# WDB06tab lookups (format 3): bin T ne G_F h G_E h_E1 h_E2 Zmean Zsigma Gamma '// &
+                'Lambda alpha(10)'
         end if
-        write(psi_debug_unit, '(I3,*(1X,ES23.15E3))') ii, T, ne, G_F, h, G_E, Zmean, Zsigma, Gamma, Lambda, alpha
+        write(psi_debug_unit, '(I3,*(1X,ES23.15E3))') ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha
         psi_debug_count = psi_debug_count + 1
         ndumped = psi_debug_count
     end subroutine psitab_dump
+
+    ! ------------------------------------------------- charge outside the cooling step
+    subroutine dust_charge_moments(ii, Np, egy, c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp, Zmean, Zsigma, &
+                                   lnL1, coul)
+        ! <Z> and sigma_Z of dust bin ii from charging_model, for callers outside the RTZ
+        ! cooling step (the Coulomb drag): the same models as compute_dust_precool, but
+        ! stateless. WDB06tab: the table lookup; WDB06rt: a cold per-group solve (no
+        ! recombination, no T derivatives), or the uniform-background table without local
+        ! photons; otherwise the (G0, T, ne) tables of dust_charging. Np: photon densities
+        ! per group [cm^-3]; egy [eV]; c_red [cm/s]; G0_bg: UV background [Habing]; G0:
+        ! background plus the local 5.6-13.6 eV groups [Habing] (the (G0, T, ne) tables only).
+        ! With lnL1 = ln Lambda of Z = 1, also coul = <Z^2 ln+(Lambda_1/|Z|)> over P(Z), the
+        ! Draine & Salpeter (1979) Coulomb term in units of phi(Z=1)^2: on the exact P(Z) for
+        ! WDB06rt (the solve's window if discrete, else one evaluated around Z* while it fits
+        ! MAX_DISCRETE_STATES), else on a Gaussian of the model's <Z> and sigma_Z. coul needs lnL1.
+        use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma
+        use rt_parameters, only: smallNp
+        implicit none
+        integer, intent(in) :: ii
+        real(dp), intent(in) :: Np(:), egy(:), c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp
+        real(dp), intent(out) :: Zmean, Zsigma
+        real(dp), intent(in), optional :: lnL1
+        real(dp), intent(out), optional :: coul
+        real(dp) :: pin(PSI_NIN), Gamma, Lambda, alpha(RTG_NRI)
+        integer :: lo, hi, half, Zc
+        logical :: exact
+        type(RTGState) :: st
+        type(RTGResult) :: r
+        exact = .false.
+        if (trim(charging_model) == 'WDB06tab') then
+            call psitab_inputs(Np, c_red, G0_bg, egy, pin)
+            call psitab_lookup(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha)
+        else if (trim(charging_model) == 'WDB06rt') then
+            if (all(Np <= smallNp)) then
+                call rtgroups_uniform_lookup(ii, G0_bg, T, ne, Zmean, Zsigma, Gamma, Lambda)
+            else
+                call rtgroups_solve_bin(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, -huge(1d0), &
+                                        st, 0d0, RTG_ALPHA_NONE, r)
+                Zmean = r%Zmean
+                Zsigma = r%Zsigma
+                if (present(coul)) then
+                    if (r%discrete) then
+                        lo = nint(st%wlo)
+                        hi = nint(st%whi)
+                        exact = .true.
+                    else if (2*ceiling(5d0*r%Zsigma) + 1 <= MAX_DISCRETE_STATES) then
+                        ! the cell state of the solve is still set
+                        half = ceiling(3d0*r%Zsigma)
+                        Zc = floor(r%Zstar + 0.5d0)
+                        call window(max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), &
+                                    .false., lo, hi)
+                        exact = hi - lo + 1 < MAX_DISCRETE_STATES     ! else truncated: the Gaussian
+                    end if
+                    if (exact) coul = coul_window(lo, hi, lnL1)
+                end if
+            end if
+        else
+            call compute_mean_dust_charge(ii, G0, T, ne, Zmean)
+            call compute_dust_charge_sigma(ii, G0, T, ne, Zsigma)
+        end if
+        if (present(coul) .and. .not. exact) coul = coul_gauss(Zmean, Zsigma, lnL1)
+    end subroutine dust_charge_moments
+
+    real(dp) function coul_term(Z, lnL1)
+        ! Z^2 ln+(Lambda_1/|Z|): the Draine & Salpeter (1979) Coulomb term of charge Z, in units of phi(Z=1)^2
+        implicit none
+        real(dp), intent(in) :: Z, lnL1
+        coul_term = 0d0
+        if (Z /= 0d0) coul_term = Z**2*max(lnL1 - log(abs(Z)), 0d0)
+    end function coul_term
+
+    real(dp) function coul_window(lo, hi, lnL1)
+        ! coul_term over the exact P(Z) of the window lo..hi
+        implicit none
+        integer, intent(in) :: lo, hi
+        real(dp), intent(in) :: lnL1
+        integer :: k
+        coul_window = 0d0
+        do k = lo, hi
+            coul_window = coul_window + b_P(k - b_base)*coul_term(dble(k), lnL1)
+        end do
+    end function coul_window
+
+    real(dp) function coul_gauss(mu, sig, lnL1)
+        ! coul_term over a Gaussian P(Z) of mean mu and width sig: 10-point Gauss-Hermite
+        implicit none
+        real(dp), intent(in) :: mu, sig, lnL1
+        real(dp), parameter :: X(5) = (/0.3429013272237046d0, 1.0366108297895137d0, 1.7566836492998818d0, &
+                                        2.5327316742327897d0, 3.4361591188377376d0/)
+        real(dp), parameter :: W(5) = (/0.6108626337353258d0, 0.2401386110823147d0, 3.387439445548106d-2, &
+                                        1.3436457467812327d-3, 7.640432855232621d-6/)
+        integer :: k
+        coul_gauss = 0d0
+        do k = 1, 5
+            coul_gauss = coul_gauss + W(k)*(coul_term(mu + sqrt(2d0)*sig*X(k), lnL1) &
+                                          + coul_term(mu - sqrt(2d0)*sig*X(k), lnL1))
+        end do
+        coul_gauss = coul_gauss/sqrt(RTG_PI)
+    end function coul_gauss
 
 end module dust_charging_rtgroups

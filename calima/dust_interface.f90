@@ -1,7 +1,7 @@
 module dust_interface
     use amr_commons, only:dp,ndim
     use amr_parameters, only: nvector
-    use dust_charging_rtgroups, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_RECOMB_IMPORTANT
+    use dust_charging_rtgroups, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_RECOMB_IMPORTANT, PSI_NIN
     use constants
     use dust_commons
     implicit none
@@ -237,7 +237,7 @@ contains
         real(dp) :: Zel, nHI, prevD
         integer :: n_charge
         logical :: use_rtg, no_local, use_tab
-        real(dp) :: G_F, h_F, G_E, alpha_tab(RTG_NRI)
+        real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
         real(dp), dimension(1:dinfo%ndust) :: rtg_Pinj, rtg_Prec
         type(RTGState), pointer :: st
@@ -258,15 +258,15 @@ contains
             if (use_tab) then
                 ! tables on (T, G_FUV sqrt(T)/ne, FUV hardness, G_EUV sqrt(T)/ne), n(H+) = ne
                 if (present(Np)) then
-                    call psitab_inputs(Np, dinfo%local_c, dinfo%G0_background, dinfo%group_eV, G_F, h_F, G_E)
+                    call psitab_inputs(Np, dinfo%local_c, dinfo%G0_background, dinfo%group_eV, psi_in)
                 else
-                    call psitab_inputs(0d0*dinfo%group_eV, 0d0, dinfo%G0_background, dinfo%group_eV, G_F, h_F, G_E)
+                    call psitab_inputs(0d0*dinfo%group_eV, 0d0, dinfo%G0_background, dinfo%group_eV, psi_in)
                 end if
                 do ii = 1, dinfo%ndust
-                    call psitab_lookup(ii, Tk, ne, G_F, h_F, G_E, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
+                    call psitab_lookup(ii, Tk, ne, psi_in, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
                                        rtg_Pinj(ii), rtg_Prec(ii), alpha_tab)
                     if (dust_rtgroups_debug .or. dust_rtgroups_verify) then
-                        call psitab_dump(ii, Tk, ne, G_F, h_F, G_E, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
+                        call psitab_dump(ii, Tk, ne, psi_in, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
                                          rtg_Pinj(ii), rtg_Prec(ii), alpha_tab, ndumped)
                         if (dust_rtgroups_verify .and. ndumped >= dust_rtgroups_debug_max) then
                             if (myid == 1) write(*,'(A,I7,A)') ' WDB06tab verify: ', ndumped, ' lookups dumped; stopping'
