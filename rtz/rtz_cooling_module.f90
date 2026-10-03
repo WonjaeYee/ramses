@@ -248,8 +248,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer::loopCode_idx1,loopCode_idx2
    integer*8,dimension(1:nGroups):: loopCodes01
    integer*8,dimension(1:nGroups,1:ndim):: loopCodes02
-   integer*8,dimension(1:n_elements,1:7):: loopCodes08,loopCodes09
-   integer*8,dimension(1:n_elements,0:7):: loopCodes10
+   ! Indexed by ion stage, 1..n_ions, and n_ions reaches 27 (Fe) with the full networks
+   integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
+   integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
    
    ! get cell size
    nx_loc = (icoarse_max-icoarse_min+1)
