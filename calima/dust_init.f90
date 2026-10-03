@@ -174,14 +174,14 @@ module dust_init
             if(myid==1)write(*,*)'Error: dust_radpressure has no effect without dust_tva=.true.'
             check_params_dust=.false.
         end if
-        if (trim(drag_model).ne.'epstein' .and. trim(drag_model).ne.'draine2011') then
-            if(myid==1)write(*,*)'Error: drag_model must be epstein or draine2011, not ',trim(drag_model)
+        if (trim(drag_model).ne.'epstein' .and. .not.draine_drag()) then
+            if(myid==1)write(*,*)'Error: drag_model must be epstein, draine2011 or draine2011_pz, not ',trim(drag_model)
             check_params_dust=.false.
         end if
         ! The Draine drag needs n_H, T and the grain charge, which the TVA gets
         ! from the per-cell radiation-pressure call; the pure-drag path has none.
-        if (trim(drag_model).eq.'draine2011' .and. .not.dust_radpressure) then
-            if(myid==1)write(*,*)'Error: drag_model=draine2011 requires dust_radpressure=.true.'
+        if (draine_drag() .and. .not.dust_radpressure) then
+            if(myid==1)write(*,*)'Error: drag_model=',trim(drag_model),' requires dust_radpressure=.true.'
             check_params_dust=.false.
         end if
         if (dust_tva .and. myid==1) then

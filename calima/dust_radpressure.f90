@@ -8,7 +8,7 @@ module dust_radpressure_module
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO, e2instatC, kB, pi
-    use dust_charging, only: compute_mean_dust_charge
+    use dust_charging_rtgroups, only: dust_charge_moments
     ! rt_pressBoost / rt_isoPress / rt_isIR / iIR / rt_isIRtrap / iIRtrapVar are
     ! declared unconditionally in rt_parameters (see the note at their declaration),
     ! so they need no RTZ fork. isH2_rtz, rtz_UV_background_G0 and the rank of
@@ -17,7 +17,7 @@ module dust_radpressure_module
     use rt_parameters, only: nGroups, iGroups, group_egy, rt_pressBoost, &
                             rt_isoPress, rt_isIR, iIR, rt_c, group_csn, &
                             iIons, isLW, rt_advect, rt_c_cgs, &
-                            rt_n_source, rt_isIRtrap, iIRtrapVar, rt_c_fraction
+                            rt_n_source, rt_isIRtrap, iIRtrapVar, rt_c_fraction, smallNp
     ! n_elements is the same entity either way: rtz_module re-exports
     ! hydro_parameters' parameter (rtz_module.f90:3).
     use hydro_parameters, only: ndust, npah, idust, ipah, imetal, smallr, smallc, gamma, &
@@ -37,7 +37,7 @@ module dust_radpressure_module
 #ifdef CO
     use hydro_parameters, only: iCO
 #endif
-    use dust_commons, only: drag_model, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
+    use dust_commons, only: drag_model, draine_drag, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
     use dust_optics, only: get_IR_mean_cross_sections
 
@@ -69,7 +69,8 @@ contains
         ! Local state for the Draine (2011) drag (drag_model='draine2011'):
         ! (1) n_H [cm^-3], (2) T [K], (2+k) Coulomb coefficient of dust bin k,
         ! (n_H+/n_H) phi_k^2 ln(Lambda_k), with phi_k = Z_k e^2/(a_k kT) from
-        ! charging_model and Lambda from Draine & Salpeter (1979).
+        ! charging_model and Lambda from Draine & Salpeter (1979); with drag_model='draine2011_pz',
+        ! (n_H+/n_H) <phi^2 ln(Lambda)> over the charge distribution P(Z).
         real(dp), dimension(1:ndust+2), intent(out), optional :: drag_state
 
         ! Local variables for cell state extraction
@@ -90,6 +91,8 @@ contains
         real(dp), dimension(max(1, 2*npah)) :: sig_R_pah,  sig_P_pah
         integer :: id, iion, counter, e_counter, jbin
         real(dp) :: nH_drag, nHp_drag, Z_drag, phi_drag, Lambda_drag
+        real(dp) :: nHep_drag, nHepp_drag, G0_bg_drag, Zsig_drag, phi1_drag, lnL1_drag, coul_drag
+        real(dp), dimension(1:nGroups) :: Np_drag
 #ifndef RTZ
         real(dp), dimension(max(1,nIons)) :: xion_rt
         real(dp) :: nH_loc, nHe_loc, xHI_loc, xH2_loc
@@ -344,18 +347,46 @@ contains
 
         ! 10. Drag state for the Draine (2011) drag law
         if (present(drag_state)) drag_state = 0d0
-        if (present(drag_state) .and. trim(drag_model) == 'draine2011') then
+        if (present(drag_state) .and. draine_drag()) then
 #ifdef RTZ
            nH_drag  = nElement(1)
            nHp_drag = nElement(1) * xion(1,2)
+           nHep_drag  = nElement(2) * xion(2,2)
+           nHepp_drag = nElement(2) * xion(2,3)
+           G0_bg_drag = rtz_UV_background_G0
 #else
            nH_drag  = nH_loc
            nHp_drag = nH_loc * xion_rt(ixHII)
+           nHep_drag  = nHe_loc * xHeII_loc
+           nHepp_drag = nHe_loc * xHeIII_loc
+           G0_bg_drag = 0d0
 #endif
+           ! Local photon densities [cm^-3], as the RTZ cooling step passes them to the charging
+           Np_drag = smallNp
+           if (rt_advect) then
+              do id = 1, nGroups
+                 Np_drag(id) = max(scale_Np * cell_rt_state(iGroups(id)), smallNp)
+              end do
+           end if
            drag_state(1) = nH_drag
            drag_state(2) = Tk
            do jbin = 1, ndust
-              call compute_mean_dust_charge(jbin, G0, Tk, ne, Z_drag)
+              if (trim(drag_model) == 'draine2011_pz') then
+                 ! The charge fluctuates much faster than the grain is stopped, so the drift
+                 ! feels the Coulomb force averaged over P(Z): with phi = Z phi_1 and
+                 ! Lambda = Lambda_1/|Z|, phi^2 ln(Lambda) -> phi_1^2 <Z^2 ln+(Lambda_1/|Z|)>
+                 if (ne > 0d0 .and. nH_drag > 0d0) then
+                    phi1_drag = e2instatC / (dustbins_props(jbin)%asize_cm * kB * Tk)
+                    lnL1_drag = log(3d0 / (2d0 * dustbins_props(jbin)%asize_cm * sqrt(e2instatC) * phi1_drag) &
+                                    * sqrt(kB * Tk / (pi * ne)))
+                    call dust_charge_moments(jbin, Np_drag, group_egy, rt_c_cgs(ilevel), G0_bg_drag, G0, Tk, ne, &
+                                             nHp_drag, nHep_drag, nHepp_drag, Z_drag, Zsig_drag, lnL1_drag, coul_drag)
+                    drag_state(2+jbin) = nHp_drag / nH_drag * phi1_drag**2 * coul_drag
+                 end if
+                 cycle
+              end if
+              call dust_charge_moments(jbin, Np_drag, group_egy, rt_c_cgs(ilevel), G0_bg_drag, G0, Tk, ne, &
+                                       nHp_drag, nHep_drag, nHepp_drag, Z_drag, Zsig_drag)
               phi_drag = abs(Z_drag) * e2instatC / (dustbins_props(jbin)%asize_cm * kB * Tk)
               if (phi_drag > 0d0 .and. ne > 0d0 .and. nH_drag > 0d0) then
                  Lambda_drag = 3d0 / (2d0 * dustbins_props(jbin)%asize_cm * sqrt(e2instatC) * phi_drag) &
