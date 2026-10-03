@@ -451,6 +451,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            counter = counter + 1
         endif
 
+        ! nCO is used by rtz_solve_cooling (O abundance, mu, CO shielding and cooling) and,
+        ! with CO compiled in, written back to uold(iCO); without CO tracking it is zero
+        nCO(1:nleaf) = 0d0
 #ifdef CO
         if (isCO_rtz) then
            do i=1,nleaf !loop over leaf cells
