@@ -17,12 +17,9 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
   real(dp)::ud(1:nvector,1:nvar)
   logical ::ok(1:nvector)
 
-  integer::k,idim
+  integer::k,idim,irad
   real(dp),dimension(1:nvector),save::eking,ekinm,ekind
   real(dp)::dg,dm,dd,pg,pm,pd,vg,vm,vd,cg,cm,cd,error
-#if NENER>0
-  integer::irad
-#endif
 
   ! Convert to primitive variables
   do k = 1,nn

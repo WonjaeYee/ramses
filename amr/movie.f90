@@ -21,7 +21,7 @@ subroutine output_frame()
   use constants, only: eV2erg
   use dust_commons, only: ndust, sigca_dust
   use dust_radiation, only: get_Tdust_radiative_eq, get_dust_band_luminosity
-  use hydro_parameters, only: idust
+  use hydro_parameters, only: idust, ipah, npah
 #endif
   implicit none
 #if NDIM > 1
@@ -39,7 +39,11 @@ subroutine output_frame()
 
   character(len=5)::istep_str
   character(len=100)::moviedir,moviecmd,infofile,sinkfile,filename
-#if NENER>0
+#if NENER>0 || (defined(RT) && defined(CALIMA))
+  ! Loop index for the NENER radiative-energy block AND for the photon-group
+  ! loop in the CALIMA dust-temperature movie variable (~line 713), which is
+  ! guarded by RT+CALIMA rather than by NENER. Declaring it under #if NENER>0
+  ! alone breaks any RT+CALIMA build with NENER=0.
   integer::irad
 #endif
 #ifdef RT
@@ -107,15 +111,22 @@ subroutine output_frame()
   real(dp),dimension(1:n_elements, 1:n_elements):: xion
   real(dp), dimension(n_elements):: nElement
   real(dp):: electron_density, temperature, mu
-  real(dp):: m_bar, n_hat, vol
+  real(dp):: m_bar, n_hat
   integer:: counter, e_counter, iii, jjj
   integer:: line_id, atomic_num, ion_idx
+#endif
+#if defined(RTZ) || defined(CALIMA)
+  ! vol is used both by the RTZ line-emission block below and by the CALIMA
+  ! dust-mass movie variable (~line 830), which is NOT RTZ-guarded. Declaring it
+  ! inside #ifdef RTZ alone breaks any CALIMA build without RTZ.
+  real(dp):: vol
 #endif
 #ifdef CALIMA
   logical :: has_IR_movie_var
   integer :: j_band
   real(dp), dimension(1:ndust) :: T_dust_cell
   real(dp) :: Tmin, P_abs, Np_val, mass_g
+  real(dp) :: rho_metal_loc, rho_dust_loc
 #endif
 
  nh_temp = nh_frame
@@ -834,6 +845,39 @@ subroutine output_frame()
                                   endif
 #endif
 #endif
+#ifdef CALIMA
+                                  if(movie_vars(kk).eq.i_mv_DTM)then
+                                     ok_frame=.true.
+                                     ! Gas-phase metal density. The element block at
+                                     ! imetal is packed over elements(:) with
+                                     ! atomic_number > 0, so it starts with H (and He
+                                     ! when helium is tracked); neither is a metal.
+                                     rho_metal_loc = 0.0d0
+#ifdef RTZ
+                                     e_counter = 0
+                                     do iii = 1, n_elements
+                                        if (elements(iii)%atomic_number.gt.0) then
+                                           if (elements(iii)%atomic_number.gt.2) &
+                                                & rho_metal_loc = rho_metal_loc &
+                                                & + uold(ind_cell(i), imetal + e_counter)
+                                           e_counter = e_counter + 1
+                                        end if
+                                     end do
+#else
+                                     do j_band = 1, nmetals
+                                        rho_metal_loc = rho_metal_loc + uold(ind_cell(i), imetal + j_band - 1)
+                                     end do
+#endif
+                                     ! Total dust includes the PAH bins, as in
+                                     ! rtz_cooling_module.f90:909-910
+                                     rho_dust_loc = sum(uold(ind_cell(i),idust:idust+ndust-1))
+                                     if (npah > 0) rho_dust_loc = rho_dust_loc &
+                                          & + sum(uold(ind_cell(i),ipah:ipah+npah-1))
+                                     ! Metals locked in grains are no longer in the gas
+                                     ! phase, so they must be added back to the denominator
+                                     uvar = rho_dust_loc / max(rho_metal_loc + rho_dust_loc, smallr)
+                                  endif
+#endif
 #ifdef RTZ
 
                                   ! First we need to grab all of the elements and ionization fractions
@@ -1324,6 +1368,16 @@ subroutine set_movie_vars()
         ! Find which photon group to show
         read( movie_vars_txt(kk)(3:4), '(i1)' ) ivar
         movie_var_number(kk) = ivar
+
+#ifdef CALIMA
+     ! DTM is a plain named variable, so it stays in the `else if` chain.  The
+     ! dust IR bands it used to sit next to are handled in the `else` block
+     ! below instead, along with the RTZ line variables.
+     else if (movie_vars_txt(kk) .eq. 'DTM') then
+        if (i_mv_DTM .eq. -1) i_mv_DTM = kk
+        movie_vars(kk) = i_mv_DTM
+#endif
+
      else
 
 ! escape from the `else if` part
