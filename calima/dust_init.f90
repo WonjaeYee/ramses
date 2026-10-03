@@ -1124,7 +1124,10 @@ module dust_init
         if (dust_pahs) then
             if (pah_sputtering) call init_pah_sputtering_tables
             if (pah_photolysis) call init_pah_dissociation_tables
-            if (pah_pe_heating) call init_pah_peh_tables
+            ! Always: the PAH charge tables (fcharge_tab) built here are also used by
+            ! the RT absorption (compute_dust_rad_rates), radiation pressure and the
+            ! cooling pre-computation, whether or not pah_pe_heating is on
+            call init_pah_peh_tables
         end if
 #endif
 
