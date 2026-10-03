@@ -96,10 +96,10 @@ _ROW = re.compile(r"^\s+\d+\s+\d+(\s+[-+0-9.E]+){14,}\s*$")
 
 def read_log(txt):
     """Sink table rows of a RAMSES log text, one per printout, with the simulation time printed
-    just before it. Returns a dict of arrays: t_yr, M, M_F [Msun], Mdot [Msun/yr], age_Myr,
-    rho [g/cm3], Q_sub, Q_ion [s^-1] (sink 1 only)."""
+    just before it. Returns a dict of arrays: t_yr, tag (the evolution flag), M, M_F [Msun],
+    Mdot [Msun/yr], age_Myr, rho [g/cm3], Q_sub, Q_ion [s^-1] (sink 1 only)."""
     keys = ("M", "M_F", "x", "y", "z", "vx", "vy", "vz", "spin", "Mdot", "age_Myr", "rho", "Q_sub", "Q_ion")
-    out = {k: [] for k in ("t_yr",) + keys}
+    out = {k: [] for k in ("t_yr", "tag") + keys}
     t = np.nan
     for line in txt.splitlines():
         if "simulation time [yr]" in line:
@@ -107,6 +107,7 @@ def read_log(txt):
         elif _ROW.match(line) and line.split()[0] == "1":
             v = [float(x) for x in line.split()[2:2 + len(keys)]]
             out["t_yr"].append(t)
+            out["tag"].append(int(line.split()[1]))
             for k, x in zip(keys, v):
                 out[k].append(x)
     return {k: np.array(v) for k, v in out.items()}

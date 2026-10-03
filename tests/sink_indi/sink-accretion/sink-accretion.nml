@@ -1,5 +1,8 @@
-! sink-accretion: reduced from Wonjae Yee's test (levels 6-7 -> 5-6: uniform 32^3 cells of 1.5 pc, level 6 unused but sets dx_min; output
-! times and the end time shortened; ncontrol=1 so the sink table is in the log every step).
+! sink-accretion: Bondi growth of a pre-main-sequence individual-star sink, 2 -> 20 Msun in ~1 Myr,
+! and its switch to the main sequence. Adapted from Wonjae Yee's accretion test (levels 6-7 -> 5-6:
+! uniform 32^3 cells of 1.5 pc, level 6 unused but sets dx_min; ncontrol=1). Changed so the sink grows:
+! n_H 100 -> 1.8e6 cm^-3, T 1e4 -> 1e3 K, seed 0.03 -> 2 Msun, final mass 300 -> 20 Msun, H2/CO off.
+! The Bondi radius stays < r_acc/70, so the gravity-free (poisson=.false.) subgrid rate is consistent.
 ! 2026.10.02
 ! For daily automatic tests
 ! With individual star on pre-MS phase, test accretion
@@ -32,9 +35,9 @@
 /
 
 &output_params
-    noutput = 11
-    tout = 0.000525284052, 0.001050568104, 0.002101136208, 0.003151704312, 0.004202272416, 0.00525284052, 0.006303408624, 0.007353976728, 0.008404544832, 0.009455112936, 0.01050568104 ! Myr: 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0
-    tend = 0.01050568104 ! 1.0 Myr
+    noutput = 12
+    tout = 0.001050568104, 0.002101136208, 0.003151704312, 0.004202272416, 0.00525284052, 0.006303408624, 0.007353976728, 0.008404544832, 0.009455112936, 0.01050568104, 0.01155624914, 0.01260681725 ! Myr: 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2
+    tend = 0.01260681725 ! 1.2 Myr
 /
 
 &init_params
@@ -47,11 +50,11 @@
     length_y = 1.0d+30
     length_z = 1.0d+30 ! arbitrarily large to fill the whole box
     exp_region = 10.0
-    d_region = 100.8
+    d_region = 1.8e+06 ! n_H = 1.79e6 cm^-3 (pure H)
     u_region = 0.0
     v_region = 0.0
     w_region = 0.0
-    p_region = 7.885e7 ! T = 1e4 K for neutral H (the rt_Tconst value): with p_region = 1 (T ~ 1e-4 K) the first step accretes cold gas
+    p_region = 1.40806e+11 ! T = 1e3 K for neutral H (the rt_Tconst value), so the first step does not accrete cold gas
     
     ! magnetic field
     A_region(1) = 0.0
@@ -246,7 +249,7 @@
     rt_smooth = .false.
     rt_otsa = .false.
     rt_is_init_xion = .false.
-    rt_Tconst = 10000.0
+    rt_Tconst = 1000.0
     rt_sink = .true.
     rt_star = .false.
     rt_isIR = .false.
@@ -265,8 +268,8 @@
     rtz_include_charge_exchange=.true.
     rtz_include_dust_recombination=.true.
     rtz_include_HM12_UVB=.true.
-    isH2_rtz=.true.
-    isCO_rtz=.true.
+    isH2_rtz=.false. ! fixed composition: H2 would change the sound speed at 1e6 cm^-3
+    isCO_rtz=.false.
     rtz_UV_background_G0=1.0d-40
     rtz_primary_cosmic_ray_ionization_rate=1.0d-40
     rtz_max_cool_timestep=1.d10
