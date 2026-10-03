@@ -1,0 +1,386 @@
+! sink-accretion: reduced from Wonjae Yee's test (levels 6-7 -> 5-6: uniform 32^3 cells of 1.5 pc, level 6 unused but sets dx_min; output
+! times and the end time shortened; ncontrol=1 so the sink table is in the log every step).
+! 2026.10.02
+! For daily automatic tests
+! With individual star on pre-MS phase, test accretion
+
+&run_params
+    pic = .true.
+    sink = .true.
+    clumpfind = .false.
+    poisson = .false.
+    hydro = .true.
+    rt = .true.
+    cost_weighting = .true.
+    nremap = 100
+    nsubcycle = 20*2
+    ncontrol = 1
+/
+
+&amr_params
+    levelmin = 5
+    levelmax = 6
+    ngridmax = 10000
+    npartmax = 1000
+    boxlen = 48.0000
+/
+
+&refine_params
+    interpol_var = 0
+    interpol_type = 0
+    sink_refine = .false.
+/
+
+&output_params
+    noutput = 11
+    tout = 0.000525284052, 0.001050568104, 0.002101136208, 0.003151704312, 0.004202272416, 0.00525284052, 0.006303408624, 0.007353976728, 0.008404544832, 0.009455112936, 0.01050568104 ! Myr: 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0
+    tend = 0.01050568104 ! 1.0 Myr
+/
+
+&init_params
+    nregion = 1
+    region_type = 'square'
+    x_center = 0.0
+    y_center = 0.0
+    z_center = 0.0
+    length_x = 1.0d+30
+    length_y = 1.0d+30
+    length_z = 1.0d+30 ! arbitrarily large to fill the whole box
+    exp_region = 10.0
+    d_region = 100.8
+    u_region = 0.0
+    v_region = 0.0
+    w_region = 0.0
+    p_region = 7.885e7 ! T = 1e4 K for neutral H (the rt_Tconst value): with p_region = 1 (T ~ 1e-4 K) the first step accretes cold gas
+    
+    ! magnetic field
+    A_region(1) = 0.0
+    B_region(1) = 0.0
+    C_region(1) = 0.0
+    
+    ! mass fraction of elements
+    ! H
+    var_region(1,1) = 1.0
+    ! He
+    var_region(1,2) = 0.0
+    ! C
+    var_region(1,3) = 0.0
+    ! N
+    var_region(1,4) = 0.0
+    ! O
+    var_region(1,5) = 0.0
+    ! Ne
+    var_region(1,6) = 0.0
+    ! Mg
+    var_region(1,7) = 0.0
+    ! Si
+    var_region(1,8) = 0.0
+    ! S
+    var_region(1,9) = 0.0
+    ! Fe
+    var_region(1,10) = 0.0
+
+    ! CO
+    var_region(1,11) = 0.0
+
+    ! PAH
+    var_region(1,12) = 0.0
+    var_region(1,13) = 0.0
+
+    ! dust 1 - carbonaceous
+    var_region(1,14) = 0.0
+    var_region(1,15) = 0.0
+
+    ! dust 2 - silicate
+    var_region(1,16) = 0.0
+    var_region(1,17) = 0.0
+
+    ! ionization fractions
+    ! H
+    var_region(1,18) = 0.999999
+    var_region(1,19) = 1e-06
+    ! He
+    var_region(1,20) = 0.999990
+    var_region(1,21) = 0.000009
+    var_region(1,22) = 0.000001
+    ! C
+    var_region(1,23) = 0.999994
+    var_region(1,24) = 0.000001
+    var_region(1,25) = 0.000001
+    var_region(1,26) = 0.000001
+    var_region(1,27) = 0.000001
+    var_region(1,28) = 0.000001
+    var_region(1,29) = 0.000001
+    ! N
+    var_region(1,30) = 0.999995
+    var_region(1,31) = 0.000001
+    var_region(1,32) = 0.000001
+    var_region(1,33) = 0.000001
+    var_region(1,34) = 0.000001
+    var_region(1,35) = 0.000001
+    ! O
+    var_region(1,36) = 0.999995
+    var_region(1,37) = 0.000001
+    var_region(1,38) = 0.000001
+    var_region(1,39) = 0.000001
+    var_region(1,40) = 0.000001
+    var_region(1,41) = 0.000001
+    ! Ne
+    var_region(1,42) = 0.999995
+    var_region(1,43) = 0.000001
+    var_region(1,44) = 0.000001
+    var_region(1,45) = 0.000001
+    var_region(1,46) = 0.000001
+    var_region(1,47) = 0.000001
+    ! Mg
+    var_region(1,48) = 0.999995
+    var_region(1,49) = 0.000001
+    var_region(1,50) = 0.000001
+    var_region(1,51) = 0.000001
+    var_region(1,52) = 0.000001
+    var_region(1,53) = 0.000001
+    ! Si
+    var_region(1,54) = 0.999995
+    var_region(1,55) = 0.000001
+    var_region(1,56) = 0.000001
+    var_region(1,57) = 0.000001
+    var_region(1,58) = 0.000001
+    var_region(1,59) = 0.000001
+    ! S
+    var_region(1,60) = 0.999995
+    var_region(1,61) = 0.000001
+    var_region(1,62) = 0.000001
+    var_region(1,63) = 0.000001
+    var_region(1,64) = 0.000001
+    var_region(1,65) = 0.000001
+    ! Fe
+    var_region(1,66) = 0.999995
+    var_region(1,67) = 0.000001
+    var_region(1,68) = 0.000001
+    var_region(1,69) = 0.000001
+    var_region(1,70) = 0.000001
+    var_region(1,71) = 0.000001
+    ! H2
+    var_region(1,72) = 0.0
+
+    ! passive scalar
+    var_region(1,73) = 0.0
+/
+
+&boundary_params
+    nboundary = 6
+    bound_type = 2, 2, 2, 2, 2, 2 ! all outflow
+    ibound_min =-1,+1,-1,-1,-1,-1
+    ibound_max =-1,+1,+1,+1,+1,+1
+    jbound_min = 0, 0,-1,+1,-1,-1
+    jbound_max = 0, 0,-1,+1,+1,+1
+    kbound_min = 0, 0, 0, 0,-1,+1
+    kbound_max = 0, 0, 0, 0,-1,+1
+/
+
+&hydro_params
+    gamma = 1.6666666667
+    gamma_rad = 1.3333333333
+    courant_factor = 0.8
+    smallr = 1d-20
+    smallc = 1d-20
+    riemann = 'hlld'
+    riemann2d = 'hlld'
+    scheme = 'muscl'
+    slope_type = 1
+    pressure_fix = .true.
+    beta_fix = 0.5
+
+    data_dir = 'rtz_data/' ! linked by before-test.sh
+/
+
+! all cooling handled by RTZ
+&cooling_params
+    metal = .true.
+/
+
+&sf_params
+/
+
+&feedback_params
+/
+
+&units_params
+    units_density = 1.660539e-24 ! 1 m_u cm^-3
+    units_time = 3003860471423912.0 ! ~ 95 Myr
+    units_length = 3.0856776e+18 ! 1 pc
+/
+
+&grackle_params
+/
+
+&poisson_params
+/
+
+&clumpfind_params
+/
+
+&sink_params
+    create_sinks = .false.
+    nsinkmax = 1
+    ir_cloud = 2
+    accretion_scheme = 'bondi' ! if 'none', no accretion AND no feedbacks
+    mass_sink_seed = 1e0
+    d_sink = 10.0 ! use arbitrarily large number
+/
+
+&movie_params
+/
+
+&turb_params
+/
+
+&tracer_params
+/
+
+&rt_params
+    rt_flux_scheme = 'glf'
+    rt_c_fraction = 0.001
+    rt_courant_factor = 0.8
+    rt_nsubcycle = 1
+    rt_smooth = .false.
+    rt_otsa = .false.
+    rt_is_init_xion = .false.
+    rt_Tconst = 10000.0
+    rt_sink = .true.
+    rt_star = .false.
+    rt_isIR = .false.
+    rt_isIRtrap = .false.
+    rt_isoPress = .false.
+
+    rt_sink_central_cloud = .true.
+
+    ! sed_dir = 'SEDtables/'
+
+    ! RTZ params below
+    rtz_cooling=.true.
+    rtz_include_collisional_ionization=.true.
+    rtz_include_photoionization=.true.
+    rtz_include_cosmic_ray_ionization=.true.
+    rtz_include_charge_exchange=.true.
+    rtz_include_dust_recombination=.true.
+    rtz_include_HM12_UVB=.true.
+    isH2_rtz=.true.
+    isCO_rtz=.true.
+    rtz_UV_background_G0=1.0d-40
+    rtz_primary_cosmic_ray_ionization_rate=1.0d-40
+    rtz_max_cool_timestep=1.d10
+/
+
+&rt_groups
+    kappaAbs  = 0.0,  1d3,   1d3,   1d3,   1d3,   1d3,    1d3,    1d3
+    kappaSc   = 5.0,    0,     0,     0,     0,     0,      0,      0
+    group_egy = 0.1,  1.0,  8.60, 12.44, 14.40, 19.90, 35.079, 65.666
+    groupL0   = 0.1,  1.0,  5.60, 11.20, 13.60, 15.20, 24.590, 54.420
+    groupL1   = 1.0,  5.6, 11.20, 13.60, 15.20, 24.59, 54.420, 500.000
+/
+
+&calima_params
+    !----------- Global CALIMA parameters -----------!
+    dust_log=.false. ! Activate the logging of dust evolution
+    dust_solver_type=2 ! Which ODE solver to use (2:Anninos)
+
+    !----------- Dust evolution switches -----------!
+    dust_coagulation=.false. ! Activate dust coagulation
+    dust_shattering=.false. ! Activate dust shattering
+    dust_accretion=.false. ! Allow gas-phase accretion
+    dust_sputtering=.false. ! Allow dust sputtering
+    dust_sputtering_charge=.false. ! Add the dependence on grain charge to sputtering efficiency
+    dust_acc_coulomb=.false. ! Coulomb enhancement of gas-phase accretion
+    dust_ratd=.false. ! Activate RAT-d
+    dust_coll_cooling=.false. ! Activate dust collisional cooling
+    dust_coll_lowT=.false. ! Extend collisional cooling to low T based on Hollenbach and McKee
+    dust_coll_charge=.false. ! Coulomb effects on cooling efficiency
+    dust_pe_heating=.false. ! Activate the grain-assisted PEH and recombination cooling
+    dust_pe_heating_isrf=.false. ! PEH and recombination using ISRF-averaged tables
+    poppe_ice_enhancement=.false. ! Enhancement of v_thres in coagulation due to ice formation
+    H2ondust=.false. ! Activate H2 formation on dust grains
+    
+    !----------- PAH evolution switches -----------!
+    pah_accretion=.false. ! Activate direct C-accretion onto PAHs (as 2026.06.23, not implemented yet)
+    pah_acc_spu=.false.
+    pah_coalescence=.false. ! Activate clustering of small PAHs to form large PAHs
+    pah_freezing=.false. ! Activate the freezing of PAHs on carbonaceous grains
+    pah_photolysis=.false. ! Destruction of PAHs by UV photons
+    pah_cluster_evaporation=.false. ! Photo-evaporation of PAH clusters
+    pah_sputtering=.false. ! PAH destruction in hot gas
+    pah_pe_heating=.false. ! PAH PEH and recombination
+    pah_pe_heating_isrf=.false. ! Use the ISRF-averaged PEH model for PAHs
+    pah_pe_nolyman=.false. ! Do not consider PEH contribution from photons above the Lyman limit
+    H2onpah=.false. ! Allow the formation of H2 on PAHs
+    
+    !----------- Dust modelling choices -----------!
+    sputtering_model='RM2026'
+    accretion_model='LeBourlot2012'
+    shattering_model='Smoluchowski1916'
+    coagulation_model='Smoluchowski1916'
+    dust_velocity_model='Hirashita2019'
+    charging_model='RM2026'
+    nZmix=3 ! Number of representative charges to reconstruct grain-ion interactions
+
+    !----------- PAH modelling choices -----------!
+    photolysis_model='RM2026'
+    peh_attach_model='Berne'
+    coalescence_model='Totton2012'
+    pah_h2_model='RM2026'
+    pah_growth_model='Omont2025_sg'
+    pah_sputtering_model='RM2026'
+    cluster_evaporation_model='Montillaud2014'
+
+    !----------- Efficiency parameters -----------!
+    Sconstant=0.333333333d0
+    nh_coa=1d1,1d1
+    nhmax_acc=1d5,1d5
+    nhmax_coa=1d10,1d10
+    nhmax_sha=1d10,1d10
+    Coulomb_enhance=1d0,1d0
+
+    !----------- Grain material parameters -----------!
+    tensile_strength=2d8,1.5d9
+    Youngs_modulus=1.0d11,5.4d11
+    Poisson_ratio=0.32,0.17
+    surf_energy=75d0,25d0
+    work_function=4.4d0,8.0d0 ! [eV]
+    band_gap=0.0d0,5.0d0 ! [eV]
+    e_escape_length=1d-7,1d-7 ! [cm]
+    separate_refractive_index=.true.,.false.
+    slope_frag_func=0.4333d0
+
+    !----------- DustBin properties -----------!
+    ! Chemtype 1: C
+    dust_composition(1,6) = 1d0
+
+    ! Chemtype 2: O4MgSiFe
+    dust_composition(2,8)  = 4d0
+    dust_composition(2,12) = 1d0
+    dust_composition(2,14) = 1d0
+    dust_composition(2,26) = 1d0
+    dustbins_per_chemtype=2,2
+    asize=0.01d0,0.1d0,0.005d0,0.1d0 ! Grain size bin centre [microns]
+    sgrain=2.2d0,2.2d0,3.3d0,3.3d0 ! Grain material density [g/cm^3]
+    amin = 4d-3,3d-2,1d-3,2d-2 ! Minimum size grain bin [microns]
+    amax = 3d-2,1d0,2d-2,1d0 ! Maximum size grain bin [microns]
+    fmass_ej = 0.1,0.9,0.1,0.9 ! Fraction of mass in dust ejecta for each bin
+
+    !----------- PAHBin properties -----------!
+    pah_nc = 54,418 ! [C]
+    pah_nc_min = 12,101 ! [C]
+    pah_nc_max = 101,29952 ! [C]
+    spah = 2d0,2d0 ! PAH molecule material density [g/cm^3]
+    pah_SNdest_eff = 1d0,1d0 ! Destruction efficiency by SN shocks
+    fpah_inwind = 0.1,0.1d0 ! Injection in AGB winds
+    pah_ncharge_states = 4, 4 ! Number of charge states
+    pah_is_cluster = .false.,.true.
+
+    !----------- Data files -----------!
+    dust_tables_dir = 'rtz_data/calima_data/' ! linked by before-test.sh
+/
+
+&indi_star
+    mist_sample = 'mist_sample.unf' ! linked by before-test.sh
+/
