@@ -2082,7 +2082,8 @@ module dust_radiation
         ! dust_charge    --> charge of the dust grains (in units of e)
         ! Ep            --> radiation energy density [eV/cm3]
         ! cs_abs        --> grain cross section array for dust types [cm3/s] (no PAHs)
-        ! lin           <-- (optional) the solution and its first-order response (serve_T_dust)
+        ! lin           <-- (optional) the solution and its first-order response (serve_T_dust); not
+        !                   with dust_coll_charge, which serve_T_dust does not serve
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
         use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval
@@ -2136,7 +2137,7 @@ module dust_radiation
                     ! Planck power so P_rad is consistent with T_dust.
                     T_dust(j) = max(T0, Tmin)
                     call dust_emission_power(j, T_dust(j), P_rad(j))
-                    if (present(lin)) then
+                    if (present(lin) .and. .not. dust_coll_charge) then
                         ! T_dust does not respond; H_coll at this T0 moves with Tgas
                         call lin_state(T0, 0d0, .false.)
                     end if
@@ -2151,7 +2152,7 @@ module dust_radiation
             call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
                                 recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT)
             T_dust(j) = max(T0, Tmin)
-            if (present(lin)) call lin_state(T0_lin, dHdT, T0 > Tmin)
+            if (present(lin) .and. .not. dust_coll_charge) call lin_state(T0_lin, dHdT, T0 > Tmin)
         end do
 
     contains
