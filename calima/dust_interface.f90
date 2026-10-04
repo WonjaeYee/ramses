@@ -3,6 +3,7 @@ module dust_interface
     use amr_parameters, only: nvector
     use dust_charging_rtgroups, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, RTG_RECOMB_IMPORTANT, &
                                       PSI_NIN, RI_ATOMIC
+    use dust_radiation, only: TdustLin
     use constants
     use dust_commons
     implicit none
@@ -41,6 +42,12 @@ module dust_interface
     ! 4: predicted from the cell's last full solve, rtgroups_predict)
     real(dp), save :: tchg = 0d0
     integer(8), save :: nchg(0:4) = 0, nchg_fit = 0, nchg_disc = 0
+    ! the dust temperatures of the last update_T_dust and the inputs it had: the cooling solver's
+    ! T(1 +- 1e-5) calls with the same other inputs are served from it (serve_T_dust)
+    type(TdustLin), allocatable, save :: td_lin(:)
+    logical, save :: td_valid = .false., td_hasNp = .false.
+    real(dp), save :: td_T = 0d0, td_ne = 0d0, td_G0 = 0d0, td_nH2 = 0d0, td_nCO = 0d0
+    real(dp), allocatable, save :: td_nel(:), td_xion(:,:), td_Np(:), td_egy(:)
 
 contains
     subroutine rtgroups_reset_warm()
@@ -50,6 +57,7 @@ contains
         if (allocated(rtg_warm)) rtg_warm(:,:)%valid = .false.
         if (allocated(rtg_warm)) rtg_warm(:,:)%anchored = .false.
         if (allocated(rtg_last)) rtg_last(:)%valid = .false.
+        td_valid = .false.
         if (dust_rtgroups_debug .or. dust_rtgroups_verify) call rtgroups_dump_mark()
     end subroutine rtgroups_reset_warm
 
@@ -238,7 +246,7 @@ contains
                                             compute_pah_peh_equilibrium,&
                                             interpolate_pah_peh_equilibrium,&
                                             compute_pah_charge_equilibrium
-        use dust_radiation, only: update_T_dust
+        use dust_radiation, only: update_T_dust, serve_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
                                           psitab_inputs, psitab_lookup, psitab_dump, rtgroups_predict
@@ -500,13 +508,35 @@ contains
             if (dust_charging_timer) tchg = tchg + (wallclock() - t0)
 
             ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
-            if (present(Np)) then
-                call update_T_dust(dinfo%G0_background,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
-                                    dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
-                                    Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:))
+            if (td_served()) then
+                ! the cooling solver's T(1 +- 1e-5) call: first order from the last update_T_dust
+                call serve_T_dust(td_lin,Tk,dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Pcoll_dust(:),&
+                                  dinfo%Prad_dust(:),dinfo%T_dust(:))
             else
-                call update_T_dust(G0_total,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
-                                    dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:))
+                if (.not. allocated(td_lin)) allocate(td_lin(1:dinfo%ndust), td_nel(size(nElement)), &
+                                                      td_xion(size(xelem_ions,1), size(xelem_ions,2)))
+                if (present(Np)) then
+                    call update_T_dust(dinfo%G0_background,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
+                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
+                                        Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:),lin=td_lin)
+                    if (.not. allocated(td_Np)) allocate(td_Np(dinfo%nGroups), td_egy(dinfo%nGroups))
+                    td_Np = Np
+                    td_egy = dinfo%group_eV
+                    td_G0 = dinfo%G0_background
+                else
+                    call update_T_dust(G0_total,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
+                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
+                                        lin=td_lin)
+                    td_G0 = G0_total
+                end if
+                td_valid = .true.
+                td_hasNp = present(Np)
+                td_T = Tk
+                td_ne = ne
+                td_nH2 = nH2
+                td_nCO = nCO
+                td_nel = nElement
+                td_xion = xelem_ions
             end if
 
             ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
@@ -617,6 +647,26 @@ contains
             if (any(Np /= rtg_last(ib)%Np) .or. any(dinfo%group_eV /= rtg_last(ib)%egy)) return
             rtg_served = .true.
         end function rtg_served
+
+        logical function td_served()
+            ! same inputs as the last update_T_dust but T, within RTG_SERVE in ln T (and the
+            ! recombination and photoelectric terms, which serve_T_dust takes to first order); not
+            ! with dust_coll_charge, whose collisional heating also follows the charge
+            real(dp) :: x
+            td_served = .false.
+            if (.not. td_valid .or. dust_coll_charge .or. (td_hasNp .neqv. present(Np))) return
+            x = Tk/td_T
+            if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
+            if (ne /= td_ne .or. nH2 /= td_nH2 .or. nCO /= td_nCO) return
+            if (present(Np)) then
+                if (dinfo%G0_background /= td_G0) return
+                if (any(Np /= td_Np) .or. any(dinfo%group_eV /= td_egy)) return
+            else
+                if (G0_total /= td_G0) return
+            end if
+            if (any(nElement /= td_nel) .or. any(xelem_ions /= td_xion)) return
+            td_served = .true.
+        end function td_served
 
         subroutine rtg_allocate()
             integer :: ib

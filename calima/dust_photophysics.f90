@@ -1729,6 +1729,18 @@ module dust_radiation
     use dust_commons
     use hydro_parameters, only:ndust,npah
 
+    ! update_T_dust's solution of one bin (its lin output) and its first-order response to the gas
+    ! temperature and to the recombination and photoelectric terms of the balance, from which
+    ! serve_T_dust gives the cooling solver's T(1 +- 1e-5) calls without solving again
+    type TdustLin
+        real(dp) :: Tg = 0d0, Td = 0d0, coll = 0d0, Prad = 0d0, rec = 0d0, pe = 0d0
+        real(dp) :: dH_dTg = 0d0      ! d coll / d T_gas at fixed T_dust
+        real(dp) :: dH_dTd = 0d0      ! d coll / d T_dust (the slope of the solve)
+        real(dp) :: dP_dTd = 0d0      ! d P_emit / d T_dust
+        real(dp) :: dTd_df = 0d0      ! response of T_dust to the balance, -1/(dH_dTd - dP_dTd); 0: T_dust fixed
+    end type TdustLin
+    real(dp), parameter :: TDUST_LIN_EPS = 1d-5     ! relative step in T_gas of dH_dTg
+
     contains
 
     function rad_dust_rate(cross_sec,rho_dust)
@@ -1819,7 +1831,7 @@ module dust_radiation
         T0 = max(T0, Tmin)
     end subroutine get_Tdust_radiative_eq
 
-    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin)
+    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin,dHdT)
         ! This subroutine computes the local dust temperature by solving the full energy balance
         ! equation: P_rad + H_coll + recomb_heat = P_emit + pe_heat
         ! i_dust         --> integer of dust bin
@@ -1831,6 +1843,7 @@ module dust_radiation
         ! P_rad          <-- emitted power by the dust grain [erg/s]
         ! T              <-- computed dust temperature [K]
         ! Tmin           --> minimum allowed dust temperature (e.g. CMB temp) [K]
+        ! dHdT           <-- (optional) d H_coll / d T of the linearisation used [erg/s/K]
         !-------------------------------------------------------------------------
         use dust_cooling, only: CollHeatPre, coll_heating_eval
         use dust_commons, only: dust_log_tdust_solver_update
@@ -1842,6 +1855,7 @@ module dust_radiation
         real(dp),intent(inout) :: coll_heat,P_rad
         real(dp),intent(in) :: recomb_heat,pe_heat
         real(dp),intent(inout) :: T
+        real(dp),intent(out),optional :: dHdT
 
         integer :: iter
         integer :: max_iter=100
@@ -1869,6 +1883,7 @@ module dust_radiation
             H0 = 0d0
             dH_dT = 0d0
         end if
+        if (present(dHdT)) dHdT = dH_dT
 
         ! =========================================================
         ! 2. Newton iterations (with linearised approximation)
@@ -2040,7 +2055,7 @@ module dust_radiation
                             &recomb_heat,pe_heat,P_rad,T_dust,&
                             &ne,nElement,xelem_ions,Coulomb_factor,&
                             &nH2,nCO,Tgas,dust_charge,&
-                            &Ep,cs_abs)
+                            &Ep,cs_abs,lin)
         ! This subroutine updates the local dust temperatures by considering
         ! the radiation field conditions. The balance between radiative
         ! heating and radiative cooling is only achieved for the larger grains
@@ -2067,6 +2082,7 @@ module dust_radiation
         ! dust_charge    --> charge of the dust grains (in units of e)
         ! Ep            --> radiation energy density [eV/cm3]
         ! cs_abs        --> grain cross section array for dust types [cm3/s] (no PAHs)
+        ! lin           <-- (optional) the solution and its first-order response (serve_T_dust)
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
         use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval
@@ -2081,10 +2097,12 @@ module dust_radiation
         real(dp),intent(in) :: ne,nH2,nCO,Tgas
         real(dp),dimension(1:ndust),intent(in) :: dust_charge
         real(dp),intent(in),optional :: Ep(:),cs_abs(:,:)
+        type(TdustLin),dimension(1:ndust),intent(out),optional :: lin
 
         integer :: i,j
-        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas
+        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd
         type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
+        type(CollHeatPre) :: pre_eps  ! ... at Tgas (1 + TDUST_LIN_EPS), for lin
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
@@ -2118,6 +2136,10 @@ module dust_radiation
                     ! Planck power so P_rad is consistent with T_dust.
                     T_dust(j) = max(T0, Tmin)
                     call dust_emission_power(j, T_dust(j), P_rad(j))
+                    if (present(lin)) then
+                        ! T_dust does not respond; H_coll at this T0 moves with Tgas
+                        call lin_state(T0, 0d0, .false.)
+                    end if
                     cycle
                 end if                
             else
@@ -2125,11 +2147,61 @@ module dust_radiation
                 coll_heat(j) = 0d0
             end if
 
+            T0_lin = T0
             call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
-                                recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin)
+                                recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT)
             T_dust(j) = max(T0, Tmin)
+            if (present(lin)) call lin_state(T0_lin, dHdT, T0 > Tmin)
         end do
+
+    contains
+
+        subroutine lin_state(Tx, slope, free)
+            ! lin(j) of the solution of bin j: H_coll linearised about T_dust = Tx with the given
+            ! slope; free: T_dust follows the balance (else fixed, at Tmin or radiative)
+            real(dp), intent(in) :: Tx, slope
+            logical, intent(in) :: free
+            lin(j)%Tg = Tgas
+            lin(j)%Td = T_dust(j)
+            lin(j)%coll = coll_heat(j)
+            lin(j)%Prad = P_rad(j)
+            lin(j)%rec = recomb_heat(j)
+            lin(j)%pe = pe_heat(j)
+            lin(j)%dH_dTg = 0d0
+            if (dust_coll_cooling) then
+                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas*(1d0 + TDUST_LIN_EPS),dust_charge(j),pre_eps)
+                lin(j)%dH_dTg = (coll_heating_eval(pre_eps,Tx) - coll_heating_eval(pre,Tx))/(TDUST_LIN_EPS*Tgas)
+            end if
+            lin(j)%dH_dTd = slope
+            lin(j)%dP_dTd = 0d0
+            lin(j)%dTd_df = 0d0
+            if (free) then
+                call dust_emission_with_deriv(j, T_dust(j), Pd, lin(j)%dP_dTd)
+                if (slope - lin(j)%dP_dTd /= 0d0) lin(j)%dTd_df = -1d0/(slope - lin(j)%dP_dTd)
+            end if
+        end subroutine lin_state
+
     end subroutine update_T_dust
+
+    subroutine serve_T_dust(lin,Tgas,recomb_heat,pe_heat,coll_heat,P_rad,T_dust)
+        ! update_T_dust to first order from its solution lin at a nearby gas temperature, with the
+        ! same other inputs but the recombination and photoelectric terms (the cooling solver's
+        ! T(1 +- 1e-5) calls): coll_heat, P_rad [erg/s per grain] and T_dust
+        implicit none
+        type(TdustLin),dimension(1:ndust),intent(in) :: lin
+        real(dp),intent(in) :: Tgas
+        real(dp),dimension(1:ndust),intent(in) :: recomb_heat,pe_heat
+        real(dp),dimension(1:ndust),intent(out) :: coll_heat,P_rad,T_dust
+        integer :: j
+        real(dp) :: dTg, dTd
+        do j = 1, ndust
+            dTg = Tgas - lin(j)%Tg
+            dTd = lin(j)%dTd_df*(lin(j)%dH_dTg*dTg + (recomb_heat(j) - lin(j)%rec) - (pe_heat(j) - lin(j)%pe))
+            T_dust(j) = lin(j)%Td + dTd
+            coll_heat(j) = lin(j)%coll + lin(j)%dH_dTg*dTg + lin(j)%dH_dTd*dTd
+            P_rad(j) = lin(j)%Prad + lin(j)%dP_dTd*dTd
+        end do
+    end subroutine serve_T_dust
 
     function get_dust_band_luminosity(j, T, mass, iband) result(lum)
         implicit none
