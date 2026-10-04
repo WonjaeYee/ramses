@@ -269,16 +269,17 @@ contains
         logical :: use_rtg, no_local, use_tab, predict, ok
         real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
-        real(dp), dimension(1:dinfo%ndust) :: rtg_Pinj, rtg_Prec
+        ! sized by the compile-time ndust (= dinfo%ndust): on the stack, not allocated on each call
+        real(dp), dimension(1:ndust) :: rtg_Pinj, rtg_Prec
         type(RTGState), pointer :: st
         type(RTGState), allocatable :: st0s(:)      ! the dumps only: an RTGState is large, and initialised on each call
         type(RTGResult) :: rr
-        type(RTGResult), dimension(1:dinfo%ndust) :: rrs
+        type(RTGResult), dimension(1:ndust) :: rrs
         integer :: path, ic, ndumped
-        integer, dimension(1:dinfo%ndust) :: paths
-        logical, dimension(1:dinfo%ndust) :: refined
-        real(dp) :: rate(RTG_NRI, 1:dinfo%ndust), tot(RTG_NRI), zg_used(1:dinfo%ndust)
-        real(dp) :: alpha_bins(RTG_NRI, 1:dinfo%ndust), n_grain
+        integer, dimension(1:ndust) :: paths
+        logical, dimension(1:ndust) :: refined
+        real(dp) :: rate(RTG_NRI, 1:ndust), tot(RTG_NRI), zg_used(1:ndust)
+        real(dp) :: alpha_bins(RTG_NRI, 1:ndust), n_grain
         real(kind=8) :: wallclock
 
         if (dinfo%ndust > 0) then
