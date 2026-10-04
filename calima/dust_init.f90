@@ -228,19 +228,19 @@ module dust_init
 #endif
         select case (trim(charging_model))
         case ('Ibanez2019', 'WDB06isrf')
-        case ('WDB06rt', 'WDB06tab')
+        case ('WDB06rt')
 #ifndef RT
             if (myid == 1) write(*,*) 'Error: charging_model='//trim(charging_model)//' needs RT photon groups; ', &
                 'use WDB06isrf (uniform ISRF) or Ibanez2019'
             check_params_dust = .false.
 #endif
         case default
-            if (myid == 1) write(*,*) 'Error: unknown charging_model='//trim(charging_model)//' (WDB06rt, WDB06tab, ', &
-                'WDB06isrf or Ibanez2019; the old (gamma, T) charge tables were removed)'
+            if (myid == 1) write(*,*) 'Error: unknown charging_model='//trim(charging_model)//' (WDB06rt, ', &
+                'WDB06isrf or Ibanez2019; the old (gamma, T) charge tables and WDB06tab were removed)'
             check_params_dust = .false.
         end select
-        if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06tab') then
-            if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06tab; ', &
+        if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06isrf') then
+            if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06isrf; ', &
                 'the RTZ chemistry keeps its grain recombination fit'
         end if
 #if defined(RT) && !defined(RTZ)
@@ -1306,11 +1306,10 @@ module dust_init
         if (dust_coll_cooling) call init_dust_collisional_tables
 
         ! 10. Read the uniform-ISRF charging tables: charging_model='WDB06isrf', the PE heating of the
-        ! models that do not compute their own (WDB06rt and WDB06tab do), and the Coulomb factors of
-        ! the WDB06rt cells without local photons
-        if (trim(charging_model) == 'WDB06isrf' .or. (dust_pe_heating .and. trim(charging_model) /= 'WDB06rt' &
-            .and. trim(charging_model) /= 'WDB06tab') .or. (Coulomb_precompute .and. trim(charging_model) == 'WDB06rt')) &
-            call init_dust_charging_isrf
+        ! models that do not compute their own (WDB06rt does), and the Coulomb factors of the WDB06rt
+        ! cells without local photons
+        if (trim(charging_model) == 'WDB06isrf' .or. (dust_pe_heating .and. trim(charging_model) /= 'WDB06rt') &
+            .or. (Coulomb_precompute .and. trim(charging_model) == 'WDB06rt')) call init_dust_charging_isrf
 
         ! 11b. Read the dust IR emission tables
         call init_dust_IR_emission_tables

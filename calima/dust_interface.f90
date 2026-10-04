@@ -2,7 +2,7 @@ module dust_interface
     use amr_commons, only:dp,ndim
     use amr_parameters, only: nvector
     use dust_charging_rtgroups, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, RTG_RECOMB_IMPORTANT, &
-                                      PSI_NIN, RI_ATOMIC
+                                      RI_ATOMIC
     use dust_radiation, only: TdustLin
     use constants
     use dust_commons
@@ -253,7 +253,7 @@ contains
         use dust_radiation, only: update_T_dust, serve_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
-                                          psitab_inputs, psitab_lookup, psitab_dump, rtgroups_predict, rtgroups_coulomb_ratio
+                                          rtgroups_predict, rtgroups_coulomb_ratio
         use amr_commons, only: myid
 
         implicit none
@@ -271,7 +271,7 @@ contains
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: nHI
         integer :: n_charge
-        logical :: use_rtg, no_local, use_tab, use_isrf, predict, ok, skip_coulomb
+        logical :: use_rtg, no_local, use_isrf, predict, ok, skip_coulomb
         real(dp), dimension(1:ndust) :: isrf_G, isrf_L         ! WDB06isrf: PE heating, recombination cooling
         real(dp), dimension(ISRF_ND, 1:ndust) :: isrf_D        ! WDB06isrf: Coulomb factors over the exact P(Z)
         ! WDB06rt Coulomb factors of the low impactor charges: 1 the Gaussian ones times rtg_D (the
@@ -279,7 +279,6 @@ contains
         integer, dimension(1:ndust) :: rtg_Dmode
         real(dp), dimension(ISRF_ND, 1:ndust) :: rtg_D
         real(dp) :: zz, ss, gg, ll
-        real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
         ! sized by the compile-time ndust (= dinfo%ndust): on the stack, not allocated on each call
         real(dp), dimension(1:ndust) :: rtg_Pinj, rtg_Prec
@@ -298,31 +297,9 @@ contains
             ! 1. Compute the equilibrium dust charge
             if (dust_charging_timer) t0 = wallclock()
             use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
-            use_tab = trim(charging_model) == 'WDB06tab'
             use_isrf = trim(charging_model) == 'WDB06isrf'
             alpha_bins = 0d0
-            if (use_tab) then
-                ! tables on (T, G_FUV sqrt(T)/ne, FUV hardness, G_EUV sqrt(T)/ne), n(H+) = ne
-                if (present(Np)) then
-                    call psitab_inputs(Np, dinfo%local_c, dinfo%G0_background, dinfo%group_eV, psi_in)
-                else
-                    call psitab_inputs(0d0*dinfo%group_eV, 0d0, dinfo%G0_background, dinfo%group_eV, psi_in)
-                end if
-                do ii = 1, dinfo%ndust
-                    call psitab_lookup(ii, Tk, ne, psi_in, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
-                                       rtg_Pinj(ii), rtg_Prec(ii), alpha_tab)
-                    alpha_bins(:, ii) = alpha_tab        ! 0 without dust_ion_recombination
-                    if (dust_rtgroups_debug .or. dust_rtgroups_verify) then
-                        call psitab_dump(ii, Tk, ne, psi_in, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
-                                         rtg_Pinj(ii), rtg_Prec(ii), alpha_tab, ndumped)
-                        if (dust_rtgroups_verify .and. ndumped >= dust_rtgroups_debug_max) then
-                            if (myid == 1) write(*,'(A,I7,A)') ' WDB06tab verify: ', ndumped, ' lookups dumped; stopping'
-                            call clean_stop
-                        end if
-                    end if
-                end do
-                if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
-            else if (use_rtg) then
+            if (use_rtg) then
                 ! Local-field charge balance on the RT photon groups (WDB06 yields),
                 ! which also gives the PE heating, recombination cooling and the
                 ! grain-assisted ion recombination (rr%alpha; dust_ion_recombination: dinfo%rec_ion_rate, for the RTZ chemistry)
@@ -464,10 +441,16 @@ contains
                 end if
             else if (use_isrf) then
                 ! uniform-ISRF tables at the local G0: the charge, the PE heating and recombination
-                ! cooling, and the Coulomb factors of the low impactor charges over the exact P(Z)
+                ! cooling, the Coulomb factors of the low impactor charges over the exact P(Z), and
+                ! the grain-assisted recombination (dust_ion_recombination)
                 do ii = 1, dinfo%ndust
-                    call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), isrf_G(ii), isrf_L(ii), &
-                                     isrf_D(:, ii))
+                    if (dust_ion_recombination) then
+                        call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), isrf_G(ii), isrf_L(ii), &
+                                         isrf_D(:, ii), alpha_bins(:, ii))
+                    else
+                        call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), isrf_G(ii), isrf_L(ii), &
+                                         isrf_D(:, ii))
+                    end if
                 end do
                 if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
             else
@@ -479,7 +462,7 @@ contains
                 end do
                 if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
             end if
-            if (dust_ion_recombination .and. (use_rtg .or. use_tab)) then
+            if (dust_ion_recombination .and. (use_rtg .or. use_isrf)) then
                 ! grain-assisted X+ -> X per X+ ion [s^-1]: sum over the bins of n_grain alpha (dust bins only)
                 dinfo%rec_ion_rate = 0d0
                 do ii = 1, dinfo%ndust
@@ -527,7 +510,7 @@ contains
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
             if (dust_charging_timer) t0 = wallclock()
-            if (dust_pe_heating .and. (use_rtg .or. use_tab)) then
+            if (dust_pe_heating .and. use_rtg) then
                 dinfo%Pinj_dust(1:dinfo%ndust) = rtg_Pinj
                 dinfo%Prec_dust(1:dinfo%ndust) = rtg_Prec
             elseif (dust_pe_heating .and. use_isrf) then

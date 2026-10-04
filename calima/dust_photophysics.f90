@@ -3008,7 +3008,7 @@ module dust_photoelectric_heating
         ! The dust photoelectric heating and net electron recombination cooling of bin i_dust in
         ! a uniform ISRF of G0 Habing: the WDB06 charge balance with H+ ions at n = n_e, from the
         ! uniform-ISRF tables (pyCALIMA charging_isrf_tables). The PE heating of the charging
-        ! models that do not compute their own (WDB06rt and WDB06tab do)
+        ! models that do not compute their own (WDB06rt does)
         ! i_dust   --> index of the dust species
         ! G0       --> radiation field in Habing units
         ! ne       --> electron number density [cm^-3]

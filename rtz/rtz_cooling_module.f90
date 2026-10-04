@@ -2168,7 +2168,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! dust_ion_recombination: X+ -> X on the grains from the WDB06 charge balance (all ten elements,
       ! dust bins only), in place of the fit below
       calima_ion_rec = dust_ion_recombination .and. &
-                       (trim(charging_model) == 'WDB06rt' .or. trim(charging_model) == 'WDB06tab')
+                       (trim(charging_model) == 'WDB06rt' .or. trim(charging_model) == 'WDB06isrf')
 #endif
 
       ! Loop over all elements

@@ -50,9 +50,8 @@ module dust_charging_rtgroups
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark, rtgroups_predict, &
               rtgroups_coulomb_ratio
-    public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup, psitab_dump
     public :: dust_charge_moments
-    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
+    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
               RTG_RECOMB_IMPORTANT
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the (reused) fit
     integer, parameter :: RTG_ALPHA_NONE = 0, RTG_ALPHA_GAUSS = 1, RTG_ALPHA_FIT = 2
@@ -146,28 +145,7 @@ module dust_charging_rtgroups
         real(dp) :: Dratio(4) = 1d0          ! rtgroups_coulomb_ratio at the last full solve (impactor charges -1, 1, 2, 3)
     end type RTGState
 
-    ! charging_model = 'WDB06tab': per-bin tables on (log T, log psi_F, h, psi_E), pyCALIMA charging_psi_tables
-    integer, parameter :: PSI_NQ = 5 + RTG_NRI      ! Zmean, Zsigma, ln gamma_F, ln gamma_E, lambda, ln alpha_i
-    integer, parameter :: PSI_NQ_CHARGE = 5         ! the quantities before ln alpha_i: all that is loaded without dust_ion_recombination
     integer, parameter :: RI_ATOMIC(RTG_NRI) = (/1, 2, 6, 7, 8, 10, 12, 14, 16, 26/)   ! atomic numbers of the RI_* ions
-    integer, parameter :: PSI_SOFT = 1, PSI_HARD = 2, PSI_EUV = 3, PSI_EUV_HE = 4, PSI_EUV_HEP = 5
-    integer, parameter :: PSI_NIN = 5                ! cell inputs: G_F, h, G_E, h_E1, h_E2
-    ! along psi_E the lookup is cubic for Zmean, Zsigma and lambda (q 1, 2, 5), and for the
-    ! logarithms (ln gamma, ln alpha) where none of the four nodes is below PSI_LN_FLOOR_CUBIC
-    real(dp), parameter :: PSI_LN_FLOOR_CUBIC = log(1d-250)
-    ! EUV hardness segments with both nodes in (0, PSI_HE_LOG_MAX] are interpolated in log h_E
-    ! (pyCALIMA charging_psi_tables.HE_LOG_MAX)
-    real(dp), parameter :: PSI_HE_LOG_MAX = 0.15d0
-    type PsiTable
-        integer :: nG = 0, nT = 0, nPF = 0, nH = 0, nHE1 = 0, nHE2 = 0, nPE = 0
-        real(dp) :: a = 0d0, T_bb = 0d0, F0 = 0d0, bg(2) = 0d0
-        integer, allocatable :: roles(:)
-        real(dp), allocatable :: w(:), L0(:), L1(:), egy(:), lT(:), lpsiF(:), h(:), psiE(:), lpsiE(:)   ! h: sqrt(h) nodes
-        real(dp), allocatable :: hE1(:), hE2(:)    ! EUV hardness nodes: F(>= 24.59 eV)/F_EUV, F(>= 54.42)/F(>= 24.59)
-        real(kind=4), allocatable :: q(:,:,:,:,:,:,:)  ! (nPE, nHE2, nHE1, nH, nPF, nT, PSI_NQ), as stored (float32)
-    end type PsiTable
-    type(PsiTable), allocatable, save :: pst(:)
-    integer, save :: psi_debug_unit = 0, psi_debug_count = 0
 
     type(RTGroupTable), allocatable, save :: rtg(:)
     integer, save :: debug_count = 0, debug_unit = 0
@@ -2291,313 +2269,16 @@ module dust_charging_rtgroups
         ndumped = debug_count
     end subroutine rtgroups_dump
 
-    ! ============================================== charging_model = 'WDB06tab'
-    subroutine init_dust_charging_psitab(groupL0, groupL1, nGroups)
-        ! Read the charging tables with FUV hardness and EUV axes of every dust bin (pyCALIMA
-        ! export_dust_charging_psitables: text header .dat and float32 values .bin) and check
-        ! them against the run.
-        use amr_commons, only: myid
-        implicit none
-        integer, intent(in) :: nGroups
-        real(dp), intent(in) :: groupL0(nGroups), groupL1(nGroups)
-        integer :: ii, g, istat, ver, mcode, iu
-        real(dp) :: W
-        character(len=20) :: dustlabel
-        character(len=256) :: fname
-        character(len=512) :: line
-
-        if (allocated(pst)) deallocate(pst)
-        allocate(pst(1:ndust))
-        do ii = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
-            fname = trim(dust_tables_dir)//'dust_charging_psitab_'//trim(dustlabel)//'.dat'
-            iu = 28
-            open(iu, file=trim(fname), status='old', action='read', iostat=istat)
-            if (istat /= 0) then
-                if (myid == 1) write(*,*) 'WDB06tab: cannot open ', trim(fname), &
-                    ' (pyCALIMA export_dust_charging_psitables)'
-                call clean_stop
-            end if
-            do
-                read(iu, '(A)') line
-                if (line(1:1) /= '#') exit
-            end do
-            associate(tb => pst(ii))
-                read(line, *) ver, mcode, tb%a, W, tb%nG, tb%nT, tb%nPF, tb%nH, tb%nHE1, tb%nHE2, tb%nPE, tb%T_bb, tb%F0
-                if (ver /= 5) then
-                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' has format ', ver, ', expected 5 (re-export)'
-                    call clean_stop
-                end if
-                if (tb%nG /= nGroups) then
-                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' has ', tb%nG, ' groups, the run has ', nGroups
-                    call clean_stop
-                end if
-                allocate(tb%roles(tb%nG), tb%w(tb%nG), tb%L0(tb%nG), tb%L1(tb%nG), tb%egy(tb%nG), tb%lT(tb%nT), &
-                         tb%lpsiF(tb%nPF), tb%h(tb%nH), tb%hE1(tb%nHE1), tb%hE2(tb%nHE2), tb%psiE(tb%nPE), &
-                         tb%lpsiE(tb%nPE - 1), &
-                         tb%q(tb%nPE, tb%nHE2, tb%nHE1, tb%nH, tb%nPF, tb%nT, merge(PSI_NQ, PSI_NQ_CHARGE, dust_ion_recombination)))
-                read(iu, *) tb%roles
-                read(iu, *) tb%w
-                read(iu, *) tb%L0
-                read(iu, *) tb%L1
-                read(iu, *) tb%egy
-                read(iu, *) tb%bg
-                read(iu, *) tb%lT
-                read(iu, *) tb%lpsiF
-                read(iu, *) tb%h
-                read(iu, *) tb%hE1
-                read(iu, *) tb%hE2
-                read(iu, *) tb%psiE
-                close(iu)
-                tb%lpsiE = log10(tb%psiE(2:tb%nPE))
-                fname = trim(dust_tables_dir)//'dust_charging_psitab_'//trim(dustlabel)//'.bin'
-                open(iu, file=trim(fname), status='old', action='read', access='stream', form='unformatted', &
-                     convert='little_endian', iostat=istat)
-                if (istat /= 0) then
-                    if (myid == 1) write(*,*) 'WDB06tab: cannot open ', trim(fname)
-                    call clean_stop
-                end if
-                read(iu) tb%q        ! the quantities are stored one after the other: the first size(q, 7) of them
-                close(iu)
-                do g = 1, nGroups
-                    if (abs(tb%L0(g) - groupL0(g)) > 1d-6*max(1d0,groupL0(g)) .or. &
-                        abs(tb%L1(g) - groupL1(g)) > 1d-6*max(1d0,groupL1(g))) then
-                        if (myid == 1) write(*,*) 'WDB06tab: group ', g, ' edges in ', trim(fname), ' differ from groupL0/L1'
-                        call clean_stop
-                    end if
-                end do
-                if (abs(tb%a - dustbins_props(ii)%asize_cm) > 1d-6*tb%a) then
-                    if (myid == 1) write(*,*) 'WDB06tab: ', trim(fname), ' is for a = ', tb%a, ' cm, bin ', ii, &
-                        ' has asize = ', dustbins_props(ii)%asize_cm, ' cm'
-                    call clean_stop
-                end if
-                if (myid == 1) write(*,'(A,A,A,ES12.5,A,6I4,A,I2,A,I2,A,F8.1,A)') ' WDB06tab: read ', trim(dustlabel), &
-                    ', a = ', tb%a, ' cm, grid (T, psi_F, sqrt h, h_E1, h_E2, psi_E) ', tb%nT, tb%nPF, tb%nH, tb%nHE1, &
-                    tb%nHE2, tb%nPE, ', quantities ', size(tb%q, 7), ' of ', PSI_NQ, ', ', 4d0*size(tb%q)/1048576d0, ' MB'
-            end associate
-        end do
-    end subroutine init_dust_charging_psitab
-
-    subroutine psitab_check_egy(egy)
-        ! warn once if the run's group mean energies differ from those the tables were built at
-        use amr_commons, only: myid
-        implicit none
-        real(dp), intent(in) :: egy(:)
-        logical, save :: done = .false.
-        integer :: g
-        if (done) return
-        done = .true.
-        do g = 1, pst(1)%nG
-            if (pst(1)%roles(g) /= 0 .and. abs(egy(g) - pst(1)%egy(g)) > 1d-2*pst(1)%egy(g) .and. myid == 1) &
-                write(*,'(A,I2,A,F8.3,A,F8.3,A)') ' WDB06tab warning: group ', g, ' mean energy ', egy(g), &
-                ' eV, the tables were built at ', pst(1)%egy(g), ' eV (export_dust_charging_psitables --egy)'
-        end do
-    end subroutine psitab_check_egy
-
-    subroutine psitab_inputs(Np, c_red, G0_bg, egy, pin)
-        ! pin = G_FUV, FUV hardness, G_EUV and the EUV hardnesses h_E1 = F(>= 24.59 eV)/F_EUV,
-        ! h_E2 = F(>= 54.42 eV)/F(>= 24.59 eV) of the cell (pyCALIMA charging_psi_tables.cell_inputs)
-        implicit none
-        real(dp), intent(in) :: Np(:), c_red, G0_bg, egy(:)
-        real(dp), intent(out) :: pin(PSI_NIN)
-        real(dp) :: F_s, F_h, F_e(3)
-        integer :: g
-        call psitab_check_egy(egy)
-        F_s = 0d0
-        F_h = 0d0
-        F_e = 0d0
-        do g = 1, pst(1)%nG
-            if (pst(1)%roles(g) == PSI_SOFT) F_s = F_s + Np(g)
-            if (pst(1)%roles(g) == PSI_HARD) F_h = F_h + Np(g)
-            if (pst(1)%roles(g) >= PSI_EUV) F_e(pst(1)%roles(g) - PSI_EUV + 1) = F_e(pst(1)%roles(g) - PSI_EUV + 1) + Np(g)
-        end do
-        F_s = c_red*F_s + G0_bg*pst(1)%bg(1)
-        F_h = c_red*F_h + G0_bg*pst(1)%bg(2)
-        pin(1) = (F_s + F_h)/pst(1)%F0
-        pin(2) = 0d0
-        if (F_s + F_h > 0d0) pin(2) = F_h/(F_s + F_h)
-        pin(3) = c_red*sum(F_e)/pst(1)%F0
-        pin(4) = 0d0
-        if (sum(F_e) > 0d0) pin(4) = (F_e(2) + F_e(3))/sum(F_e)
-        pin(5) = 0d0
-        if (F_e(2) + F_e(3) > 0d0) pin(5) = F_e(3)/(F_e(2) + F_e(3))
-    end subroutine psitab_inputs
-
-    subroutine psitab_lookup(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha)
-        ! pyCALIMA charging_psi_tables.psi_lookup: multilinear in (log T, log psi_F, sqrt h) and
-        ! cubic in log psi_E (4-point Lagrange; linear next to psi_E = 0 and the ends; the
-        ! logarithms stay linear where a node is at the floor) at each corner of the EUV
-        ! hardness axes (not equally spaced, log segments below PSI_HE_LOG_MAX), which are then
-        ! combined linearly, the heating in gamma rather than ln gamma; clamped (an axis with one
-        ! node is not interpolated); pin from psitab_inputs; Lambda includes autoionisation
-        implicit none
-        integer, intent(in) :: ii
-        real(dp), intent(in) :: T, ne, pin(PSI_NIN)
-        real(dp), intent(out) :: Zmean, Zsigma, Gamma, Lambda, alpha(RTG_NRI)
-        real(dp) :: sq, u, v, x, s, pE, c(PSI_NQ), wi, wj, wm, wk, y1, y2, w1, w2, wijm
-        real(dp) :: cub(PSI_NQ), low(PSI_NQ), wc(-1:2), node, lin(PSI_NQ), gam(2)
-        integer :: i, j, m, k, di, dj, dm, dk, iq, e1, e2, d1, d2, k0, k1, nq
-        logical :: cubic
-        associate(tb => pst(ii), G_F => pin(1), h => pin(2), G_E => pin(3))
-            nq = size(tb%q, 7)       ! PSI_NQ_CHARGE without dust_ion_recombination
-            sq = sqrt(T)
-            call grid_index(log10(T), tb%lT, tb%nT, i, u)
-            call grid_index(log10(max(G_F*sq/max(ne, RTG_TINY), RTG_TINY)), tb%lpsiF, tb%nPF, j, v)
-            call grid_index(sqrt(max(h, 0d0)), tb%h, tb%nH, m, x)      ! the hardness axis is uniform in sqrt(h)
-            call he_index(pin(4), tb%hE1, tb%nHE1, e1, y1)
-            call he_index(pin(5), tb%hE2, tb%nHE2, e2, y2)
-            pE = G_E*sq/max(ne, RTG_TINY)
-            if (pE <= tb%psiE(2)) then
-                k = 1
-                s = pE/tb%psiE(2)
-            else
-                call grid_index(log10(pE), tb%lpsiE, tb%nPE - 1, k, s)
-                k = k + 1
-            end if
-            ! weights along psi_E (pyCALIMA _psiE_weights): cubic on the logarithmic planes k-1..k+2
-            cubic = k >= 3 .and. k + 2 <= tb%nPE
-            if (cubic) then
-                k0 = -1
-                k1 = 2
-                wc(-1) = -s*(s - 1d0)*(s - 2d0)/6d0
-                wc(0) = (s + 1d0)*(s - 1d0)*(s - 2d0)/2d0
-                wc(1) = -(s + 1d0)*s*(s - 2d0)/2d0
-                wc(2) = (s + 1d0)*s*(s - 1d0)/6d0
-            else
-                k0 = 0
-                k1 = 1
-                wc(0) = 1d0 - s
-                wc(1) = s
-            end if
-            c = 0d0
-            gam = 0d0
-            do d1 = 0, min(1, tb%nHE1 - 1)
-                w1 = merge(1d0 - y1, y1, d1 == 0)
-                do d2 = 0, min(1, tb%nHE2 - 1)
-                    w2 = merge(1d0 - y2, y2, d2 == 0)
-                    lin = 0d0
-                    cub = 0d0
-                    low = huge(1d0)
-                    do di = 0, 1
-                        wi = merge(1d0 - u, u, di == 0)
-                        do dj = 0, 1
-                            wj = merge(1d0 - v, v, dj == 0)
-                            do dm = 0, 1
-                                wm = merge(1d0 - x, x, dm == 0)
-                                wijm = wi*wj*wm
-                                do dk = 0, 1
-                                    wk = wijm*merge(1d0 - s, s, dk == 0)
-                                    do iq = 1, nq
-                                        lin(iq) = lin(iq) + wk*dble(tb%q(k + dk, e2 + d2, e1 + d1, m + dm, j + dj, i + di, iq))
-                                    end do
-                                end do
-                                do dk = k0, k1
-                                    wk = wijm*wc(dk)
-                                    do iq = 1, nq
-                                        node = dble(tb%q(k + dk, e2 + d2, e1 + d1, m + dm, j + dj, i + di, iq))
-                                        cub(iq) = cub(iq) + wk*node
-                                        low(iq) = min(low(iq), node)
-                                    end do
-                                end do
-                            end do
-                        end do
-                    end do
-                    do iq = 1, nq
-                        if (iq == 1 .or. iq == 2 .or. iq == 5 .or. low(iq) > PSI_LN_FLOOR_CUBIC) lin(iq) = cub(iq)
-                    end do
-                    c = c + w1*w2*lin
-                    gam = gam + w1*w2*exp(lin(3:4))        ! heating: linear in gamma along h_E
-                end do
-            end do
-            Zmean = c(1)
-            Zsigma = c(2)
-            Gamma = G_F*gam(1) + G_E*gam(2)
-            Lambda = ne*sq*c(5)
-            if (nq == PSI_NQ) then
-                alpha = exp(c(6:PSI_NQ))
-            else
-                alpha = 0d0
-            end if
-        end associate
-    contains
-        subroutine he_index(xx, nodes, n, i0, f0)
-            ! 1-based node and weight on an EUV hardness axis (pyCALIMA _hE_index): not equally
-            ! spaced, clamped, log weight where both nodes are in (0, PSI_HE_LOG_MAX]
-            real(dp), intent(in) :: xx, nodes(:)
-            integer, intent(in) :: n
-            integer, intent(out) :: i0
-            real(dp), intent(out) :: f0
-            real(dp) :: xc
-            integer :: ii
-            if (n == 1) then
-                i0 = 1
-                f0 = 0d0
-                return
-            end if
-            xc = min(max(xx, nodes(1)), nodes(n))
-            i0 = 1
-            do ii = 1, n - 1
-                if (nodes(ii) <= xc) i0 = ii
-            end do
-            if (nodes(i0) > 0d0 .and. nodes(i0 + 1) <= PSI_HE_LOG_MAX) then
-                f0 = log(xc/nodes(i0))/log(nodes(i0 + 1)/nodes(i0))
-            else
-                f0 = (xc - nodes(i0))/(nodes(i0 + 1) - nodes(i0))
-            end if
-        end subroutine he_index
-
-        subroutine grid_index(xx, grid, n, i0, f0)
-            ! 1-based node and weight on an equally spaced grid, clamped (pyCALIMA _index);
-            ! a single node: weight 0 on it
-            real(dp), intent(in) :: xx, grid(:)
-            integer, intent(in) :: n
-            integer, intent(out) :: i0
-            real(dp), intent(out) :: f0
-            real(dp) :: f
-            if (n == 1) then
-                i0 = 1
-                f0 = 0d0
-                return
-            end if
-            f = (min(max(xx, grid(1)), grid(n)) - grid(1))/(grid(2) - grid(1))
-            i0 = min(int(f), n - 2)
-            f0 = f - dble(i0)
-            i0 = i0 + 1
-        end subroutine grid_index
-    end subroutine psitab_lookup
-
-    subroutine psitab_dump(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha, ndumped)
-        ! inputs and outputs of one lookup, for compare_ramses_rtgroups.py --psitab
-        use amr_commons, only: myid
-        implicit none
-        integer, intent(in) :: ii
-        real(dp), intent(in) :: T, ne, pin(PSI_NIN), Zmean, Zsigma, Gamma, Lambda, alpha(RTG_NRI)
-        integer, intent(out) :: ndumped
-        character(len=32) :: fname
-        ndumped = psi_debug_count
-        if (psi_debug_count >= dust_rtgroups_debug_max) return
-        if (psi_debug_unit == 0) then
-            psi_debug_unit = 932
-            write(fname, '(A,I5.5,A)') 'dust_psitab_debug_', myid, '.dat'
-            open(psi_debug_unit, file=trim(fname), status='replace')
-            write(psi_debug_unit, '(A)') '# WDB06tab lookups (format 3): bin T ne G_F h G_E h_E1 h_E2 Zmean Zsigma Gamma '// &
-                'Lambda alpha(10)'
-        end if
-        write(psi_debug_unit, '(I3,*(1X,ES23.15E3))') ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha
-        psi_debug_count = psi_debug_count + 1
-        ndumped = psi_debug_count
-    end subroutine psitab_dump
-
     ! ------------------------------------------------- charge outside the cooling step
     subroutine dust_charge_moments(ii, Np, egy, c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp, Zmean, Zsigma, &
                                    lnL1, coul)
         ! <Z> and sigma_Z of dust bin ii from charging_model, for callers outside the RTZ
         ! cooling step (the Coulomb drag): the same models as compute_dust_precool, but
-        ! stateless. WDB06tab: the table lookup; WDB06rt: a cold per-group solve (no
-        ! recombination, no T derivatives), or the uniform-background table without local
-        ! photons; otherwise the (G0, T, ne) tables of dust_charging. Np: photon densities
+        ! stateless. WDB06rt: a cold per-group solve (no recombination, no T derivatives), or
+        ! the uniform-background table without local photons; otherwise the uniform-ISRF
+        ! tables (or the analytic fit) of dust_charging. Np: photon densities
         ! per group [cm^-3]; egy [eV]; c_red [cm/s]; G0_bg: UV background [Habing]; G0:
-        ! background plus the local 5.6-13.6 eV groups [Habing] (the (G0, T, ne) tables only).
+        ! background plus the local 5.6-13.6 eV groups [Habing] (the dust_charging models only).
         ! With lnL1 = ln Lambda of Z = 1, also coul = <Z^2 ln+(Lambda_1/|Z|)> over P(Z), the
         ! Draine & Salpeter (1979) Coulomb term in units of phi(Z=1)^2: on the exact P(Z) for
         ! WDB06rt (the solve's window if discrete, else one evaluated around Z* while it fits
@@ -2610,16 +2291,13 @@ module dust_charging_rtgroups
         real(dp), intent(out) :: Zmean, Zsigma
         real(dp), intent(in), optional :: lnL1
         real(dp), intent(out), optional :: coul
-        real(dp) :: pin(PSI_NIN), Gamma, Lambda, alpha(RTG_NRI)
+        real(dp) :: Gamma, Lambda
         integer :: lo, hi, half, Zc
         logical :: exact
         type(RTGState) :: st
         type(RTGResult) :: r
         exact = .false.
-        if (trim(charging_model) == 'WDB06tab') then
-            call psitab_inputs(Np, c_red, G0_bg, egy, pin)
-            call psitab_lookup(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha)
-        else if (trim(charging_model) == 'WDB06rt') then
+        if (trim(charging_model) == 'WDB06rt') then
             if (all(Np <= smallNp)) then
                 call rtgroups_uniform_lookup(ii, G0_bg, T, ne, Zmean, Zsigma, Gamma, Lambda)
             else

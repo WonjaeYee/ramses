@@ -8,12 +8,15 @@ module dust_charging
     integer,parameter :: n_charge_threshold = 10
 
     ! charging_model = 'WDB06isrf': WDB06 charging under a uniform ISRF, per dust bin, from
-    ! pyCALIMA export_dust_charging_isrf (dust_charging_isrf_DustBin_XX.dat in dust_tables_dir)
-    integer, parameter :: ISRF_NQ = 8, ISRF_ND = 4
+    ! pyCALIMA export_dust_charging_isrf (dust_charging_isrf_DustBin_XX.dat in dust_tables_dir).
+    ! Planes: <Z>, sigma_Z, ln Gamma_1, lambda_1, ln D_j (ISRF_ND), then ln alpha_i (ISRF_NA) of the
+    ! grain-assisted recombination of the ions of dust_charging_rtgroups RI_ATOMIC (pyCALIMA
+    ! RECOMB_IONS), read only for dust_ion_recombination with WDB06isrf
+    integer, parameter :: ISRF_ND = 4, ISRF_NA = 10, ISRF_NQ_CHARGE = 4 + ISRF_ND, ISRF_NQ = ISRF_NQ_CHARGE + ISRF_NA
     integer, parameter, dimension(ISRF_ND) :: ISRF_DCHARGE = (/-1, 1, 2, 3/)  ! impactor charges of the D planes
-    integer :: isrf_nT = 0, isrf_nX = 0
+    integer :: isrf_nT = 0, isrf_nX = 0, isrf_nqload = 0
     real(dp) :: isrf_lT0 = 0d0, isrf_lT1 = 0d0, isrf_dlT = 1d0, isrf_lX0 = 0d0, isrf_lX1 = 0d0, isrf_dlX = 1d0
-    real(dp), allocatable :: isrf_q(:,:,:,:)         ! (ISRF_NQ, nT, nX, ndust)
+    real(dp), allocatable :: isrf_q(:,:,:,:)         ! (isrf_nqload, nT, nX, ndust): ISRF_NQ_CHARGE or ISRF_NQ planes
 
     private
     public :: compute_mean_dust_charge, compute_dust_charge_sigma,&
@@ -162,7 +165,7 @@ module dust_charging
             return
         end if
 
-        ! charging_model = 'WDB06isrf' (WDB06rt and WDB06tab are computed in compute_dust_precool and
+        ! charging_model = 'WDB06isrf' (WDB06rt is computed in compute_dust_precool and
         ! dust_charge_moments): the uniform-ISRF tables at G0
         call isrf_lookup(i_dust, G0, Tgas, ne, Zdust, Zsigma, Gam, Lam, Dj)
     end subroutine compute_mean_dust_charge
@@ -200,7 +203,8 @@ module dust_charging
         ! Reads the uniform-ISRF WDB06 charging tables of every dust bin (pyCALIMA
         ! export_dust_charging_isrf): <Z>, sigma_Z, ln Gamma_1, lambda_1 and ln D_j on equally
         ! spaced (log10 T, log10 n_e/G0), the same grid for every bin, each for the grain radius
-        ! of its bin; see isrf_lookup
+        ! of its bin; see isrf_lookup. The ln alpha_i planes only for dust_ion_recombination with
+        ! WDB06isrf (WDB06rt computes its own)
         use amr_commons, only: myid
         implicit none
         integer :: ii, k, i, nver, nT, nX, nQ, istat
@@ -216,7 +220,7 @@ module dust_charging
             open(u, file=trim(fname), status='old', action='read', iostat=istat)
             if (istat /= 0) then
                 if (myid == 1) write(*,*) 'ERROR: cannot open ', trim(fname), ' (pyCALIMA export_dust_charging_isrf: ', &
-                    'charging_model=''WDB06isrf'', and the PE heating of models other than WDB06rt and WDB06tab)'
+                    'charging_model=''WDB06isrf'', and the PE heating of models other than WDB06rt)'
                 call clean_stop
             end if
             do                                                  ! the header
@@ -224,9 +228,9 @@ module dust_charging
                 if (line(1:1) /= '#') exit
             end do
             read(line, *) nver, nT, nX, nQ, a_tab
-            if (nver /= 1 .or. nQ /= ISRF_NQ) then
+            if (nver /= 2 .or. nQ /= ISRF_NQ) then
                 if (myid == 1) write(*,*) 'ERROR: ', trim(fname), ' has format ', nver, ' with ', nQ, &
-                    ' quantities; expected format 1 with ', ISRF_NQ, ' (re-export the tables)'
+                    ' quantities; expected format 2 with ', ISRF_NQ, ' (re-export the tables)'
                 call clean_stop
             end if
             if (abs(a_tab - dustbins_props(ii)%asize_cm) > 1d-6*a_tab) then
@@ -246,14 +250,15 @@ module dust_charging
                 isrf_lX0 = lX(1)
                 isrf_lX1 = lX(nX)
                 isrf_dlX = lX(2) - lX(1)
+                isrf_nqload = merge(ISRF_NQ, ISRF_NQ_CHARGE, dust_ion_recombination .and. trim(charging_model) == 'WDB06isrf')
                 if (allocated(isrf_q)) deallocate(isrf_q)
-                allocate(isrf_q(ISRF_NQ, nT, nX, ndust))
+                allocate(isrf_q(isrf_nqload, nT, nX, ndust))
             else if (nT /= isrf_nT .or. nX /= isrf_nX .or. lT(1) /= isrf_lT0 .or. lX(1) /= isrf_lX0 &
                      .or. lT(nT) /= isrf_lT1 .or. lX(nX) /= isrf_lX1) then
                 if (myid == 1) write(*,*) 'ERROR: ', trim(fname), ' is not on the grid of DustBin_01'
                 call clean_stop
             end if
-            do k = 1, ISRF_NQ
+            do k = 1, isrf_nqload
                 do i = 1, nT
                     read(u, *) isrf_q(k, i, :, ii)
                 end do
@@ -265,20 +270,23 @@ module dust_charging
             isrf_nX, ' nodes per bin)'
     end subroutine init_dust_charging_isrf
 
-    subroutine isrf_lookup(ii, G0, T, ne, Zmean, Zsigma, Gamma, Lambda, D)
+    subroutine isrf_lookup(ii, G0, T, ne, Zmean, Zsigma, Gamma, Lambda, D, alpha)
         ! <Z>, sigma_Z, PE heating Gamma and net recombination cooling Lambda [erg/s per grain],
-        ! and the Coulomb focusing factors D(ISRF_DCHARGE) over the exact P(Z), of dust bin ii in a
-        ! uniform ISRF of G0 Habing at T [K] and n_e [cm^-3]: bilinear in (log10 T, log10 n_e/G0),
-        ! clamped. Every rate is linear in G0 or n_e, so the tables at G0 = 1 give any G0
-        ! (pyCALIMA charging_isrf_tables.isrf_lookup)
+        ! the Coulomb focusing factors D(ISRF_DCHARGE) over the exact P(Z) and, if asked (the planes
+        ! are read for dust_ion_recombination with WDB06isrf), the grain-assisted recombination
+        ! coefficients alpha of the RI_ATOMIC ions [cm^3/s per grain], of dust bin ii in a uniform
+        ! ISRF of G0 Habing at T [K] and n_e [cm^-3]: bilinear in (log10 T, log10 n_e/G0), clamped.
+        ! Every rate is linear in G0 or n_e, so the tables at G0 = 1 give any G0 (pyCALIMA
+        ! charging_isrf_tables.isrf_lookup)
         implicit none
         integer, intent(in) :: ii
         real(dp), intent(in) :: G0, T, ne
         real(dp), intent(out) :: Zmean, Zsigma, Gamma, Lambda
         real(dp), dimension(ISRF_ND), intent(out) :: D
+        real(dp), dimension(ISRF_NA), intent(out), optional :: alpha
         real(dp) :: fi, fj, u, v
         real(dp), dimension(ISRF_NQ) :: c
-        integer :: i, j
+        integer :: i, j, n
 
         fi = (min(max(log10(T), isrf_lT0), isrf_lT1) - isrf_lT0) / isrf_dlT
         fj = (min(max(log10(max(ne, 1d-300) / max(G0, 1d-300)), isrf_lX0), isrf_lX1) - isrf_lX0) / isrf_dlX
@@ -288,13 +296,19 @@ module dust_charging
         v = fj - dble(j)
         i = i + 1
         j = j + 1
-        c = (1d0 - u) * (1d0 - v) * isrf_q(:, i, j, ii) + u * (1d0 - v) * isrf_q(:, i + 1, j, ii) &
-            + (1d0 - u) * v * isrf_q(:, i, j + 1, ii) + u * v * isrf_q(:, i + 1, j + 1, ii)
+        n = ISRF_NQ_CHARGE
+        if (present(alpha)) n = isrf_nqload
+        c(1:n) = (1d0 - u) * (1d0 - v) * isrf_q(1:n, i, j, ii) + u * (1d0 - v) * isrf_q(1:n, i + 1, j, ii) &
+                 + (1d0 - u) * v * isrf_q(1:n, i, j + 1, ii) + u * v * isrf_q(1:n, i + 1, j + 1, ii)
         Zmean = c(1)
         Zsigma = c(2)
         Gamma = G0 * exp(c(3))
         Lambda = ne * sqrt(T) * c(4)
         D = exp(c(5:4 + ISRF_ND))
+        if (present(alpha)) then
+            alpha = 0d0
+            if (n == ISRF_NQ) alpha = exp(c(ISRF_NQ_CHARGE + 1:ISRF_NQ))
+        end if
     end subroutine isrf_lookup
 
     subroutine compute_dust_charge_dist(i_dust,Z_avg,Zsigma,Zdust,fcharge,n_charge)
