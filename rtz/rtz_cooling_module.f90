@@ -931,7 +931,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: rho
       !-----------------------------------------------------------------------
       ! Variables specific to RTZ
-      real(dp):: xe, x_eq
+      real(dp):: xe, x_eq, x_old
+      logical:: ne_sync                       ! the next ion update sums ne over all ions again
       real(dp):: dust_effective_number_density, dust_to_gas_mass_ratio_over_mw
       real(dp):: HI_number_density, HII_number_density
       real(dp):: paired_ion_number_density
@@ -2186,6 +2187,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
             ! Loop over the ions and get the relevant rates
             saved_rates = 0.d0
+            ! ne is summed again at this element's first update (it catches up the renormalisation of
+            ! the previous element, and the CO chemistry before the first), then follows its updates
+            ne_sync = .true.
 
             ! Initialize collisional ionization before the loop
             ! recombination rates are 0 for ground state
@@ -2418,6 +2422,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                !/////////////////////////
                !//       Update        //
                !/////////////////////////
+               x_old = dXion(iElement,iIon)
                if (de * ddt(icell) < 1.d-6) then
                   dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
                else
@@ -2427,7 +2432,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
                ! Get the new electron fraction
-               ne = getNe(dXion, nElement_dep(:))
+               if (ne_sync) then
+                  ne = getNe(dXion, nElement_dep(:))
+                  ne_sync = .false.
+               else
+                  ne = ne + nElement_dep(iElement) * (dXion(iElement,iIon) - x_old) * real(iIon - 1, dp)
+               end if
                xe = ne / nElement_dep(1)
                phi_s = secondary_cr_rates(xe)
                total_cosmic_ray_ionization_rate = primary_cosmic_ray_ionization_rate * (1.d0 + phi_s)
