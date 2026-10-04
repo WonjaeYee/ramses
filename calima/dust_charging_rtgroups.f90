@@ -158,6 +158,12 @@ module dust_charging_rtgroups
     real(dp) :: c_geoA, c_lngeoA      ! pi a^2 (8kT / pi m_u)^1/2 and its ln (ion capture per J~ at z = 1)
     real(dp), allocatable :: c_cN(:)
     integer :: c_bin, c_kh
+    ! T-independent part of g of the last GM_N charges of the cell (gfun; set_cell empties it):
+    ! U index and weight of Z and Z + 1, photoemission at Z. GM_N covers the pair and up to
+    ! SIGMA_CHORD_ITER chords of a wide P(Z), re-evaluated at T(1 + dlnT)
+    integer, parameter :: GM_N = 2 + 2*SIGMA_CHORD_ITER
+    real(dp) :: gm_Z(GM_N), gm_w(GM_N), gm_w1(GM_N), gm_photo(GM_N)
+    integer :: gm_i(GM_N), gm_i1(GM_N), gm_used = 0, gm_next = 1
 
     ! discrete window: per-integer quantities, indexed by charge - b_base
     integer :: b_base
@@ -666,32 +672,41 @@ module dust_charging_rtgroups
         if (c_nion(3) > 0d0) ion_capture = ion_capture + c_arr_ion(3)*jtilde(Z, c_zion(3), c_tau_ion(3))
     end function ion_capture
 
-    real(dp) function up_rate(Z)
-        ! photoemission + ion capture + gas-electron secondaries at Z
-        implicit none
-        real(dp), intent(in) :: Z
-        real(dp) :: w, photo, heat
-        integer :: i
-        call u_of(Z, i, w)
-        call kernels(i, w, photo, heat, .false.)
-        up_rate = photo + ion_capture(Z) + c_arr_e*jtilde(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
-    end function up_rate
-
-    real(dp) function down_rate(Z)
-        ! electron capture at Z
-        implicit none
-        real(dp), intent(in) :: Z
-        real(dp) :: w
-        integer :: i
-        call u_of(Z, i, w)
-        down_rate = c_arr_e*jtilde(Z, -1d0, c_tau_e)*sticking(Z)*(1d0 - hot(rtg(c_bin)%Ptr, i, w))
-    end function down_rate
-
     real(dp) function gfun(Z)
-        ! ln Up(Z) - ln Down(Z+1)
+        ! ln Up(Z) - ln Down(Z+1): Up = photoemission + ion capture + gas-electron secondaries at Z,
+        ! Down = electron capture at Z + 1. The U indices of Z and Z + 1 and the photoemission at
+        ! Z do not depend on T; those of the last GM_N charges of the cell are kept, so g at the
+        ! same charges at T(1 + dlnT) (the d/d ln T of a wide P(Z)) costs only its T-dependent part
         implicit none
         real(dp), intent(in) :: Z
-        gfun = log(max(up_rate(Z), RTG_TINY)) - log(max(down_rate(Z + 1d0), RTG_TINY))
+        real(dp) :: w, w1, photo, heat, up, down
+        integer :: i, i1, m
+        do m = 1, gm_used
+            if (gm_Z(m) == Z) exit
+        end do
+        if (m <= gm_used) then
+            i = gm_i(m)
+            w = gm_w(m)
+            i1 = gm_i1(m)
+            w1 = gm_w1(m)
+            photo = gm_photo(m)
+        else
+            call u_of(Z, i, w)
+            call kernels(i, w, photo, heat, .false.)
+            call u_of(Z + 1d0, i1, w1)
+            m = gm_next
+            gm_Z(m) = Z
+            gm_i(m) = i
+            gm_w(m) = w
+            gm_i1(m) = i1
+            gm_w1(m) = w1
+            gm_photo(m) = photo
+            gm_next = mod(m, GM_N) + 1
+            gm_used = max(gm_used, m)
+        end if
+        up = photo + ion_capture(Z) + c_arr_e*jtilde(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
+        down = c_arr_e*jtilde(Z + 1d0, -1d0, c_tau_e)*sticking(Z + 1d0)*(1d0 - hot(rtg(c_bin)%Ptr, i1, w1))
+        gfun = log(max(up, RTG_TINY)) - log(max(down, RTG_TINY))
     end function gfun
 
     subroutine heating_cooling(Z, gam, lam)
@@ -732,6 +747,8 @@ module dust_charging_rtgroups
         real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg
         c_bin = ii
         c_cN(1:rtg(ii)%nG) = c_red*Np(1:rtg(ii)%nG)
+        gm_used = 0
+        gm_next = 1
         c_ne = ne
         c_G0 = G0_bg
         c_nion = (/ n_Hp, n_Hep, n_Hepp /)
