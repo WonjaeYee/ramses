@@ -502,7 +502,7 @@ contains
             ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
             if (td_served()) then
                 ! the cooling solver's T(1 +- 1e-5) call: first order from the last update_T_dust
-                call serve_T_dust(td_lin,Tk,dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Pcoll_dust(:),&
+                call serve_T_dust(td_lin,Tk,dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Z_dust(:),dinfo%Pcoll_dust(:),&
                                   dinfo%Prad_dust(:),dinfo%T_dust(:))
             else
                 if (.not. allocated(td_lin)) allocate(td_lin(1:dinfo%ndust), td_nel(size(nElement)), &
@@ -642,11 +642,11 @@ contains
 
         logical function td_served()
             ! same inputs as the last update_T_dust but T, within RTG_SERVE in ln T (and the
-            ! recombination and photoelectric terms, which serve_T_dust takes to first order); not
-            ! with dust_coll_charge, whose collisional heating also follows the charge
+            ! recombination and photoelectric terms and the grain charge, which serve_T_dust takes to
+            ! first order)
             real(dp) :: x
             td_served = .false.
-            if (.not. td_valid .or. dust_coll_charge .or. (td_hasNp .neqv. present(Np))) return
+            if (.not. td_valid .or. (td_hasNp .neqv. present(Np))) return
             x = Tk/td_T
             if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
             if (ne /= td_ne .or. nH2 /= td_nH2 .or. nCO /= td_nCO) return
