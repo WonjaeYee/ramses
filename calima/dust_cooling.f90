@@ -24,6 +24,7 @@ module dust_cooling
         real(dp) :: Tgas = 0d0, sum_rate = 0d0, supp = 0d0, supp_inv = 0d0   ! T > 1e3 K: tables, blend with BH80
         real(dp) :: sqrtTg = 0d0, s_const = 0d0, nh2_pf = 0d0, a0_h2 = 0d0   ! BH80: species with unit accommodation,
         real(dp) :: nco = 0d0, co_pf = 0d0, nhi_pf = 0d0, a0_h = 0d0         ! H2, CO and neutral H
+        logical :: bh80_ok = .false.                                         ! the BH80 part is set
     end type CollHeatPre
 
     logical, save :: bh80_cache_ready = .false.
@@ -154,6 +155,7 @@ module dust_cooling
             pre%nhi_pf = nElement(1) * xelem_ions(1,1) * bh80_species_prefactor(i_dust,1)
             pre%a0_h = bh80_h_accomm_zero(i_dust)
         end if
+        pre%bh80_ok = .true.
 
     end subroutine bh80_prepare
 
@@ -202,9 +204,11 @@ module dust_cooling
 
     end subroutine compute_dust_coll_heating
 
-    subroutine coll_heating_prepare(i_dust,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge,pre)
+    subroutine coll_heating_prepare(i_dust,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge,pre,bh80_from)
         ! compute_dust_coll_heating but its dependence on the dust temperature (the tables of the
-        ! electrons and ions, and the BH80 terms that do not depend on Td)
+        ! electrons and ions, and the BH80 terms that do not depend on Td). bh80_from (optional): a
+        ! state of the same bin and gas at another temperature, whose BH80 species sums (which do not
+        ! depend on Tgas) are taken instead of summed again
         implicit none
 
         integer, intent(in) :: i_dust
@@ -215,6 +219,7 @@ module dust_cooling
         real(dp), intent(in) :: Tgas
         real(dp), intent(in) :: dust_charge
         type(CollHeatPre), intent(out) :: pre
+        type(CollHeatPre), intent(in), optional :: bh80_from
 
         integer :: j,iel,nT,nphi,nions_loc
         real(dp) :: lT,cooling_rate
@@ -288,11 +293,33 @@ module dust_cooling
             if (pre%blend) then
                 pre%supp = 1d0 - 1d0/(1d0+exp(-1d1*(log10(Tgas)-4d0)))
                 pre%supp_inv = 1d0 / (1d0 + exp(-1d1*(log10(Tgas) - 4d0)))
-                call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre)
+                call bh80_part()
             end if
         else
-            call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre)
+            call bh80_part()
         end if
+
+    contains
+
+        subroutine bh80_part()
+            ! bh80_prepare, or its species sums from bh80_from
+            if (present(bh80_from)) then
+                if (bh80_from%bh80_ok) then
+                    pre%sqrtTg = sqrt(Tgas)
+                    pre%s_const = bh80_from%s_const
+                    pre%nh2_pf = bh80_from%nh2_pf
+                    pre%a0_h2 = bh80_from%a0_h2
+                    pre%nco = bh80_from%nco
+                    pre%co_pf = bh80_from%co_pf
+                    pre%hneutral = bh80_from%hneutral
+                    pre%nhi_pf = bh80_from%nhi_pf
+                    pre%a0_h = bh80_from%a0_h
+                    pre%bh80_ok = .true.
+                    return
+                end if
+            end if
+            call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre)
+        end subroutine bh80_part
 
     end subroutine coll_heating_prepare
 

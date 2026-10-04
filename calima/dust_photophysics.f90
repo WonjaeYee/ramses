@@ -2170,7 +2170,8 @@ module dust_radiation
             lin(j)%pe = pe_heat(j)
             lin(j)%dH_dTg = 0d0
             if (dust_coll_cooling) then
-                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas*(1d0 + TDUST_LIN_EPS),dust_charge(j),pre_eps)
+                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas*(1d0 + TDUST_LIN_EPS),dust_charge(j),pre_eps, &
+                                          bh80_from=pre)
                 lin(j)%dH_dTg = (coll_heating_eval(pre_eps,Tx) - coll_heating_eval(pre,Tx))/(TDUST_LIN_EPS*Tgas)
             end if
             lin(j)%dH_dTd = slope
