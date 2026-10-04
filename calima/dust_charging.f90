@@ -10,6 +10,7 @@ module dust_charging
     private
     public :: compute_mean_dust_charge, compute_dust_charge_sigma,&
               compute_dust_charge_dist, compute_Coulomb_focusing,&
+              compute_Coulomb_focusing_ions,&
               three_point_charge_mix, two_point_charge_mix
 
     contains
@@ -304,6 +305,51 @@ module dust_charging
         ! 3. Make sure that the Coulomb factor does not become too small
         D_coulomb = max(D_coulomb, 1d-5)
     end subroutine compute_Coulomb_focusing
+
+    subroutine compute_Coulomb_focusing_ions(i_dust,Tgas,Zmean,Zsigma,jmax,D_coulomb)
+        ! compute_Coulomb_focusing of bin i_dust for the ion charges -1..jmax, stopping (1d-10 for
+        ! the rest) after a factor at its floor for a repulsive charge: the charge distribution of
+        ! the direct sum does not depend on the ion charge, so it is built once for all of them
+        use constants, only: pi,e2instatC,kB
+        implicit none
+        integer, intent(in) :: i_dust, jmax
+        real(dp), intent(in) :: Tgas,Zmean,Zsigma
+        real(dp), dimension(-1:jmax), intent(inout) :: D_coulomb
+
+        integer :: Zmin,Zmax,n_charge,j
+        real(dp) :: alpha, Zion, prevD
+        real(dp),dimension(1:n_charge_threshold) :: Zvals,fcharge
+        logical :: taylor
+
+        ! 1. Determine the charge range within +/- 3 sigma, and the method (compute_Coulomb_focusing)
+        Zmin = nint(Zmean - 3d0 * Zsigma)
+        Zmax = nint(Zmean + 3d0 * Zsigma)
+        n_charge = Zmax - Zmin + 1
+        taylor = abs(Zmean/Zsigma) > 3d0 .and. n_charge > n_charge_threshold
+        if (.not. taylor) call compute_dust_charge_dist(i_dust,Zmean,Zsigma,Zvals,fcharge,n_charge)
+
+        ! 2. Each ion charge
+        prevD = 1d0
+        do j = -1, jmax
+            Zion = dble(j)
+            if (prevD <= 1d-5 .and. Zmean*Zion > 0d0) then
+                D_coulomb(j:jmax) = 1d-10
+                exit
+            end if
+            if (taylor) then
+                alpha = (Zion * e2instatC) / (kB * Tgas * dustbins_props(i_dust)%asize_cm)
+                if (Zmean * Zion > 0d0) then
+                    D_coulomb(j) = safe_exp(-alpha * Zmean) * (1d0 + 0.5d0 * alpha**2d0 * Zsigma**2d0)
+                else
+                    D_coulomb(j) = 1d0 - alpha * Zmean
+                end if
+            else
+                call compute_Coulomb_focusing_dist(Tgas,dustbins_props(i_dust)%asize_cm,fcharge,Zvals,n_charge,Zion,D_coulomb(j))
+            end if
+            D_coulomb(j) = max(D_coulomb(j), 1d-5)
+            prevD = D_coulomb(j)
+        end do
+    end subroutine compute_Coulomb_focusing_ions
 
     subroutine compute_Coulomb_focusing_dist(Tgas,agrain,fcharge,Zdust,n_charge,Zion,D_Coulomb)
         ! ====== Coulomb enhancement factor =====

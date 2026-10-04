@@ -239,7 +239,7 @@ contains
         ! nCO --> local carbon monoxide density (cm^-3)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_dust_charge_dist, compute_Coulomb_focusing
+                                compute_dust_charge_dist, compute_Coulomb_focusing_ions
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
                                             compute_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
@@ -264,7 +264,7 @@ contains
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
-        real(dp) :: Zel, nHI, prevD
+        real(dp) :: nHI
         integer :: n_charge
         logical :: use_rtg, no_local, use_tab, predict, ok
         real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
@@ -456,17 +456,8 @@ contains
             dinfo%Coulomb_factor = 1d0
             if (Coulomb_precompute) then
                 do ii = 1, dinfo%ndust
-                    prevD = 1d0
-                    do j = -1, dinfo%nion_charges
-                        Zel = dble(j)
-                        if (prevD <= 1d-5 .and. dinfo%Z_dust(ii)*Zel > 0d0) then
-                            dinfo%Coulomb_factor(ii,j:dinfo%nion_charges) = 1d-10
-                            exit
-                        end if
-                        call compute_Coulomb_focusing(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),&
-                                                       &Zel,dinfo%Coulomb_factor(ii,j))
-                        prevD = dinfo%Coulomb_factor(ii,j)
-                    end do
+                    call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
+                                                       dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
                 end do
             end if
 
