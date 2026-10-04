@@ -14,7 +14,7 @@ module rtz_cooling_module
    use safe_math, only: safe_exp
    use molecules_module, only: comp_SH2, comp_SCO
 #ifdef CALIMA
-   use dust_commons, only: dust_helper,sigca_dust,sigcs_dust,sigcr_dust,&
+   use dust_commons, only: dust_helper,dust_ion_recombination,charging_model,sigca_dust,sigcs_dust,sigcr_dust,&
                            sigcrat_dust,sigca_pah,sigcs_pah,sigcr_pah,&
                            group_csa_dust, group_css_dust, group_csr_dust,&
                            group_csa_pah, group_css_pah, group_csr_pah,&
@@ -972,6 +972,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       logical::dust_step_ok
       real(dp)::t_sub_start, t_sub_end
 #endif
+      logical::calima_ion_rec                ! grain recombination from the CALIMA charge balance (dinfo%rec_ion_rate)
       !-----------------------------------------------------------------------
       real(dp)::alpha
       real(dp),dimension(nGroups)::recrad_f
@@ -2157,6 +2158,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! Get the effective dust number density
       dust_effective_number_density = nElement_dep(1) * dust_to_gas_mass_ratio_over_mw
+      calima_ion_rec = .false.
+#ifdef CALIMA
+      ! dust_ion_recombination: X+ -> X on the grains from the WDB06 charge balance (all ten elements,
+      ! dust bins only), in place of the fit below
+      calima_ion_rec = dust_ion_recombination .and. &
+                       (trim(charging_model) == 'WDB06rt' .or. trim(charging_model) == 'WDB06tab')
+#endif
 
       ! Loop over all elements
       do iElement = 1,n_elements
@@ -2254,7 +2262,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Recombination on dust from the more excited state
                if (rtz_include_dust_recombination) then 
-                  if (iIon.lt.n_ions) then 
+                  if (calima_ion_rec) then
+#ifdef CALIMA
+                     if (iIon == 1 .and. n_ions > 1) cr = cr + dust_helper%rec_ion_rate(iElement) * dXion(iElement,2)
+#endif
+                  else if (iIon.lt.n_ions) then 
                      ! cr = cr + (dust_recombination(iIon+1, iElement, TK, UV_background_G0, ne) * dust_effective_number_density * dXion(iElement,iIon+1))
                      cr = cr + (saved_rates(iIon+1,3) * dust_effective_number_density * dXion(iElement,iIon+1))
                   end if
@@ -2334,7 +2346,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                
                ! Recombination on dust
                if (rtz_include_dust_recombination) then 
-                  if (iIon .gt. 1) then 
+                  if (calima_ion_rec) then
+#ifdef CALIMA
+                     if (iIon == 2) de = de + dust_helper%rec_ion_rate(iElement)
+#endif
+                  else if (iIon .gt. 1) then 
                      ! de = de + (dust_recombination(iIon, iElement, TK, UV_background_G0, ne) * dust_effective_number_density)
                      de = de + (saved_rates(iIon,3) * dust_effective_number_density)
                   end if
