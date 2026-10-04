@@ -3005,17 +3005,17 @@ module dust_photoelectric_heating
     end subroutine compute_dust_peh_rate
 
     subroutine interpolate_dust_peh_rate(i_dust,G0,ne,Tgas,Pinj,Prec)
-        ! This subroutine interpolates the dust photoelectric heating and 
-        ! electron recombination cooling rates from the equilibrium tables
-        ! computed in Rodriguez Montero et al. (2024) based on the modelling
-        ! of Weingartner & Draine (2001)
+        ! The dust photoelectric heating and net electron recombination cooling of bin i_dust in
+        ! a uniform ISRF of G0 Habing: the WDB06 charge balance with H+ ions at n = n_e, from the
+        ! uniform-ISRF tables (pyCALIMA charging_isrf_tables). The PE heating of the charging
+        ! models that do not compute their own (WDB06rt and WDB06tab do)
         ! i_dust   --> index of the dust species
         ! G0       --> radiation field in Habing units
         ! ne       --> electron number density [cm^-3]
         ! Tgas     --> gas temperature in K
         ! Pinj     <-- photoelectric heating rate [erg/s]
-        ! Prec     <-- photoelectric recombination cooling rate [erg/s]
-        use amr_commons, only: myid
+        ! Prec     <-- recombination cooling rate [erg/s]
+        use dust_charging, only: isrf_lookup, ISRF_ND
         implicit none
 
         ! Inputs
@@ -3025,34 +3025,9 @@ module dust_photoelectric_heating
         real(dp), intent(out) :: Pinj,Prec
 
         ! Local
-        real(dp) :: gamma,log_gamma,log_T,peh_rate,cool_rate
-        integer :: idx_g, idx_T
+        real(dp) :: Zm, Zs, D(ISRF_ND)
 
-        ! 1. Compute the ionisation parameter
-        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
-        log_gamma = log10(gamma)
-        log_T = log10(Tgas)
-
-        ! 2. Make the interpolation in log-log in 2D using the per-bin tables
-        if ((.not. dustbins_props(i_dust)%peh_tab%initialised) .or. &
-            (.not. dustbins_props(i_dust)%rec_tab%initialised)) then
-            if (myid.eq.1) then
-                write(*,*) 'ERROR in interpolate_dust_peh_rate'
-                write(*,*) 'peh_tab/rec_tab are not initialised for dust bin ', i_dust
-            end if
-            call clean_stop
-        end if
-
-        idx_g = -1
-        idx_T = -1
-
-        call dustbins_props(i_dust)%peh_tab%interpolate(log_gamma, log_T, peh_rate, idx_g, idx_T)
-        Pinj = exp(peh_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
-
-        ! The tables are at G0 = 1 (Mathis) with n_e = sqrt(T)/gamma, so at fixed (gamma, T) the
-        ! recombination cooling scales with n_e, i.e. with G0, as the heating does
-        call dustbins_props(i_dust)%rec_tab%interpolate(log_gamma, log_T, cool_rate, idx_g, idx_T)
-        Prec = exp(cool_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
+        call isrf_lookup(i_dust, G0, Tgas, ne, Zm, Zs, Pinj, Prec, D)
     end subroutine interpolate_dust_peh_rate
     
 

@@ -145,6 +145,6 @@ asize=0.01d0,0.1d0,0.005d0    ! must match DustBin_01..03 (graphite, graphite, s
 sgrain=2.2d0,2.2d0,3.3d0
 amin = 3d-3,3d-2,1d-3
 amax = 3d-2,3d-1,2d-2
-charging_model='RM2026'
+charging_model='WDB06isrf'
 dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
 /

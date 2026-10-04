@@ -48,7 +48,8 @@ module dust_charging_rtgroups
 
     private
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
-              rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark, rtgroups_predict
+              rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark, rtgroups_predict, &
+              rtgroups_coulomb_ratio
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup, psitab_dump
     public :: dust_charge_moments
     public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
@@ -142,6 +143,7 @@ module dust_charging_rtgroups
         real(dp) :: adla(RTG_NRI, 3) = 0d0   ! discrete P(Z): d ln alpha_i / d ln S, N, T
         real(dp) :: alg(RTG_NRI) = 0d0       ! wide P(Z): its Gaussian estimate of ln alpha_i
         type(RTGResult) :: ar
+        real(dp) :: Dratio(4) = 1d0          ! rtgroups_coulomb_ratio at the last full solve (impactor charges -1, 1, 2, 3)
     end type RTGState
 
     ! charging_model = 'WDB06tab': per-bin tables on (log T, log psi_F, h, psi_E), pyCALIMA charging_psi_tables
@@ -2171,6 +2173,65 @@ module dust_charging_rtgroups
         Lambda = (1d0-u)*(1d0-v)*rtg(ii)%uni(4,i,j) + u*(1d0-v)*rtg(ii)%uni(4,i+1,j) &
               + (1d0-u)*v*rtg(ii)%uni(4,i,j+1) + u*v*rtg(ii)%uni(4,i+1,j+1)
     end subroutine rtgroups_uniform_lookup
+
+    subroutine rtgroups_coulomb_ratio(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Zstar, Zsigma, Zmean, ratio)
+        ! The correction of the Gaussian Coulomb focusing factors of a narrow P(Z) of bin ii: D_j over
+        ! this cell's exact P(Z), on every charge within 8 sigma + 10 of Zstar and from -3 to +3 (the
+        ! tail at the opposite sign sets D_j of small grains in cold gas) down to 1e-300 of its
+        ! maximum, over D_j of the Gaussian of Zmean and Zsigma (compute_Coulomb_focusing_ions), for
+        ! the impactor charges ISRF_DCHARGE. 1 where that range does not fit in the window buffers.
+        ! P(Z) is summed in ln (pyCALIMA charging_isrf_tables.full_distribution): across the tail of
+        ! a small grain in cold gas one step of P can exceed the range of a real.
+        use constants, only: pi, e2instatC, kB
+        use dust_charging, only: compute_Coulomb_focusing_ions, ISRF_ND, ISRF_DCHARGE
+        implicit none
+        integer, intent(in) :: ii
+        real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Zstar, Zsigma, Zmean
+        real(dp), dimension(ISRF_ND), intent(out) :: ratio
+        real(dp), parameter :: LN_CUT = -690.7755278982137d0      ! ln 1e-300
+        real(dp) :: pmax, C1, b0, g, s, Dg(-1:3), Dx(ISRF_ND)
+        integer :: lo, hi, k, m, j
+
+        ratio = 1d0
+        lo = max(nint(rtg(ii)%Zmin), min(floor(Zstar - 8d0*max(Zsigma, 0.5d0) - 10d0), -3))
+        hi = min(nint(rtg(ii)%Zmax), max(ceiling(Zstar + 8d0*max(Zsigma, 0.5d0) + 10d0), 3))
+        if (hi - lo + 3 > NBUF) return
+        call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+        b_base = lo - 2
+        do k = lo, hi
+            call eval_int(dble(k), .false.)
+        end do
+        b_P(lo - b_base) = 0d0
+        do k = lo - b_base, hi - b_base - 1
+            b_P(k+1) = b_P(k) + log(max(b_up(k), RTG_TINY)) - log(max(b_dn(k+1), RTG_TINY))
+        end do
+        pmax = maxval(b_P(lo - b_base:hi - b_base))
+        C1 = e2instatC / (kB * T * dustbins_props(ii)%asize_cm)
+        s = 0d0
+        Dx = 0d0
+        do k = lo, hi
+            g = b_P(k - b_base) - pmax
+            if (g <= LN_CUT) cycle
+            g = exp(g)
+            s = s + g
+            do m = 1, ISRF_ND
+                j = ISRF_DCHARGE(m)
+                if (k == 0) then
+                    b0 = 1d0 + dble(abs(j)) * sqrt(pi * C1 / 2d0)
+                    Dx(m) = Dx(m) + g * b0
+                else if (k * j > 0) then
+                    Dx(m) = Dx(m) + g * exp(max(-dble(k * j) * C1, -745d0))
+                else
+                    Dx(m) = Dx(m) + g * (1d0 - dble(k * j) * C1)
+                end if
+            end do
+        end do
+        Dg = 1d0
+        call compute_Coulomb_focusing_ions(ii, T, Zmean, Zsigma, 3, Dg)
+        do m = 1, ISRF_ND
+            ratio(m) = (Dx(m) / s) / Dg(ISRF_DCHARGE(m))
+        end do
+    end subroutine rtgroups_coulomb_ratio
 
     ! -------------------------------------------------------------- debug dump
     subroutine open_dump()

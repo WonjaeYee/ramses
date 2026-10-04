@@ -42,7 +42,7 @@ module dust_commons
     logical ::dust_coll_lowT=.false.             ! Activate low-temperature dust collisional heating (Hollenbach & McKee 1980)
     logical ::dust_coll_charge=.false.           ! Activate the dependence of dust collisional cooling on grain and ion charge
     logical ::dust_pe_heating=.false.            ! Activate photo-electric heating by dust grains
-    logical ::dust_pe_heating_isrf=.false.       ! Activate the simple dust PE heating based on an averaged ISRF G0
+    logical ::dust_pe_heating_isrf=.false.       ! PE heating from the uniform-ISRF tables at the local G0 (models other than WDB06rt/WDB06tab)
     logical ::ratd_only_rtadv=.false.            ! Only allow for RATD if the rt_advect=.true.
     logical ::poppe_ice_enhancement=.false.      ! Whether to use the empirical enhancement in coagulation threshold due to ice mantel
     logical ::H2ondust=.false.                   ! Activate H2 formation on dust
@@ -115,7 +115,13 @@ module dust_commons
     character(LEN=30)::shattering_model='Granato2021' ! Model for the shattering dispersion velocity
     character(LEN=30)::coagulation_model='Aoyama2017' ! Model for the coagulation dispersion velocity
     character(LEN=30)::dust_velocity_model='Ormel2007' ! Model for the relative velocity of grains
-    character(LEN=30)::charging_model='Ibanez2019'     ! Model for the grain charge distribution
+#ifdef RT
+    character(LEN=30)::charging_model='WDB06rt'        ! Model for the grain charge distribution: WDB06rt or
+                                                       !   WDB06tab (RT photon groups), WDB06isrf (uniform ISRF), Ibanez2019
+#else
+    character(LEN=30)::charging_model='WDB06isrf'      ! Model for the grain charge distribution: WDB06isrf (uniform ISRF)
+                                                       !   or Ibanez2019 (WDB06rt and WDB06tab need RT photon groups)
+#endif
     character(LEN=30)::ice_model='Hollenbach2009'     ! Model for ice formation on dust grains
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
     logical :: dust_rtgroups_debug=.false.             ! WDB06rt: dump per-call inputs/outputs (dust_rtgroups_debug_XXXXX.dat)

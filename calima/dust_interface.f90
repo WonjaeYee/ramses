@@ -242,7 +242,8 @@ contains
         ! nCO --> local carbon monoxide density (cm^-3)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_dust_charge_dist, compute_Coulomb_focusing_ions
+                                compute_dust_charge_dist, compute_Coulomb_focusing_ions,&
+                                isrf_lookup, ISRF_ND, ISRF_DCHARGE
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
                                             compute_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
@@ -252,7 +253,7 @@ contains
         use dust_radiation, only: update_T_dust, serve_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
-                                          psitab_inputs, psitab_lookup, psitab_dump, rtgroups_predict
+                                          psitab_inputs, psitab_lookup, psitab_dump, rtgroups_predict, rtgroups_coulomb_ratio
         use amr_commons, only: myid
 
         implicit none
@@ -270,7 +271,14 @@ contains
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: nHI
         integer :: n_charge
-        logical :: use_rtg, no_local, use_tab, predict, ok, skip_coulomb
+        logical :: use_rtg, no_local, use_tab, use_isrf, predict, ok, skip_coulomb
+        real(dp), dimension(1:ndust) :: isrf_G, isrf_L         ! WDB06isrf: PE heating, recombination cooling
+        real(dp), dimension(ISRF_ND, 1:ndust) :: isrf_D        ! WDB06isrf: Coulomb factors over the exact P(Z)
+        ! WDB06rt Coulomb factors of the low impactor charges: 1 the Gaussian ones times rtg_D (the
+        ! exact-P(Z) ratio of the last full solve), 2 rtg_D (the ISRF tables, background-only cells)
+        integer, dimension(1:ndust) :: rtg_Dmode
+        real(dp), dimension(ISRF_ND, 1:ndust) :: rtg_D
+        real(dp) :: zz, ss, gg, ll
         real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
         ! sized by the compile-time ndust (= dinfo%ndust): on the stack, not allocated on each call
@@ -291,6 +299,7 @@ contains
             if (dust_charging_timer) t0 = wallclock()
             use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
             use_tab = trim(charging_model) == 'WDB06tab'
+            use_isrf = trim(charging_model) == 'WDB06isrf'
             alpha_bins = 0d0
             if (use_tab) then
                 ! tables on (T, G_FUV sqrt(T)/ne, FUV hardness, G_EUV sqrt(T)/ne), n(H+) = ne
@@ -327,6 +336,7 @@ contains
                 predict = rtg_predict_tol > 0d0 .and. ic <= nvector
                 do ii = 1, dinfo%ndust
                     paths(ii) = -1
+                    rtg_Dmode(ii) = 0
                     zg_used(ii) = rtg_Zguess(ii)
                     if (dinfo%rho_dust(ii) <= 0d0) then
                         ! empty bin: no charge or rates needed
@@ -348,6 +358,10 @@ contains
                         ! only the uniform background: start-up table in (T, ne), which has no alpha
                         path = 1
                         call rtgroups_uniform_lookup(ii, dinfo%G0_background, Tk, ne, rr%Zmean, rr%Zsigma, rr%Gamma, rr%Lambda)
+                        if (Coulomb_precompute) then
+                            call isrf_lookup(ii, dinfo%G0_background, Tk, ne, zz, ss, gg, ll, rtg_D(:, ii))
+                            rtg_Dmode(ii) = 2
+                        end if
                     else if (rtg_served(ii)) then
                         ! the cooling solver's T(1 +- 1e-5) call: first order in ln T from the last solve
                         path = 2
@@ -363,6 +377,10 @@ contains
                                                            dinfo%G0_background, rtg_predict_tol, rtg_predict_tol_shape, rr, ok)
                         if (ok) then
                             path = 4
+                            if (Coulomb_precompute) then
+                                rtg_D(:, ii) = st%Dratio
+                                rtg_Dmode(ii) = 1
+                            end if
                         else
                             ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
                             path = 0
@@ -370,6 +388,15 @@ contains
                                                     n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
                                                     st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), &
                                                     rr, sens=predict)
+                            if (Coulomb_precompute) then
+                                ! narrow P(Z): its exact Coulomb factors over the Gaussian ones (kept for the
+                                ! predictions from this solve); a wide one is close to its Gaussian
+                                st%Dratio = 1d0
+                                if (rr%discrete) call rtgroups_coulomb_ratio(ii, Np, dinfo%local_c, Tk, ne, n_Hp, n_Hep, &
+                                    n_Hepp, dinfo%G0_background, rr%Zstar, rr%Zsigma, rr%Zmean, st%Dratio)
+                                rtg_D(:, ii) = st%Dratio
+                                rtg_Dmode(ii) = 1
+                            end if
                         end if
                         rtg_last(ii)%valid = .true.
                         rtg_last(ii)%T = Tk
@@ -435,6 +462,14 @@ contains
                         call rtg_verify_print(ndumped)
                     end do
                 end if
+            else if (use_isrf) then
+                ! uniform-ISRF tables at the local G0: the charge, the PE heating and recombination
+                ! cooling, and the Coulomb factors of the low impactor charges over the exact P(Z)
+                do ii = 1, dinfo%ndust
+                    call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), isrf_G(ii), isrf_L(ii), &
+                                     isrf_D(:, ii))
+                end do
+                if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
             else
                 idx_g = -1
                 idx_T = -1
@@ -468,6 +503,24 @@ contains
                     do ii = 1, dinfo%ndust
                         call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
                                                            dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
+                        if (use_isrf) then
+                            ! the tabulated factors over the exact P(Z), where the Gaussian of <Z> and
+                            ! sigma_Z misses the tail at the opposite sign (small grains in cold gas)
+                            do j = 1, ISRF_ND
+                                if (ISRF_DCHARGE(j) <= dinfo%nion_charges) &
+                                    dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = max(isrf_D(j, ii), 1d-10)
+                            end do
+                        else if (use_rtg) then
+                            do j = 1, ISRF_ND
+                                if (ISRF_DCHARGE(j) > dinfo%nion_charges) cycle
+                                if (rtg_Dmode(ii) == 1) then
+                                    dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = &
+                                        max(dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) * rtg_D(j, ii), 1d-10)
+                                else if (rtg_Dmode(ii) == 2) then
+                                    dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = max(rtg_D(j, ii), 1d-10)
+                                end if
+                            end do
+                        end if
                     end do
                 end if
             end if
@@ -477,6 +530,9 @@ contains
             if (dust_pe_heating .and. (use_rtg .or. use_tab)) then
                 dinfo%Pinj_dust(1:dinfo%ndust) = rtg_Pinj
                 dinfo%Prec_dust(1:dinfo%ndust) = rtg_Prec
+            elseif (dust_pe_heating .and. use_isrf) then
+                dinfo%Pinj_dust(1:dinfo%ndust) = isrf_G
+                dinfo%Prec_dust(1:dinfo%ndust) = isrf_L
             elseif (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
                     if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then

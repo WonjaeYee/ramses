@@ -188,8 +188,6 @@ module dustbin_types
         type(DustTable),dimension(1:n_elements) :: sputtering_tab ! Sputtering tables
         type(DustTable) :: sublimation_tab ! Thermal sublimation erosion rate table (function of dust temperature)
         type(DustTable),dimension(0:n_elements) :: collisional_tab ! Collisional tables (0 is for electrons)
-        type(DustTable) :: mean_charg_tab, sigma_charg_tab ! Charging tables
-        type(DustTable) :: peh_tab, rec_tab ! Photoelectric and recombination tables
         type(DustTable) :: cs_abs_tab, cs_scat_tab, cs_ext_tab ! Absorption, scattering and extinction cross-section tables
         type(DustTable) :: Rosseland_tab, Planck_tab ! Rosseland and Planck mean opacity tables
         type(DustTable),dimension(:),allocatable :: Im_n ! Imaginary part of the refractive index tables for each element

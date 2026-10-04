@@ -217,7 +217,7 @@ accretion_model='LeBourlot2012'
 shattering_model='Smoluchowski1916'
 coagulation_model='Smoluchowski1916'
 dust_velocity_model='Hirashita2019'
-charging_model='WDB06rt'  ! 'RM2026' for the original tables
+charging_model='WDB06rt'  ! 'WDB06isrf' for the uniform-ISRF tables
 nZmix=3 ! Number of representative charges to reconstruct grain-ion interactions
 
 !----------- PAH modelling choices -----------!
