@@ -225,6 +225,10 @@ module dust_init
             end if
         end if
 #endif
+        if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06tab') then
+            if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06tab; ', &
+                'the RTZ chemistry keeps its grain recombination fit'
+        end if
 #if defined(RT) && !defined(RTZ)
         ! RT + CALIMA without RTZ. The radiative dust coupling is ported into
         ! rt_cooling_module, but the dust<->gas THERMAL coupling is not: it
@@ -1351,7 +1355,7 @@ module dust_init
                 tva_wmax_cs,drag_model,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
-                dust_rtgroups_debug,dust_rtgroups_debug_max,dust_rtgroups_verify,dust_charging_timer,&
+                dust_rtgroups_debug,dust_rtgroups_debug_max,dust_rtgroups_verify,dust_charging_timer,dust_ion_recombination,&
                 ! PAH modelling options
                 photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
                 cluster_evaporation_model,&
