@@ -229,7 +229,7 @@ contains
 
     subroutine compute_dust_precool(dinfo, G0_total, Tk, ne,&
                                     &nElement, xelem_ions, nH2, nCO, &
-                                    & Np)
+                                    & Np, rates_only)
         ! Pre-computes the dust and PAH cooling and heating rates for the given local conditions, 
         ! which can then be used in subsequent calls to compute_dust_coolrates to save computational time.
         ! dinfo --> the DustChemistryInfo instance to update with the computed rates
@@ -263,13 +263,14 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: nH2, nCO
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
+        logical, intent(in), optional :: rates_only   ! only the rates compute_dust_coolrates returns (not the Coulomb factors)
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: nHI
         integer :: n_charge
-        logical :: use_rtg, no_local, use_tab, predict, ok
+        logical :: use_rtg, no_local, use_tab, predict, ok, skip_coulomb
         real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
         ! sized by the compile-time ndust (= dinfo%ndust): on the stack, not allocated on each call
@@ -456,13 +457,19 @@ contains
             end if
             if (dust_charging_timer) tchg = tchg + (wallclock() - t0)
 
-            ! 2. If needed, precompute the Coulomb factors
-            dinfo%Coulomb_factor = 1d0
-            if (Coulomb_precompute) then
-                do ii = 1, dinfo%ndust
-                    call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
-                                                       dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
-                end do
+            ! 2. If needed, precompute the Coulomb factors, for compute_dust_update: not in a call for
+            ! the rates only (the cooling solver's T(1 + 1e-5) call), whose factors differ from those
+            ! at T only to first order
+            skip_coulomb = .false.
+            if (present(rates_only)) skip_coulomb = rates_only
+            if (.not. skip_coulomb) then
+                dinfo%Coulomb_factor = 1d0
+                if (Coulomb_precompute) then
+                    do ii = 1, dinfo%ndust
+                        call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
+                                                           dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
+                    end do
+                end if
             end if
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
@@ -725,7 +732,7 @@ contains
         ! called before us this step), delegate to it now.  This eliminates ~148 lines
         ! of duplicated physics that previously lived in the non-precomp branch here.
         if (.not. dinfo%use_precomp) then
-            call compute_dust_precool(dinfo, G0_total, Tk, ne, nElement, xelem_ions, nH2, nCO, Np=Np)
+            call compute_dust_precool(dinfo, G0_total, Tk, ne, nElement, xelem_ions, nH2, nCO, Np=Np, rates_only=.true.)
         end if
 
         ! Read the precomputed rates from dinfo (populated either just above or by an

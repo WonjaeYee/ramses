@@ -307,47 +307,200 @@ module dust_charging
     end subroutine compute_Coulomb_focusing
 
     subroutine compute_Coulomb_focusing_ions(i_dust,Tgas,Zmean,Zsigma,jmax,D_coulomb)
-        ! compute_Coulomb_focusing of bin i_dust for the ion charges -1..jmax, stopping (1d-10 for
-        ! the rest) after a factor at its floor for a repulsive charge: the charge distribution of
-        ! the direct sum does not depend on the ion charge, so it is built once for all of them
+        ! Coulomb focusing factors (Weingartner & Draine 1999, eqs. 6-7) of bin i_dust for the
+        ! impactor charges -1..jmax, over a Gaussian charge distribution of mean Zmean and width
+        ! Zsigma on the integer charges. For Zsigma < COUL_SIG_HI, the sum over every charge
+        ! within COUL_KWIN max(Zsigma, 1/2) of the mean, the last unit of that width tapered to
+        ! zero weight; for Zsigma > COUL_SIG_LO, the integral over the continuous Gaussian (the
+        ! neutral charge: the bin [-1/2, 1/2]; the repulsive exponential at bin centres); blended
+        ! in between. Continuous in Zmean, Zsigma and Tgas. Floored at COUL_FLOOR; once the
+        ! repulsive part has fallen so far that every higher charge is at the floor, the rest are
+        ! set to it.
         use constants, only: pi,e2instatC,kB
         implicit none
         integer, intent(in) :: i_dust, jmax
         real(dp), intent(in) :: Tgas,Zmean,Zsigma
         real(dp), dimension(-1:jmax), intent(inout) :: D_coulomb
 
-        integer :: Zmin,Zmax,n_charge,j
-        real(dp) :: alpha, Zion, prevD
-        real(dp),dimension(1:n_charge_threshold) :: Zvals,fcharge
-        logical :: taylor
+        real(dp), parameter :: COUL_SIG_LO = 3.5d0, COUL_SIG_HI = 4.5d0, COUL_KWIN = 6d0, COUL_FLOOR = 1d-10
+        real(dp), parameter :: SQRT2 = 1.4142135623730951d0, SQRT2PI = 2.5066282746310002d0
+        real(dp), parameter :: PI_D = 3.141592653589793d0
+        integer, parameter :: NW = 2*ceiling(COUL_KWIN*COUL_SIG_HI) + 3
+        real(dp), dimension(1:NW) :: p
+        real(dp) :: sig, sw, C1, w, x, s, q, q1, qj, c, B0, b1, att, neu, rep, bound, m, r, rho, arg
+        real(dp) :: A0n, A1n, A0p, A1p, p0
+        real(dp), dimension(2) :: tA, tR, PA, M1A, PN        ! 1: positive impactors, 2: negative (mirror)
+        integer :: zlo, n, k, k0, j, kn, kp, z, im
 
-        ! 1. Determine the charge range within +/- 3 sigma, and the method (compute_Coulomb_focusing)
-        Zmin = nint(Zmean - 3d0 * Zsigma)
-        Zmax = nint(Zmean + 3d0 * Zsigma)
-        n_charge = Zmax - Zmin + 1
-        taylor = abs(Zmean/Zsigma) > 3d0 .and. n_charge > n_charge_threshold
-        if (.not. taylor) call compute_dust_charge_dist(i_dust,Zmean,Zsigma,Zvals,fcharge,n_charge)
+        sig = max(Zsigma, 1d-3)
+        C1 = e2instatC / (kB * Tgas * dustbins_props(i_dust)%asize_cm)
+        x = min(max((sig - COUL_SIG_LO) / (COUL_SIG_HI - COUL_SIG_LO), 0d0), 1d0)
+        w = x * x * (3d0 - 2d0 * x)
 
-        ! 2. Each ion charge
-        prevD = 1d0
+        ! 1. The discrete Gaussian and its sums over the negative, neutral and positive charges
+        A0n = 0d0; A1n = 0d0; A0p = 0d0; A1p = 0d0; p0 = 0d0
+        kn = 0
+        kp = 1
+        n = 0
+        zlo = 0
+        if (w < 1d0) then
+            sw = max(sig, 0.5d0)
+            zlo = floor(Zmean - COUL_KWIN * sw)
+            n = ceiling(Zmean + COUL_KWIN * sw) - zlo + 1
+            ! from the charge nearest the mean (weight 1) outward, p(Z+1) = p(Z) r with r(Z+1) =
+            ! r(Z) exp(-1/sig^2): three exponentials instead of one per charge
+            k0 = nint(Zmean) - zlo + 1
+            rho = exp(-1d0 / (sig * sig))
+            p(k0) = 1d0
+            r = exp(-(2d0 * (dble(zlo + k0 - 1) - Zmean) + 1d0) / (2d0 * sig * sig))
+            do k = k0 + 1, n
+                p(k) = p(k-1) * r
+                r = r * rho
+            end do
+            r = exp((2d0 * (dble(zlo + k0 - 1) - Zmean) - 1d0) / (2d0 * sig * sig))
+            do k = k0 - 1, 1, -1
+                p(k) = p(k+1) * r
+                r = r * rho
+            end do
+            do k = 1, n
+                x = abs(dble(zlo + k - 1) - Zmean) / sw
+                if (x >= COUL_KWIN) then
+                    p(k) = 0d0
+                else if (x > COUL_KWIN - 1d0) then
+                    p(k) = p(k) * cos(0.5d0 * PI_D * (x - COUL_KWIN + 1d0))**2
+                end if
+            end do
+            p(1:n) = p(1:n) / sum(p(1:n))
+            kp = n + 1
+            do k = 1, n
+                z = zlo + k - 1
+                if (z < 0) then
+                    A0n = A0n + p(k)
+                    A1n = A1n + dble(z) * p(k)
+                    kn = k
+                else if (z == 0) then
+                    p0 = p(k)
+                else
+                    A0p = A0p + p(k)
+                    A1p = A1p + dble(z) * p(k)
+                    kp = min(kp, k)
+                end if
+            end do
+        end if
+
+        ! 2. The continuous Gaussian: its mass and first moment below -1/2, and the neutral bin
+        if (w > 0d0) then
+            do im = 1, 2
+                m = Zmean
+                if (im == 2) m = -Zmean
+                tA(im) = (-0.5d0 - m) / sig
+                tR(im) = (0.5d0 - m) / sig
+                ! beyond 8.5 sigma the normal integrals are 0 or 1 to double precision
+                if (tA(im) < -8.5d0) then
+                    PA(im) = 0d0
+                    M1A(im) = 0d0
+                else if (tA(im) > 8.5d0) then
+                    PA(im) = 1d0
+                    M1A(im) = m
+                else
+                    PA(im) = 0.5d0 * erfc(-tA(im) / SQRT2)
+                    M1A(im) = m * PA(im) - sig * exp(-0.5d0 * tA(im)**2) / SQRT2PI
+                end if
+                if (tR(im) < -8.5d0) then
+                    PN(im) = -PA(im)
+                else if (tR(im) > 8.5d0) then
+                    PN(im) = 1d0 - PA(im)
+                else
+                    PN(im) = 0.5d0 * erfc(-tR(im) / SQRT2) - PA(im)
+                end if
+                PN(im) = max(PN(im), 0d0)
+            end do
+        end if
+
+        ! 3. Each impactor charge. The attractive and neutral parts grow with the charge: their value
+        ! at jmax bounds them all, for the early exit
+        b1 = sqrt(pi * C1 / 2d0)              ! B0 = 1 + |j| b1, the neutral grain
+        q1 = exp(-C1)                         ! exp(-c) = q1**|j|
+        c = dble(jmax) * C1
+        B0 = 1d0 + dble(jmax) * b1
+        bound = 0d0
+        if (w < 1d0) bound = (1d0 - w) * (A0n - c * A1n + p0 * B0)
+        if (w > 0d0) bound = bound + w * (PA(1) - c * M1A(1) + PN(1) * B0)
+        D_coulomb(0) = 1d0
+        qj = 1d0
         do j = -1, jmax
-            Zion = dble(j)
-            if (prevD <= 1d-5 .and. Zmean*Zion > 0d0) then
-                D_coulomb(j:jmax) = 1d-10
+            if (j == 0) cycle
+            im = 1
+            if (j < 0) im = 2
+            c = dble(abs(j)) * C1
+            B0 = 1d0 + dble(abs(j)) * b1
+            if (abs(j) == 1) then
+                qj = q1
+            else
+                qj = qj * q1
+            end if
+            D_coulomb(j) = 0d0
+            rep = 0d0
+            if (w < 1d0) then
+                q = qj
+                s = 0d0
+                if (j > 0) then
+                    att = A0n - c * A1n
+                    if (kp <= n .and. A0p >= 1d-17 * (att + p0 * B0)) then
+                        do k = n, kp, -1
+                            s = s * q + p(k)
+                        end do
+                        s = exp(max(-c * dble(zlo + kp - 1), -745d0)) * s
+                    end if
+                else
+                    att = A0p + c * A1p
+                    if (kn >= 1 .and. A0n >= 1d-17 * (att + p0 * B0)) then
+                        do k = 1, kn
+                            s = s * q + p(k)
+                        end do
+                        s = exp(max(c * dble(zlo + kn - 1), -745d0)) * s
+                    end if
+                end if
+                D_coulomb(j) = (1d0 - w) * (att + p0 * B0 + s)
+                rep = (1d0 - w) * s
+            end if
+            if (w > 0d0) then
+                m = Zmean
+                if (im == 2) m = -Zmean
+                att = PA(im) - c * M1A(im)
+                neu = PN(im) * B0
+                x = tR(im) + c * sig
+                if (x > 0d0) then
+                    arg = -0.5d0 * c - 0.5d0 * tR(im)**2
+                else
+                    arg = -c * m + 0.5d0 * (c * sig)**2
+                end if
+                s = 0d0
+                q = 1d0
+                ! the repulsive part is at most exp(arg): left out below 1e-17 of the rest
+                if (arg > -708d0 .and. .not. (att + neu >= 1d-3 .and. arg < -46d0)) then
+                    if (x > 0d0) then
+                        s = 0.5d0 * exp(arg) * erfc_scaled(x / SQRT2)
+                    else if (x > -8.5d0) then
+                        s = exp(arg) * 0.5d0 * erfc(x / SQRT2)
+                    else
+                        s = exp(arg)                        ! erfc = 2 to double precision
+                    end if
+                    ! (c/2)/sinh(c/2) = c exp(-c/2)/(1 - exp(-c))
+                    if (c < 1d-3) then
+                        q = 1d0 - c * c / 24d0
+                    else
+                        q = c * sqrt(qj) / (1d0 - qj)
+                    end if
+                end if
+                D_coulomb(j) = D_coulomb(j) + w * (att + neu + q * s)
+                rep = rep + w * q * s
+            end if
+            D_coulomb(j) = max(D_coulomb(j), COUL_FLOOR)
+            if (j > 0 .and. bound + rep <= COUL_FLOOR) then
+                D_coulomb(j:jmax) = COUL_FLOOR
                 exit
             end if
-            if (taylor) then
-                alpha = (Zion * e2instatC) / (kB * Tgas * dustbins_props(i_dust)%asize_cm)
-                if (Zmean * Zion > 0d0) then
-                    D_coulomb(j) = safe_exp(-alpha * Zmean) * (1d0 + 0.5d0 * alpha**2d0 * Zsigma**2d0)
-                else
-                    D_coulomb(j) = 1d0 - alpha * Zmean
-                end if
-            else
-                call compute_Coulomb_focusing_dist(Tgas,dustbins_props(i_dust)%asize_cm,fcharge,Zvals,n_charge,Zion,D_coulomb(j))
-            end if
-            D_coulomb(j) = max(D_coulomb(j), 1d-5)
-            prevD = D_coulomb(j)
         end do
     end subroutine compute_Coulomb_focusing_ions
 
