@@ -48,7 +48,7 @@ module dust_charging_rtgroups
 
     private
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
-              rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark
+              rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark, rtgroups_predict
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup, psitab_dump
     public :: dust_charge_moments
     public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
@@ -57,6 +57,8 @@ module dust_charging_rtgroups
     integer, parameter :: RTG_ALPHA_NONE = 0, RTG_ALPHA_GAUSS = 1, RTG_ALPHA_FIT = 2
     ! dust_interface fits only the wide bins with more than this share of an ion's grain recombination
     real(dp), parameter :: RTG_RECOMB_IMPORTANT = 0.1d0
+    ! rtgroups_predict guards: identical to pyCALIMA rt_group_charging PREDICT_WIDE_ZERO, _WIDE_DZ
+    real(dp), parameter :: PREDICT_WIDE_ZERO = 1d0, PREDICT_WIDE_DZ = 0.25d0
 
     ! constants: identical to pyCALIMA shared_physics / rt_group_charging
     real(dp), parameter :: RTG_KB = 1.380649d-16, RTG_ME = 9.1093837015d-28
@@ -74,6 +76,7 @@ module dust_charging_rtgroups
     real(dp), parameter :: UNI_LT0 = 1d0, UNI_LT1 = 9d0, UNI_LNE0 = -8d0, UNI_LNE1 = 8d0
     ! grain-assisted recombination: pyCALIMA RECOMB_IONS and RECOMB_* (rt_group_charging)
     integer, parameter :: RTG_NRI = 10, RTG_MAXX = 64
+    integer, parameter :: RTG_MAXG = 32          ! rtgroups_predict: at most this many groups (else no anchor)
     real(dp), parameter :: RI_MASS(RTG_NRI) = (/1.00794d0, 4.002602d0, 12.0107d0, 14.0067d0, 15.9994d0, &
                                                 20.1797d0, 24.305d0, 28.0855d0, 32.065d0, 55.845d0/)
     real(dp), parameter :: RI_IP(RTG_NRI) = (/13.598d0, 24.587d0, 11.260d0, 14.534d0, 13.618d0, &
@@ -108,6 +111,19 @@ module dust_charging_rtgroups
         integer :: jpos = 1                                                  ! first U node > 0
     end type RTGroupTable
 
+    type RTGResult
+        real(dp) :: Zmean = 0d0, Zsigma = 0d0, Gamma = 0d0, Lambda = 0d0, Lambda_auto = 0d0, Zstar = 0d0
+        real(dp) :: dZmean = 0d0, dZsigma = 0d0, dGamma = 0d0, dLambda = 0d0   ! d/d ln T (dLambda: of Lambda + auto)
+        real(dp) :: alpha(RTG_NRI) = 0d0                                         ! cm^3 s^-1 per grain
+        logical :: discrete = .false.
+        integer :: nfit = 0                                                      ! 1: recombination fitted this call
+        ! sens of rtgroups_solve_bin: d/d ln S (every photon density scaled) and d/d ln N (n_e and the
+        ! ion densities scaled), for rtgroups_predict (dLambda: of Lambda + auto)
+        real(dp) :: dZmean_S = 0d0, dZsigma_S = 0d0, dGamma_S = 0d0, dLambda_S = 0d0
+        real(dp) :: dZmean_N = 0d0, dZsigma_N = 0d0, dGamma_N = 0d0, dLambda_N = 0d0
+        logical :: predicted = .false.                                           ! rtgroups_predict, not solved
+    end type RTGResult
+
     ! warm state of one bin in one cell (dust_interface keeps one per cell and bin)
     type RTGState
         logical :: valid = .false., discrete = .false.
@@ -116,15 +132,13 @@ module dust_charging_rtgroups
         integer :: nx = 0                                    ! recombination fit reference (0: none):
         real(dp) :: x(RTG_MAXX) = 0d0, alpha(RTG_NRI) = 0d0  ! ln inputs, alpha and Gaussian estimate
         real(dp) :: lg(RTG_NRI) = 0d0
+        ! rtgroups_predict anchor: the last solve of this bin in this cell with sens (inputs, the
+        ! per-group photoemission kernel at its Z*, its result with the sensitivities)
+        logical :: anchored = .false.
+        real(dp) :: aT = 0d0, ane = 0d0, anion(3) = 0d0, acred = 0d0, aG0 = 0d0, akbg = 0d0
+        real(dp) :: aNp(RTG_MAXG) = 0d0, akstar(RTG_MAXG) = 0d0
+        type(RTGResult) :: ar
     end type RTGState
-
-    type RTGResult
-        real(dp) :: Zmean = 0d0, Zsigma = 0d0, Gamma = 0d0, Lambda = 0d0, Lambda_auto = 0d0, Zstar = 0d0
-        real(dp) :: dZmean = 0d0, dZsigma = 0d0, dGamma = 0d0, dLambda = 0d0   ! d/d ln T (dLambda: of Lambda + auto)
-        real(dp) :: alpha(RTG_NRI) = 0d0                                         ! cm^3 s^-1 per grain
-        logical :: discrete = .false.
-        integer :: nfit = 0                                                      ! 1: recombination fitted this call
-    end type RTGResult
 
     ! charging_model = 'WDB06tab': per-bin tables on (log T, log psi_F, h, psi_E), pyCALIMA charging_psi_tables
     integer, parameter :: PSI_NQ = 5 + RTG_NRI      ! Zmean, Zsigma, ln gamma_F, ln gamma_E, lambda, ln alpha_i
@@ -169,7 +183,7 @@ module dust_charging_rtgroups
 
     ! discrete window: per-integer quantities, indexed by charge - b_base
     integer :: b_base
-    real(dp), dimension(NBUF) :: b_up, b_dn, b_gam, b_lam, b_lamd, b_dup, b_ddn, b_dlam, b_A, b_P
+    real(dp), dimension(NBUF) :: b_up, b_dn, b_gam, b_lam, b_lamd, b_dup, b_ddn, b_dlam, b_A, b_P, b_ph
     ! recombination fit work
     real(dp), allocatable, save :: f_Zn(:), f_lnP(:), f_lnA(:), f_v(:), f_ps(:), f_row(:)
     integer :: np_
@@ -462,6 +476,119 @@ module dust_charging_rtgroups
         w = f - dble(i)
         i = i + 1        ! 1-based
     end subroutine u_index
+
+    subroutine anchor_kernels(Z, st)
+        ! the per-group photoemission kernels at charge Z (and the background's), unweighted: the
+        ! photoemission rate at the anchor's Z* for any photon densities (rtgroups_predict)
+        implicit none
+        real(dp), intent(in) :: Z
+        type(RTGState), intent(inout) :: st
+        real(dp) :: w, w2, w3, h00, h10, h01, h11
+        integer :: i, g
+        call u_of(Z, i, w)
+        w2 = w*w
+        w3 = w*w*w
+        h00 = 2d0*w3 - 3d0*w2 + 1d0
+        h10 = w3 - 2d0*w2 + w
+        h01 = 3d0*w2 - 2d0*w3
+        h11 = w3 - w2
+        st%akstar = 0d0
+        do g = 1, rtg(c_bin)%nG
+            st%akstar(g) = h00*rtg(c_bin)%KgT(g,i) + h10*rtg(c_bin)%mKT(g,i) &
+                           + h01*rtg(c_bin)%KgT(g,i+1) + h11*rtg(c_bin)%mKT(g,i+1)
+        end do
+        st%akbg = h00*rtg(c_bin)%Kbg(i) + h10*rtg(c_bin)%mKb(i) + h01*rtg(c_bin)%Kbg(i+1) + h11*rtg(c_bin)%mKb(i+1)
+    end subroutine anchor_kernels
+
+    subroutine rtgroups_predict(ii, st, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, tol, tol_shape, r, ok)
+        ! First-order prediction of bin ii in this cell from its anchor st (the last
+        ! rtgroups_solve_bin with sens), or ok = .false. where it must be solved again
+        ! (pyCALIMA rt_group_charging.predict). Changes since the anchor: d ln S of the
+        ! photoemission rate at the anchor's Z* (all groups and the background, with its kernels),
+        ! d ln N of n_e, d ln T; refused beyond tol (also for the change of an ion density beyond
+        ! d ln N), if a group's photon density changed by more than tol_shape beyond d ln S, if
+        ! sigma is on the other side of SIGMA_DISCRETE than the anchor's, or, for a wide P(Z), if
+        ! Z* + 1/2 (of the anchor or of the prediction) is within PREDICT_WIDE_ZERO + 1/2 of zero
+        ! charge or on either side of it, or moves by more than max(1, PREDICT_WIDE_DZ sigma).
+        ! r: Lambda includes the autoionisation; alpha and d/d ln T are the anchor's.
+        implicit none
+        integer, intent(in) :: ii
+        type(RTGState), intent(in) :: st
+        real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, tol, tol_shape
+        type(RTGResult), intent(out) :: r
+        logical, intent(out) :: ok
+        real(dp) :: P0, P1, rS, rN, rT, dS, dN, dT, nion(3), m, z0, z1, y
+        real(dp), save :: tol_c = -1d0, tsh_c = -1d0, et = 1d0, es = 1d0     ! exp(tol), exp(tol_shape)
+        integer :: g, j, nG
+        ! the tests |ln(x/y) - d| <= tol as bounds on ratios: no logarithm per group or ion
+        ok = .false.
+        if (.not. st%anchored .or. ne <= 0d0) return
+        nG = rtg(ii)%nG
+        if (tol /= tol_c .or. tol_shape /= tsh_c) then
+            tol_c = tol
+            tsh_c = tol_shape
+            et = exp(tol)
+            es = exp(tol_shape)
+        end if
+        P0 = st%acred*sum(st%aNp(1:nG)*st%akstar(1:nG)) + st%aG0*st%akbg
+        P1 = c_red*sum(Np(1:nG)*st%akstar(1:nG)) + G0_bg*st%akbg
+        if (P0 > 0d0 .and. P1 > 0d0) then
+            rS = P1/P0
+        else if (P0 <= 0d0 .and. P1 <= 0d0) then
+            rS = 1d0
+        else
+            return
+        end if
+        rN = ne/st%ane
+        rT = T/st%aT
+        if (rS > et .or. rS*et < 1d0 .or. rN > et .or. rN*et < 1d0 .or. rT > et .or. rT*et < 1d0) return
+        nion = (/n_Hp, n_Hep, n_Hepp/)
+        do j = 1, 3
+            if (max(nion(j), st%anion(j)) > 1d-6*ne) then
+                if (nion(j) <= 0d0 .or. st%anion(j) <= 0d0) return
+                y = st%anion(j)*rN
+                if (nion(j) > y*et .or. nion(j)*et < y) return
+            end if
+        end do
+        m = 0d0
+        do g = 1, nG
+            m = max(m, Np(g), st%aNp(g))
+        end do
+        m = 1d-30*max(m, 1d-300)
+        do g = 1, nG
+            if (max(Np(g), st%aNp(g)) > m) then
+                if (Np(g) <= 0d0 .or. st%aNp(g) <= 0d0) return
+                y = st%aNp(g)*rS
+                if (Np(g) > y*es .or. Np(g)*es < y) return
+            end if
+        end do
+        dS = log(rS)
+        dN = log(rN)
+        dT = log(rT)
+        associate (a => st%ar)
+            r%Zmean = a%Zmean + a%dZmean_S*dS + a%dZmean_N*dN + a%dZmean*dT
+            r%Zsigma = a%Zsigma + a%dZsigma_S*dS + a%dZsigma_N*dN + a%dZsigma*dT
+            r%Gamma = a%Gamma + a%dGamma_S*dS + a%dGamma_N*dN + a%dGamma*dT
+            r%Lambda = (a%Lambda + a%Lambda_auto) + a%dLambda_S*dS + a%dLambda_N*dN + a%dLambda*dT
+            r%Lambda_auto = 0d0
+            r%Zstar = a%Zstar + (r%Zmean - a%Zmean)
+            r%discrete = a%discrete
+            r%dZmean = a%dZmean
+            r%dZsigma = a%dZsigma
+            r%dGamma = a%dGamma
+            r%dLambda = a%dLambda
+            r%alpha = a%alpha
+            r%predicted = .true.
+            if ((r%Zsigma < SIGMA_DISCRETE) .neqv. a%discrete) return
+            if (.not. a%discrete) then
+                z0 = a%Zstar + 0.5d0
+                z1 = r%Zstar + 0.5d0
+                if (z0*z1 <= 0d0 .or. min(abs(z0), abs(z1)) < PREDICT_WIDE_ZERO + 0.5d0) return
+                if (abs(z1 - z0) > max(1d0, PREDICT_WIDE_DZ*a%Zsigma)) return
+            end if
+        end associate
+        ok = .true.
+    end subroutine rtgroups_predict
 
     subroutine u_of(Z, i, w)
         ! U index of charge Z: cached for the integers
@@ -1004,6 +1131,7 @@ module dust_charging_rtgroups
         st = sticking(Z)
         kT = RTG_KB*c_T
         b_up(k) = photo + ion + c_arr_e*je*dlt
+        b_ph(k) = photo                             ! the photoemission part (rtgroups_solve_bin sens)
         b_dn(k) = c_arr_e*je*st*(1d0 - ptr)
         b_gam(k) = RTG_EV2ERG*heat
         b_lam(k) = c_arr_e*st*lt*kT*fc - c_arr_e*je*dlt*eb*RTG_EV2ERG
@@ -1607,7 +1735,7 @@ module dust_charging_rtgroups
 
     ! ---------------------------------------------------------------- solver
     subroutine rtgroups_solve_bin(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, &
-                                  st, dlnT, alpha_mode, r)
+                                  st, dlnT, alpha_mode, r, sens)
         ! Equilibrium charge and rates [erg/s per grain] of bin ii for one cell
         ! (pyCALIMA GroupChargingTable.solve). Np: photon densities per group
         ! [cm^-3]; egy: group mean energies [eV]; c_red: RT speed of light [cm/s];
@@ -1626,6 +1754,8 @@ module dust_charging_rtgroups
         real(dp) :: gm1, gp1, gam1, lam1, c(NBUF), cb, dvar, je, dje, EA, arrive2, zr, lg(RTG_NRI)
         integer :: lo, hi, k, j, half, Zc
         logical :: disc, got, want_d, have_chord
+        logical, intent(in), optional :: sens    ! also d/d ln S, d/d ln N and the anchor of rtgroups_predict
+        real(dp) :: cS(NBUF), cN(NBUF), cbS, cbN, dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN
 
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
@@ -1776,7 +1906,103 @@ module dust_charging_rtgroups
         st%discrete = disc
         st%Zstar = Zs
         st%Zsigma = r%Zsigma
+
+        ! 3. sens: d/d ln S and d/d ln N (pyCALIMA GroupChargingTable._sensitivities), and the anchor
+        st%anchored = .false.
+        if (.not. present(sens)) return
+        if (.not. sens .or. rtg(ii)%nG > RTG_MAXG) return
+        if (disc) then
+            ! d ln P(Z): cumulative sums of d ln Up - d ln Down, as the d/d ln T above; heating ~ S,
+            ! cooling and autoionisation ~ N
+            cS(1) = 0d0
+            cN(1) = 0d0
+            do k = lo, hi - 1
+                cb = max(b_up(k - b_base), RTG_TINY)
+                cS(k - lo + 2) = cS(k - lo + 1) + b_ph(k - b_base)/cb
+                cN(k - lo + 2) = cN(k - lo + 1) + ((cb - b_ph(k - b_base))/cb - 1d0)
+            end do
+            cbS = 0d0
+            cbN = 0d0
+            do k = lo, hi
+                cbS = cbS + b_P(k - b_base)*cS(k - lo + 1)
+                cbN = cbN + b_P(k - b_base)*cN(k - lo + 1)
+            end do
+            r%dZmean_S = 0d0
+            r%dZmean_N = 0d0
+            dvS = 0d0
+            dvN = 0d0
+            r%dGamma_S = 0d0
+            r%dGamma_N = 0d0
+            r%dLambda_S = 0d0
+            r%dLambda_N = 0d0
+            do k = lo, hi
+                cS(k - lo + 1) = cS(k - lo + 1) - cbS
+                cN(k - lo + 1) = cN(k - lo + 1) - cbN
+                r%dZmean_S = r%dZmean_S + b_P(k - b_base)*(cS(k - lo + 1)*dble(k))
+                r%dZmean_N = r%dZmean_N + b_P(k - b_base)*(cN(k - lo + 1)*dble(k))
+                dvS = dvS + b_P(k - b_base)*(cS(k - lo + 1)*dble(k)*dble(k))
+                dvN = dvN + b_P(k - b_base)*(cN(k - lo + 1)*dble(k)*dble(k))
+                r%dGamma_S = r%dGamma_S + b_P(k - b_base)*(cS(k - lo + 1)*b_gam(k - b_base))
+                r%dGamma_N = r%dGamma_N + b_P(k - b_base)*(cN(k - lo + 1)*b_gam(k - b_base))
+                r%dLambda_S = r%dLambda_S + b_P(k - b_base)*(cS(k - lo + 1)*b_lam(k - b_base))
+                r%dLambda_N = r%dLambda_N + b_P(k - b_base)*(cN(k - lo + 1)*b_lam(k - b_base))
+            end do
+            r%dGamma_S = r%dGamma_S + r%Gamma
+            r%dLambda_N = r%dLambda_N + r%Lambda
+            if (r%Lambda_auto /= 0d0) then
+                r%dLambda_S = r%dLambda_S + r%Lambda_auto*cS(1)
+                r%dLambda_N = r%dLambda_N + r%Lambda_auto*(cN(1) + 1d0)
+            end if
+            dvS = dvS - 2d0*r%Zmean*r%dZmean_S
+            dvN = dvN - 2d0*r%Zmean*r%dZmean_N
+            r%dZsigma_S = 0d0
+            r%dZsigma_N = 0d0
+            if (r%Zsigma > 0d0) then
+                r%dZsigma_S = 0.5d0*dvS/r%Zsigma
+                r%dZsigma_N = 0.5d0*dvN/r%Zsigma
+            end if
+        else
+            ! the root moves by sigma^2 dg/dtheta; sigma with the slope across Z* -+ 1/2; Gamma and
+            ! Lambda (at Z* + 1/2) along their slope over [Z*, Z* + 1]
+            call dg_dtheta(Zs, sg)
+            call dg_dtheta(Zs - 0.5d0, sgm)
+            call dg_dtheta(Zs + 0.5d0, sgp)
+            call heating_cooling(Zs, gl, ll)
+            call heating_cooling(Zs + 1d0, gh, lh)
+            dZS = sigma*sigma*sg(1)
+            dZN = sigma*sigma*sg(2)
+            r%dZmean_S = dZS
+            r%dZmean_N = dZN
+            r%dZsigma_S = 0.5d0*sigma**3*(sgp(1) - sgm(1))
+            r%dZsigma_N = 0.5d0*sigma**3*(sgp(2) - sgm(2))
+            r%dGamma_S = (gh - gl)*dZS + r%Gamma
+            r%dGamma_N = (gh - gl)*dZN
+            r%dLambda_S = (lh - ll)*dZS
+            r%dLambda_N = (lh - ll)*dZN + r%Lambda
+        end if
+        call anchor_kernels(Zs, st)
+        st%anchored = .true.
+        st%aT = T
+        st%ane = ne
+        st%anion = (/n_Hp, n_Hep, n_Hepp/)
+        st%acred = c_red
+        st%aG0 = G0_bg
+        st%aNp = 0d0
+        st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
+        st%ar = r
     contains
+        subroutine dg_dtheta(z, d)
+            ! dg/d ln S and dg/d ln N at charge z (Up at z, Down at z + 1 ~ n_e)
+            real(dp), intent(in) :: z
+            real(dp), intent(out) :: d(2)
+            real(dp) :: ww, ph, ht, upz
+            integer :: iz
+            call u_of(z, iz, ww)
+            call kernels(iz, ww, ph, ht, .false.)
+            upz = max(ph + ion_capture(z) + c_arr_e*jtilde(z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, iz, ww), RTG_TINY)
+            d(1) = ph/upz
+            d(2) = (upz - ph)/upz - 1d0
+        end subroutine dg_dtheta
         real(dp) function gwin(k)
             ! g increment of the window from charge k to k + 1
             integer, intent(in) :: k
@@ -1940,7 +2166,9 @@ module dust_charging_rtgroups
         write(debug_unit, '(*(1X,ES23.15E3))', advance='no') st0%alpha, st0%lg
         write(debug_unit, '(6(1X,ES23.15E3),1X,L1,4(1X,ES23.15E3),1X,I1,1X,L1)', advance='no') r%Zmean, r%Zsigma, &
             r%Gamma, r%Lambda, r%Lambda_auto, r%Zstar, r%discrete, r%dZmean, r%dZsigma, r%dGamma, r%dLambda, r%nfit, refined
-        write(debug_unit, '(*(1X,ES23.15E3))') r%alpha
+        write(debug_unit, '(*(1X,ES23.15E3))', advance='no') r%alpha
+        write(debug_unit, '(8(1X,ES23.15E3))') r%dZmean_S, r%dZsigma_S, r%dGamma_S, r%dLambda_S, &
+            r%dZmean_N, r%dZsigma_N, r%dGamma_N, r%dLambda_N
         debug_count = debug_count + 1
         ndumped = debug_count
     end subroutine rtgroups_dump

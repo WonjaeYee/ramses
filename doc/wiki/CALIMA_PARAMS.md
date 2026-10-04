@@ -71,6 +71,8 @@ For detailed descriptions of the concepts and models described here, see:
 | `dust_velocity_model='Ormel2007'` |  `character(LEN=30)` | Relative velocity model for grain-grain interactions. Options: 'Ormel2007', others as implemented. |
 | `charging_model='Ibanez2019'` |  `character(LEN=30)` | Grain charge distribution model. Options: 'Ibanez2019', others as implemented. |
 | `dust_ion_recombination=.false.` | `logical` | With `charging_model='WDB06rt'` or `'WDB06tab'`: grain-assisted recombination of the singly charged ions (H, He, C, N, O, Ne, Mg, Si, S, Fe; dust bins, not PAHs) from the charge balance, used by the RTZ chemistry instead of its fit (still gated by `rtz_include_dust_recombination`). Off: WDB06rt skips the recombination coefficients and WDB06tab loads only the charging part of its tables (a third of the memory). |
+| `rtg_predict_tol=0.2d0` | `real` | With `charging_model='WDB06rt'`: a bin's charge, PE heating and recombination cooling are predicted to first order from the cell's last full solve (within the same RTZ call) while the photoemission rate at its Z\*, n_e and T changed by at most this in ln since that solve, and the ion densities beyond n_e as well; otherwise solved again. In the 2D Strömgren test the errors stay below 9% (3% for 99% of the calls) and the full solves drop fivefold. 0: always a full solve. Not used with `dust_ion_recombination`. |
+| `rtg_predict_tol_shape=0.3d0` | `real` | With `rtg_predict_tol > 0`: also a full solve where some group's photon density changed by more than this in ln beyond the photoemission rate. |
 | `nZmix=3`                     |  `integer`    | Number of representative charge states (1: mean charge, 2: two-point, 3: three-point distribution). |
 
 ## PAH Modelling Options

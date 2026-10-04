@@ -35,10 +35,12 @@ module dust_interface
     type(RTGLast), allocatable, save :: rtg_last(:)
     real(dp), allocatable, save :: rtg_Zguess(:)
     real(dp), parameter :: RTG_DLNT = 1d-5, RTG_SERVE = 1.5d-5
+    real(dp), parameter :: RTG_SERVE_HI = exp(RTG_SERVE), RTG_SERVE_LO = exp(-RTG_SERVE)   ! rtg_served, without a log
     ! grain charging timer (dust_charging_timer): wall-clock seconds; calls per bin by path
-    ! (0: full solve, 1: uniform-G0 table, 2: from d/d ln T, 3: other charging models)
+    ! (0: full solve, 1: uniform-G0 table, 2: from d/d ln T, 3: other charging models,
+    ! 4: predicted from the cell's last full solve, rtgroups_predict)
     real(dp), save :: tchg = 0d0
-    integer(8), save :: nchg(0:3) = 0, nchg_fit = 0, nchg_disc = 0
+    integer(8), save :: nchg(0:4) = 0, nchg_fit = 0, nchg_disc = 0
 
 contains
     subroutine rtgroups_reset_warm()
@@ -46,6 +48,7 @@ contains
         use dust_charging_rtgroups, only: rtgroups_dump_mark
         implicit none
         if (allocated(rtg_warm)) rtg_warm(:,:)%valid = .false.
+        if (allocated(rtg_warm)) rtg_warm(:,:)%anchored = .false.
         if (allocated(rtg_last)) rtg_last(:)%valid = .false.
         if (dust_rtgroups_debug .or. dust_rtgroups_verify) call rtgroups_dump_mark()
     end subroutine rtgroups_reset_warm
@@ -73,7 +76,7 @@ contains
         use mpi_mod
         implicit none
         real(dp) :: t, tr, tl(2)
-        integer(8) :: n(0:6), nl(0:6)
+        integer(8) :: n(0:7), nl(0:7)
         real(dp), allocatable :: ta(:,:)
         integer(8), allocatable :: na(:,:)
         integer :: k
@@ -81,17 +84,17 @@ contains
         integer :: info
 #endif
         if (.not. dust_charging_timer) return
-        nl(0:3) = nchg
-        nl(4) = nchg_fit
-        nl(5) = nchg_disc
-        nl(6) = nrtz
+        nl(0:4) = nchg
+        nl(5) = nchg_fit
+        nl(6) = nchg_disc
+        nl(7) = nrtz
         tl = (/ tchg, trtz /)
-        allocate(ta(2, ncpu), na(0:6, ncpu))
+        allocate(ta(2, ncpu), na(0:7, ncpu))
         ta(:, 1) = tl
         na(:, 1) = nl
 #ifndef WITHOUTMPI
         call MPI_GATHER(tl, 2, MPI_DOUBLE_PRECISION, ta, 2, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
-        call MPI_GATHER(nl, 7, MPI_INTEGER8, na, 7, MPI_INTEGER8, 0, MPI_COMM_WORLD, info)
+        call MPI_GATHER(nl, 8, MPI_INTEGER8, na, 8, MPI_INTEGER8, 0, MPI_COMM_WORLD, info)
 #endif
         if (myid /= 1) return
         t = sum(ta(1, :))
@@ -100,14 +103,15 @@ contains
         write(*,'(A,A)') ' CALIMA grain charging timer, charging_model = ', trim(charging_model)
         write(*,'(A)') '   rank   RTZ steps  t(RTZ steps) [s]  t(charging) [s]  charging/RTZ step [ns]  RTZ step [ns]  charging share'
         do k = 1, ncpu
-            write(*,'(I7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') k, dble(na(6, k)), ta(2, k), ta(1, k), &
-                1d9*ta(1, k)/max(dble(na(6, k)), 1d0), 1d9*ta(2, k)/max(dble(na(6, k)), 1d0), ta(1, k)/max(ta(2, k), 1d-30)
+            write(*,'(I7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') k, dble(na(7, k)), ta(2, k), ta(1, k), &
+                1d9*ta(1, k)/max(dble(na(7, k)), 1d0), 1d9*ta(2, k)/max(dble(na(7, k)), 1d0), ta(1, k)/max(ta(2, k), 1d-30)
         end do
-        write(*,'(A7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') '  all', dble(n(6)), tr, t, 1d9*t/max(dble(n(6)), 1d0), &
-            1d9*tr/max(dble(n(6)), 1d0), t/max(tr, 1d-30)
-        write(*,'(A,ES10.3,A,F9.1,A)') '   ', dble(sum(n(0:3))), ' bin calls: ', 1d9*t/max(dble(sum(n(0:3))), 1d0), ' ns per call'
-        if (sum(n(0:2)) > 0) write(*,'(A,3ES11.3,A,ES11.3,A,ES11.3)') '   WDB06rt calls full / uniform table / from d/dlnT:', &
-            dble(n(0:2)), '; discrete', dble(n(5)), '; recombination fits', dble(n(4))
+        write(*,'(A7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') '  all', dble(n(7)), tr, t, 1d9*t/max(dble(n(7)), 1d0), &
+            1d9*tr/max(dble(n(7)), 1d0), t/max(tr, 1d-30)
+        write(*,'(A,ES10.3,A,F9.1,A)') '   ', dble(sum(n(0:4))), ' bin calls: ', 1d9*t/max(dble(sum(n(0:4))), 1d0), ' ns per call'
+        if (sum(n(0:2)) + n(4) > 0) write(*,'(A,4ES11.3,A,ES11.3,A,ES11.3)') &
+            '   WDB06rt calls full / uniform table / from d/dlnT / predicted:', &
+            dble(n(0:2)), dble(n(4)), '; discrete', dble(n(6)), '; recombination fits', dble(n(5))
     end subroutine report_dust_charging_timer
 
     subroutine compute_local_anisotropy_factor(dinfo,Fp,Np)
@@ -237,7 +241,7 @@ contains
         use dust_radiation, only: update_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
-                                          psitab_inputs, psitab_lookup, psitab_dump
+                                          psitab_inputs, psitab_lookup, psitab_dump, rtgroups_predict
         use amr_commons, only: myid
 
         implicit none
@@ -254,12 +258,12 @@ contains
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: Zel, nHI, prevD
         integer :: n_charge
-        logical :: use_rtg, no_local, use_tab
+        logical :: use_rtg, no_local, use_tab, predict, ok
         real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
         real(dp), dimension(1:dinfo%ndust) :: rtg_Pinj, rtg_Prec
         type(RTGState), pointer :: st
-        type(RTGState), dimension(1:dinfo%ndust) :: st0s
+        type(RTGState), allocatable :: st0s(:)      ! the dumps only: an RTGState is large, and initialised on each call
         type(RTGResult) :: rr
         type(RTGResult), dimension(1:dinfo%ndust) :: rrs
         integer :: path, ic, ndumped
@@ -307,6 +311,8 @@ contains
                 if (.not. allocated(rtg_warm)) call rtg_allocate()
                 ic = dinfo%icell
                 if (ic < 1 .or. ic > nvector) ic = nvector + 1
+                ! rtgroups_predict: not with the grain recombination, whose alpha it does not predict
+                predict = rtg_predict_tol > 0d0 .and. .not. dust_ion_recombination .and. ic <= nvector
                 do ii = 1, dinfo%ndust
                     paths(ii) = -1
                     zg_used(ii) = rtg_Zguess(ii)
@@ -320,8 +326,12 @@ contains
                     end if
                     st => rtg_warm(ic, ii)
                     if (ic == nvector + 1) st%valid = .false.
-                    if (dust_rtgroups_debug .or. dust_rtgroups_verify) st0s(ii) = st
+                    if (dust_rtgroups_debug .or. dust_rtgroups_verify) then
+                        if (.not. allocated(st0s)) allocate(st0s(1:dinfo%ndust))
+                        st0s(ii) = st
+                    end if
                     rr = RTGResult()
+                    ok = .false.
                     if (no_local .and. .not. dust_ion_recombination) then
                         ! only the uniform background: start-up table in (T, ne), which has no alpha
                         path = 1
@@ -336,11 +346,19 @@ contains
                         rr%Lambda = rtg_last(ii)%r%Lambda + rtg_last(ii)%r%Lambda_auto + h*rtg_last(ii)%r%dLambda
                         rr%Zstar = h
                     else
-                        ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
-                        path = 0
-                        call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
-                                                n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
-                                                st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), rr)
+                        ! first order from this cell's last full solve where the inputs changed little
+                        if (predict) call rtgroups_predict(ii, st, Np, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
+                                                           dinfo%G0_background, rtg_predict_tol, rtg_predict_tol_shape, rr, ok)
+                        if (ok) then
+                            path = 4
+                        else
+                            ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
+                            path = 0
+                            call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
+                                                    n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
+                                                    st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), &
+                                                    rr, sens=predict)
+                        end if
                         rtg_last(ii)%valid = .true.
                         rtg_last(ii)%T = Tk
                         rtg_last(ii)%ne = ne
@@ -354,7 +372,7 @@ contains
                         rtg_last(ii)%r = rr
                         rr%Lambda = rr%Lambda + rr%Lambda_auto
                         rtg_Zguess(ii) = rr%Zstar
-                        if (dust_charging_timer .and. rr%discrete) nchg_disc = nchg_disc + 1
+                        if (dust_charging_timer .and. rr%discrete .and. path == 0) nchg_disc = nchg_disc + 1
                     end if
                     paths(ii) = path
                     rrs(ii) = rr
@@ -586,9 +604,11 @@ contains
         logical function rtg_served(ib)
             ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T
             integer, intent(in) :: ib
+            real(dp) :: x
             rtg_served = .false.
             if (.not. rtg_last(ib)%valid) return
-            if (abs(log(Tk/rtg_last(ib)%T)) > RTG_SERVE) return
+            x = Tk/rtg_last(ib)%T
+            if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
             if (ne /= rtg_last(ib)%ne .or. n_Hp /= rtg_last(ib)%n_Hp .or. n_Hep /= rtg_last(ib)%n_Hep .or. &
                 n_Hepp /= rtg_last(ib)%n_Hepp .or. dinfo%G0_background /= rtg_last(ib)%G0 .or. &
                 dinfo%local_c /= rtg_last(ib)%c_red) return

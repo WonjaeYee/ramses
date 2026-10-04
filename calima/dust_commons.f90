@@ -125,6 +125,9 @@ module dust_commons
     logical :: dust_ion_recombination=.false.          ! WDB06rt/WDB06tab: grain-assisted recombination of the singly charged
                                                        ! ions from the charge balance, used by the RTZ chemistry instead of its
                                                        ! fit; off: WDB06rt skips it and WDB06tab does not load that part
+    real(dp) :: rtg_predict_tol=0.2d0                  ! WDB06rt: first-order prediction from the cell's last full solve while
+    real(dp) :: rtg_predict_tol_shape=0.3d0            ! |d ln| of the inputs <= tol and of each group's spectrum shape <= tol_shape
+                                                       ! (0: always a full solve; not with dust_ion_recombination)
 
     ! ==== PAH modelling options (read from nml) ====
     character(LEN=30)::photolysis_model='RM2026'         ! Model for UV sublimation of PAHs
