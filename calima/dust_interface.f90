@@ -139,6 +139,9 @@ contains
         integer :: i
         real(dp) :: rad_ani
 
+        ! the groups at the floor (skipped below) are isotropic and get no solid angle
+        dinfo%local_rad_ani = 0d0
+        dinfo%local_solid_angle = 0d0
         if (all(Np.le.dinfo%smallNp)) return
 
         if (fixed_rad_ani .eq. -1d0) then

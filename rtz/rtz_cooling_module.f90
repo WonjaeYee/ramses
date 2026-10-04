@@ -1027,8 +1027,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #else
       ! In the case of using CALIMA, we need to add to the
       ! total density the contribution from dust and PAHs
-      ! 1. Reset the dust helper to get ready for this cool step
-      call dust_helper%reset()
+      ! 1. Get the dust helper ready for this cool step. No full reset: each field is written
+      !    before it is read within the step, except Pabs_pah, which the PAH model adds to
+      if (npah > 0) dust_helper%Pabs_pah = 0d0
       dust_helper%icell = icell          ! WDB06rt: warm state of this cell
 
       ! 2. Compute the total density and metallicity
