@@ -311,8 +311,7 @@ contains
                 if (.not. allocated(rtg_warm)) call rtg_allocate()
                 ic = dinfo%icell
                 if (ic < 1 .or. ic > nvector) ic = nvector + 1
-                ! rtgroups_predict: not with the grain recombination, whose alpha it does not predict
-                predict = rtg_predict_tol > 0d0 .and. .not. dust_ion_recombination .and. ic <= nvector
+                predict = rtg_predict_tol > 0d0 .and. ic <= nvector
                 do ii = 1, dinfo%ndust
                     paths(ii) = -1
                     zg_used(ii) = rtg_Zguess(ii)
@@ -383,12 +382,14 @@ contains
                     rtg_Prec(ii) = rr%Lambda
                 end do
                 ! grain-assisted recombination (pyCALIMA solve_cell): the fit only for the wide bins
-                ! that carry more than RTG_RECOMB_IMPORTANT of the cell's rate of some ion
+                ! solved here that carry more than RTG_RECOMB_IMPORTANT of the cell's rate of some ion
+                ! (the predicted bins count in that rate)
                 refined = .false.
                 if (dust_ion_recombination .and. any(paths == 0)) then
                     rate = 0d0
                     do ii = 1, dinfo%ndust
-                        if (paths(ii) == 0) rate(:, ii) = (dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain)*rtg_last(ii)%r%alpha
+                        if (paths(ii) == 0 .or. paths(ii) == 4) &
+                            rate(:, ii) = (dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain)*rtg_last(ii)%r%alpha
                     end do
                     tot = sum(rate, dim=2)
                     do ii = 1, dinfo%ndust
@@ -399,6 +400,7 @@ contains
                         st => rtg_warm(ic, ii)
                         call rtgroups_refine_alpha(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
                                                    dinfo%G0_background, st, rtg_last(ii)%r)
+                        if (st%anchored) st%ar%alpha = rtg_last(ii)%r%alpha      ! predictions scale the fitted alpha
                         if (dust_charging_timer) nchg_fit = nchg_fit + rtg_last(ii)%r%nfit
                     end do
                 end if

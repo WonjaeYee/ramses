@@ -58,7 +58,9 @@ module dust_charging_rtgroups
     ! dust_interface fits only the wide bins with more than this share of an ion's grain recombination
     real(dp), parameter :: RTG_RECOMB_IMPORTANT = 0.1d0
     ! rtgroups_predict guards: identical to pyCALIMA rt_group_charging PREDICT_WIDE_ZERO, _WIDE_DZ
-    real(dp), parameter :: PREDICT_WIDE_ZERO = 1d0, PREDICT_WIDE_DZ = 0.25d0
+    real(dp), parameter :: PREDICT_WIDE_ZERO = 0.5d0, PREDICT_WIDE_DZ = 1d0
+    ! ... and a wide P(Z) is linearised (else corrected) within PREDICT_LIN_TOL, _DZ and _ZERO
+    real(dp), parameter :: PREDICT_LIN_TOL = 0.1d0, PREDICT_LIN_DZ = 0.25d0, PREDICT_LIN_ZERO = 1d0
 
     ! constants: identical to pyCALIMA shared_physics / rt_group_charging
     real(dp), parameter :: RTG_KB = 1.380649d-16, RTG_ME = 9.1093837015d-28
@@ -137,6 +139,8 @@ module dust_charging_rtgroups
         logical :: anchored = .false.
         real(dp) :: aT = 0d0, ane = 0d0, anion(3) = 0d0, acred = 0d0, aG0 = 0d0, akbg = 0d0
         real(dp) :: aNp(RTG_MAXG) = 0d0, akstar(RTG_MAXG) = 0d0
+        real(dp) :: adla(RTG_NRI, 3) = 0d0   ! discrete P(Z): d ln alpha_i / d ln S, N, T
+        real(dp) :: alg(RTG_NRI) = 0d0       ! wide P(Z): its Gaussian estimate of ln alpha_i
         type(RTGResult) :: ar
     end type RTGState
 
@@ -183,7 +187,7 @@ module dust_charging_rtgroups
 
     ! discrete window: per-integer quantities, indexed by charge - b_base
     integer :: b_base
-    real(dp), dimension(NBUF) :: b_up, b_dn, b_gam, b_lam, b_lamd, b_dup, b_ddn, b_dlam, b_A, b_P, b_ph
+    real(dp), dimension(NBUF) :: b_up, b_dn, b_gam, b_lam, b_lamd, b_dup, b_ddn, b_dlam, b_A, b_P, b_ph, b_dA
     ! recombination fit work
     real(dp), allocatable, save :: f_Zn(:), f_lnP(:), f_lnA(:), f_v(:), f_ps(:), f_row(:)
     integer :: np_
@@ -510,14 +514,18 @@ module dust_charging_rtgroups
         ! sigma is on the other side of SIGMA_DISCRETE than the anchor's, or, for a wide P(Z), if
         ! Z* + 1/2 (of the anchor or of the prediction) is within PREDICT_WIDE_ZERO + 1/2 of zero
         ! charge or on either side of it, or moves by more than max(1, PREDICT_WIDE_DZ sigma).
-        ! r: Lambda includes the autoionisation; alpha and d/d ln T are the anchor's.
+        ! A discrete P(Z) is the linearisation, alpha too (in ln); so is a wide one for a small
+        ! change, else it is corrected at the new inputs (a Newton step of g, Gamma and Lambda at
+        ! Z* + 1/2); its alpha is scaled by the change of its Gaussian estimate. r: Lambda includes
+        ! the autoionisation; d/d ln T is the anchor's.
         implicit none
         integer, intent(in) :: ii
         type(RTGState), intent(in) :: st
         real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, tol, tol_shape
         type(RTGResult), intent(out) :: r
         logical, intent(out) :: ok
-        real(dp) :: P0, P1, rS, rN, rT, dS, dN, dT, nion(3), m, z0, z1, y
+        real(dp) :: P0, P1, rS, rN, rT, dS, dN, dT, nion(3), m, z0, z1, y, zs, lg(RTG_NRI)
+        logical :: linear
         real(dp), save :: tol_c = -1d0, tsh_c = -1d0, et = 1d0, es = 1d0     ! exp(tol), exp(tol_shape)
         integer :: g, j, nG
         ! the tests |ln(x/y) - d| <= tol as bounds on ratios: no logarithm per group or ion
@@ -583,8 +591,33 @@ module dust_charging_rtgroups
             if (.not. a%discrete) then
                 z0 = a%Zstar + 0.5d0
                 z1 = r%Zstar + 0.5d0
-                if (z0*z1 <= 0d0 .or. min(abs(z0), abs(z1)) < PREDICT_WIDE_ZERO + 0.5d0) return
-                if (abs(z1 - z0) > max(1d0, PREDICT_WIDE_DZ*a%Zsigma)) return
+                linear = max(abs(dS), abs(dN), abs(dT)) <= PREDICT_LIN_TOL .and. z0*z1 > 0d0 .and. &
+                         min(abs(z0), abs(z1)) >= PREDICT_LIN_ZERO + 0.5d0 .and. &
+                         abs(z1 - z0) <= max(1d0, PREDICT_LIN_DZ*a%Zsigma)
+                if (.not. linear .or. any(a%alpha > 0d0)) call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+                if (.not. linear) then
+                    ! corrected at the new inputs: a Newton step of g from the linear Z* (g' = -1/sigma^2,
+                    ! sigma linear), then Gamma and Lambda at Z* + 1/2 (the wide closure of the solve)
+                    zs = min(max(r%Zstar + r%Zsigma*r%Zsigma*gfun(r%Zstar), rtg(ii)%Zmin), rtg(ii)%Zmax - 1d0)
+                    z1 = zs + 0.5d0
+                    if (z0*z1 <= 0d0 .or. min(abs(z0), abs(z1)) < PREDICT_WIDE_ZERO + 0.5d0) return
+                    if (abs(z1 - z0) > max(1d0, PREDICT_WIDE_DZ*a%Zsigma)) return
+                    call heating_cooling(z1, r%Gamma, r%Lambda)
+                    r%Zstar = zs
+                    r%Zmean = z1
+                end if
+                ! alpha (fitted or not) times the change of its Gaussian estimate (as a reused fit)
+                if (any(a%alpha > 0d0)) then
+                    call recomb_gauss(r%Zstar, r%Zsigma, lg)
+                    do j = 1, RTG_NRI
+                        if (a%alpha(j) > 0d0) r%alpha(j) = a%alpha(j)*exp(lg(j) - st%alg(j))
+                    end do
+                end if
+            else
+                do j = 1, RTG_NRI
+                    if (a%alpha(j) > 0d0) r%alpha(j) = a%alpha(j)*exp(st%adla(j, 1)*dS + st%adla(j, 2)*dN &
+                                                                      + st%adla(j, 3)*dT)
+                end do
             end if
         end associate
         ok = .true.
@@ -1147,6 +1180,7 @@ module dust_charging_rtgroups
         b_lamd(k) = c_arr_e*(st*lt*kT*fc - je*dlt*eb*RTG_EV2ERG)
         b_dlam(k) = c_arr_e*(st*lt*kT*(fc*(1.5d0 + dld) + dfc) &
                     - je*RTG_EV2ERG*(dlt*eb*(0.5d0 + dje) + dde*eb + dlt*deb))
+        b_dA(k) = 0.5d0 + dj1                       ! d ln b_A / d ln T (rtgroups_solve_bin sens)
     end subroutine eval_int
 
     subroutine window_P(lo, hi, pmax)
@@ -1755,7 +1789,7 @@ module dust_charging_rtgroups
         integer :: lo, hi, k, j, half, Zc
         logical :: disc, got, want_d, have_chord
         logical, intent(in), optional :: sens    ! also d/d ln S, d/d ln N and the anchor of rtgroups_predict
-        real(dp) :: cS(NBUF), cN(NBUF), cbS, cbN, dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN
+        real(dp) :: cS(NBUF), cN(NBUF), cbS, cbN, dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN, sw
 
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
@@ -1961,6 +1995,23 @@ module dust_charging_rtgroups
                 r%dZsigma_S = 0.5d0*dvS/r%Zsigma
                 r%dZsigma_N = 0.5d0*dvN/r%Zsigma
             end if
+            ! d ln alpha_i: sum P A over the charges at or below Zth_i, P moving as above and
+            ! A ~ T^1/2 J~(Z, 1) also with T
+            st%adla = 0d0
+            if (alpha_mode /= RTG_ALPHA_NONE .and. want_d) then
+                do j = 1, RTG_NRI
+                    sw = 0d0
+                    do k = lo, hi
+                        if (dble(k) > rtg(ii)%Zth(j)) cycle
+                        cb = b_P(k - b_base)*b_A(k - b_base)
+                        sw = sw + cb
+                        st%adla(j, 1) = st%adla(j, 1) + cb*cS(k - lo + 1)
+                        st%adla(j, 2) = st%adla(j, 2) + cb*cN(k - lo + 1)
+                        st%adla(j, 3) = st%adla(j, 3) + cb*(c(k - lo + 1) + b_dA(k - b_base))
+                    end do
+                    if (sw > 0d0) st%adla(j, :) = st%adla(j, :)/sw
+                end do
+            end if
         else
             ! the root moves by sigma^2 dg/dtheta; sigma with the slope across Z* -+ 1/2; Gamma and
             ! Lambda (at Z* + 1/2) along their slope over [Z*, Z* + 1]
@@ -1979,6 +2030,12 @@ module dust_charging_rtgroups
             r%dGamma_N = (gh - gl)*dZN
             r%dLambda_S = (lh - ll)*dZS
             r%dLambda_N = (lh - ll)*dZN + r%Lambda
+            ! the change of the Gaussian estimate scales the predicted alpha (fitted or not)
+            if (alpha_mode == RTG_ALPHA_GAUSS) then
+                st%alg = lg
+            else if (alpha_mode /= RTG_ALPHA_NONE) then
+                call recomb_gauss(Zs, sigma, st%alg)
+            end if
         end if
         call anchor_kernels(Zs, st)
         st%anchored = .true.
