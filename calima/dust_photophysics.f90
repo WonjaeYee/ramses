@@ -1819,20 +1819,12 @@ module dust_radiation
         T0 = max(T0, Tmin)
     end subroutine get_Tdust_radiative_eq
 
-    subroutine solve_Tdust_fast(i_dust,P_abs,ne,nElement,xelem_ions,Coulomb_factor,nH2,&
-                           nCO,Tgas,dust_charge,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin)
+    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin)
         ! This subroutine computes the local dust temperature by solving the full energy balance
         ! equation: P_rad + H_coll + recomb_heat = P_emit + pe_heat
         ! i_dust         --> integer of dust bin
         ! P_abs          --> absorbed power by the dust grain [erg/s]
-        ! ne             --> electron density [cm^-3]
-        ! nElement       --> array of elemental densities [cm^-3]
-        ! xelem_ions     --> array of ionisation fractions for each element
-        ! Coulomb_factor --> array of Coulomb factors
-        ! nH2            --> molecular hydrogen density [cm^-3]
-        ! nCO            --> carbon monoxide density [cm^-3]
-        ! Tgas           --> gas temperature [K]
-        ! dust_charge    --> charge of the dust grain (in units of e)
+        ! pre            --> the collisional heating of this bin in this gas (coll_heating_prepare)
         ! coll_heat      <-- heating rate from collisions with gas particles [erg/s]
         ! recomb_heat    --> heating rate from recombination of electrons on dust [erg/s]
         ! pe_heat        --> cooling rate from photoelectric effect [erg/s]
@@ -1840,17 +1832,15 @@ module dust_radiation
         ! T              <-- computed dust temperature [K]
         ! Tmin           --> minimum allowed dust temperature (e.g. CMB temp) [K]
         !-------------------------------------------------------------------------
-        use dust_cooling, only: compute_dust_coll_heating
+        use dust_cooling, only: CollHeatPre, coll_heating_eval
         use dust_commons, only: dust_log_tdust_solver_update
         implicit none
 
         integer,intent(in) :: i_dust
-        real(dp),intent(in) :: P_abs,ne,nH2,nCO,Tgas,dust_charge,Tmin
+        real(dp),intent(in) :: P_abs,Tmin
+        type(CollHeatPre),intent(in) :: pre
         real(dp),intent(inout) :: coll_heat,P_rad
         real(dp),intent(in) :: recomb_heat,pe_heat
-        real(dp),dimension(1:n_elements),intent(in) :: nElement
-        real(dp),dimension(1:n_elements,1:n_elements),intent(in) :: xelem_ions
-        real(dp),dimension(-1:n_elements),intent(in) :: Coulomb_factor
         real(dp),intent(inout) :: T
 
         integer :: iter
@@ -1870,15 +1860,9 @@ module dust_radiation
         ! =========================================================
         if (dust_coll_cooling) then
             dT = max(T0*eps,1e-6)
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0+dT,&
-                                        dust_charge,H2)
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,max(T0-dT,Tmin),&
-                                        dust_charge,H1)
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0,&
-                                        dust_charge,H0)
+            H2 = coll_heating_eval(pre,T0+dT)
+            H1 = coll_heating_eval(pre,max(T0-dT,Tmin))
+            H0 = coll_heating_eval(pre,T0)
             true_dT_low = T0 - max(T0-dT, Tmin)
             dH_dT = (H2 - H1) / (dT + true_dT_low)
         else
@@ -2085,7 +2069,7 @@ module dust_radiation
         ! cs_abs        --> grain cross section array for dust types [cm3/s] (no PAHs)
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
-        use dust_cooling, only: compute_dust_coll_heating
+        use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -2100,6 +2084,7 @@ module dust_radiation
 
         integer :: i,j
         real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas
+        type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
@@ -2120,9 +2105,8 @@ module dust_radiation
             ! --- Check collisional heating at Tgas ---
             ! If collisional heating dominates radiation, start closer to Tgas
             if (dust_coll_cooling) then
-                call compute_dust_coll_heating(j,ne,nElement,xelem_ions,&
-                                            Coulomb_factor(j,:),nH2,nCO,Tgas,T0,&
-                                            dust_charge(j),H_coll_at_Tgas)
+                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge(j),pre)
+                H_coll_at_Tgas = coll_heating_eval(pre,T0)
                 coll_heat(j) = H_coll_at_Tgas
                 if (H_coll_at_Tgas > P_abs) then
                     ! Collisional heating dominates the initial guess
@@ -2141,8 +2125,7 @@ module dust_radiation
                 coll_heat(j) = 0d0
             end if
 
-            call solve_Tdust_fast(j,P_abs,ne,nElement,xelem_ions,Coulomb_factor(j,:),&
-                                nH2,nCO,Tgas,dust_charge(j),coll_heat(j),&
+            call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
                                 recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin)
             T_dust(j) = max(T0, Tmin)
         end do
