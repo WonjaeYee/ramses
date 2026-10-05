@@ -1148,7 +1148,7 @@ module dust_dynamics
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
         ! Transverse ranges for the FACE loop, clamped to the flux arrays.
-        ! dflux/eflux/mflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
+        ! dflux/eflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
         ! but ilo/jlo/klo above are MIN(1,iu1+1) = 0 in any active dimension
         ! (iu1 = ju1 = -1), so the transverse index started at 0 and every 2D or
         ! 3D run died with "Index '0' ... below lower bound of 1". RAMSES's own
@@ -1526,8 +1526,8 @@ module dust_dynamics
         real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ntva,1:ndim),save::dflux
         real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndim),save::eflux
 
-        ! Allocate momentum flux and radiation acceleration buffers
-        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndim),save::mflux
+        ! Drag heating per unit volume and time at the cell centres, and the radiation accelerations
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::qdrag
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndim),save::a_rad_g
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva,1:ndim),save::a_rad_d
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
@@ -1665,7 +1665,7 @@ module dust_dynamics
         end do; end do; end do
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
-        call calculate_drag_rad_fluxes(uloc,dflux,eflux,mflux,dx,dt,ncache,&
+        call calculate_drag_rad_fluxes(uloc,dflux,eflux,qdrag,dx,dt,ncache,&
                                         a_rad_g,a_rad_d,s_IRtrap,drag_state,agrain_code,sgrain_code)
 
         ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
@@ -1688,7 +1688,6 @@ module dust_dynamics
                     if(ok(i,i3-i0,j3-j0,k3-k0) .or. ok(i,i3,j3,k3))then
                         dflux(i,i3,j3,k3,:,idim)=0.0d0
                         eflux(i,i3,j3,k3,idim)=0.0d0
-                        mflux(i,i3,j3,k3,idim)=0.0d0
                     end if
                 end do
             end do; end do; end do
@@ -1720,12 +1719,18 @@ module dust_dynamics
                     ! 2. Total Energy Update
                     unew(ind_cell(i),neul)=unew(ind_cell(i),neul)+ &
                         (eflux(i,i3,j3,k3,idim) - eflux(i,i3+i0,j3+j0,k3+k0,idim))
-                    ! 3. Mixture Momentum Update
-                    unew(ind_cell(i),idim+1)=unew(ind_cell(i),idim+1) + &
-                        (mflux(i,i3,j3,k3,idim) - mflux(i,i3+i0,j3+j0,k3+k0,idim))
                 end do
             end do; end do; end do
         end do
+
+        ! Drag heating of the radiation-driven drift, a source in each cell (no flux to correct)
+        do k2=0,k2max; do j2=0,j2max; do i2=0,i2max
+            ind_son=1+i2+2*j2+4*k2
+            iskip=ncoarse+(ind_son-1)*ngridmax
+            do i=1,ncache
+                unew(iskip+ind_grid(i),neul)=unew(iskip+ind_grid(i),neul)+qdrag(i,1+i2,1+j2,1+k2)*dt
+            end do
+        end do; end do; end do
 
         ! Update neighboring coarser cells (flux correction at coarse-fine boundaries)
         do idim=1,ndim
@@ -1760,8 +1765,6 @@ module dust_dynamics
                 do i=1,nb_noneigh
                     unew(ind_buffer(i),neul)=unew(ind_buffer(i),neul) &
                         - eflux(ind_cell(i),i3,j3,k3,idim)*oneontwotondim
-                    unew(ind_buffer(i),idim+1)=unew(ind_buffer(i),idim+1) &
-                        - mflux(ind_cell(i),i3,j3,k3,idim)*oneontwotondim
                 end do
             end do; end do; end do
 
@@ -1793,15 +1796,13 @@ module dust_dynamics
                 do i=1,nb_noneigh
                     unew(ind_buffer(i),neul)=unew(ind_buffer(i),neul) &
                         + eflux(ind_cell(i),i3+i0,j3+j0,k3+k0,idim)*oneontwotondim
-                    unew(ind_buffer(i),idim+1)=unew(ind_buffer(i),idim+1) &
-                        + mflux(ind_cell(i),i3+i0,j3+j0,k3+k0,idim)*oneontwotondim
                 end do
             end do; end do; end do
         end do
 
     end subroutine dust_upwind_correct2
 
-    subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, mflux, dx, dt, ngrid, &
+    subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, qdrag, dx, dt, ngrid, &
                                         & a_rad_g, a_rad_d, s_IRtrap, drag_state, &
                                         & agrain_code, sgrain_code)
         use amr_parameters
@@ -1821,7 +1822,9 @@ module dust_dynamics
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nvar), intent(in)  :: uloc
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ntva, 1:ndim), intent(out) :: dflux
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: eflux
-        real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: mflux
+        ! Drag heating [code energy per volume and time] at the cell centres: the radiation and
+        ! trapped-IR work on the drift of every phase relative to the barycentre
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2), intent(out) :: qdrag
         ! Radiation acceleration arrays [code units]
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndim), intent(in) :: a_rad_g
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva, 1:ndim), intent(in) :: a_rad_d
@@ -1862,12 +1865,12 @@ module dust_dynamics
         real(dp), dimension(1:ntva) :: t_s_intrinsic, D_bin, a_rad_d_cell
         real(dp), dimension(1:ntva) :: a_cm_tva, s_cgs_tva
         real(dp) :: avg_ts_cell, a_rad_g_cell, a_rad_mix, sum_eps_ts_D
-        real(dp) :: w_cap_cell
+        real(dp) :: w_cap_cell, share_gas, q_work
 
         ! Initialize output flux arrays
         dflux = 0.0_dp
         eflux = 0.0_dp
-        mflux = 0.0_dp
+        qdrag = 0.0_dp
         call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
         call tva_species(a_cm_tva, s_cgs_tva)
 
@@ -1876,7 +1879,7 @@ module dust_dynamics
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
         ! Transverse ranges for the FACE loop, clamped to the flux arrays.
-        ! dflux/eflux/mflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
+        ! dflux/eflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
         ! but ilo/jlo/klo above are MIN(1,iu1+1) = 0 in any active dimension
         ! (iu1 = ju1 = -1), so the transverse index started at 0 and every 2D or
         ! 3D run died with "Index '0' ... below lower bound of 1". RAMSES's own
@@ -2114,6 +2117,25 @@ module dust_dynamics
                                 w_d_cell(l,i,j,k,jbin) = sign(w_cap_cell, w_d_cell(l,i,j,k,jbin))
                         end do
                     end if
+                    ! 2d. Drag heating, this direction's part of sum_s f_s . w_s over the phases s
+                    ! (the gas and every TVA species), f_s the radiation and trapped-IR force density
+                    ! on phase s. The radiation momentum goes to the mixture with the work f . u on
+                    ! the barycentre only (cooling_fine); the work on the drift relative to it is
+                    ! what the drag turns into gas heat in the terminal regime. The pressure-driven
+                    ! part needs no term: -w_g . grad(P_g) is inside the divergence of the enthalpy
+                    ! flux H_g w_g. Gravity accelerates every phase alike and does no work here.
+                    share_gas = 1.0_dp
+                    do jbin = 1, ntva
+                        share_gas = share_gas - s_IRtrap(l,i,j,k,jbin)
+                    end do
+                    share_gas = max(share_gas, 0.0_dp)
+                    q_work = (rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k)) * a_rad_g_cell &
+                             - share_gas * grad_Ptrap_cell) * w_g_cell(l,i,j,k)
+                    do jbin = 1, ntva
+                        q_work = q_work + (rhod_cell(l,i,j,k,jbin) * a_rad_d_cell(jbin) &
+                                 - s_IRtrap(l,i,j,k,jbin) * grad_Ptrap_cell) * w_d_cell(l,i,j,k,jbin)
+                    end do
+                    qdrag(l,i,j,k) = qdrag(l,i,j,k) + q_work
                 end if
             end do; end do; end do; end do
 
@@ -2240,7 +2262,10 @@ module dust_dynamics
                     H_gdnv = (gamma / (gamma - 1.0_dp)) * Pg_upwind
                     eflux(l,i,j,k,idim) = wg_face * H_gdnv * (dt / dx)
 
-                    ! --- B. DUST MASS, MOMENTUM, AND DRIFT ENERGY FLUX ---
+                    ! --- B. DUST MASS FLUX ---
+                    ! The drift stress (momentum) and the drift kinetic-energy flux are O(St^2)
+                    ! and left out, as are the drift kinetic energy and its work in the energy
+                    ! (Lebreuilly et al. 2019); the drag heating (2d) is O(St).
                     do jbin = 1, ntva
                         if (idim == 1) then
                             rhod_state_L = rhod_pred(l,i-1,j,k,jbin) + half * slope_rhod(l,i-1,j,k,jbin)
@@ -2270,12 +2295,6 @@ module dust_dynamics
                             flux_mass_bin = w_face * rhod_state_R * (dt / dx)
                         end if
                         dflux(l,i,j,k,jbin,idim) = flux_mass_bin
-
-                        ! Momentum flux
-                        mflux(l,i,j,k,idim) = mflux(l,i,j,k,idim) + flux_mass_bin * (w_face - wg_face)
-
-                        ! Energy flux (drift kinetic energy only, enthalpy is wg_face * H_gdnv)
-                        eflux(l,i,j,k,idim) = eflux(l,i,j,k,idim) + half * flux_mass_bin * (w_face**2 - wg_face**2)
                     end do
 
                 end do
