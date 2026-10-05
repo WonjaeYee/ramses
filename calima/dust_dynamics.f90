@@ -2162,15 +2162,24 @@ module dust_dynamics
                     ! what the drag turns into gas heat in the terminal regime. The pressure-driven
                     ! part needs no term: -w_g . grad(P_g) is inside the divergence of the enthalpy
                     ! flux H_g w_g. Gravity accelerates every phase alike and does no work here.
+                    ! Where the drift is capped the driving force exceeds the drag at the capped drift,
+                    ! and only the drag's part is dissipated: each phase's work is scaled by its cap
+                    ! factor f = w_capped/w_uncapped, so that the heat is the friction rho |dv|^2/t_s
+                    ! the capped drift represents (f = 1, exactly, where nothing is capped).
+                    f_cap = 1.0_dp
+                    if (sum_eps_ts_D /= 0.0_dp) f_cap = w_g_cell(l,i,j,k) / (-sum_eps_ts_D)
                     share_gas = 1.0_dp
                     do jbin = 1, ntva
                         share_gas = share_gas - s_IRtrap(l,i,j,k,jbin)
                     end do
                     share_gas = max(share_gas, 0.0_dp)
-                    q_work = (rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k)) * a_rad_g_cell &
+                    q_work = f_cap * (rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k)) * a_rad_g_cell &
                              - share_gas * grad_Ptrap_cell) * w_g_cell(l,i,j,k)
                     do jbin = 1, ntva
-                        q_work = q_work + (rhod_cell(l,i,j,k,jbin) * a_rad_d_cell(jbin) &
+                        w_unc = t_s_intrinsic(jbin) * D_bin(jbin) - sum_eps_ts_D
+                        f_cap = 1.0_dp
+                        if (w_unc /= 0.0_dp) f_cap = w_d_cell(l,i,j,k,jbin) / w_unc
+                        q_work = q_work + f_cap * (rhod_cell(l,i,j,k,jbin) * a_rad_d_cell(jbin) &
                                  - s_IRtrap(l,i,j,k,jbin) * grad_Ptrap_cell) * w_d_cell(l,i,j,k,jbin)
                     end do
                     qdrag(l,i,j,k) = qdrag(l,i,j,k) + q_work
