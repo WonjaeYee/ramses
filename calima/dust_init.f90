@@ -841,6 +841,7 @@ module dust_init
         case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
         case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
         case ('dustyirtrap');  tva_test_mode = TVA_TEST_IRTRAP
+        case ('dustytrapclump'); tva_test_mode = TVA_TEST_IRTRAP
         case default;          tva_test_mode = TVA_TEST_NONE
         end select
         if (myid == 1 .and. tva_test_mode /= TVA_TEST_NONE) then
