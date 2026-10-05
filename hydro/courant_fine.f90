@@ -166,7 +166,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   use hydro_parameters
   use const
 #ifdef CALIMA
-  use dust_commons, only: dust_tva, ndust, tva_test_mode, TVA_TEST_DIFFUSE
+  use dust_commons, only: dust_tva, ntva, tva_test_mode, TVA_TEST_DIFFUSE
 #endif
   implicit none
   integer::ncell
@@ -234,10 +234,10 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
 #else
-     if (dust_tva .and. ndust>0) then
+     if (dust_tva .and. ntva>0) then
         eps_total=0.0d0
-        do id = 1,ndust
-           eps_total=eps_total+uu(k,idust+id-1)/uu(k,1)
+        do id = 1,ntva
+           eps_total=eps_total+uu(k,ipah+id-1)/uu(k,1)
         end do
         eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
         rho_gas = uu(k,1)*(1.0d0-eps_total)
@@ -270,10 +270,10 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
 #else
-      if (dust_tva .and. ndust>0) then
+      if (dust_tva .and. ntva>0) then
          eps_total=0.0d0
-         do id = 1,ndust
-            eps_total=eps_total+uu(k,idust+id-1)/uu(k,1)
+         do id = 1,ntva
+            eps_total=eps_total+uu(k,ipah+id-1)/uu(k,1)
          end do
          eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
          rho_gas = uu(k,1)*(1.0d0-eps_total)

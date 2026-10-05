@@ -64,6 +64,9 @@ module dust_commons
     logical ::H2onpah=.false.                    ! Formation of H2 molecules on PAHs
 
     ! ==== Dust dynamics (read from nml) ====
+    ! Species that drift in the TVA: the PAH bins, then the dust bins, i.e. uold(:,ipah:ipah+ntva-1)
+    ! (idust = ipah + npah)
+    integer, parameter :: ntva = npah + ndust
     logical ::dust_tva=.false.                   ! Activate the dust dynamics using the Terminal Velocity Approximation (TVA)
     logical ::dust_radpressure=.false.           ! Activate the dust dynamics using the radiation pressure force
     logical ::use_w_drift_test=.false.           ! Override the drift velocity with a constant value for testing
