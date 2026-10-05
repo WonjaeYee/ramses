@@ -2183,7 +2183,7 @@ module dust_dynamics
                             drgt = rhod_cell(l,i,j+1,k,jbin) - rhod_cell(l,i,j,k,jbin)
                         else
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
-                            drgt = rhod_cell(l,i,j+1,k,jbin) - rhod_cell(l,i,j,k,jbin)
+                            drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
                         end if
                         dcen = half * (dlft + drgt)
                         if (slope_type == 6) then
@@ -2206,7 +2206,7 @@ module dust_dynamics
                                 drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
                             else
                                 dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j,k-1,jbin)
-                                drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
+                                drgt = w_d_cell(l,i,j,k+1,jbin) - w_d_cell(l,i,j,k,jbin)
                             end if
                             dcen = half * (dlft + drgt)
                             if (dlft * drgt <= 0.0_dp) then; slope_wd(l,i,j,k,jbin) = 0.0_dp
