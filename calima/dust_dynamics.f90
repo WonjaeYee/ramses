@@ -1866,6 +1866,16 @@ module dust_dynamics
         real(dp), dimension(1:ntva) :: a_cm_tva, s_cgs_tva
         real(dp) :: avg_ts_cell, a_rad_g_cell, a_rad_mix, sum_eps_ts_D
         real(dp) :: w_cap_cell, share_gas, q_work
+        ! Trapped-IR part of the dust flux (2e, 5C): per species the stopping time and the
+        ! velocity B of F_t = A zeta + B rho_d (A = -grad(P_trap) t_s), both cap-scaled, the
+        ! drift without that part, and the slopes of that drift and of the opacity shares.
+        ! Static: they double the stencil work arrays, too much for the stack in 3D.
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: tau_t_cell, B_t_cell, w_r_cell
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: slope_wr, slope_zeta
+        real(dp), dimension(1:ntva) :: D_t_bin
+        real(dp) :: W_t, f_cap, w_unc, G_face, A_face, B_face, zeta_L, zeta_R, zeta_up, rhod_up_B
+        real(dp) :: flux_A, v_lim
+        integer  :: io, jo, ko
 
         ! Initialize output flux arrays
         dflux = 0.0_dp
@@ -2055,6 +2065,11 @@ module dust_dynamics
                         w_d_cell(l,i,j,k,jbin) = w_drift_test(idim)
                     end do
                     w_g_cell(l,i,j,k) = - (eps_tot(l,i,j,k) / max(one - eps_tot(l,i,j,k), smallr)) * w_drift_test(idim)
+                    if (do_irtrap) then
+                        tau_t_cell(l,i,j,k,:) = 0.0_dp
+                        B_t_cell(l,i,j,k,:) = 0.0_dp
+                        w_r_cell(l,i,j,k,:) = w_d_cell(l,i,j,k,:)
+                    end if
                 else
                     a_rad_g_cell = a_rad_g(l,i,j,k,idim)
                     a_rad_mix = (1.0_dp - eps_tot(l,i,j,k)) * a_rad_g_cell
@@ -2070,11 +2085,13 @@ module dust_dynamics
                         !   a_k    = -(s_k/rho_k) grad(P_trap)   (force on bin k)
                         !   a_bary = -(1/rho_mix) grad(P_trap)   (already applied by godunov)
                         !   D_k   += a_k - a_bary
+                        D_t_bin(jbin) = 0.0_dp
                         if (do_irtrap) then
-                            D_bin(jbin) = D_bin(jbin) - grad_Ptrap_cell *            &
+                            D_t_bin(jbin) = - grad_Ptrap_cell *                      &
                                 ( s_IRtrap(l,i,j,k,jbin)                             &
                                   / max(rhod_cell(l,i,j,k,jbin), smallr)             &
                                   - 1.0_dp / max(rho_mix(l,i,j,k), smallr) )
+                            D_bin(jbin) = D_bin(jbin) + D_t_bin(jbin)
                         end if
                         ! Draine (2011) drag is nonlinear in the drift, so its
                         ! stopping time needs the driving acceleration D first.
@@ -2115,6 +2132,27 @@ module dust_dynamics
                         do jbin = 1, ntva
                             if (abs(w_d_cell(l,i,j,k,jbin)) > w_cap_cell) &
                                 w_d_cell(l,i,j,k,jbin) = sign(w_cap_cell, w_d_cell(l,i,j,k,jbin))
+                        end do
+                    end if
+                    ! 2e. The trapped-IR part of the drift, w_t = t_s D_t - W_t with W_t = sum eps t_s D_t,
+                    ! moves the flux F_t = rho_d w_t = A zeta + B rho_d, A = -grad(P_trap) t_s and
+                    ! B = grad(P_trap) t_s/rho - W_t (zeta = s_IRtrap, the opacity share). Kept apart
+                    ! from the rest of the drift w_r = w - w_t, which is upwinded as before; a capped
+                    ! drift scales both parts alike.
+                    if (do_irtrap) then
+                        W_t = 0.0_dp
+                        do jbin = 1, ntva
+                            W_t = W_t + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_t_bin(jbin)
+                        end do
+                        do jbin = 1, ntva
+                            w_unc = t_s_intrinsic(jbin) * D_bin(jbin) - sum_eps_ts_D
+                            f_cap = 1.0_dp
+                            if (w_unc /= 0.0_dp) f_cap = w_d_cell(l,i,j,k,jbin) / w_unc
+                            tau_t_cell(l,i,j,k,jbin) = f_cap * t_s_intrinsic(jbin)
+                            B_t_cell(l,i,j,k,jbin) = f_cap * (grad_Ptrap_cell * t_s_intrinsic(jbin) &
+                                                     / max(rho_mix(l,i,j,k), smallr) - W_t)
+                            w_r_cell(l,i,j,k,jbin) = w_d_cell(l,i,j,k,jbin) &
+                                                     - f_cap * (t_s_intrinsic(jbin) * D_t_bin(jbin) - W_t)
                         end do
                     end if
                     ! 2d. Drag heating, this direction's part of sum_s f_s . w_s over the phases s
@@ -2216,6 +2254,24 @@ module dust_dynamics
                     end do
                 end do; end do; end do; end do
             end if
+            ! Slopes of the drift without its trapped-IR part (as slope_wd) and of the opacity
+            ! shares (as slope_rhod)
+            io = merge(1, 0, idim == 1); jo = merge(1, 0, idim == 2); ko = merge(1, 0, idim == 3)
+            if (do_irtrap) then
+                slope_wr = 0.0_dp; slope_zeta = 0.0_dp
+                if (slope_type > 0) then
+                    do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                        do jbin = 1, ntva
+                            if (slope_type /= 6) slope_wr(l,i,j,k,jbin) = limited_slope(        &
+                                w_r_cell(l,i-io,j-jo,k-ko,jbin), w_r_cell(l,i,j,k,jbin),        &
+                                w_r_cell(l,i+io,j+jo,k+ko,jbin), theta, .false.)
+                            slope_zeta(l,i,j,k,jbin) = limited_slope(s_IRtrap(l,i-io,j-jo,k-ko,jbin), &
+                                s_IRtrap(l,i,j,k,jbin), s_IRtrap(l,i+io,j+jo,k+ko,jbin), theta,      &
+                                slope_type == 6)
+                        end do
+                    end do; end do; end do; end do
+                end if
+            end if
 
             ! ====================================================================
             ! STEP 4: TEMPORAL PREDICTOR
@@ -2286,6 +2342,11 @@ module dust_dynamics
 
                         rhod_state_L = MAX(rhod_state_L, zero)
                         rhod_state_R = MAX(rhod_state_R, zero)
+                        if (do_irtrap) then
+                            ! the drift without its trapped-IR part (5C adds that part's own flux)
+                            w_state_L = w_r_cell(l,i-io,j-jo,k-ko,jbin) + half * slope_wr(l,i-io,j-jo,k-ko,jbin)
+                            w_state_R = w_r_cell(l,i,j,k,jbin)          - half * slope_wr(l,i,j,k,jbin)
+                        end if
 
                         w_face = half * (w_state_L + w_state_R)
 
@@ -2294,6 +2355,36 @@ module dust_dynamics
                         else
                             flux_mass_bin = w_face * rhod_state_R * (dt / dx)
                         end if
+
+                        ! --- C. TRAPPED-IR DUST FLUX ---
+                        ! F_t = A zeta + B rho_d (2e). For a single absorber F_t hardly depends on
+                        ! rho_d (zeta = 1): its characteristic speed dF_t/drho_d ~ -eps w_t is ~1/eps
+                        ! below the drift, so upwinding rho_d on the drift would diffuse the dust
+                        ! ~1/eps too much. Instead the share zeta is upwinded on the sign of A (stable:
+                        ! dzeta_k/drho_k >= 0, and A has one sign for every species) and rho_d on the
+                        ! sign of the small velocity B. A minor absorber, zeta ~ rho_d, is still carried
+                        ! at its drift. grad(P_trap) at the face is the face difference.
+                        ! A zeta does not vanish with the dust in a draining cell (zeta = 1 for a
+                        ! lone absorber), so it is limited to the upwind density times the smaller of
+                        ! the drift cap and dx/(2 ndim dt), which keeps rho_d >= 0. In smooth flow
+                        ! A zeta / rho_d is the (capped) drift, inside that bound.
+                        if (do_irtrap) then
+                            G_face = (Ptrap(l,i,j,k) - Ptrap(l,i-io,j-jo,k-ko)) / dx
+                            A_face = -G_face * half * (tau_t_cell(l,i-io,j-jo,k-ko,jbin) + tau_t_cell(l,i,j,k,jbin))
+                            zeta_L = min(max(s_IRtrap(l,i-io,j-jo,k-ko,jbin) + half * slope_zeta(l,i-io,j-jo,k-ko,jbin), &
+                                             0.0_dp), 1.0_dp)
+                            zeta_R = min(max(s_IRtrap(l,i,j,k,jbin) - half * slope_zeta(l,i,j,k,jbin), 0.0_dp), 1.0_dp)
+                            zeta_up = merge(zeta_L, zeta_R, A_face >= zero)
+                            v_lim = dx / (2.0_dp * dble(ndim) * dt)
+                            if (tva_wmax_cs > 0.0_dp) v_lim = min(v_lim, tva_wmax_cs &
+                                * max(c_s(l,i-io,j-jo,k-ko), c_s(l,i,j,k)))
+                            flux_A = A_face * zeta_up
+                            flux_A = sign(min(abs(flux_A), v_lim * merge(rhod_state_L, rhod_state_R, A_face >= zero)), &
+                                          flux_A)
+                            B_face = half * (B_t_cell(l,i-io,j-jo,k-ko,jbin) + B_t_cell(l,i,j,k,jbin))
+                            rhod_up_B = merge(rhod_state_L, rhod_state_R, B_face >= zero)
+                            flux_mass_bin = flux_mass_bin + (flux_A + B_face * rhod_up_B) * (dt / dx)
+                        end if
                         dflux(l,i,j,k,jbin,idim) = flux_mass_bin
                     end do
 
@@ -2301,6 +2392,24 @@ module dust_dynamics
             end do; end do; end do
         end do
         
+    contains
+        pure real(dp) function limited_slope(qm, q0, qp, theta_lim, central)
+            ! slope of q at a cell from its neighbours, limited as in STEP 3 (MinMod, or
+            ! monotonized central with theta_lim = 2); central: the unlimited central slope
+            real(dp), intent(in) :: qm, q0, qp, theta_lim
+            logical, intent(in) :: central
+            real(dp) :: dl, dr, dc
+            dl = q0 - qm
+            dr = qp - q0
+            dc = 0.5_dp * (dl + dr)
+            if (central) then
+                limited_slope = dc
+            else if (dl * dr <= 0.0_dp) then
+                limited_slope = 0.0_dp
+            else
+                limited_slope = sign(1.0_dp, dc) * min(theta_lim * min(abs(dl), abs(dr)), abs(dc))
+            end if
+        end function limited_slope
     end subroutine calculate_drag_rad_fluxes
 #endif
 
