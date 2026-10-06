@@ -524,7 +524,12 @@ contains
                 ! Calculate PAH charge equilibrium fraction
                 ! Use PAH photoelectric heating solver for charge state
                 call interpolate_pah_charge_equilibrium(ii, G0, ne, Tk, fcharge_pah_local(:,ii))
-                pah_ion_fraction = fcharge_pah_local(2, ii)
+                ! the cations (charge states > 0), as in the RT absorption (rad_pah_rate); state 2 is
+                ! the neutral one (states -1, 0, +1, ...)
+                pah_ion_fraction = 0d0
+                if (pahbins_props(ii)%cation_start_idx <= pahbins_props(ii)%ncharge_states) &
+                    pah_ion_fraction = sum(fcharge_pah_local(pahbins_props(ii)%cation_start_idx: &
+                                                             pahbins_props(ii)%ncharge_states, ii))
                 ! group_cs*_pah is laid out interlaced, neutral then ion for
                 ! each bin (see initialize_cross_sections_from_blackbody_dust_pah
                 ! and rad_pah_rate). The previous (ii)/(npah+ii) block indexing
