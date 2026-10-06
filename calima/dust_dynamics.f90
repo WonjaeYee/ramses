@@ -369,59 +369,53 @@ module dust_dynamics
     subroutine rp_new_sweep()
         ! start a sweep: the cache entries of the previous one become invalid
         use amr_commons, only: ngridmax
-        use hydro_parameters, only: ndust, npah
         implicit none
         if (.not. allocated(rp_key)) then
             rp_n = min(RP_NMAX, twotondim*ngridmax)
             allocate(rp_key(rp_n), rp_stamp(rp_n))
-            allocate(rp_val((1 + max(1, ndust) + max(1, npah))*ndim + max(1, ndust) + ndust + 2, rp_n))
+            allocate(rp_val((1 + max(1, ntva))*ndim + max(1, ntva) + ntva + 2, rp_n))
             rp_key = 0
             rp_stamp = 0
         end if
         rp_sweep = rp_sweep + 1
     end subroutine rp_new_sweep
 
-    subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, &
+    subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
                                     irtrap_share, drag_state)
         ! compute_gas_dust_radpressure_acc of the level cell icell (uold/rtuold index), computed
         ! once per sweep and copied for the other stencils that hold the cell; a cache collision
         ! recomputes, so the outputs are always those of the direct call
         use amr_commons, only: ncoarse, ngridmax
-        use hydro_parameters, only: ndust, npah
         use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
         implicit none
         integer, intent(in) :: icell, ilevel
         real(dp), dimension(:), intent(in) :: cell_state, cell_rt_state
         real(dp), intent(in) :: dx
         real(dp), dimension(1:ndim), intent(out) :: gas_acc
-        real(dp), dimension(max(1, ndust), 1:ndim), intent(out) :: dust_acc
-        real(dp), dimension(max(1, npah), 1:ndim), intent(out) :: pah_acc
-        real(dp), dimension(max(1, ndust)), intent(out) :: irtrap_share
-        real(dp), dimension(1:ndust+2), intent(out) :: drag_state
-        integer :: s, n1, n2, n3, n4
+        real(dp), dimension(max(1, ntva), 1:ndim), intent(out) :: tva_acc
+        real(dp), dimension(max(1, ntva)), intent(out) :: irtrap_share
+        real(dp), dimension(1:ntva+2), intent(out) :: drag_state
+        integer :: s, n1, n2, n3
         ! slot of (grid, son): (grid - 1) 2^ndim + son - 1, modulo the cache size
         s = mod(mod(icell - ncoarse - 1, ngridmax)*twotondim + (icell - ncoarse - 1)/ngridmax, rp_n) + 1
         n1 = ndim
-        n2 = n1 + max(1, ndust)*ndim
-        n3 = n2 + max(1, npah)*ndim
-        n4 = n3 + max(1, ndust)
+        n2 = n1 + max(1, ntva)*ndim
+        n3 = n2 + max(1, ntva)
         if (rp_key(s) == icell .and. rp_stamp(s) == rp_sweep) then
             gas_acc = rp_val(1:n1, s)
-            dust_acc = reshape(rp_val(n1+1:n2, s), (/ max(1, ndust), ndim /))
-            pah_acc = reshape(rp_val(n2+1:n3, s), (/ max(1, npah), ndim /))
-            irtrap_share = rp_val(n3+1:n4, s)
-            drag_state = rp_val(n4+1:n4+ndust+2, s)
+            tva_acc = reshape(rp_val(n1+1:n2, s), (/ max(1, ntva), ndim /))
+            irtrap_share = rp_val(n2+1:n3, s)
+            drag_state = rp_val(n3+1:n3+ntva+2, s)
             return
         end if
-        call compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, &
+        call compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
                                               irtrap_share, drag_state)
         rp_key(s) = icell
         rp_stamp(s) = rp_sweep
         rp_val(1:n1, s) = gas_acc
-        rp_val(n1+1:n2, s) = reshape(dust_acc, (/ n2 - n1 /))
-        rp_val(n2+1:n3, s) = reshape(pah_acc, (/ n3 - n2 /))
-        rp_val(n3+1:n4, s) = irtrap_share
-        rp_val(n4+1:n4+ndust+2, s) = drag_state
+        rp_val(n1+1:n2, s) = reshape(tva_acc, (/ n2 - n1 /))
+        rp_val(n2+1:n3, s) = irtrap_share
+        rp_val(n3+1:n3+ntva+2, s) = drag_state
     end subroutine radpressure_acc_once
 #endif
 
