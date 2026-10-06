@@ -5,7 +5,7 @@
 !=======================================================================
 module dust_radpressure_module
     use amr_parameters, only: dp, ndim
-    use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS
+    use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS, ntva
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO, e2instatC, kB, pi
     use dust_charging_rtgroups, only: dust_charge_moments
@@ -48,30 +48,30 @@ module dust_radpressure_module
 
 contains
 
-    subroutine compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, irtrap_share, &
+    subroutine compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, irtrap_share, &
                                                 drag_state)
         implicit none
         real(dp), dimension(:), intent(in) :: cell_state
         real(dp), dimension(:), intent(in) :: cell_rt_state
         integer, intent(in) :: ilevel
         real(dp), intent(in) :: dx
+        ! Acceleration of the gas phase (the gas without the dust and the PAHs, which drift)
         real(dp), dimension(1:ndim), intent(out) :: gas_acc
-        ! Shapes match the caller's a_rad_d/a_rad_pah sections, which are
-        ! declared (...,1:ndust,1:ndim) / (...,1:npah,1:ndim) in dust_dynamics
-        ! and read back as (jbin,idim). Declaring these (ndim,nbin) transposed
-        ! them for any run with ndim>1 and ndust>1.
-        real(dp), dimension(max(1, ndust), 1:ndim), intent(out) :: dust_acc
-        real(dp), dimension(max(1, npah), 1:ndim), intent(out) :: pah_acc
-        ! Fraction of the trapped-IR Rosseland extinction carried by each dust
-        ! bin, chi_R,k / chi_R,tot. Zero unless rt_isIR (see Part D of the
-        ! trapped-IR scheme). Optional so non-TVA callers need not supply it.
-        real(dp), dimension(max(1, ndust)), intent(out), optional :: irtrap_share
+        ! Acceleration of each TVA species, the PAH bins then the dust bins. The shape matches
+        ! the caller's a_rad_d section, declared (...,1:ntva,1:ndim) in dust_dynamics and read
+        ! back as (jbin,idim). Declaring it (ndim,nbin) transposed it for any run with ndim>1.
+        real(dp), dimension(max(1, ntva), 1:ndim), intent(out) :: tva_acc
+        ! Fraction of the trapped-IR Rosseland extinction carried by each TVA species,
+        ! chi_R,k / chi_R,tot. Zero unless rt_isIR (see Part D of the trapped-IR scheme).
+        ! Optional so non-TVA callers need not supply it.
+        real(dp), dimension(max(1, ntva)), intent(out), optional :: irtrap_share
         ! Local state for the Draine (2011) drag (drag_model='draine2011'):
-        ! (1) n_H [cm^-3], (2) T [K], (2+k) Coulomb coefficient of dust bin k,
-        ! (n_H+/n_H) phi_k^2 ln(Lambda_k), with phi_k = Z_k e^2/(a_k kT) from
-        ! charging_model and Lambda from Draine & Salpeter (1979); with drag_model='draine2011_pz',
-        ! (n_H+/n_H) <phi^2 ln(Lambda)> over the charge distribution P(Z).
-        real(dp), dimension(1:ndust+2), intent(out), optional :: drag_state
+        ! (1) n_H [cm^-3], (2) T [K], (2+k) Coulomb coefficient of TVA species k,
+        ! (n_H+/n_H) phi_k^2 ln(Lambda_k), with phi_k = Z_k e^2/(a_k kT): the mean charge of
+        ! charging_model for a dust bin (with drag_model='draine2011_pz', (n_H+/n_H) <phi^2 ln(Lambda)>
+        ! over its charge distribution P(Z)), the rms charge of the charge-state distribution for a
+        ! PAH bin; Lambda from Draine & Salpeter (1979).
+        real(dp), dimension(1:ntva+2), intent(out), optional :: drag_state
 
         ! Local variables for cell state extraction
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
@@ -88,6 +88,10 @@ contains
         real(dp) :: rho_loc, P_gas, eps_tot, rho_gas, mu
         real(dp) :: E_IR_tot_cgs, T_rad_loc, chi_R_tot
         real(dp), dimension(max(1, ndust))  :: sig_R_dust, sig_P_dust, chi_R_dust
+        real(dp), dimension(max(1, npah))   :: chi_R_pah
+        real(dp), dimension(1:ncharge_pah_max) :: fch_drag
+        real(dp) :: rho_gas_tva, Z2_drag
+        integer :: istate
         real(dp), dimension(max(1, 2*npah)) :: sig_R_pah,  sig_P_pah
         integer :: id, iion, counter, e_counter, jbin
         real(dp) :: nH_drag, nHp_drag, Z_drag, phi_drag, Lambda_drag
@@ -287,41 +291,36 @@ contains
             nElement, xion, rho_dust, rho_pah, &
             Tk, ne, G0, f_shd)
 
-        ! 8. Calculate accelerations
-        gas_acc = gas_force / rho_gas
+        ! 8. Calculate accelerations. The PAHs drift as TVA species, so the gas phase is the
+        ! mixture without the dust and the PAHs
+        rho_gas_tva = rho_gas
+#if NPAH>0
+        rho_gas_tva = max(rho_gas - sum(rho_pah(1:npah)), smallr)
+#endif
+        gas_acc = gas_force / rho_gas_tva
 
-        if (ndust > 0) then
-           do jbin = 1, ndust
-              if (rho_dust(jbin) > 0d0) then
-                 dust_acc(jbin, :) = dust_force(:, jbin) / rho_dust(jbin)
-              else
-                 dust_acc(jbin, :) = 0d0
-              end if
-           end do
-        end if
-
+        tva_acc = 0d0
 #if NPAH>0
         if (npah > 0) then
            do jbin = 1, npah
-              if (rho_pah(jbin) > 0d0) then
-                 pah_acc(jbin, :) = pah_force(:, jbin) / rho_pah(jbin)
-              else
-                 pah_acc(jbin, :) = 0d0
-              end if
+              if (rho_pah(jbin) > 0d0) tva_acc(jbin, :) = pah_force(:, jbin) / rho_pah(jbin)
            end do
         end if
 #endif
+        if (ndust > 0) then
+           do jbin = 1, ndust
+              if (rho_dust(jbin) > 0d0) tva_acc(npah+jbin, :) = dust_force(:, jbin) / rho_dust(jbin)
+           end do
+        end if
 
-        ! 9. Trapped-IR opacity share per dust bin, s_k = chi_R,k / chi_R,tot.
+        ! 9. Trapped-IR opacity share per TVA species, s_k = chi_R,k / chi_R,tot.
         ! In the diffusion limit the force density on species k is
         ! -(chi_k/chi_tot) grad(E_t)/3 (RT15 eq. 48 summed over species gives
         ! -grad(P_trap)), so s_k is the fraction of the trapped-IR pressure
-        ! gradient that bin k feels. PAHs contribute to chi_tot but do not
-        ! drift, so their share simply stays with the barycenter; the TVA
-        ! closure conserves barycentric momentum regardless.
+        ! gradient that species k feels. The dust and the PAHs carry all of chi_tot.
         if (present(irtrap_share)) then
            irtrap_share = 0d0
-           if (rt_isIR .and. ndust > 0) then
+           if (rt_isIR .and. ntva > 0) then
               chi_R_tot = 0d0
               do jbin = 1, ndust
                  chi_R_dust(jbin) = sig_R_dust(jbin) * rho_dust(jbin) * scale_d &
@@ -332,14 +331,19 @@ contains
               ! Charge-state mean, as in the trapping optical depth in
               ! cooling_fine; PAH IR opacity is a small correction.
               do jbin = 1, npah
-                 chi_R_tot = chi_R_tot                                        &
-                    + 0.5d0 * (sig_R_pah(2*(jbin-1)+1) + sig_R_pah(2*(jbin-1)+2)) &
-                    * rho_pah(jbin) * scale_d / pahbins_props(jbin)%mpah
+                 chi_R_pah(jbin) = 0.5d0 * (sig_R_pah(2*(jbin-1)+1) + sig_R_pah(2*(jbin-1)+2)) &
+                                 * rho_pah(jbin) * scale_d / pahbins_props(jbin)%mpah
+                 chi_R_tot = chi_R_tot + chi_R_pah(jbin)
               end do
 #endif
               if (chi_R_tot > 1d-40) then
+#if NPAH>0
+                 do jbin = 1, npah
+                    irtrap_share(jbin) = chi_R_pah(jbin) / chi_R_tot
+                 end do
+#endif
                  do jbin = 1, ndust
-                    irtrap_share(jbin) = chi_R_dust(jbin) / chi_R_tot
+                    irtrap_share(npah+jbin) = chi_R_dust(jbin) / chi_R_tot
                  end do
               end if
            end if
@@ -381,7 +385,7 @@ contains
                                     * sqrt(kB * Tk / (pi * ne)))
                     call dust_charge_moments(jbin, Np_drag, group_egy, rt_c_cgs(ilevel), G0_bg_drag, G0, Tk, ne, &
                                              nHp_drag, nHep_drag, nHepp_drag, Z_drag, Zsig_drag, lnL1_drag, coul_drag)
-                    drag_state(2+jbin) = nHp_drag / nH_drag * phi1_drag**2 * coul_drag
+                    drag_state(2+npah+jbin) = nHp_drag / nH_drag * phi1_drag**2 * coul_drag
                  end if
                  cycle
               end if
@@ -391,9 +395,25 @@ contains
               if (phi_drag > 0d0 .and. ne > 0d0 .and. nH_drag > 0d0) then
                  Lambda_drag = 3d0 / (2d0 * dustbins_props(jbin)%asize_cm * sqrt(e2instatC) * phi_drag) &
                              * sqrt(kB * Tk / (pi * ne))
+                 drag_state(2+npah+jbin) = nHp_drag / nH_drag * phi_drag**2 * log(max(Lambda_drag, 1d0))
+              end if
+           end do
+#if NPAH>0
+           do jbin = 1, npah
+              ! the Coulomb drag goes as Z^2: the rms charge of the PAH charge-state distribution
+              call interpolate_pah_charge_equilibrium(jbin, G0, ne, Tk, fch_drag)
+              Z2_drag = 0d0
+              do istate = 1, pahbins_props(jbin)%ncharge_states
+                 Z2_drag = Z2_drag + fch_drag(istate) * pahbins_props(jbin)%charge_states(istate)**2
+              end do
+              phi_drag = sqrt(Z2_drag) * e2instatC / (pahbins_props(jbin)%apah_cm * kB * Tk)
+              if (phi_drag > 0d0 .and. ne > 0d0 .and. nH_drag > 0d0) then
+                 Lambda_drag = 3d0 / (2d0 * pahbins_props(jbin)%apah_cm * sqrt(e2instatC) * phi_drag) &
+                             * sqrt(kB * Tk / (pi * ne))
                  drag_state(2+jbin) = nHp_drag / nH_drag * phi_drag**2 * log(max(Lambda_drag, 1d0))
               end if
            end do
+#endif
         end if
 
     end subroutine compute_gas_dust_radpressure_acc
@@ -535,7 +555,12 @@ contains
                 ! Calculate PAH charge equilibrium fraction
                 ! Use PAH photoelectric heating solver for charge state
                 call interpolate_pah_charge_equilibrium(ii, G0, ne, Tk, fcharge_pah_local(:,ii))
-                pah_ion_fraction = fcharge_pah_local(2, ii)
+                ! the cations (charge states > 0), as in the RT absorption (rad_pah_rate); state 2 is
+                ! the neutral one (states -1, 0, +1, ...)
+                pah_ion_fraction = 0d0
+                if (pahbins_props(ii)%cation_start_idx <= pahbins_props(ii)%ncharge_states) &
+                    pah_ion_fraction = sum(fcharge_pah_local(pahbins_props(ii)%cation_start_idx: &
+                                                             pahbins_props(ii)%ncharge_states, ii))
                 ! group_cs*_pah is laid out interlaced, neutral then ion for
                 ! each bin (see initialize_cross_sections_from_blackbody_dust_pah
                 ! and rad_pah_rate). The previous (ii)/(npah+ii) block indexing

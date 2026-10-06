@@ -47,6 +47,21 @@ module dust_dynamics
         if (idim == 3) then; ifind_khi = f; else; ifind_khi = hi; endif
     end function ifind_khi
 
+    subroutine tva_species(a_cm, s_cgs)
+        ! Radius [cm] and material density [g cm^-3] of the species that drift in the TVA:
+        ! the PAH bins, then the dust bins (uold(:,ipah:ipah+ntva-1))
+        real(dp), dimension(1:ntva), intent(out) :: a_cm, s_cgs
+        integer :: i
+        do i = 1, npah
+            a_cm(i) = pahbins_props(i)%apah_cm
+            s_cgs(i) = pahbins_props(i)%spah
+        end do
+        do i = 1, ndust
+            a_cm(npah+i) = dustbins_props(i)%asize_cm
+            s_cgs(npah+i) = dustbins_props(i)%sgrain
+        end do
+    end subroutine tva_species
+
     function draine2011_stopping_time(a, rho_s, D, nH, T, coul) result(t_s)
         ! Effective stopping time t_s = |w|/|D| [s] of a grain under the drag of
         ! Draine (2011) eq. (24)-(25), after Draine & Salpeter (1979): the drift
@@ -354,59 +369,53 @@ module dust_dynamics
     subroutine rp_new_sweep()
         ! start a sweep: the cache entries of the previous one become invalid
         use amr_commons, only: ngridmax
-        use hydro_parameters, only: ndust, npah
         implicit none
         if (.not. allocated(rp_key)) then
             rp_n = min(RP_NMAX, twotondim*ngridmax)
             allocate(rp_key(rp_n), rp_stamp(rp_n))
-            allocate(rp_val((1 + max(1, ndust) + max(1, npah))*ndim + max(1, ndust) + ndust + 2, rp_n))
+            allocate(rp_val((1 + max(1, ntva))*ndim + max(1, ntva) + ntva + 2, rp_n))
             rp_key = 0
             rp_stamp = 0
         end if
         rp_sweep = rp_sweep + 1
     end subroutine rp_new_sweep
 
-    subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, &
+    subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
                                     irtrap_share, drag_state)
         ! compute_gas_dust_radpressure_acc of the level cell icell (uold/rtuold index), computed
         ! once per sweep and copied for the other stencils that hold the cell; a cache collision
         ! recomputes, so the outputs are always those of the direct call
         use amr_commons, only: ncoarse, ngridmax
-        use hydro_parameters, only: ndust, npah
         use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
         implicit none
         integer, intent(in) :: icell, ilevel
         real(dp), dimension(:), intent(in) :: cell_state, cell_rt_state
         real(dp), intent(in) :: dx
         real(dp), dimension(1:ndim), intent(out) :: gas_acc
-        real(dp), dimension(max(1, ndust), 1:ndim), intent(out) :: dust_acc
-        real(dp), dimension(max(1, npah), 1:ndim), intent(out) :: pah_acc
-        real(dp), dimension(max(1, ndust)), intent(out) :: irtrap_share
-        real(dp), dimension(1:ndust+2), intent(out) :: drag_state
-        integer :: s, n1, n2, n3, n4
+        real(dp), dimension(max(1, ntva), 1:ndim), intent(out) :: tva_acc
+        real(dp), dimension(max(1, ntva)), intent(out) :: irtrap_share
+        real(dp), dimension(1:ntva+2), intent(out) :: drag_state
+        integer :: s, n1, n2, n3
         ! slot of (grid, son): (grid - 1) 2^ndim + son - 1, modulo the cache size
         s = mod(mod(icell - ncoarse - 1, ngridmax)*twotondim + (icell - ncoarse - 1)/ngridmax, rp_n) + 1
         n1 = ndim
-        n2 = n1 + max(1, ndust)*ndim
-        n3 = n2 + max(1, npah)*ndim
-        n4 = n3 + max(1, ndust)
+        n2 = n1 + max(1, ntva)*ndim
+        n3 = n2 + max(1, ntva)
         if (rp_key(s) == icell .and. rp_stamp(s) == rp_sweep) then
             gas_acc = rp_val(1:n1, s)
-            dust_acc = reshape(rp_val(n1+1:n2, s), (/ max(1, ndust), ndim /))
-            pah_acc = reshape(rp_val(n2+1:n3, s), (/ max(1, npah), ndim /))
-            irtrap_share = rp_val(n3+1:n4, s)
-            drag_state = rp_val(n4+1:n4+ndust+2, s)
+            tva_acc = reshape(rp_val(n1+1:n2, s), (/ max(1, ntva), ndim /))
+            irtrap_share = rp_val(n2+1:n3, s)
+            drag_state = rp_val(n3+1:n3+ntva+2, s)
             return
         end if
-        call compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, dust_acc, pah_acc, &
+        call compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
                                               irtrap_share, drag_state)
         rp_key(s) = icell
         rp_stamp(s) = rp_sweep
         rp_val(1:n1, s) = gas_acc
-        rp_val(n1+1:n2, s) = reshape(dust_acc, (/ n2 - n1 /))
-        rp_val(n2+1:n3, s) = reshape(pah_acc, (/ n3 - n2 /))
-        rp_val(n3+1:n4, s) = irtrap_share
-        rp_val(n4+1:n4+ndust+2, s) = drag_state
+        rp_val(n1+1:n2, s) = reshape(tva_acc, (/ n2 - n1 /))
+        rp_val(n2+1:n3, s) = irtrap_share
+        rp_val(n3+1:n3+ntva+2, s) = drag_state
     end subroutine radpressure_acc_once
 #endif
 
@@ -456,13 +465,12 @@ module dust_dynamics
         ! Cell-centred primitive fields (same structure as calc_pure_drag)
         ! ----------------------------------------------------------------
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2),          save :: Pg, rho_mix, c_s, eps_tot_arr
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), save :: eps_arr
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: eps_arr
 
         ! Radiation acceleration arrays
 #ifdef RT
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndim), save :: a_rad_g
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust, 1:ndim), save :: a_rad_d
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, max(1,npah), 1:ndim), save :: a_rad_pah
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva, 1:ndim), save :: a_rad_d
 
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nrtvar), save :: rt_uloc
         real(dp), dimension(1:nvector, 0:twondim, 1:nrtvar) :: rt_u1
@@ -482,7 +490,8 @@ module dust_dynamics
 
         real(dp) :: dx, scale, dt_loc, dt_all, dtcell
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
-        real(dp), dimension(1:ndust) :: agrain_code, sgrain_code, t_s_face_arr
+        real(dp), dimension(1:ntva) :: agrain_code, sgrain_code, t_s_face_arr
+        real(dp), dimension(1:ntva) :: a_cm_tva, s_cgs_tva
 
         ! Face-centred quantities
         real(dp) :: Pg_L, Pg_R, Pg_face
@@ -496,17 +505,17 @@ module dust_dynamics
         ! Declared unconditionally: the drift driver below references them
         ! outside the #ifdef RT guards (they stay zero without RT).
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), save :: s_IRtrap
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: s_IRtrap
         ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust+2), save :: drag_state
-        real(dp), dimension(1:ndust+2) :: drag_state_face
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), save :: drag_state
+        real(dp), dimension(1:ntva+2) :: drag_state_face
         real(dp) :: Ptrap_L, Ptrap_R, grad_Ptrap
-        real(dp), dimension(1:ndust) :: s_IRtrap_face
+        real(dp), dimension(1:ntva) :: s_IRtrap_face
         logical  :: do_irtrap
         real(dp) :: a_rad_g_face, a_rad_mix, w_g, w_d_val, sum_eps_ts_D
         real(dp) :: w_cap, wmax_all
         integer(kind=8) :: nclip_all
-        real(dp), dimension(1:ndust) :: a_rad_d_face, D_bin
+        real(dp), dimension(1:ntva) :: a_rad_d_face, D_bin
 
 #ifndef WITHOUTMPI
         integer  :: info
@@ -516,10 +525,9 @@ module dust_dynamics
 
         call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
 
-        do i = 1, ndust
-            agrain_code(i) = dustbins_props(i)%asize_cm / scale_l
-            sgrain_code(i) = dustbins_props(i)%sgrain   / scale_d
-        end do
+        call tva_species(a_cm_tva, s_cgs_tva)
+        agrain_code = a_cm_tva / scale_l
+        sgrain_code = s_cgs_tva / scale_d
 
         scale  = boxlen / dble(icoarse_max - icoarse_min + 1)
         dx     = 0.5d0**ilevel * scale
@@ -627,7 +635,6 @@ module dust_dynamics
                                                                         ilevel,dx,& 
                                                                         a_rad_g(ind_exist(i),i3,j3,k3,:),&
                                                                         a_rad_d(ind_exist(i),i3,j3,k3,:,:),&
-                                                                        a_rad_pah(ind_exist(i),i3,j3,k3,:,:),&
                                                                         s_IRtrap(ind_exist(i),i3,j3,k3,:),&
                                                                         drag_state(ind_exist(i),i3,j3,k3,:))
                             end do
@@ -637,7 +644,6 @@ module dust_dynamics
                                                                         ilevel,dx,& 
                                                                         a_rad_g(ind_nexist(i),i3,j3,k3,:),&
                                                                         a_rad_d(ind_nexist(i),i3,j3,k3,:,:),&
-                                                                        a_rad_pah(ind_nexist(i),i3,j3,k3,:,:),&
                                                                         s_IRtrap(ind_nexist(i),i3,j3,k3,:),&
                                                                         drag_state(ind_nexist(i),i3,j3,k3,:))
                             end do
@@ -656,8 +662,8 @@ module dust_dynamics
                         rho_mix(l,i,j,k) = max(uloc(l,i,j,k,1), smallr)
                     end if
                     eps_tot_arr(l,i,j,k) = 0.0_dp
-                    do jbin = 1, ndust
-                        eps_arr(l,i,j,k,jbin) = uloc(l,i,j,k,idust+jbin-1) / rho_mix(l,i,j,k)
+                    do jbin = 1, ntva
+                        eps_arr(l,i,j,k,jbin) = uloc(l,i,j,k,ipah+jbin-1) / rho_mix(l,i,j,k)
                         eps_tot_arr(l,i,j,k)  = eps_tot_arr(l,i,j,k) + eps_arr(l,i,j,k,jbin)
                     end do
                     eps_tot_arr(l,i,j,k) = min(max(eps_tot_arr(l,i,j,k), 0.0_dp), 1.0_dp-smallr)
@@ -693,7 +699,7 @@ module dust_dynamics
                 ! this CFL bound applies to the drift actually taken.
                 do_irtrap = .false.
 #if defined(RT) && NENER>0
-                do_irtrap = rt_isIR .and. rt_isIRtrap .and. ndust > 0
+                do_irtrap = rt_isIR .and. rt_isIRtrap .and. ntva > 0
 #endif
                 Ptrap = 0.0_dp
 #ifndef RT
@@ -723,14 +729,14 @@ module dust_dynamics
                             if (idim == 1) then
                                 Pg_L      = Pg(l,i-1,j,k);       Pg_R      = Pg(l,i,j,k)
                                 Ptrap_L   = Ptrap(l,i-1,j,k);    Ptrap_R   = Ptrap(l,i,j,k)
-                                s_IRtrap_face(1:ndust) = half * (s_IRtrap(l,i-1,j,k,1:ndust) + s_IRtrap(l,i,j,k,1:ndust))
+                                s_IRtrap_face(1:ntva) = half * (s_IRtrap(l,i-1,j,k,1:ntva) + s_IRtrap(l,i,j,k,1:ntva))
                                 rho_L     = rho_mix(l,i-1,j,k);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i-1,j,k); eps_tot_R = eps_tot_arr(l,i,j,k)
                                 c_s_face  = half * (c_s(l,i-1,j,k) + c_s(l,i,j,k))
 #ifdef RT
                                 if (dust_radpressure) then
                                     a_rad_g_face = half * (a_rad_g(l,i-1,j,k,idim) + a_rad_g(l,i,j,k,idim))
-                                    do jbin = 1, ndust
+                                    do jbin = 1, ntva
                                         a_rad_d_face(jbin) = half * (a_rad_d(l,i-1,j,k,jbin,idim) + a_rad_d(l,i,j,k,jbin,idim))
                                     end do
                                 else
@@ -744,14 +750,14 @@ module dust_dynamics
                             else if (idim == 2) then
                                 Pg_L      = Pg(l,i,j-1,k);       Pg_R      = Pg(l,i,j,k)
                                 Ptrap_L   = Ptrap(l,i,j-1,k);    Ptrap_R   = Ptrap(l,i,j,k)
-                                s_IRtrap_face(1:ndust) = half * (s_IRtrap(l,i,j-1,k,1:ndust) + s_IRtrap(l,i,j,k,1:ndust))
+                                s_IRtrap_face(1:ntva) = half * (s_IRtrap(l,i,j-1,k,1:ntva) + s_IRtrap(l,i,j,k,1:ntva))
                                 rho_L     = rho_mix(l,i,j-1,k);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i,j-1,k); eps_tot_R = eps_tot_arr(l,i,j,k)
                                 c_s_face  = half * (c_s(l,i,j-1,k) + c_s(l,i,j,k))
 #ifdef RT
                                 if (dust_radpressure) then
                                     a_rad_g_face = half * (a_rad_g(l,i,j-1,k,idim) + a_rad_g(l,i,j,k,idim))
-                                    do jbin = 1, ndust
+                                    do jbin = 1, ntva
                                         a_rad_d_face(jbin) = half * (a_rad_d(l,i,j-1,k,jbin,idim) + a_rad_d(l,i,j,k,jbin,idim))
                                     end do
                                 else
@@ -765,14 +771,14 @@ module dust_dynamics
                             else
                                 Pg_L      = Pg(l,i,j,k-1);       Pg_R      = Pg(l,i,j,k)
                                 Ptrap_L   = Ptrap(l,i,j,k-1);    Ptrap_R   = Ptrap(l,i,j,k)
-                                s_IRtrap_face(1:ndust) = half * (s_IRtrap(l,i,j,k-1,1:ndust) + s_IRtrap(l,i,j,k,1:ndust))
+                                s_IRtrap_face(1:ntva) = half * (s_IRtrap(l,i,j,k-1,1:ntva) + s_IRtrap(l,i,j,k,1:ntva))
                                 rho_L     = rho_mix(l,i,j,k-1);  rho_R     = rho_mix(l,i,j,k)
                                 eps_tot_L = eps_tot_arr(l,i,j,k-1); eps_tot_R = eps_tot_arr(l,i,j,k)
                                 c_s_face  = half * (c_s(l,i,j,k-1) + c_s(l,i,j,k))
 #ifdef RT
                                 if (dust_radpressure) then
                                     a_rad_g_face = half * (a_rad_g(l,i,j,k-1,idim) + a_rad_g(l,i,j,k,idim))
-                                    do jbin = 1, ndust
+                                    do jbin = 1, ntva
                                         a_rad_d_face(jbin) = half * (a_rad_d(l,i,j,k-1,jbin,idim) + a_rad_d(l,i,j,k,jbin,idim))
                                     end do
                                 else
@@ -793,7 +799,7 @@ module dust_dynamics
                             eps_tot_face = min(max(eps_tot_face, 0.0_dp), 1.0_dp - smallr)
                             rho_g_face   = max(rho_face * (1.0_dp - eps_tot_face), smallr)
 
-                            do jbin = 1, ndust
+                            do jbin = 1, ntva
                                 if (idim == 1) then
                                     eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
                                 else if (idim == 2) then
@@ -806,7 +812,7 @@ module dust_dynamics
                                 if (tva_test_mode == TVA_TEST_DIFFUSE) then
                                     t_s_face = 0.1_dp
                                 else if (tva_test_mode == TVA_TEST_SHOCK) then
-                                    t_s_face = eps_face_bin * rho_face / drag_coefficient(jbin)
+                                    t_s_face = eps_face_bin * rho_face / drag_coefficient(max(jbin-npah,1))
                                 else if (tva_test_mode == TVA_TEST_BLAST1D) then
                                     t_s_face = 6d-3
                                 else
@@ -818,7 +824,7 @@ module dust_dynamics
                             end do
 
                             a_rad_mix = (1.0_dp - eps_tot_face) * a_rad_g_face
-                            do jbin = 1, ndust
+                            do jbin = 1, ntva
                                 if (idim == 1) then
                                     eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
                                 else if (idim == 2) then
@@ -831,7 +837,7 @@ module dust_dynamics
                             end do
 
                             sum_eps_ts_D = 0.0_dp
-                            do jbin = 1, ndust
+                            do jbin = 1, ntva
                                 if (idim == 1) then
                                     eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
                                 else if (idim == 2) then
@@ -858,8 +864,8 @@ module dust_dynamics
                                     else
                                         drag_state_face = half * (drag_state(l,i,j,k-1,:) + drag_state(l,i,j,k,:))
                                     end if
-                                    t_s_face_arr(jbin) = draine2011_stopping_time(dustbins_props(jbin)%asize_cm, &
-                                        dustbins_props(jbin)%sgrain, D_bin(jbin) * scale_v / scale_t,          &
+                                    t_s_face_arr(jbin) = draine2011_stopping_time(a_cm_tva(jbin), &
+                                        s_cgs_tva(jbin), D_bin(jbin) * scale_v / scale_t,          &
                                         drag_state_face(1), drag_state_face(2), drag_state_face(2+jbin)) / scale_t
                                 end if
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
@@ -885,7 +891,7 @@ module dust_dynamics
                                 dt_loc = min(dt_loc, dtcell)
                             end if
 
-                            do jbin = 1, ndust
+                            do jbin = 1, ntva
                                 w_d_val = t_s_face_arr(jbin) * D_bin(jbin) - sum_eps_ts_D
                                 if (tva_wmax_cs > 0.0_dp .and. abs(w_d_val) > w_cap) then
                                     tva_nclip = tva_nclip + 1
@@ -938,7 +944,7 @@ module dust_dynamics
         ! Cache blocks matching the sizes found in godfine1
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar_all),save::uloc
         logical ,dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::ok
-        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndust,1:ndim),save::dflux
+        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ntva,1:ndim),save::dflux
         real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndim),save::eflux
         
         integer,dimension(1:nvector),save::ind_cell, ind_father, igrid_nbor, ind_exist, ind_nexist, ind_buffer
@@ -954,16 +960,15 @@ module dust_dynamics
         integer::i3min,i3max,j3min,j3max,k3min,k3max
         real(dp)::dx,scale,oneontwotondim,dt
         real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
-        real(dp),dimension(1:ndust)::agrain_code,sgrain_code
+        real(dp),dimension(1:ntva)::agrain_code,sgrain_code,a_cm_tva,s_cgs_tva
 
         ! Get the current code units
         call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
 
         ! Get grain radii and material density in code units
-        do i = 1, ndust
-            agrain_code(i) = dustbins_props(i)%asize_cm / scale_l
-            sgrain_code(i) = dustbins_props(i)%sgrain / scale_d
-        end do
+        call tva_species(a_cm_tva, s_cgs_tva)
+        agrain_code = a_cm_tva / scale_l
+        sgrain_code = s_cgs_tva / scale_d
 
         oneontwotondim = 1d0/dble(twotondim)
         scale=boxlen/dble(icoarse_max-icoarse_min+1)
@@ -1078,9 +1083,9 @@ module dust_dynamics
                 end do
                 i3=1+i2; j3=1+j2; k3=1+k2
                 
-                do ivar=1,ndust
+                do ivar=1,ntva
                     do i=1,ncache
-                        unew(ind_cell(i),idust+ivar-1)=unew(ind_cell(i),idust+ivar-1)+ &
+                        unew(ind_cell(i),ipah+ivar-1)=unew(ind_cell(i),ipah+ivar-1)+ &
                             (dflux(i,i3,j3,k3,ivar,idim) - dflux(i,i3+i0,j3+j0,k3+k0,ivar,idim))
                     end do
                 end do
@@ -1109,12 +1114,12 @@ module dust_dynamics
                 end if
             end do
             ! Update conservative variables
-            do ivar=1,ndust
+            do ivar=1,ntva
                 do k3=k3min,k3max-k0
                 do j3=j3min,j3max-j0
                 do i3=i3min,i3max-i0
                     do i=1,nb_noneigh
-                        unew(ind_buffer(i),idust+ivar-1)=unew(ind_buffer(i),idust+ivar-1) &
+                        unew(ind_buffer(i),ipah+ivar-1)=unew(ind_buffer(i),ipah+ivar-1) &
                             - dflux(ind_cell(i),i3,j3,k3,ivar,idim)*oneontwotondim
                     end do
                 end do; end do; end do
@@ -1138,12 +1143,12 @@ module dust_dynamics
                 end if
             end do
             ! Update conservative variables
-            do ivar=1,ndust
+            do ivar=1,ntva
                 do k3=k3min+k0,k3max
                 do j3=j3min+j0,j3max
                 do i3=i3min+i0,i3max
                     do i=1,nb_noneigh
-                        unew(ind_buffer(i),idust+ivar-1)=unew(ind_buffer(i),idust+ivar-1) &
+                        unew(ind_buffer(i),ipah+ivar-1)=unew(ind_buffer(i),ipah+ivar-1) &
                             + dflux(ind_cell(i),i3+i0,j3+j0,k3+k0,ivar,idim)*oneontwotondim
                     end do
                 end do; end do; end do
@@ -1174,10 +1179,10 @@ module dust_dynamics
         real(dp), intent(in) :: dx, dt
 
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nvar), intent(in)  :: uloc
-        real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndust, 1:ndim), intent(out) :: dflux
+        real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ntva, 1:ndim), intent(out) :: dflux
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: eflux
         
-        real(dp), dimension(1:ndust), intent(in) :: agrain_code, sgrain_code
+        real(dp), dimension(1:ntva), intent(in) :: agrain_code, sgrain_code
 
         ! ========================================================================
         ! 2. LOCAL WORKSPACE FIELDS
@@ -1188,11 +1193,11 @@ module dust_dynamics
         
         ! Cell-Centered Base Primitives
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: eps
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: eps
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: rhod_cell, w_d_cell
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: slope_rhod, slope_wd, rhod_pred
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: slope_rhod, slope_wd, rhod_pred
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, slope_wg, wg_pred
         
         real(dp) :: eken, rho_gas_cell, grad_P_cell, erad_cell
@@ -1201,7 +1206,7 @@ module dust_dynamics
         real(dp) :: rhod_state_L, rhod_state_R, w_state_L, w_state_R, w_face
         real(dp) :: wg_state_L, wg_state_R, wg_face, Pg_upwind, H_gdnv
         
-        real(dp), dimension(1:ndust) :: t_s_intrinsic
+        real(dp), dimension(1:ntva) :: t_s_intrinsic
         real(dp) :: avg_ts_cell
         real(dp) :: w_cap_cell
 
@@ -1212,7 +1217,7 @@ module dust_dynamics
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
         ! Transverse ranges for the FACE loop, clamped to the flux arrays.
-        ! dflux/eflux/mflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
+        ! dflux/eflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
         ! but ilo/jlo/klo above are MIN(1,iu1+1) = 0 in any active dimension
         ! (iu1 = ju1 = -1), so the transverse index started at 0 and every 2D or
         ! 3D run died with "Index '0' ... below lower bound of 1". RAMSES's own
@@ -1235,8 +1240,8 @@ module dust_dynamics
             end if 
             
             eps_tot(l,i,j,k) = 0.0_dp
-            do jbin = 1, ndust
-                eps(l,i,j,k,jbin) = uloc(l,i,j,k,idust+jbin-1) / rho_mix(l,i,j,k) 
+            do jbin = 1, ntva
+                eps(l,i,j,k,jbin) = uloc(l,i,j,k,ipah+jbin-1) / rho_mix(l,i,j,k) 
                 eps_tot(l,i,j,k) = eps_tot(l,i,j,k) + eps(l,i,j,k,jbin)
             end do
             eps_tot(l,i,j,k) = MIN(MAX(eps_tot(l,i,j,k), zero), 1.0_dp - smallr)
@@ -1309,13 +1314,13 @@ module dust_dynamics
 
                 ! 2b. Cell-Centered Intrinsic Stopping Times
                 avg_ts_cell = 0.0_dp
-                do jbin = 1, ndust
+                do jbin = 1, ntva
                     rhod_cell(l,i,j,k,jbin) = rho_mix(l,i,j,k) * eps(l,i,j,k,jbin)
 
                     if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         t_s_intrinsic(jbin) = 0.1_dp
                     else if (tva_test_mode == TVA_TEST_SHOCK) then
-                        t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(jbin)
+                        t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(max(jbin-npah,1))
                     else if (tva_test_mode == TVA_TEST_BLAST1D) then
                         t_s_intrinsic(jbin) = 6d-3
                     else
@@ -1327,7 +1332,7 @@ module dust_dynamics
 
                 ! 2c. Cell-Centered Drift Velocities
                 if (use_w_drift_test) then
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         w_d_cell(l,i,j,k,jbin) = w_drift_test(idim)
                     end do
                     w_g_cell(l,i,j,k) = - (eps_tot(l,i,j,k) / max(one - eps_tot(l,i,j,k), smallr)) * w_drift_test(idim)
@@ -1338,7 +1343,7 @@ module dust_dynamics
                     ! radiation-pressure solver and with get_dust_courant_dt, which both
                     ! divide by rho_mix alone.
                     w_g_cell(l,i,j,k) = -avg_ts_cell * grad_P_cell / max(rho_mix(l,i,j,k), smallr)
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         w_d_cell(l,i,j,k,jbin) = (t_s_intrinsic(jbin) - avg_ts_cell) * grad_P_cell / rho_mix(l,i,j,k)
                     end do
                     ! Same cap as get_dust_courant_dt: TVA is only valid for Stokes << 1.
@@ -1346,7 +1351,7 @@ module dust_dynamics
                         w_cap_cell = tva_wmax_cs * c_s(l,i,j,k)
                         if (abs(w_g_cell(l,i,j,k)) > w_cap_cell) &
                             w_g_cell(l,i,j,k) = sign(w_cap_cell, w_g_cell(l,i,j,k))
-                        do jbin = 1, ndust
+                        do jbin = 1, ntva
                             if (abs(w_d_cell(l,i,j,k,jbin)) > w_cap_cell) &
                                 w_d_cell(l,i,j,k,jbin) = sign(w_cap_cell, w_d_cell(l,i,j,k,jbin))
                         end do
@@ -1388,7 +1393,7 @@ module dust_dynamics
                     end if
 
                     ! --- Dust Density & Drift Slopes ---
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         ! Rho_d Slope
                         if (idim == 1) then
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i-1,j,k,jbin) 
@@ -1438,7 +1443,7 @@ module dust_dynamics
             ! ====================================================================
             do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
                 ! Predictor for Dust Density (w * grad_rho + rho * grad_w)
-                do jbin = 1, ndust
+                do jbin = 1, ntva
                     rhod_pred(l,i,j,k,jbin) = rhod_cell(l,i,j,k,jbin) - 0.5_dp * (dt / dx) * &
                         (w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin) + rhod_cell(l,i,j,k,jbin) * slope_wd(l,i,j,k,jbin))
                     rhod_pred(l,i,j,k,jbin) = MAX(rhod_pred(l,i,j,k,jbin), 0.0_dp)
@@ -1484,7 +1489,7 @@ module dust_dynamics
 
 
                     ! --- B. DUST MASS FLUX ---
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         ! Point 2: Interpolate rho_d and w to the interfaces
                         if (idim == 1) then
                             rhod_state_L = rhod_pred(l,i-1,j,k,jbin) + half * slope_rhod(l,i-1,j,k,jbin)
@@ -1588,18 +1593,17 @@ module dust_dynamics
         ! Cache blocks matching the sizes found in godfine1
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar_all),save::uloc
         logical ,dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::ok
-        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndust,1:ndim),save::dflux
+        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ntva,1:ndim),save::dflux
         real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndim),save::eflux
 
-        ! Allocate momentum flux and radiation acceleration buffers
-        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ndim),save::mflux
+        ! Drag heating per unit volume and time at the cell centres, and the radiation accelerations
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::qdrag
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndim),save::a_rad_g
-        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust,1:ndim),save::a_rad_d
-        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,max(1,npah),1:ndim),save::a_rad_pah
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva,1:ndim),save::a_rad_d
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
-        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust),save::s_IRtrap
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva),save::s_IRtrap
         ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
-        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ndust+2),save::drag_state
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva+2),save::drag_state
         
         integer,dimension(1:nvector),save::ind_cell, ind_father, igrid_nbor, ind_exist, ind_nexist, ind_buffer
         integer,dimension(1:nvector,1:threetondim)::nbors_father_cells
@@ -1617,16 +1621,15 @@ module dust_dynamics
         integer::i3min,i3max,j3min,j3max,k3min,k3max
         real(dp)::dx,scale,oneontwotondim,dt
         real(dp)::scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2
-        real(dp),dimension(1:ndust)::agrain_code,sgrain_code
+        real(dp),dimension(1:ntva)::agrain_code,sgrain_code,a_cm_tva,s_cgs_tva
 
         ! Get the current code units
         call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
 
         ! Get grain radii and material density in code units
-        do i = 1, ndust
-            agrain_code(i) = dustbins_props(i)%asize_cm / scale_l
-            sgrain_code(i) = dustbins_props(i)%sgrain / scale_d
-        end do
+        call tva_species(a_cm_tva, s_cgs_tva)
+        agrain_code = a_cm_tva / scale_l
+        sgrain_code = s_cgs_tva / scale_d
 
         oneontwotondim = 1d0/dble(twotondim)
         scale=boxlen/dble(icoarse_max-icoarse_min+1)
@@ -1712,7 +1715,6 @@ module dust_dynamics
                                                             ilevel,dx,& 
                                                             a_rad_g(ind_exist(i),i3,j3,k3,:),&
                                                             a_rad_d(ind_exist(i),i3,j3,k3,:,:),&
-                                                            a_rad_pah(ind_exist(i),i3,j3,k3,:,:),&
                                                             s_IRtrap(ind_exist(i),i3,j3,k3,:),&
                                                             drag_state(ind_exist(i),i3,j3,k3,:))
                 end do
@@ -1723,7 +1725,6 @@ module dust_dynamics
                                                             ilevel,dx,& 
                                                             a_rad_g(ind_nexist(i),i3,j3,k3,:),&
                                                             a_rad_d(ind_nexist(i),i3,j3,k3,:,:),&
-                                                            a_rad_pah(ind_nexist(i),i3,j3,k3,:,:),&
                                                             s_IRtrap(ind_nexist(i),i3,j3,k3,:),&
                                                             drag_state(ind_nexist(i),i3,j3,k3,:))
                 end do
@@ -1734,7 +1735,7 @@ module dust_dynamics
         end do; end do; end do
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
-        call calculate_drag_rad_fluxes(uloc,dflux,eflux,mflux,dx,dt,ncache,&
+        call calculate_drag_rad_fluxes(uloc,dflux,eflux,qdrag,dx,dt,ncache,&
                                         a_rad_g,a_rad_d,s_IRtrap,drag_state,agrain_code,sgrain_code)
 
         ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
@@ -1757,7 +1758,6 @@ module dust_dynamics
                     if(ok(i,i3-i0,j3-j0,k3-k0) .or. ok(i,i3,j3,k3))then
                         dflux(i,i3,j3,k3,:,idim)=0.0d0
                         eflux(i,i3,j3,k3,idim)=0.0d0
-                        mflux(i,i3,j3,k3,idim)=0.0d0
                     end if
                 end do
             end do; end do; end do
@@ -1778,9 +1778,9 @@ module dust_dynamics
                 i3=1+i2; j3=1+j2; k3=1+k2
                 
                 ! 1. Dust Mass Update
-                do ivar=1,ndust
+                do ivar=1,ntva
                     do i=1,ncache
-                        unew(ind_cell(i),idust+ivar-1)=unew(ind_cell(i),idust+ivar-1)+ &
+                        unew(ind_cell(i),ipah+ivar-1)=unew(ind_cell(i),ipah+ivar-1)+ &
                             (dflux(i,i3,j3,k3,ivar,idim) - dflux(i,i3+i0,j3+j0,k3+k0,ivar,idim))
                     end do
                 end do
@@ -1789,12 +1789,18 @@ module dust_dynamics
                     ! 2. Total Energy Update
                     unew(ind_cell(i),neul)=unew(ind_cell(i),neul)+ &
                         (eflux(i,i3,j3,k3,idim) - eflux(i,i3+i0,j3+j0,k3+k0,idim))
-                    ! 3. Mixture Momentum Update
-                    unew(ind_cell(i),idim+1)=unew(ind_cell(i),idim+1) + &
-                        (mflux(i,i3,j3,k3,idim) - mflux(i,i3+i0,j3+j0,k3+k0,idim))
                 end do
             end do; end do; end do
         end do
+
+        ! Drag heating of the radiation-driven drift, a source in each cell (no flux to correct)
+        do k2=0,k2max; do j2=0,j2max; do i2=0,i2max
+            ind_son=1+i2+2*j2+4*k2
+            iskip=ncoarse+(ind_son-1)*ngridmax
+            do i=1,ncache
+                unew(iskip+ind_grid(i),neul)=unew(iskip+ind_grid(i),neul)+qdrag(i,1+i2,1+j2,1+k2)*dt
+            end do
+        end do; end do; end do
 
         ! Update neighboring coarser cells (flux correction at coarse-fine boundaries)
         do idim=1,ndim
@@ -1813,12 +1819,12 @@ module dust_dynamics
                 end if
             end do
             ! Update conservative variables
-            do ivar=1,ndust
+            do ivar=1,ntva
                 do k3=k3min,k3max-k0
                 do j3=j3min,j3max-j0
                 do i3=i3min,i3max-i0
                     do i=1,nb_noneigh
-                        unew(ind_buffer(i),idust+ivar-1)=unew(ind_buffer(i),idust+ivar-1) &
+                        unew(ind_buffer(i),ipah+ivar-1)=unew(ind_buffer(i),ipah+ivar-1) &
                             - dflux(ind_cell(i),i3,j3,k3,ivar,idim)*oneontwotondim
                     end do
                 end do; end do; end do
@@ -1829,8 +1835,6 @@ module dust_dynamics
                 do i=1,nb_noneigh
                     unew(ind_buffer(i),neul)=unew(ind_buffer(i),neul) &
                         - eflux(ind_cell(i),i3,j3,k3,idim)*oneontwotondim
-                    unew(ind_buffer(i),idim+1)=unew(ind_buffer(i),idim+1) &
-                        - mflux(ind_cell(i),i3,j3,k3,idim)*oneontwotondim
                 end do
             end do; end do; end do
 
@@ -1846,12 +1850,12 @@ module dust_dynamics
                 end if
             end do
             ! Update conservative variables
-            do ivar=1,ndust
+            do ivar=1,ntva
                 do k3=k3min+k0,k3max
                 do j3=j3min+j0,j3max
                 do i3=i3min+i0,i3max
                     do i=1,nb_noneigh
-                        unew(ind_buffer(i),idust+ivar-1)=unew(ind_buffer(i),idust+ivar-1) &
+                        unew(ind_buffer(i),ipah+ivar-1)=unew(ind_buffer(i),ipah+ivar-1) &
                             + dflux(ind_cell(i),i3+i0,j3+j0,k3+k0,ivar,idim)*oneontwotondim
                     end do
                 end do; end do; end do
@@ -1862,15 +1866,13 @@ module dust_dynamics
                 do i=1,nb_noneigh
                     unew(ind_buffer(i),neul)=unew(ind_buffer(i),neul) &
                         + eflux(ind_cell(i),i3+i0,j3+j0,k3+k0,idim)*oneontwotondim
-                    unew(ind_buffer(i),idim+1)=unew(ind_buffer(i),idim+1) &
-                        + mflux(ind_cell(i),i3+i0,j3+j0,k3+k0,idim)*oneontwotondim
                 end do
             end do; end do; end do
         end do
 
     end subroutine dust_upwind_correct2
 
-    subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, mflux, dx, dt, ngrid, &
+    subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, qdrag, dx, dt, ngrid, &
                                         & a_rad_g, a_rad_d, s_IRtrap, drag_state, &
                                         & agrain_code, sgrain_code)
         use amr_parameters
@@ -1888,18 +1890,20 @@ module dust_dynamics
 
         ! Stencil array dimensions bound dynamically by the active refinement level blocks
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:nvar), intent(in)  :: uloc
-        real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndust, 1:ndim), intent(out) :: dflux
+        real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ntva, 1:ndim), intent(out) :: dflux
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: eflux
-        real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: mflux
+        ! Drag heating [code energy per volume and time] at the cell centres: the radiation and
+        ! trapped-IR work on the drift of every phase relative to the barycentre
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2), intent(out) :: qdrag
         ! Radiation acceleration arrays [code units]
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndim), intent(in) :: a_rad_g
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust, 1:ndim), intent(in) :: a_rad_d
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva, 1:ndim), intent(in) :: a_rad_d
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust), intent(in) :: s_IRtrap
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), intent(in) :: s_IRtrap
         ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust+2), intent(in) :: drag_state
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), intent(in) :: drag_state
         ! Grain properties (sizes and material densities) [code units]
-        real(dp), dimension(1:ndust), intent(in)   :: agrain_code, sgrain_code
+        real(dp), dimension(1:ntva), intent(in)   :: agrain_code, sgrain_code
 
         ! ========================================================================
         ! 2. LOCAL WORKSPACE FIELDS
@@ -1910,15 +1914,15 @@ module dust_dynamics
         
         ! Cell-centered primitive caches across the localized block
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: eps
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: eps
         ! Trapped-IR radiation pressure, exactly as the Riemann solver sees it
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
         real(dp) :: grad_Ptrap_cell
         logical  :: do_irtrap
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: rhod_cell, w_d_cell
-        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndust) :: slope_rhod, slope_wd, rhod_pred
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: slope_rhod, slope_wd, rhod_pred
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, slope_wg
         
         real(dp) :: eken, rho_gas_cell, grad_P_cell, erad_cell
@@ -1928,22 +1932,34 @@ module dust_dynamics
         real(dp) :: wg_state_L, wg_state_R, wg_face, Pg_upwind, H_gdnv, flux_mass_bin
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
 
-        real(dp), dimension(1:ndust) :: t_s_intrinsic, D_bin, a_rad_d_cell
+        real(dp), dimension(1:ntva) :: t_s_intrinsic, D_bin, a_rad_d_cell
+        real(dp), dimension(1:ntva) :: a_cm_tva, s_cgs_tva
         real(dp) :: avg_ts_cell, a_rad_g_cell, a_rad_mix, sum_eps_ts_D
-        real(dp) :: w_cap_cell
+        real(dp) :: w_cap_cell, share_gas, q_work
+        ! Trapped-IR part of the dust flux (2e, 5C): per species the stopping time and the
+        ! velocity B of F_t = A zeta + B rho_d (A = -grad(P_trap) t_s), both cap-scaled, the
+        ! drift without that part, and the slopes of that drift and of the opacity shares.
+        ! Static: they double the stencil work arrays, too much for the stack in 3D.
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: tau_t_cell, B_t_cell, w_r_cell
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: slope_wr, slope_zeta
+        real(dp), dimension(1:ntva) :: D_t_bin
+        real(dp) :: W_t, f_cap, w_unc, G_face, A_face, B_face, zeta_L, zeta_R, zeta_up, rhod_up_B
+        real(dp) :: flux_A, v_lim
+        integer  :: io, jo, ko
 
         ! Initialize output flux arrays
         dflux = 0.0_dp
         eflux = 0.0_dp
-        mflux = 0.0_dp
+        qdrag = 0.0_dp
         call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
+        call tva_species(a_cm_tva, s_cgs_tva)
 
         ! Establish safe bounds for cell-centered loops inside the stencil buffer limits
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
         klo = MIN(1, ku1+1); khi = MAX(1, ku2-1)
         ! Transverse ranges for the FACE loop, clamped to the flux arrays.
-        ! dflux/eflux/mflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
+        ! dflux/eflux are dimensioned (if1:if2, jf1:jf2, kf1:kf2) = 1:3,
         ! but ilo/jlo/klo above are MIN(1,iu1+1) = 0 in any active dimension
         ! (iu1 = ju1 = -1), so the transverse index started at 0 and every 2D or
         ! 3D run died with "Index '0' ... below lower bound of 1". RAMSES's own
@@ -1966,8 +1982,8 @@ module dust_dynamics
             end if 
             
             eps_tot(l,i,j,k) = 0.0_dp
-            do jbin = 1, ndust
-                eps(l,i,j,k,jbin) = uloc(l,i,j,k,idust+jbin-1) / rho_mix(l,i,j,k) 
+            do jbin = 1, ntva
+                eps(l,i,j,k,jbin) = uloc(l,i,j,k,ipah+jbin-1) / rho_mix(l,i,j,k) 
                 eps_tot(l,i,j,k) = eps_tot(l,i,j,k) + eps(l,i,j,k,jbin)
             end do
             eps_tot(l,i,j,k) = MIN(MAX(eps_tot(l,i,j,k), zero), 1.0_dp - smallr)
@@ -2015,7 +2031,7 @@ module dust_dynamics
         ! ========================================================================
         do_irtrap = .false.
 #if NENER>0
-        do_irtrap = rt_isIR .and. rt_isIRtrap .and. ndust > 0
+        do_irtrap = rt_isIR .and. rt_isIRtrap .and. ntva > 0
 #endif
         Ptrap = 0.0_dp
 #if NENER>0
@@ -2097,13 +2113,13 @@ module dust_dynamics
 
                 ! 2b. Cell-Centered Intrinsic Stopping Times
                 avg_ts_cell = 0.0_dp
-                do jbin = 1, ndust
+                do jbin = 1, ntva
                     rhod_cell(l,i,j,k,jbin) = rho_mix(l,i,j,k) * eps(l,i,j,k,jbin)
 
                     if (tva_test_mode == TVA_TEST_DIFFUSE) then
                         t_s_intrinsic(jbin) = 0.1_dp
                     else if (tva_test_mode == TVA_TEST_SHOCK) then
-                        t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(jbin)
+                        t_s_intrinsic(jbin) = (eps(l,i,j,k,jbin) * rho_mix(l,i,j,k)) / drag_coefficient(max(jbin-npah,1))
                     else if (tva_test_mode == TVA_TEST_BLAST1D) then
                         t_s_intrinsic(jbin) = 6d-3
                     else
@@ -2115,37 +2131,44 @@ module dust_dynamics
 
                 ! 2c. Cell-Centered Drift Velocities
                 if (use_w_drift_test) then
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         w_d_cell(l,i,j,k,jbin) = w_drift_test(idim)
                     end do
                     w_g_cell(l,i,j,k) = - (eps_tot(l,i,j,k) / max(one - eps_tot(l,i,j,k), smallr)) * w_drift_test(idim)
+                    if (do_irtrap) then
+                        tau_t_cell(l,i,j,k,:) = 0.0_dp
+                        B_t_cell(l,i,j,k,:) = 0.0_dp
+                        w_r_cell(l,i,j,k,:) = w_d_cell(l,i,j,k,:)
+                    end if
                 else
                     a_rad_g_cell = a_rad_g(l,i,j,k,idim)
                     a_rad_mix = (1.0_dp - eps_tot(l,i,j,k)) * a_rad_g_cell
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         a_rad_d_cell(jbin) = a_rad_d(l,i,j,k,jbin,idim)
                         a_rad_mix = a_rad_mix + eps(l,i,j,k,jbin) * a_rad_d_cell(jbin)
                     end do
 
                     sum_eps_ts_D = 0.0_dp
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         D_bin(jbin) = grad_P_cell / max(rho_mix(l,i,j,k), smallr) + a_rad_d_cell(jbin) - a_rad_mix
                         ! Trapped-IR differential acceleration:
                         !   a_k    = -(s_k/rho_k) grad(P_trap)   (force on bin k)
                         !   a_bary = -(1/rho_mix) grad(P_trap)   (already applied by godunov)
                         !   D_k   += a_k - a_bary
+                        D_t_bin(jbin) = 0.0_dp
                         if (do_irtrap) then
-                            D_bin(jbin) = D_bin(jbin) - grad_Ptrap_cell *            &
+                            D_t_bin(jbin) = - grad_Ptrap_cell *                      &
                                 ( s_IRtrap(l,i,j,k,jbin)                             &
                                   / max(rhod_cell(l,i,j,k,jbin), smallr)             &
                                   - 1.0_dp / max(rho_mix(l,i,j,k), smallr) )
+                            D_bin(jbin) = D_bin(jbin) + D_t_bin(jbin)
                         end if
                         ! Draine (2011) drag is nonlinear in the drift, so its
                         ! stopping time needs the driving acceleration D first.
                         if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
                             .or. tva_test_mode >= TVA_TEST_SPRESS)) then
-                            t_s_intrinsic(jbin) = draine2011_stopping_time(dustbins_props(jbin)%asize_cm, &
-                                dustbins_props(jbin)%sgrain, D_bin(jbin) * scale_v / scale_t,          &
+                            t_s_intrinsic(jbin) = draine2011_stopping_time(a_cm_tva(jbin), &
+                                s_cgs_tva(jbin), D_bin(jbin) * scale_v / scale_t,          &
                                 drag_state(l,i,j,k,1), drag_state(l,i,j,k,2), drag_state(l,i,j,k,2+jbin)) / scale_t
                         end if
                         sum_eps_ts_D = sum_eps_ts_D + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_bin(jbin)
@@ -2168,7 +2191,7 @@ module dust_dynamics
                     end do
 
                     w_g_cell(l,i,j,k) = -sum_eps_ts_D
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         w_d_cell(l,i,j,k,jbin) = t_s_intrinsic(jbin) * D_bin(jbin) - sum_eps_ts_D
                     end do
                     ! Same cap as get_dust_courant_dt: TVA is only valid for Stokes << 1.
@@ -2176,11 +2199,60 @@ module dust_dynamics
                         w_cap_cell = tva_wmax_cs * c_s(l,i,j,k)
                         if (abs(w_g_cell(l,i,j,k)) > w_cap_cell) &
                             w_g_cell(l,i,j,k) = sign(w_cap_cell, w_g_cell(l,i,j,k))
-                        do jbin = 1, ndust
+                        do jbin = 1, ntva
                             if (abs(w_d_cell(l,i,j,k,jbin)) > w_cap_cell) &
                                 w_d_cell(l,i,j,k,jbin) = sign(w_cap_cell, w_d_cell(l,i,j,k,jbin))
                         end do
                     end if
+                    ! 2e. The trapped-IR part of the drift, w_t = t_s D_t - W_t with W_t = sum eps t_s D_t,
+                    ! moves the flux F_t = rho_d w_t = A zeta + B rho_d, A = -grad(P_trap) t_s and
+                    ! B = grad(P_trap) t_s/rho - W_t (zeta = s_IRtrap, the opacity share). Kept apart
+                    ! from the rest of the drift w_r = w - w_t, which is upwinded as before; a capped
+                    ! drift scales both parts alike.
+                    if (do_irtrap) then
+                        W_t = 0.0_dp
+                        do jbin = 1, ntva
+                            W_t = W_t + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_t_bin(jbin)
+                        end do
+                        do jbin = 1, ntva
+                            w_unc = t_s_intrinsic(jbin) * D_bin(jbin) - sum_eps_ts_D
+                            f_cap = 1.0_dp
+                            if (w_unc /= 0.0_dp) f_cap = w_d_cell(l,i,j,k,jbin) / w_unc
+                            tau_t_cell(l,i,j,k,jbin) = f_cap * t_s_intrinsic(jbin)
+                            B_t_cell(l,i,j,k,jbin) = f_cap * (grad_Ptrap_cell * t_s_intrinsic(jbin) &
+                                                     / max(rho_mix(l,i,j,k), smallr) - W_t)
+                            w_r_cell(l,i,j,k,jbin) = w_d_cell(l,i,j,k,jbin) &
+                                                     - f_cap * (t_s_intrinsic(jbin) * D_t_bin(jbin) - W_t)
+                        end do
+                    end if
+                    ! 2d. Drag heating, this direction's part of sum_s f_s . w_s over the phases s
+                    ! (the gas and every TVA species), f_s the radiation and trapped-IR force density
+                    ! on phase s. The radiation momentum goes to the mixture with the work f . u on
+                    ! the barycentre only (cooling_fine); the work on the drift relative to it is
+                    ! what the drag turns into gas heat in the terminal regime. The pressure-driven
+                    ! part needs no term: -w_g . grad(P_g) is inside the divergence of the enthalpy
+                    ! flux H_g w_g. Gravity accelerates every phase alike and does no work here.
+                    ! Where the drift is capped the driving force exceeds the drag at the capped drift,
+                    ! and only the drag's part is dissipated: each phase's work is scaled by its cap
+                    ! factor f = w_capped/w_uncapped, so that the heat is the friction rho |dv|^2/t_s
+                    ! the capped drift represents (f = 1, exactly, where nothing is capped).
+                    f_cap = 1.0_dp
+                    if (sum_eps_ts_D /= 0.0_dp) f_cap = w_g_cell(l,i,j,k) / (-sum_eps_ts_D)
+                    share_gas = 1.0_dp
+                    do jbin = 1, ntva
+                        share_gas = share_gas - s_IRtrap(l,i,j,k,jbin)
+                    end do
+                    share_gas = max(share_gas, 0.0_dp)
+                    q_work = f_cap * (rho_mix(l,i,j,k) * (one - eps_tot(l,i,j,k)) * a_rad_g_cell &
+                             - share_gas * grad_Ptrap_cell) * w_g_cell(l,i,j,k)
+                    do jbin = 1, ntva
+                        w_unc = t_s_intrinsic(jbin) * D_bin(jbin) - sum_eps_ts_D
+                        f_cap = 1.0_dp
+                        if (w_unc /= 0.0_dp) f_cap = w_d_cell(l,i,j,k,jbin) / w_unc
+                        q_work = q_work + f_cap * (rhod_cell(l,i,j,k,jbin) * a_rad_d_cell(jbin) &
+                                 - s_IRtrap(l,i,j,k,jbin) * grad_Ptrap_cell) * w_d_cell(l,i,j,k,jbin)
+                    end do
+                    qdrag(l,i,j,k) = qdrag(l,i,j,k) + q_work
                 end if
             end do; end do; end do; end do
 
@@ -2218,7 +2290,7 @@ module dust_dynamics
                     end if
 
                     ! --- Dust Density & Drift Slopes ---
-                    do jbin = 1, ndust
+                    do jbin = 1, ntva
                         ! Rho_d Slope
                         if (idim == 1) then
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i-1,j,k,jbin) 
@@ -2228,7 +2300,7 @@ module dust_dynamics
                             drgt = rhod_cell(l,i,j+1,k,jbin) - rhod_cell(l,i,j,k,jbin)
                         else
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
-                            drgt = rhod_cell(l,i,j+1,k,jbin) - rhod_cell(l,i,j,k,jbin)
+                            drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
                         end if
                         dcen = half * (dlft + drgt)
                         if (slope_type == 6) then
@@ -2251,7 +2323,7 @@ module dust_dynamics
                                 drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
                             else
                                 dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j,k-1,jbin)
-                                drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
+                                drgt = w_d_cell(l,i,j,k+1,jbin) - w_d_cell(l,i,j,k,jbin)
                             end if
                             dcen = half * (dlft + drgt)
                             if (dlft * drgt <= 0.0_dp) then; slope_wd(l,i,j,k,jbin) = 0.0_dp
@@ -2261,12 +2333,30 @@ module dust_dynamics
                     end do
                 end do; end do; end do; end do
             end if
+            ! Slopes of the drift without its trapped-IR part (as slope_wd) and of the opacity
+            ! shares (as slope_rhod)
+            io = merge(1, 0, idim == 1); jo = merge(1, 0, idim == 2); ko = merge(1, 0, idim == 3)
+            if (do_irtrap) then
+                slope_wr = 0.0_dp; slope_zeta = 0.0_dp
+                if (slope_type > 0) then
+                    do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                        do jbin = 1, ntva
+                            if (slope_type /= 6) slope_wr(l,i,j,k,jbin) = limited_slope(        &
+                                w_r_cell(l,i-io,j-jo,k-ko,jbin), w_r_cell(l,i,j,k,jbin),        &
+                                w_r_cell(l,i+io,j+jo,k+ko,jbin), theta, .false.)
+                            slope_zeta(l,i,j,k,jbin) = limited_slope(s_IRtrap(l,i-io,j-jo,k-ko,jbin), &
+                                s_IRtrap(l,i,j,k,jbin), s_IRtrap(l,i+io,j+jo,k+ko,jbin), theta,      &
+                                slope_type == 6)
+                        end do
+                    end do; end do; end do; end do
+                end if
+            end if
 
             ! ====================================================================
             ! STEP 4: TEMPORAL PREDICTOR
             ! ====================================================================
             do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
-                do jbin = 1, ndust
+                do jbin = 1, ntva
                     rhod_pred(l,i,j,k,jbin) = rhod_cell(l,i,j,k,jbin) - 0.5_dp * (dt / dx) * &
                         (w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin) + rhod_cell(l,i,j,k,jbin) * slope_wd(l,i,j,k,jbin))
                     rhod_pred(l,i,j,k,jbin) = MAX(rhod_pred(l,i,j,k,jbin), 0.0_dp)
@@ -2307,8 +2397,11 @@ module dust_dynamics
                     H_gdnv = (gamma / (gamma - 1.0_dp)) * Pg_upwind
                     eflux(l,i,j,k,idim) = wg_face * H_gdnv * (dt / dx)
 
-                    ! --- B. DUST MASS, MOMENTUM, AND DRIFT ENERGY FLUX ---
-                    do jbin = 1, ndust
+                    ! --- B. DUST MASS FLUX ---
+                    ! The drift stress (momentum) and the drift kinetic-energy flux are O(St^2)
+                    ! and left out, as are the drift kinetic energy and its work in the energy
+                    ! (Lebreuilly et al. 2019); the drag heating (2d) is O(St).
+                    do jbin = 1, ntva
                         if (idim == 1) then
                             rhod_state_L = rhod_pred(l,i-1,j,k,jbin) + half * slope_rhod(l,i-1,j,k,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
@@ -2328,6 +2421,11 @@ module dust_dynamics
 
                         rhod_state_L = MAX(rhod_state_L, zero)
                         rhod_state_R = MAX(rhod_state_R, zero)
+                        if (do_irtrap) then
+                            ! the drift without its trapped-IR part (5C adds that part's own flux)
+                            w_state_L = w_r_cell(l,i-io,j-jo,k-ko,jbin) + half * slope_wr(l,i-io,j-jo,k-ko,jbin)
+                            w_state_R = w_r_cell(l,i,j,k,jbin)          - half * slope_wr(l,i,j,k,jbin)
+                        end if
 
                         w_face = half * (w_state_L + w_state_R)
 
@@ -2336,19 +2434,61 @@ module dust_dynamics
                         else
                             flux_mass_bin = w_face * rhod_state_R * (dt / dx)
                         end if
+
+                        ! --- C. TRAPPED-IR DUST FLUX ---
+                        ! F_t = A zeta + B rho_d (2e). For a single absorber F_t hardly depends on
+                        ! rho_d (zeta = 1): its characteristic speed dF_t/drho_d ~ -eps w_t is ~1/eps
+                        ! below the drift, so upwinding rho_d on the drift would diffuse the dust
+                        ! ~1/eps too much. Instead the share zeta is upwinded on the sign of A (stable:
+                        ! dzeta_k/drho_k >= 0, and A has one sign for every species) and rho_d on the
+                        ! sign of the small velocity B. A minor absorber, zeta ~ rho_d, is still carried
+                        ! at its drift. grad(P_trap) at the face is the face difference.
+                        ! A zeta does not vanish with the dust in a draining cell (zeta = 1 for a
+                        ! lone absorber), so it is limited to the upwind density times the smaller of
+                        ! the drift cap and dx/(2 ndim dt), which keeps rho_d >= 0. In smooth flow
+                        ! A zeta / rho_d is the (capped) drift, inside that bound.
+                        if (do_irtrap) then
+                            G_face = (Ptrap(l,i,j,k) - Ptrap(l,i-io,j-jo,k-ko)) / dx
+                            A_face = -G_face * half * (tau_t_cell(l,i-io,j-jo,k-ko,jbin) + tau_t_cell(l,i,j,k,jbin))
+                            zeta_L = min(max(s_IRtrap(l,i-io,j-jo,k-ko,jbin) + half * slope_zeta(l,i-io,j-jo,k-ko,jbin), &
+                                             0.0_dp), 1.0_dp)
+                            zeta_R = min(max(s_IRtrap(l,i,j,k,jbin) - half * slope_zeta(l,i,j,k,jbin), 0.0_dp), 1.0_dp)
+                            zeta_up = merge(zeta_L, zeta_R, A_face >= zero)
+                            v_lim = dx / (2.0_dp * dble(ndim) * dt)
+                            if (tva_wmax_cs > 0.0_dp) v_lim = min(v_lim, tva_wmax_cs &
+                                * max(c_s(l,i-io,j-jo,k-ko), c_s(l,i,j,k)))
+                            flux_A = A_face * zeta_up
+                            flux_A = sign(min(abs(flux_A), v_lim * merge(rhod_state_L, rhod_state_R, A_face >= zero)), &
+                                          flux_A)
+                            B_face = half * (B_t_cell(l,i-io,j-jo,k-ko,jbin) + B_t_cell(l,i,j,k,jbin))
+                            rhod_up_B = merge(rhod_state_L, rhod_state_R, B_face >= zero)
+                            flux_mass_bin = flux_mass_bin + (flux_A + B_face * rhod_up_B) * (dt / dx)
+                        end if
                         dflux(l,i,j,k,jbin,idim) = flux_mass_bin
-
-                        ! Momentum flux
-                        mflux(l,i,j,k,idim) = mflux(l,i,j,k,idim) + flux_mass_bin * (w_face - wg_face)
-
-                        ! Energy flux (drift kinetic energy only, enthalpy is wg_face * H_gdnv)
-                        eflux(l,i,j,k,idim) = eflux(l,i,j,k,idim) + half * flux_mass_bin * (w_face**2 - wg_face**2)
                     end do
 
                 end do
             end do; end do; end do
         end do
         
+    contains
+        pure real(dp) function limited_slope(qm, q0, qp, theta_lim, central)
+            ! slope of q at a cell from its neighbours, limited as in STEP 3 (MinMod, or
+            ! monotonized central with theta_lim = 2); central: the unlimited central slope
+            real(dp), intent(in) :: qm, q0, qp, theta_lim
+            logical, intent(in) :: central
+            real(dp) :: dl, dr, dc
+            dl = q0 - qm
+            dr = qp - q0
+            dc = 0.5_dp * (dl + dr)
+            if (central) then
+                limited_slope = dc
+            else if (dl * dr <= 0.0_dp) then
+                limited_slope = 0.0_dp
+            else
+                limited_slope = sign(1.0_dp, dc) * min(theta_lim * min(abs(dl), abs(dr)), abs(dc))
+            end if
+        end function limited_slope
     end subroutine calculate_drag_rad_fluxes
 #endif
 

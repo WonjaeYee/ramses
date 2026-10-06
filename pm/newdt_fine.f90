@@ -10,7 +10,7 @@ subroutine newdt_fine(ilevel)
   use turb_commons
 #endif
 #ifdef CALIMA
-  use dust_commons,   only: dust_tva, ndust, tva_test_mode, TVA_TEST_GAUSS
+  use dust_commons,   only: dust_tva, ntva, tva_test_mode, TVA_TEST_GAUSS
   use dust_dynamics,  only: get_dust_courant_dt
 #endif
   use constants, ONLY: pi
@@ -190,7 +190,7 @@ subroutine newdt_fine(ilevel)
   ! This mirrors the pattern of get_rt_courant_dt: the subroutine accesses uold
   ! directly, builds the full AMR stencil, computes TVA drift speeds at every
   ! face, MPI-reduces to the global minimum, and updates dtnew(ilevel) itself.
-  if (dust_tva .and. ndust > 0) call get_dust_courant_dt(ilevel)
+  if (dust_tva .and. ntva > 0) call get_dust_courant_dt(ilevel)
 
   ! Force to use a very small timestep of 1e-8 for dustygauss convergence tests
   if (tva_test_mode == TVA_TEST_GAUSS) then
