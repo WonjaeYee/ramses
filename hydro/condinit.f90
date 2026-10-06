@@ -49,6 +49,9 @@ subroutine condinit(x,u,dx,nn)
   case('dustyirtrap')
      call dustyirtrap_condinit(x, q, dx, nn)
 
+  case('dustytrapclump')
+     call dustytrapclump_condinit(x, q, dx, nn)
+
   case('dustyslab')
      call dustyslab_condinit(x, q, dx, nn)
 
@@ -62,6 +65,9 @@ subroutine condinit(x,u,dx,nn)
      call dustylev_condinit(x, q, dx, nn)
 
   case('dustylevtrap')
+     call dustylev_condinit(x, q, dx, nn)
+
+  case('dustylevtrapseed')
      call dustylev_condinit(x, q, dx, nn)
 
   case('dustylevatm')
@@ -250,6 +256,12 @@ subroutine dustyspress_condinit(x,q,dx,nn)
         q(i,idust+ivar-1) = eps_val
      end do
 #endif
+#if NPAH>0
+     ! the PAH bins drift as TVA species too (dustyshell_pah)
+     do ivar=1,npah
+        q(i,ipah+ivar-1) = eps_val
+     end do
+#endif
   end do
 
 end subroutine dustyspress_condinit
@@ -412,6 +424,70 @@ subroutine dustyirtrap_condinit(x,q,dx,nn)
 end subroutine dustyirtrap_condinit
 
 
+subroutine dustytrapclump_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use constants
+
+  implicit none
+  integer ::nn                            ! Number of cells
+  real(dp)::dx                            ! Cell size
+  real(dp),dimension(1:nvector,1:nvar)::q ! Primitive variables
+  real(dp),dimension(1:nvector,1:ndim)::x ! Cell center position.
+  !================================================================
+  ! Initial conditions for the DustyTrapClump test: uniform static gas, a
+  ! Gaussian dust clump on a uniform dust background, and a trapped-IR
+  ! pressure held fixed (TVA_TEST_IRTRAP) whose gradient G(x) = -G_0 g(x),
+  ! g = [tanh((x-x_1)/delta) - tanh((x-x_2)/delta)]/2, is a plateau in the
+  ! middle of the box and vanishes near the edges, so that no dust has to
+  ! enter through a boundary. With one bin the bin carries all the Rosseland
+  ! opacity (zeta = 1), so the trapped-IR dust flux is
+  ! F = -t_0 G (1 - rho_d/rho), t_s = t_0/(1-eps): the grains stream through
+  ! the gas at w = F/rho_d, but where G is uniform the clump obeys
+  ! d(rho_d)/dt + lambda d(rho_d)/dx = 0, lambda = t_0 G/rho ~ -eps w. It
+  ! must keep its shape and move only at lambda, slowly and against the
+  ! drift. A dust flux upwinded on the drift diffuses it with D ~ |w| dx/2.
+  ! Where G rises (falls) along the drift the dust thins (piles up).
+  !
+  ! Run with NDUST=1 and NPAH=0, and an isothermal gas (rt_Tconst), so
+  ! that t_0 is uniform.
+  !================================================================
+  integer::i,ivar
+  real(dp),parameter::eps_bg   = 4.0d-3  ! background dust-to-gas ratio
+  real(dp),parameter::eps_pk   = 8.0d-3  ! dust-to-gas ratio at the clump centre
+  real(dp),parameter::sig_frac = 0.008d0 ! clump sigma / boxlen (~2 cells at levelmin 8)
+  ! G_0 ten times the dustyirtrap ramp: |w| ~ 0.3 c_s at eps_bg, P_trap ~ 1% of the gas pressure
+  real(dp),parameter::Ptrap_0  = 2.0d-3  ! trapped-IR pressure at x = 0 [code]
+  real(dp),parameter::G_0      = 1.0d-4  ! plateau |grad(P_trap)| [code]
+  real(dp),parameter::x1_frac  = 0.25d0  ! plateau edges / boxlen
+  real(dp),parameter::x2_frac  = 0.75d0
+  real(dp),parameter::dl_frac  = 0.125d0 ! transition half-width delta / boxlen
+  real(dp)::eps_val, x1, x2, dl
+
+  call region_condinit(x,q,dx,nn)
+  x1 = x1_frac * boxlen
+  x2 = x2_frac * boxlen
+  dl = dl_frac * boxlen
+
+  do i=1,nn
+     eps_val = eps_bg + (eps_pk - eps_bg) * exp(-0.5d0*((x(i,1)/boxlen - 0.5d0)/sig_frac)**2)
+#if NDUST>0
+     do ivar=1,ndust
+        q(i,idust+ivar-1) = eps_val/dble(ndust)
+     end do
+#endif
+     ! Uniform gas pressure despite the clump (Pg = (1-eps_tot)*q(neul)): no grad(P_gas) drift
+     q(i,neul) = q(i,neul) / (1.0d0 - eps_val)
+#if NENER>0
+     ! P_trap = Ptrap_0 - G_0 int_0^x g: (delta/2) [ln cosh((x-x1)/delta) - ln cosh((x-x2)/delta)]
+     q(i,inener) = Ptrap_0 - G_0 * 0.5d0 * dl * (log(cosh((x(i,1)-x1)/dl)) - log(cosh(x1/dl)) &
+                                               - log(cosh((x(i,1)-x2)/dl)) + log(cosh(x2/dl)))
+#endif
+  end do
+
+end subroutine dustytrapclump_condinit
+
+
 !================================================================
 !================================================================
 !================================================================
@@ -456,7 +532,8 @@ subroutine dustylev_condinit(x,q,dx,nn)
   integer::i,ivar
   real(dp),parameter::eps_lev    = 1.0d-2  ! dust-to-gas ratio, UNIFORM
   real(dp),parameter::sig_frac   = 0.1d0   ! layer sigma / boxlen
-  real(dp)::x_c, sig, rho_pk, cs2, rho_loc
+  real(dp),parameter::seed_amp   = 1.0d-2  ! 'dustylevtrapseed': relative odd-even perturbation of eps
+  real(dp)::x_c, sig, rho_pk, cs2, rho_loc, eps_loc
   real(dp)::floor_frac                     ! ambient density / peak density
 
   ! The ambient has the same dust fraction as the layer, so in the optically
@@ -466,7 +543,7 @@ subroutine dustylev_condinit(x,q,dx,nn)
   ! super-Eddington in the thin limit (f_E ~ 41), so there the ambient would be
   ! blasted to tens of sound speeds and, at 1e-3, would carry more momentum
   ! than the layer itself. Drop it two more decades there.
-  if (trim(condinit_kind) == 'dustylevtrap') then
+  if (trim(condinit_kind) == 'dustylevtrap' .or. trim(condinit_kind) == 'dustylevtrapseed') then
      floor_frac = 1.0d-5
   else
      floor_frac = 1.0d-3
@@ -489,15 +566,22 @@ subroutine dustylev_condinit(x,q,dx,nn)
      ! the only vertical forces are gravity, radiation and grad(P).
      q(i,neul) = cs2 * rho_loc
      ! The dust fraction is uniform: a dust gradient would add a TVA drift on
-     ! top of the barycentric force this test is measuring.
+     ! top of the barycentric force this test is measuring. 'dustylevtrapseed'
+     ! (the stability test of the trapped-IR drift) perturbs it by +-seed_amp in
+     ! alternate cells within 2 sigma of the centre: the odd-even mode, which an
+     ! anti-diffusive dust flux would amplify first.
+     eps_loc = eps_lev
+     if (trim(condinit_kind) == 'dustylevtrapseed' .and. abs(x(i,1)-x_c) < 2d0*sig) then
+        eps_loc = eps_lev * (1d0 + seed_amp * (1 - 2*modulo(int(x(i,1)/dx), 2)))
+     end if
 #if NDUST>0
      do ivar=1,ndust
-        q(i,idust+ivar-1) = eps_lev/dble(ndust)
+        q(i,idust+ivar-1) = eps_loc/dble(ndust)
      end do
 #endif
      ! Same (1-eps) pre-division as the slab tests, so the gas pressure the
      ! TVA solver reconstructs matches the isothermal profile above.
-     q(i,neul) = q(i,neul) / (1.0d0 - eps_lev)
+     q(i,neul) = q(i,neul) / (1.0d0 - eps_loc)
   end do
 
 end subroutine dustylev_condinit

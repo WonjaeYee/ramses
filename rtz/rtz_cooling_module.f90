@@ -2201,7 +2201,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (iIon.lt.n_ions) then
                   saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
                   if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
-                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, UV_background_G0, ne)
+                  ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
+                  ! (at the background alone every grain is as in the dark, with its largest rate)
+                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0 + UV_background_G0, ne)
                end if
 
                ! Initialize the change to zero
