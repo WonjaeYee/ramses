@@ -189,10 +189,6 @@ module dust_init
                 write(*,*)'WARNING: use_w_drift_test=.true. replaces the physical drift ', &
                           'with the constant w_drift_test. This is a test mode, not physics.'
             end if
-            if (npah > 0) then
-                write(*,*)'WARNING: TVA advects the ',ndust,' dust bins only. The ',npah, &
-                          ' PAH bins stay perfectly coupled to the gas (see calima/README.md).'
-            end if
             if (tva_wmax_cs <= 0d0) then
                 write(*,*)'WARNING: tva_wmax_cs<=0 disables the drift cap. TVA assumes ', &
                           'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'

@@ -256,6 +256,12 @@ subroutine dustyspress_condinit(x,q,dx,nn)
         q(i,idust+ivar-1) = eps_val
      end do
 #endif
+#if NPAH>0
+     ! the PAH bins drift as TVA species too (dustyshell_pah)
+     do ivar=1,npah
+        q(i,ipah+ivar-1) = eps_val
+     end do
+#endif
   end do
 
 end subroutine dustyspress_condinit
