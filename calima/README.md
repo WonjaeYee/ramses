@@ -93,12 +93,12 @@ The typical order is:
 (Lebreuilly+2019), as an operator-split upwind step applied to `unew` after the Godunov sweep
 (`amr_step.f90`, `dust_diffusion_fine` / `dust_push_fine`). Things to be aware of:
 
-- **PAH bins do not drift.** `dust_upwind_correct1/2` loop over the `ndust` dust bins only; the
-  `npah` PAH bins stay perfectly coupled to the gas. `compute_gas_dust_radpressure_acc` does return
-  a PAH acceleration, but it is not used, and PAH mass is excluded from `eps_tot` and from the
-  barycentric acceleration. Defensible for PAHs, which are small and well coupled, but it is an
-  approximation, not an accident. `check_params_dust` warns when `npah > 0` and TVA is on.
-- **Gas-phase metals do not follow the dust.** Only the `ndust` density scalars are advected;
+- **PAH bins drift too.** The TVA species are the PAH bins, then the dust bins
+  (`uold(:,ipah:ipah+ntva-1)`, `ntva = npah + ndust`), each with its own radius and material
+  density (`tva_species`), radiation force and, for Draine drag, the rms charge of its charge-state
+  distribution. All of them count in `eps_tot` and the barycentric acceleration.
+  `tests/dust_tva/dustyshell_pah` checks their drift against the TVA prediction.
+- **Gas-phase metals do not follow the dust.** Only the dust and PAH density scalars are advected;
   `imetal` is untouched. Dust carrying C/O/Mg/Si/Fe across a cell boundary does not move the
   corresponding gas-phase element, so the per-element budget drifts over time. Watch the
   `dust_log` mass-conservation output.

@@ -190,10 +190,6 @@ module dust_init
                 write(*,*)'WARNING: use_w_drift_test=.true. replaces the physical drift ', &
                           'with the constant w_drift_test. This is a test mode, not physics.'
             end if
-            if (npah > 0) then
-                write(*,*)'WARNING: TVA advects the ',ndust,' dust bins only. The ',npah, &
-                          ' PAH bins stay perfectly coupled to the gas (see calima/README.md).'
-            end if
             if (tva_wmax_cs <= 0d0) then
                 write(*,*)'WARNING: tva_wmax_cs<=0 disables the drift cap. TVA assumes ', &
                           'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'
@@ -859,6 +855,7 @@ module dust_init
         case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
         case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
         case ('dustyirtrap');  tva_test_mode = TVA_TEST_IRTRAP
+        case ('dustytrapclump'); tva_test_mode = TVA_TEST_IRTRAP
         case default;          tva_test_mode = TVA_TEST_NONE
         end select
         if (myid == 1 .and. tva_test_mode /= TVA_TEST_NONE) then

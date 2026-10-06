@@ -864,10 +864,10 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
   use hydro_parameters
   use const
 #ifdef CALIMA
-  ! dust_tva/ndust are only referenced from #ifdef CALIMA branches below, so
+  ! dust_tva/ntva are only referenced from #ifdef CALIMA branches below, so
   ! this use must be guarded too -- otherwise a CALIMA=0 build fails with
   ! "Cannot open module file 'dust_commons.mod'".
-  use dust_commons, only: dust_tva, ndust
+  use dust_commons, only: dust_tva, ntva
 #endif
   implicit none
 
@@ -935,10 +935,10 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
               eint = MAX(uin(l,i,j,k,neul)*oneoverrho-eken-erad,smalle)
               q(l,i,j,k,neul) = (gamma-one)*q(l,i,j,k,1)*eint
 #else
-              if (dust_tva .and. ndust>0) then
+              if (dust_tva .and. ntva>0) then
                  eps_total = 0.0d0
-                 do id = 1, ndust
-                    eps_total = eps_total + uin(l,i,j,k,idust+id-1)/q(l,i,j,k,1)
+                 do id = 1, ntva
+                    eps_total = eps_total + uin(l,i,j,k,ipah+id-1)/q(l,i,j,k,1)
                  end do
                  eps_total = min(max(eps_total, 0.0_dp), 0.999_dp)
                  rho_gas = q(l,i,j,k,1)*(1.0d0-eps_total)
@@ -960,7 +960,7 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
 #ifndef CALIMA
               c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
 #else
-              if (dust_tva .and. ndust>0) then
+              if (dust_tva .and. ntva>0) then
                  c(l,i,j,k)=sqrt(c(l,i,j,k)/max(rho_gas,smallr))
               else
                  c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
