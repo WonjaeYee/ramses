@@ -148,6 +148,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !-------------------------------------------------------------------------
 #ifdef CALIMA
    use dust_commons, only: dust_log, dust_log_tdust_solver_print_reset
+   use dust_interface, only: rtgroups_reset_warm, trtz, nrtz
+   use dust_commons, only: dust_charging_timer
 #endif
    implicit none
    real(dp):: aexp
@@ -167,6 +169,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp)::dt
    integer::ncell
 #ifdef CALIMA
+   real(kind=8) :: wallclock, t_step0          ! RTZ step timer (dust_charging_timer)
    real(dp),dimension(1:nvector),intent(in) :: sigma
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
@@ -552,6 +555,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    ! Otherwise perform the normal loop
    else
+#ifdef CALIMA
+      call rtgroups_reset_warm()         ! WDB06rt: a new vector of cells
+#endif
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
       if (present(ddt_initial)) ddt(1:ncell) = ddt_initial
@@ -754,7 +760,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,"(A10, X, I6, A10, X, E22.15)") "loopcnt:", loopcnt, "ddt:", ddt(i)
 #endif
 
+#ifdef CALIMA
+            if (dust_charging_timer) t_step0 = wallclock()
+#endif
             call rtz_cool_step(i)
+#ifdef CALIMA
+            if (dust_charging_timer) then
+               trtz = trtz + (wallclock() - t_step0)
+               nrtz = nrtz + 1
+            end if
+#endif
 
 #ifdef RTZ_ONE_CELL_TEST
             write(*,"(A10, X, I6, A10, X, E22.15)") "code:", code, "dt_rec:", dt_rec
@@ -1003,6 +1018,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! total density the contribution from dust and PAHs
       ! 1. Reset the dust helper to get ready for this cool step
       call dust_helper%reset()
+      dust_helper%icell = icell          ! WDB06rt: warm state of this cell
 
       ! 2. Compute the total density and metallicity
       rho_dust_tot = 0.d0
