@@ -20,7 +20,11 @@ recursive subroutine amr_step(ilevel,icount)
   use turb_commons
 #endif
 #ifdef CALIMA
-  use dust_commons, only: dust_log,print_dust_log
+  use dust_commons, only: dust_log,print_dust_log,dust_tva,dust_radpressure,ntva
+  use dust_dynamics, only: dust_diffusion_fine
+#ifdef RT
+  use dust_dynamics, only: dust_push_fine
+#endif
 #endif
   use mpi_mod
   implicit none
@@ -389,6 +393,21 @@ recursive subroutine amr_step(ilevel,icount)
                                call timer('hydro - godunov','start')
      call godunov_fine(ilevel)
 
+#ifdef CALIMA
+     ! CALIMA DYNAMICS
+     if (dust_tva .and. ntva>0) then
+                               call timer('hydro - dust','start')
+#ifdef RT
+         if (dust_radpressure) then
+            call dust_push_fine(ilevel)
+         else
+            call dust_diffusion_fine(ilevel)
+         end if
+#else
+         call dust_diffusion_fine(ilevel)
+#endif
+      end if
+#endif
      ! Reverse update boundaries
                                call timer('hydro - rev ghostzones','start')
      do ivar=1,nvar_all
@@ -611,7 +630,7 @@ end subroutine amr_step
 #ifdef RT
 subroutine rt_step(ilevel)
   use amr_parameters, only: dp
-  use amr_commons,    only: t, dtnew, myid
+  use amr_commons,    only: t, dtnew, myid, levelmin
   use rt_hydro_commons
 #ifndef RTZ
   use rt_cooling_module, only: update_UVrates
@@ -631,6 +650,10 @@ subroutine rt_step(ilevel)
 
   real(dp) :: dt_hydro, t_left, dt_rt, t_save
   integer  :: i_substep, ivar
+
+  ! RT15 sec. 3.7 light-speed ramp: advance it once per RHD step, at the
+  ! coarsest active level. A no-op unless rt_c_ramp_nstep > 0.
+  if(ilevel .eq. levelmin) call rt_ramp_lightspeed
 
   dt_hydro = dtnew(ilevel)                   ! Store hydro timestep length
   t_left = dt_hydro

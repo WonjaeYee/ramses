@@ -3,6 +3,22 @@ import re
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
+plt.rcParams.update({
+    'font.family': 'serif',
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'axes.linewidth': 0.8,
+    'axes.facecolor': 'none',
+    'figure.facecolor': 'none',
+    'legend.frameon': False,
+    'lines.linewidth': 2.5,
+})
 
 pi = 3.14159265
 
@@ -676,10 +692,10 @@ def main():
     ys_python = integrate_rk54(t_yr, y0, n_elements, ndust, bin_props, gas_elements, params, prefactor, nH)
     
     # Plot results
-    fig, axes = plt.subplots(2, 1, figsize=(7, 6), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(5.5, 6.5), sharex=True)
     
     # 1. Plot dust density evolution
-    colors = plt.cm.viridis(np.linspace(0, 0.9, ndust))
+    colors = plt.cm.plasma(np.linspace(0.1, 0.85, ndust))
     y_analytic_final = None
     
     # Only do analytic check if it is pure accretion (no other processes)
@@ -727,15 +743,14 @@ def main():
                     t_sec = t_yr * yr2sec
                     y_analytic = y_tot / (1.0 + ((y_tot - y_dust_0) / y_dust_0) * np.exp(-C_coeff * y_tot * t_sec))
                     
-                    axes[0].plot(t_yr, y_analytic / y_dust_0, ':', color='red', linewidth=2.5, label='Analytic Solution (Logistic)')
+                    axes[0].plot(t_yr, y_analytic / y_dust_0, ':', color='#b71c1c', linewidth=2.5, label='Analytic Solution (Logistic)')
                     y_analytic_final = y_analytic[-1]
                 
     axes[0].set_ylabel(r'Dust Mass Density ($\rho(t)/\rho(0)$)')
     axes[0].set_yscale('log')
     axes[0].set_xscale('log')
     axes[0].legend(loc='lower right',frameon=False)
-    axes[0].set_title('CALIMA Dust Density Evolution (Evolution Test)')
-    axes[0].grid(True, alpha=0.3)
+    axes[0].grid(True, linestyle=':', alpha=0.3, color='#aaaaaa')
     
     # 2. Plot gas metal abundance evolution
     # Dynamically find all elements present in the dust compositions
@@ -749,16 +764,16 @@ def main():
         1: 'H', 2: 'He', 6: 'C', 7: 'N', 8: 'O', 10: 'Ne', 12: 'Mg', 14: 'Si', 16: 'S', 26: 'Fe'
     }
     element_colors = {
-        6: 'black',
-        8: 'red',
-        12: 'green',
-        14: 'blue',
-        26: 'orange',
-        1: 'grey',
-        2: 'purple',
-        7: 'cyan',
-        10: 'magenta',
-        16: 'yellow'
+        6: '#212121',
+        8: '#b71c1c',
+        12: '#1b5e20',
+        14: '#1565c0',
+        26: '#e65100',
+        1: '#616161',
+        2: '#4a148c',
+        7: '#006064',
+        10: '#880e4f',
+        16: '#827717',
     }
     
     for idx, el_idx in enumerate(track_elements):
@@ -777,7 +792,7 @@ def main():
     axes[1].set_xscale('log')
     axes[1].set_ylabel('Gas-Phase Abundance ($n(t)/n(0)$)')
     axes[1].legend(loc='lower left',frameon=False,ncol=2)
-    axes[1].grid(True, alpha=0.3)
+    axes[1].grid(True, linestyle=':', alpha=0.3, color='#aaaaaa')
     
     plt.tight_layout()
     
@@ -790,7 +805,7 @@ def main():
         suffix = 'shattering'
     plot_file = f'dust_{suffix}_test.png'
     
-    plt.savefig(plot_file, dpi=150)
+    plt.savefig(plot_file, dpi=300, transparent=True)
     print(f"Plot saved to {plot_file}")
     
     # Print comparison report

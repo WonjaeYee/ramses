@@ -7,7 +7,7 @@
 ! and Harley Katz
 ! NOTE: T2=T/mu, Np = photon density, Fp = photon flux,
 module rtz_cooling_module
-   use amr_parameters, only: ndim, dp, nvector
+   use amr_parameters, only: ndim, dp, nvector, condinit_kind
    use rt_parameters
    use constants
    use rtz_module
@@ -20,6 +20,7 @@ module rtz_cooling_module
                            group_csa_pah, group_css_pah, group_csr_pah,&
                            att_len_dust
    use dust_init, only: init_dust_depletion_tests
+   use dust_optics, only: get_IR_mean_cross_sections
 #endif
    implicit none
 
@@ -918,6 +919,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp),dimension(nGroups):: recRad, phAbs, phSc, dustAbs
       real(dp),dimension(nGroups):: dustSc, kAbs_loc, kSc_loc,dustRp
       real(dp):: TR, one_over_C_v, E_rad, dE_T
+#ifdef CALIMA
+      ! IR-group mean cross sections at the local radiation temperature [cm^2]
+      real(dp),dimension(max(1,ndust))  :: sigR_IR_dust, sigP_IR_dust
+      real(dp),dimension(max(1,2*npah)) :: sigR_IR_pah,  sigP_IR_pah
+      real(dp):: E_IR_loc, T_rad_loc
+#endif
       !  real(dp):: G0, eff_peh
       real(dp):: fluxMag, mom_fact
 #endif
@@ -1161,6 +1168,31 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rt_advect) then
          dust_helper%local_c = rt_c_cgs(ilevel)
          dust_helper%group_eV(:) = group_egy(:)
+         ! For the IR group the band-weighted group_cs*_dust/pah values are
+         ! the wrong spectral weight (they are averaged over the group band
+         ! with a hot blackbody or the stellar SED). Replace that one column
+         ! with the T_rad-dependent mean opacities: Rosseland for the flux /
+         ! momentum channel and Planck for absorption and emission, following
+         ! the kappa_R / kappa_F vs kappa_P split of Rosdahl & Teyssier 2015
+         ! (eqs. 12, 21). Done here, inside cool_step, so the opacity tracks
+         ! dNp(iIR) on every substep -- the same place RAMSES-RT recomputes
+         ! kAbs_loc(iIR) in its non-CALIMA branch. At this point dNp(iIR) is
+         ! the total IR, since cooling_fine de-partitioned the trapped photons
+         ! back in before the solve.
+         if (rt_isIR) then
+            E_IR_loc = group_egy_erg(iIR) * dNp(iIR)
+            call get_IR_mean_cross_sections(E_IR_loc, rt_c_fraction(ilevel), &
+                                            sigR_IR_dust, sigP_IR_dust,      &
+                                            sigR_IR_pah,  sigP_IR_pah, T_rad_loc)
+            if (ndust > 0) then
+               dust_helper%csr_dust(:,iIR) = sigR_IR_dust(1:ndust) * rt_c_cgs(ilevel)
+               dust_helper%csa_dust(:,iIR) = sigP_IR_dust(1:ndust) * rt_c_cgs(ilevel)
+            end if
+            if (npah > 0) then
+               dust_helper%csr_pah(:,iIR) = sigR_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
+               dust_helper%csa_pah(:,iIR) = sigP_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
+            end if
+         end if
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
@@ -1250,24 +1282,26 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS
-         do igroup=1,nGroups       ! ----------------Ionization absorbtion
-            do i_current_Element=1,n_elements ! loop over elements
-               if (elements(i_current_Element)%atomic_number.gt.0) then
-                  do i_current_Ion=1,elements(i_current_Element)%n_ions-1 ! loop over ions
-                     phAbs(igroup) = phAbs(igroup) + nElement_dep(i_current_Element) * dXion(i_current_Element, i_current_Ion) * signc(igroup,i_current_Element,i_current_Ion)  ! s-1
-                  end do  ! end loop over ions
-               end if
-            end do ! end loop over elements
+         if (condinit_kind .ne. 'dustyspress') then
+            do igroup=1,nGroups       ! ----------------Ionization absorbtion
+               do i_current_Element=1,n_elements ! loop over elements
+                  if (elements(i_current_Element)%atomic_number.gt.0) then
+                     do i_current_Ion=1,elements(i_current_Element)%n_ions-1 ! loop over ions
+                        phAbs(igroup) = phAbs(igroup) + nElement_dep(i_current_Element) * dXion(i_current_Element, i_current_Ion) * signc(igroup,i_current_Element,i_current_Ion)  ! s-1
+                     end do  ! end loop over ions
+                  end if
+               end do ! end loop over elements
 
-            ! Deal with molecules separately
-            if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-               if (isLW(igroup).eq.1) then 
-                  phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
-               else
-                  phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
+               ! Deal with molecules separately
+               if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
+                  if (isLW(igroup).eq.1) then
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
+                  else
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
+                  end if
                end if
-            end if
-         end do
+            end do
+         end if
 #ifndef CALIMA
          ! IR, optical and UV depletion by dust absorption: ----------------
          ! IR scattering/abs on dust (abs after T update)
@@ -1488,17 +1522,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          !HKnote: we call prime first so what we can store the correct cooling rates
          saved_cooling_rates = 0.d0
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
-                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
+                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
          call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
-                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
+                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
-                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
+                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
@@ -1573,7 +1607,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
       endif
 
-#ifdef RT
+! In a CALIMA build the IR<->dust energy exchange comes from the explicit dust
+! temperature instead: compute_dust_precool solves T_dust and fills %Prad_dust,
+! which is added into dNp(iIR) above. This one-temperature (T_dust = T_gas) block
+! is the NON-CALIMA closure and must not also run, or IR absorption and re-emission
+! are counted twice. It is also unsafe under CALIMA as written: kAbs_loc is a plain
+! local of rtz_cool_step, assigned ONLY in the #else (non-CALIMA) arm of the opacity
+! fork above, so the test below read stack garbage at -O3 (no -finit-real).
+#if defined(RT) && !defined(CALIMA)
       if(rt_isIR) then
          if(kAbs_loc(iIR) .gt. 0d0 .and. .not. rt_T_rad) then
             ! Evolve IR-Dust equilibrium temperature------------------------
@@ -2127,7 +2168,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             else if (.not. update_COspecies) then
                cycle
             end if
-
             ! Get the atomic number
             atomic_number = elements(iElement)%atomic_number
 

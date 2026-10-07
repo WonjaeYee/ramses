@@ -67,6 +67,15 @@ module dust_init
             end do
         end if
 #endif
+        write(*,*) '>>> DUST DYNAMICS ========================================'
+        write(*,*) 'dust_tva             = ',dust_tva,',    dust_radpressure    = ',dust_radpressure
+        if (dust_tva) then
+            write(*,*) 'use_w_drift_test     = ',use_w_drift_test
+            if (use_w_drift_test) write(*,*) '   w_drift_test      = ',w_drift_test
+            write(*,*) 'tva_wmax_cs          = ',tva_wmax_cs,' (cap on |w_drift| / c_s)'
+            write(*,*) 'epstein_coef         = ',epstein_coef,' = sqrt(pi*gamma/8)'
+            write(*,*) 'drag_model           = ',trim(drag_model)
+        end if
         write(*,*) '=============================================================='
     end subroutine print_dust_parameters
 
@@ -75,6 +84,9 @@ module dust_init
         ! This function goes through the hydro and compilation parameters
         ! to make sure that it is compliant with the required dust settings
         use hydro_parameters
+#ifdef RT
+        use rt_parameters, only: rt_isIRtrap, rt_isIR, rt_use_hll
+#endif
         implicit none
         logical :: check_params_dust
         integer,intent(in) :: myid
@@ -145,6 +157,95 @@ module dust_init
             end if
         end if
 
+        !-------------------------------------------------
+        ! Check everything is correct to do dust dynamics
+        !-------------------------------------------------
+#ifndef RT
+        if (dust_radpressure) then
+            if(myid==1)write(*,*)'Error: dust_radpressure can only be used with RT'
+            check_params_dust=.false.
+        end if
+#endif
+        if (dust_tva .and. ndust <= 0) then
+            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust bin (NDUST>0)'
+            check_params_dust=.false.
+        end if
+        if (dust_radpressure .and. .not.dust_tva) then
+            if(myid==1)write(*,*)'Error: dust_radpressure has no effect without dust_tva=.true.'
+            check_params_dust=.false.
+        end if
+        if (trim(drag_model).ne.'epstein' .and. trim(drag_model).ne.'draine2011') then
+            if(myid==1)write(*,*)'Error: drag_model must be epstein or draine2011, not ',trim(drag_model)
+            check_params_dust=.false.
+        end if
+        ! The Draine drag needs n_H, T and the grain charge, which the TVA gets
+        ! from the per-cell radiation-pressure call; the pure-drag path has none.
+        if (trim(drag_model).eq.'draine2011' .and. .not.dust_radpressure) then
+            if(myid==1)write(*,*)'Error: drag_model=draine2011 requires dust_radpressure=.true.'
+            check_params_dust=.false.
+        end if
+        if (dust_tva .and. myid==1) then
+            if (use_w_drift_test) then
+                write(*,*)'WARNING: use_w_drift_test=.true. replaces the physical drift ', &
+                          'with the constant w_drift_test. This is a test mode, not physics.'
+            end if
+            if (tva_wmax_cs <= 0d0) then
+                write(*,*)'WARNING: tva_wmax_cs<=0 disables the drift cap. TVA assumes ', &
+                          'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'
+            end if
+        end if
+#ifdef RT
+        ! Trapped-IR radiation pressure on the dust
+        if (dust_tva .and. rt_isIRtrap) then
+            if (nener <= 0) then
+                if(myid==1)write(*,*)'Error: rt_isIRtrap needs a non-thermal energy ', &
+                                     'variable; recompile with NENER>=1 (and NVAR+1)'
+                check_params_dust=.false.
+            end if
+            if (.not. rt_isIR) then
+                if(myid==1)write(*,*)'Error: rt_isIRtrap requires rt_isIR=.true. ', &
+                                     '(the trapped variable is the IR group)'
+                check_params_dust=.false.
+            end if
+            if (ndust <= 0) then
+                if(myid==1)write(*,*)'Error: trapped-IR pressure on dust requires NDUST>0'
+                check_params_dust=.false.
+            end if
+            if (rt_use_hll) then
+                ! Rosdahl & Teyssier 2015, footnote 3: the trapped/streaming
+                ! partition is matched to the numerical diffusion of the GLF
+                ! flux, so it is only consistent with rt_flux_scheme='glf'.
+                if(myid==1)write(*,*)'Error: rt_isIRtrap is only consistent with ', &
+                                     "rt_flux_scheme='glf', not 'hll'"
+                check_params_dust=.false.
+            end if
+        end if
+#endif
+#if defined(RT) && !defined(RTZ)
+        ! RT + CALIMA without RTZ. The radiative dust coupling is ported into
+        ! rt_cooling_module, but the dust<->gas THERMAL coupling is not: it
+        ! lives in rtz_coolrates_module's all_cooling, which does not exist in
+        ! this build. Warn rather than fail -- the configuration is useful and
+        ! deliberate -- but do not let the limitation pass silently.
+        if (myid == 1) then
+            write(*,*)'------------------------------------------------------------'
+            write(*,*)'WARNING: CALIMA is compiled without RTZ.'
+            write(*,*)'  ACTIVE : per-bin dust temperature, IR Rosseland/Planck'
+            write(*,*)'           opacities, dust radiation pressure, dust drift.'
+            write(*,*)'  MISSING: dust->gas thermal coupling. Dust recombination'
+            write(*,*)'           cooling, photoelectric heating and dust-gas'
+            write(*,*)'           collisional cooling are computed but NOT applied'
+            write(*,*)'           to the gas temperature.'
+            write(*,*)'  MISSING: metal abundances. The gas state handed to the'
+            write(*,*)'           grain physics carries H and He only, so T_dust is'
+            write(*,*)'           biased LOW (no heavy-species collisional heating)'
+            write(*,*)'           and grain charging sees no metal-donated'
+            write(*,*)'           electrons. See rt_calima_gas_state.'
+            write(*,*)'  With rt_kIR_RT15=.true. the one-temperature RT15 closure'
+            write(*,*)'  is used instead and the gas DOES receive IR heating.'
+            write(*,*)'------------------------------------------------------------'
+        end if
+#endif
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)
@@ -702,6 +803,7 @@ module dust_init
         ! This is called during init_time.f90
         use hydro_parameters
         use amr_commons, only:myid
+        use amr_parameters, only:condinit_kind
         use dust_photoelectric_heating, only: most_negative_allowed_charge
         use dust_optics, only:getRATCrosssection
         use rk4_mod, only: rk4_step
@@ -718,6 +820,39 @@ module dust_init
         real(dp) :: R
         integer :: iend_chemtype
         ! external :: run_dust_solver_test
+
+        ! Epstein drag coefficient. t_s = rho_s*a/(rho_g*v_th) with v_th the MEAN thermal
+        ! speed sqrt(8kT/(pi mu mH)); the solver's c_s is adiabatic, and
+        ! v_th = sqrt(8/(pi*gamma))*c_s, so the coefficient is sqrt(pi*gamma/8) = 0.809 for
+        ! gamma=5/3. Cf. patch/mrn-scratch/synchro_fine.f90, which carries the isothermal
+        ! form of the same constant, sqrt(pi/8) = 0.62665706865775.
+        epstein_coef = sqrt(pi * gamma / 8d0)
+
+        ! Resolve the TVA test IC once, here, instead of string-comparing condinit_kind
+        ! inside the per-cell/per-face/per-bin solver loops.
+        select case (trim(condinit_kind))
+        case ('dustydiffuse'); tva_test_mode = TVA_TEST_DIFFUSE
+        case ('dustyshock');   tva_test_mode = TVA_TEST_SHOCK
+        case ('dustyblast1d'); tva_test_mode = TVA_TEST_BLAST1D
+        case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
+        case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
+        case ('dustyirtrap');  tva_test_mode = TVA_TEST_IRTRAP
+        case ('dustytrapclump'); tva_test_mode = TVA_TEST_IRTRAP
+        case default;          tva_test_mode = TVA_TEST_NONE
+        end select
+        if (myid == 1 .and. tva_test_mode /= TVA_TEST_NONE) then
+            if (tva_test_mode == TVA_TEST_IRTRAP) then
+                ! This one keeps the real Epstein drag and real thermodynamics;
+                ! it only freezes the analytic trapped-IR profile from condinit
+                ! by skipping the re-partition in cooling_fine.
+                write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                           'branch: the trapped-IR energy is held at its analytic profile ', &
+                           '(no trapped/streaming re-partition). Drag and thermodynamics are physical.'
+            else
+                write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                           'branch: the stopping time and/or thermodynamics are hardcoded, not physical.'
+            end if
+        end if
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
         if (sum(dustbins_per_chemtype) /= ndust) then
@@ -1208,6 +1343,9 @@ module dust_init
                 ! PAH physics flags
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
+                ! Dust dynamics flags
+                dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,drag_coefficient,&
+                tva_wmax_cs,drag_model,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
                 dust_rtgroups_debug,dust_rtgroups_debug_max,dust_rtgroups_verify,dust_charging_timer,&
