@@ -24,6 +24,12 @@ module rtz_coolrates_module
   real(dp):: high_t_cooling_temp_CIE(N_HIGH_T_COOLING_TEMP_CIE)
   real(dp):: high_t_cooling_fracs_CIE(N_HIGH_T_COOLING_TEMP_CIE,27,27)
   logical:: high_t_cooling_rates_tflag(27,27)
+  ! For the ions with a fine-structure solver (high_t_cooling_rates_tflag), the table without its
+  ! ground-term fine-structure lines (log10): the table minus the solver at the table's own
+  ! conditions (n_e = 1 cm^-3, no other collider). Below 1e4 K the solver replaces the table for
+  ! these ions, and this keeps the optical/UV forbidden lines ([O III] 5007, [N II] 6584, ...) the
+  ! solver does not have.
+  real(dp):: high_t_cooling_rates_opt(N_HIGH_T_COOLING_TEMP,27,27)
   real(dp):: fs_cool_tab(27,160,8)  ! Array for fine structure cooling rates  
 
   real(dp):: G0_heating_rates(26) = (/ &
@@ -823,10 +829,13 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
           loc_cooling_rate = 10.d0**loc_cooling_rate
 
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                 * 10.d0**(frac_low * high_t_cooling_rates_opt(idx_low,i,j) &
+                           + frac_high * high_t_cooling_rates_opt(idx_low+1,i,j))
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -844,10 +853,13 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
           loc_cooling_rate = 10.d0**loc_cooling_rate
 
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                 * 10.d0**(frac_low * high_t_cooling_rates_opt(idx_low,i,j) &
+                           + frac_high * high_t_cooling_rates_opt(idx_low+1,i,j))
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -865,10 +877,13 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
           loc_cooling_rate = 10.d0**loc_cooling_rate
 
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                 * 10.d0**(frac_low * high_t_cooling_rates_opt(idx_low,i,j) &
+                           + frac_high * high_t_cooling_rates_opt(idx_low+1,i,j))
           end if
 
           rate = rate + ((CIE_frac_used / CIE_frac_theo) * element_number_densities(i) * high_t_cooling_fracs_CIE(CIE_Tidx,i,j) * ne * loc_cooling_rate * loc_temp_smooth)
@@ -920,8 +935,56 @@ SUBROUTINE initialize_fine_structure_tables()
         close(unit_num)
 
     end do
+
+    call build_optical_metal_tables()
     
 END SUBROUTINE initialize_fine_structure_tables
+
+SUBROUTINE build_optical_metal_tables()
+    ! high_t_cooling_rates_opt: see its declaration. The Cloudy tables are per ion and electron in
+    ! the low-density limit (one zone, n_e = 1 cm^-3, n_ion = 1 cm^-3), so the fine-structure solver
+    ! is evaluated with n_ion = n_e = 1 and no other collider, at z = 0.
+    use amr_commons, only: myid
+    implicit none
+    integer:: i, j, k
+    real(dp):: T, tab, fs
+    high_t_cooling_rates_opt = high_t_cooling_rates
+    do i = 1, 27
+       do j = 1, 27
+          if (.not. high_t_cooling_rates_tflag(i,j)) cycle
+          do k = 1, N_HIGH_T_COOLING_TEMP
+             if (high_t_cooling_temp(k) > 4.95d0) exit          ! the solver's table ends at 10^4.975 K
+             T = 10.d0**high_t_cooling_temp(k)
+             fs = fine_structure_ion(i, j, T, 1.d0, 0.d0, 0.d0, 1.d0, 0.d0, 0.d0, 0.d0, 0.d0, 0.d0)
+             tab = 10.d0**high_t_cooling_rates(k,i,j)
+             high_t_cooling_rates_opt(k,i,j) = log10(max(tab - fs, 1.d-50))
+          end do
+       end do
+    end do
+    if (myid == 1) write(*,*) 'Built the optical metal-line tables (table minus fine structure)'
+END SUBROUTINE build_optical_metal_tables
+
+FUNCTION fine_structure_ion(i, j, T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z) result(rate)
+    ! The fine-structure solver of element i, ion stage j (0 if there is none)
+    implicit none
+    integer, intent(in):: i, j
+    real(dp), intent(in):: T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z
+    real(dp):: rate
+    rate = 0.d0
+    select case (100*i + j)
+    case (601);  rate = CI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (602);  rate = CII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (702);  rate = NII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (801);  rate = OI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (803);  rate = OIII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1002); rate = NeII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1401); rate = SiI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1402); rate = SiII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1601); rate = SI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (2601); rate = FeI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (2602); rate = FeII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    end select
+END FUNCTION fine_structure_ion
 
 FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
                      A_10, A_20, A_21, z, T, n_ion, ne, nH, &
