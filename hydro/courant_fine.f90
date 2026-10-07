@@ -165,6 +165,9 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   use amr_parameters
   use hydro_parameters
   use const
+#ifdef CALIMA
+  use dust_commons, only: dust_tva, ntva, tva_test_mode, TVA_TEST_DIFFUSE
+#endif
   implicit none
   integer::ncell
   real(dp)::dx,dt
@@ -175,6 +178,11 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   integer::k,idim
 #if NENER>0
   integer::irad
+#endif
+
+#ifdef CALIMA
+  real(dp)::eps_total, rho_gas
+  integer :: id
 #endif
 
   smallp = smallc**2/gamma
@@ -219,8 +227,25 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   end if
 
   ! Compute pressure
+  ! NOTE: uu(k,1) still holds the original mixture density here (not yet
+  !       overwritten by the gravity-ratio step below), so it can safely
+  !       be used in place of the removed rho_save cache.
   do k = 1, ncell
+#ifndef CALIMA
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
+#else
+     if (dust_tva .and. ntva>0) then
+        eps_total=0.0d0
+        do id = 1,ntva
+           eps_total=eps_total+uu(k,ipah+id-1)/uu(k,1)
+        end do
+        eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+        rho_gas = uu(k,1)*(1.0d0-eps_total)
+        uu(k,neul) = max((gamma-one)*uu(k,neul),rho_gas*smallp)
+     else
+        uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
+     end if
+#endif
   end do
 #if NENER>0
   do irad = 1,nener
@@ -242,7 +267,25 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
   end do
 #endif
   do k = 1, ncell
+#ifndef CALIMA
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
+#else
+      if (dust_tva .and. ntva>0) then
+         eps_total=0.0d0
+         do id = 1,ntva
+            eps_total=eps_total+uu(k,ipah+id-1)/uu(k,1)
+         end do
+         eps_total = min(max(eps_total, 0.0_dp), 0.999_dp) ! Prevent division by zero if 100% dust
+         rho_gas = uu(k,1)*(1.0d0-eps_total)
+         if (tva_test_mode == TVA_TEST_DIFFUSE) then
+            uu(k,neul) = 1.0d0
+         else
+            uu(k,neul)=sqrt(uu(k,neul)/rho_gas)
+         end if
+      else
+         uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
+      end if
+#endif
   end do
 
   ! Compute wave speed
@@ -276,12 +319,13 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
      dt = min(dt,dtcell)
   end do
 
+  ! Dust TVA CFL is now enforced by get_dust_courant_dt, called from newdt_fine.f90.
+
 end subroutine cmpdt
 !###########################################################
 !###########################################################
 !###########################################################
 !###########################################################
-
 ! TC: commented because unused by default
 !subroutine check_cons(ilevel)
 !  use amr_commons
