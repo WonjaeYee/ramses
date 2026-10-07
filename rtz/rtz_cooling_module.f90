@@ -1252,7 +1252,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! Scattering rate; reduce the photon flux, but not photon density:
          phSc(1:nGroups)=0.
 
-         ! HKnote: OTSA is required with RTZ (for now)
+         ! With rt_OTSA the ground-state recombination photons are not emitted here, and
+         ! recombination() returns the case-B rate instead (the on-the-spot approximation).
 
          ! Emission from recombining gas, re-entering the radiation field.
          !
