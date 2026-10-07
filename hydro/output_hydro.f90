@@ -148,7 +148,22 @@ subroutine backup_hydro(filename, filename_desc)
                  do i = 1, ncache
                     xdp(i) = uold(ind_grid(i)+iskip, ivar)/max(uold(ind_grid(i)+iskip, 1), smallr)
                  end do
-
+                 field_name = ''
+#ifdef CALIMA
+                 do i_pah = 1, npah
+                    if (ipah+i_pah-1 == ivar) then
+                       write(field_name, '("PAHBin_", i0.2)') i_pah
+                    end if
+                 end do
+                 do i_dust = 1, ndust
+                    if (idust+i_dust-1 == ivar) then
+                       write(field_name, '("DustBin_", i0.2)') i_dust
+                    end if
+                 end do
+#endif
+                 if (len_trim(field_name) > 0) then
+                    ! Set by CALIMA
+                 else
 #if NMETALS > 1
                  if (metal .and. ivar.ge.imetal .and. ivar.lt.iIons) then
 #ifdef RTZ
@@ -229,6 +244,7 @@ subroutine backup_hydro(filename, filename_desc)
 #else
                     write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener
 #endif
+                 end if
                  end if
                  call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
               end do
