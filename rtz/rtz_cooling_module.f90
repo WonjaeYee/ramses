@@ -248,8 +248,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer::loopCode_idx1,loopCode_idx2
    integer*8,dimension(1:nGroups):: loopCodes01
    integer*8,dimension(1:nGroups,1:ndim):: loopCodes02
-   integer*8,dimension(1:n_elements,1:7):: loopCodes08,loopCodes09
-   integer*8,dimension(1:n_elements,0:7):: loopCodes10
+   ! Indexed by ion stage, 1..n_ions, and n_ions reaches 27 (Fe) with the full networks
+   integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
+   integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
    
    ! get cell size
    nx_loc = (icoarse_max-icoarse_min+1)
@@ -2091,7 +2092,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (iIon.lt.n_ions) then
                   saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
                   if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
-                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, UV_background_G0, ne)
+                  ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
+                  ! (at the background alone every grain is as in the dark, with its largest rate)
+                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0 + UV_background_G0, ne)
                end if
 
                ! Initialize the change to zero
