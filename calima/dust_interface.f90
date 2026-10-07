@@ -11,7 +11,8 @@ module dust_interface
 
     public :: compute_dust_rad_rates,compute_dust_precool,&
             compute_dust_coolrates,compute_local_anisotropy_factor,&
-            compute_dust_update,rtgroups_reset_warm,report_dust_charging_timer
+            compute_dust_update,rtgroups_reset_warm,report_dust_charging_timer,&
+            rtgroups_ir_emitted
     ! RTZ cell sub-steps (rtz_cool_step calls) and their wall-clock time, counted by
     ! rtz_cooling_module when dust_charging_timer: the charging cost per RTZ step
     real(dp), public, save :: trtz = 0d0
@@ -48,6 +49,22 @@ contains
         if (allocated(rtg_last)) rtg_last(:)%valid = .false.
         if (dust_rtgroups_debug .or. dust_rtgroups_verify) call rtgroups_dump_mark()
     end subroutine rtgroups_reset_warm
+
+    subroutine rtgroups_ir_emitted(ig, Tk, ne, Np_ig)
+        ! WDB06rt with rt_isIR: rtz_cool_step adds the sub-step's dust IR emission to group ig
+        ! after the precool solve at (Tk, ne) and before the cooling solver's T(1 +- 1e-5)
+        ! calls, which only need dC/dT. The bins just solved take the new N_ig as theirs, so
+        ! those calls are served from the precool solve's d/d ln T (rtg_served), as without
+        ! rt_isIR, instead of two more full solves whose warm-started roots need not agree.
+        implicit none
+        integer, intent(in) :: ig
+        real(dp), intent(in) :: Tk, ne, Np_ig
+        integer :: ib
+        if (.not. allocated(rtg_last)) return
+        do ib = 1, size(rtg_last)
+            if (rtg_last(ib)%valid .and. rtg_last(ib)%T == Tk .and. rtg_last(ib)%ne == ne) rtg_last(ib)%Np(ig) = Np_ig
+        end do
+    end subroutine rtgroups_ir_emitted
 
     subroutine report_dust_charging_timer()
         ! Wall-clock time of the grain charging and PE heating (dust_charging_timer) and of the
