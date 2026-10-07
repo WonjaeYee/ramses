@@ -200,6 +200,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rtz_primary_cosmic_ray_ionization_rate, rtz_max_cool_timestep  &
        & ,rtz_eqm_min_its, rtz_source_temperature, rtz_include_dust      &
        & ,rtz_He_fluor_yield                                              &
+       & ,rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac                &
        & ,rtz_single_cell_test, rtz_single_cell_test_file               &
 #endif
        ! RT regions (for initialization)                                 &
