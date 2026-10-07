@@ -17,6 +17,13 @@ module dust_dynamics
     integer, allocatable, save :: rp_key(:), rp_stamp(:)
     real(dp), allocatable, save :: rp_val(:,:)
 #endif
+    ! Results of draine2011_stopping_time past its linear regime, direct-mapped on the bit
+    ! patterns of its six arguments: a cell's stopping times are evaluated once in each of the
+    ! overlapping stencils that hold it (3^ndim of them in the flux routine), and a hit returns
+    ! what the root search would return, bit for bit.
+    integer, parameter :: TS_MEMO_N = 16384   ! 0.9 MB
+    integer(kind=8), save :: ts_memo_key(6, 0:TS_MEMO_N-1) = 0_8
+    real(dp), save :: ts_memo_val(0:TS_MEMO_N-1) = -1d0
 
     contains
 
@@ -74,8 +81,9 @@ module dust_dynamics
         ! maximum of G it jumps to the collisional branch (Draine's runaway). cgs.
         real(dp), intent(in) :: a, rho_s, D, nH, T, coul
         real(dp) :: t_s
-        real(dp) :: G_target, g0, s_lin, s_lo, s_hi, s_mid
-        integer  :: it
+        real(dp) :: G_target, g0, s_lin, s_lo, s_hi, s_mid, c0, c2
+        integer  :: it, h
+        integer(kind=8) :: k(6)
 
         g0       = (8d0 + 4d0*coul) / (3d0*sqrt(pi))          ! dG/ds at s = 0
         G_target = (2d0/3d0) * a * rho_s * abs(D) / (max(nH, 1d-30) * kB * T)
@@ -85,12 +93,27 @@ module dust_dynamics
             t_s = (2d0/3d0) * a * rho_s * sqrt(2d0*kB*T/mH) / (max(nH, 1d-30) * kB * T * g0)
             return
         end if
-        ! Bracket the smallest root by stepping out from deep in the linear regime
+        ! the root search below, unless these arguments were the last ones in their slot
+        k = (/ transfer(a, 0_8), transfer(rho_s, 0_8), transfer(D, 0_8), &
+               transfer(nH, 0_8), transfer(T, 0_8), transfer(coul, 0_8) /)
+        h = ts_memo_slot(k)
+        if (all(ts_memo_key(:, h) == k) .and. ts_memo_val(h) >= 0d0) then
+            t_s = ts_memo_val(h)
+            return
+        end if
+        ! Bracket the smallest root by stepping out from deep in the linear regime. A step
+        ! whose s_hi has the upper bound U(s) = s (c0 (1 + 9 pi s^2/128) + c2) >= G(s) below
+        ! G_target, with a margin far above the rounding of either, cannot end the loop, so G
+        ! is evaluated only where it can (sqrt(1 + x) <= 1 + x/2; s^3 >= 0 in the Coulomb term)
+        c0 = 8d0/(3d0*sqrt(pi))
+        c2 = coul/(0.75d0*sqrt(pi))
         s_lo = 1d-3 * s_lin
         s_hi = s_lo
         do it = 1, 400
             s_hi = 1.2d0 * s_lo
-            if (G_draine(s_hi) >= G_target) exit
+            if (coul < 0d0 .or. s_hi*(c0*(1d0 + 9d0*pi*s_hi**2/128d0) + c2)*(1d0 + 1d-12) >= G_target) then
+                if (G_draine(s_hi) >= G_target) exit
+            end if
             s_lo = s_hi
         end do
         do it = 1, 50
@@ -102,6 +125,8 @@ module dust_dynamics
             end if
         end do
         t_s = 0.5d0 * (s_lo + s_hi) * sqrt(2d0*kB*T/mH) / abs(D)
+        ts_memo_key(:, h) = k
+        ts_memo_val(h) = t_s
     contains
         real(dp) function G_draine(s)
             real(dp), intent(in) :: s
@@ -109,6 +134,20 @@ module dust_dynamics
                      + coul*s/(0.75d0*sqrt(pi) + s**3)
         end function G_draine
     end function draine2011_stopping_time
+
+    pure integer function ts_memo_slot(k)
+        ! slot of draine2011_stopping_time's arguments (their bit patterns) in its memo
+        integer(kind=8), intent(in) :: k(6)
+        integer(kind=8) :: x
+        integer :: i
+        x = 0_8
+        do i = 1, 6
+            x = ieor(ishftc(x, 23), k(i))
+            x = ieor(x, ishft(x, -31))
+        end do
+        x = ieor(x, ishft(x, -12))
+        ts_memo_slot = int(iand(ieor(x, ishft(x, -24)), int(TS_MEMO_N - 1, 8)))
+    end function ts_memo_slot
 
     function grain_relative_velocity(model,T,rho_gas,nH,v_turb&
                                     &,local_mu,inject_L&
@@ -511,7 +550,7 @@ module dust_dynamics
         real(dp), dimension(1:ntva+2) :: drag_state_face
         real(dp) :: Ptrap_L, Ptrap_R, grad_Ptrap
         real(dp), dimension(1:ntva) :: s_IRtrap_face
-        logical  :: do_irtrap
+        logical  :: do_irtrap, use_draine   ! use_draine: draine_drag(), a string comparison, once per call
         real(dp) :: a_rad_g_face, a_rad_mix, w_g, w_d_val, sum_eps_ts_D
         real(dp) :: w_cap, wmax_all
         integer(kind=8) :: nclip_all
@@ -698,6 +737,7 @@ module dust_dynamics
                 ! Trapped-IR pressure, same definition as the flux routine so
                 ! this CFL bound applies to the drift actually taken.
                 do_irtrap = .false.
+                use_draine = draine_drag()
 #if defined(RT) && NENER>0
                 do_irtrap = rt_isIR .and. rt_isIRtrap .and. ntva > 0
 #endif
@@ -855,7 +895,7 @@ module dust_dynamics
                                 end if
                                 ! Draine (2011) drag is nonlinear in the drift, so its
                                 ! stopping time needs the driving acceleration D first.
-                                if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                                if (use_draine .and. (tva_test_mode == TVA_TEST_NONE &
                                     .or. tva_test_mode >= TVA_TEST_SPRESS)) then
                                     if (idim == 1) then
                                         drag_state_face = half * (drag_state(l,i-1,j,k,:) + drag_state(l,i,j,k,:))
@@ -1918,7 +1958,7 @@ module dust_dynamics
         ! Trapped-IR radiation pressure, exactly as the Riemann solver sees it
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
         real(dp) :: grad_Ptrap_cell
-        logical  :: do_irtrap
+        logical  :: do_irtrap, use_draine   ! use_draine: draine_drag(), a string comparison, once per call
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
@@ -2030,6 +2070,7 @@ module dust_dynamics
         ! whatever the rt_c_fraction normalisation turns out to be.
         ! ========================================================================
         do_irtrap = .false.
+        use_draine = draine_drag()
 #if NENER>0
         do_irtrap = rt_isIR .and. rt_isIRtrap .and. ntva > 0
 #endif
@@ -2165,7 +2206,7 @@ module dust_dynamics
                         end if
                         ! Draine (2011) drag is nonlinear in the drift, so its
                         ! stopping time needs the driving acceleration D first.
-                        if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                        if (use_draine .and. (tva_test_mode == TVA_TEST_NONE &
                             .or. tva_test_mode >= TVA_TEST_SPRESS)) then
                             t_s_intrinsic(jbin) = draine2011_stopping_time(a_cm_tva(jbin), &
                                 s_cgs_tva(jbin), D_bin(jbin) * scale_v / scale_t,          &
