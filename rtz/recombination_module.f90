@@ -729,13 +729,34 @@ FUNCTION alpha_DR(T, DR_rates_e, DR_rates_c) result(rate)
 END FUNCTION alpha_DR
 
 FUNCTION recombination(T, ion, element_idx) result(rate)
+  use rt_parameters, only: rt_otsa
   implicit none
   real(dp), intent(in) :: T
   integer, intent(in) :: ion, element_idx
   real(dp) :: rate
+  real(dp) :: aA, aB
 
-  ! Radiative recombination rate from Cloudy database
+  ! Radiative recombination rate from Cloudy database (Verner & Ferland 1996, i.e. case A)
   rate = cloudy_rad_rec(element_idx, element_idx - ion + 2, T)
+
+  ! On-the-spot approximation: with rt_otsa the photons of recombinations straight to the ground
+  ! state of H I, He I and He II are not emitted into the groups (rtz_cool_step builds recRad only
+  ! without OTSA), so they must be taken as absorbed where they are made, and the net rate is the
+  ! case-B one (as rt_cooling_module does for plain RT, and as all_cooling's case-B recombination
+  ! cooling already assumes). The case A/B fit pairs are used for their ratio only, as in
+  ! init_recrad_table.
+  if (rt_otsa) then
+     if (element_idx == 1 .and. ion == 2) then
+        call ab_HII(T, aA, aB)
+        rate = rate * (aB / aA)
+     else if (element_idx == 2 .and. ion == 2) then
+        call ab_HeII(T, aA, aB)
+        rate = rate * (aB / aA)
+     else if (element_idx == 2 .and. ion == 3) then
+        call ab_HeIII(T, aA, aB)
+        rate = rate * (aB / aA)
+     end if
+  end if
 
   ! Add dielectronic recombination rate
   select case (element_idx)
