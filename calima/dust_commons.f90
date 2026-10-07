@@ -8,13 +8,14 @@
 module dust_commons
     use amr_parameters, only:dp
     use hydro_parameters, only:n_elements,ndust,ndchemtype,npah,idust,ipah
+    use constants, only: amu2g
     use dust_utils
     use dustbin_types
 
     implicit none
 
     ! ==== Flags and logicals (read from nml) ====
-    logical, parameter ::dust=.true.             ! CALIMA always includes dust
+    logical, parameter ::dust=(ndust>0)          ! CALIMA includes dust if ndust > 0
     logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
     logical ::dust_debug=.false.                 ! Activate detailed dust mass-budget logging (per-process dM/dt; heavier overhead)
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
@@ -45,7 +46,7 @@ module dust_commons
     logical ::ratd_only_rtadv=.false.            ! Only allow for RATD if the rt_advect=.true.
     logical ::poppe_ice_enhancement=.false.      ! Whether to use the empirical enhancement in coagulation threshold due to ice mantel
     logical ::H2ondust=.false.                   ! Activate H2 formation on dust
-    logical, parameter ::dust_pahs=.true.       ! CALIMA always includes PAHs
+    logical, parameter ::dust_pahs=(npah>0)       ! CALIMA includes PAHs if npah > 0
     logical ::dust_turbulent_model=.false.       ! Activate the subgrid model of turbulent shattering and coagulation
     logical ::pah_accretion=.false.              ! Activate the simple growth of PAH mass by accretion of gas phase C atoms
     logical ::pah_acc_spu=.false.                ! Activate the destruction of PAHs by accretion of C+
