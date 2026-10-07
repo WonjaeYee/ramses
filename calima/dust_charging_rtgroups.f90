@@ -1191,16 +1191,20 @@ module dust_charging_rtgroups
         pmax = maxval(b_P(lo - b_base:hi - b_base))
     end subroutine window_P
 
-    subroutine window(z0, z1, want_d, lo, hi)
+    subroutine window(z0, z1, want_d, lo, hi, capped)
         ! pyCALIMA _window: exact P(Z) on z0..z1, grown or trimmed at each end to one charge
-        ! past where P < DISCRETE_TAIL of its maximum; P normalised in b_P(lo..hi)
+        ! past where P < DISCRETE_TAIL of its maximum; P normalised in b_P(lo..hi).
+        ! capped: the growth stopped at MAX_DISCRETE_STATES with P still above the tail at an end
+        ! that could grow, so lo..hi need not hold the peak (a warm window far from the new root)
         implicit none
         real(dp), intent(in) :: z0, z1
         logical, intent(in) :: want_d
         integer, intent(out) :: lo, hi
+        logical, intent(out), optional :: capped
         integer :: k, k0, k1, zl, zh
         real(dp) :: pmax
         logical :: room, glo, ghi
+        if (present(capped)) capped = .false.
         lo = nint(z0)
         hi = nint(z1)
         zl = nint(rtg(c_bin)%Zmin)
@@ -1214,7 +1218,12 @@ module dust_charging_rtgroups
             room = hi - lo + 1 < MAX_DISCRETE_STATES
             glo = room .and. b_P(lo - b_base) > DISCRETE_TAIL*pmax .and. lo > zl
             ghi = room .and. b_P(hi - b_base) > DISCRETE_TAIL*pmax .and. hi < zh
-            if (.not. (glo .or. ghi)) exit
+            if (.not. (glo .or. ghi)) then
+                if (present(capped)) capped = .not. room .and. &
+                    ((b_P(lo - b_base) > DISCRETE_TAIL*pmax .and. lo > zl) .or. &
+                     (b_P(hi - b_base) > DISCRETE_TAIL*pmax .and. hi < zh))
+                exit
+            end if
             if (glo) then
                 lo = lo - 1
                 call eval_int(dble(lo), want_d)
@@ -1781,7 +1790,7 @@ module dust_charging_rtgroups
         real(dp) :: Zs, sigma, pair(4), h, s0, s1, Zs1, sig1, chord(4), lnP, lnAlo
         real(dp) :: gm1, gp1, gam1, lam1, c(1 - MAX_DISCRETE_STATES:NBUF), cb, dvar, je, dje, EA, arrive2, zr, lg(RTG_NRI)
         integer :: lo, hi, k, j, half, Zc, lt
-        logical :: disc, got, want_d, have_chord
+        logical :: disc, got, want_d, have_chord, capped
         logical, intent(in), optional :: sens    ! also d/d ln S, d/d ln N and the anchor of rtgroups_predict
         ! c, cS, cN: indexed by charge - lo + 1, from the lowest charge below the window in the recombination
         real(dp) :: cS(1 - MAX_DISCRETE_STATES:NBUF), cN(1 - MAX_DISCRETE_STATES:NBUF)
@@ -1797,9 +1806,10 @@ module dust_charging_rtgroups
         ! 1. charge distribution: a discrete window reused from the warm state, or root + width
         got = .false.
         if (st%valid .and. st%discrete) then
-            call window(st%wlo, st%whi, want_d, lo, hi)
+            call window(st%wlo, st%whi, want_d, lo, hi, capped)
             call window_moments(lo, hi, r%Zmean, r%Zsigma)
-            if (r%Zsigma < SIGMA_DISCRETE) then
+            ! a capped window is a cut tail, narrow whatever the true width: solve from the root
+            if (r%Zsigma < SIGMA_DISCRETE .and. .not. capped) then
                 got = .true.
                 ! Z*: root of g interpolated between the integers of the window
                 Zs = dble(hi)
