@@ -199,6 +199,41 @@ FUNCTION collisional_excitation_cooling_HI_seon20(T) result(rate)
 
 END FUNCTION collisional_excitation_cooling_HI_seon20
 
+FUNCTION collisional_excitation_cooling_HI_2s(T) result(rate)
+    ! Collisional excitation H(1s) -> H(2s), which decays by two-photon emission and so is not in
+    ! the Lyman-alpha rate of collisional_excitation_cooling_HI_seon20. Effective collision
+    ! strengths of Anderson et al. (2000, 2002 erratum), as tabulated in Cloudy's h_coll_str.dat,
+    ! interpolated linearly in ln(kT) and held constant outside 0.5-25 eV;
+    ! Lambda = E_12 * 8.629e-6 Upsilon / (g_1 sqrt(T)) exp(-E_12/kT), g_1 = 2, E_12 = 10.199 eV.
+    implicit none
+    real(dp), intent(in):: T
+    real(dp):: rate
+    real(dp), parameter:: kT_tab(8) = (/ 0.5d0, 1.d0, 3.d0, 5.d0, 10.d0, 15.d0, 20.d0, 25.d0 /)
+    real(dp), parameter:: ups_tab(8) = (/ 0.260d0, 0.296d0, 0.326d0, 0.339d0, 0.373d0, 0.406d0, 0.436d0, 0.461d0 /)
+    real(dp), parameter:: E12_K = 118352.d0          ! 10.199 eV / k
+    real(dp), parameter:: E12_erg = 10.199d0 * 1.602176634d-12
+    real(dp):: kT, ups, w
+    integer:: i
+
+    kT = 8.617333d-5 * T
+    if (kT <= kT_tab(1)) then
+        ups = ups_tab(1)
+    else if (kT >= kT_tab(8)) then
+        ups = ups_tab(8)
+    else
+        i = 1
+        do while (kT > kT_tab(i+1))
+            i = i + 1
+        end do
+        w = log(kT / kT_tab(i)) / log(kT_tab(i+1) / kT_tab(i))
+        ups = ups_tab(i) + w * (ups_tab(i+1) - ups_tab(i))
+    end if
+    rate = E12_erg * 8.629d-6 * ups / (2.d0 * sqrt(T)) * safe_exp(-E12_K / T)
+
+    rate = MAX(rate,1.d-100)
+
+END FUNCTION collisional_excitation_cooling_HI_2s
+
 FUNCTION collisional_excitation_cooling_HeII(T) result(rate)
     ! From Cen 1992
     implicit none
@@ -2144,7 +2179,8 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     metal_cool_smooth_f2 = 0.5d0 * (tanh( (5.d-3) * ( (-1.d0 * T) + 1.d4 ) ) + 1.d0 )
 
     ! Cooling from primordial species
-    cooling_HI = (collisional_ionization_cooling_HI(T) + collisional_excitation_cooling_HI_seon20(T)) * ne * nH_I
+    cooling_HI = (collisional_ionization_cooling_HI(T) + collisional_excitation_cooling_HI_seon20(T) &
+                  + collisional_excitation_cooling_HI_2s(T)) * ne * nH_I
     cooling_HII = recombination_cooling_case_B_HII(T) * ne * nH_II
     cooling_HeI = collisional_ionization_cooling_HeI(T) * ne * nHe_I
     cooling_HeII = (collisional_ionization_cooling_HeII(T) + collisional_excitation_cooling_HeII(T) + recombination_cooling_case_B_HeII(T) + dielectronic_recombination_cooling_HeII(T)) * ne * nHe_II
