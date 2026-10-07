@@ -14,10 +14,10 @@ c_red in every cell each step, so rt_n_source(g) is the photon flux of group g
         --rtgroups-tables /path/to/pyCALIMA/model_data/dust_charging_rtgroups_data
 
 writes RUNS/<model>/<source>_bin<k>/{namelist.nml,run.sh} for model = new
-(charging_model='WDB06rt', debug dump on) and ref (the original
-charging_model='RM2026' tables), plus a tables directory that links the
-standard CALIMA tables and the RT-group ones. Compare with
-pycalima diagnostics/dust_charge/compare_ramses_rtgroups.py.
+(charging_model='WDB06rt', debug dump on) and ref (charging_model='WDB06isrf':
+the uniform-ISRF tables at the G0 of the groups; --exe-ref needs a build that has
+it), plus a tables directory that links the standard CALIMA tables and the
+RT-group ones. Compare with pycalima diagnostics/dust_charge/compare_ramses_rtgroups.py.
 """
 import argparse
 import os
@@ -122,7 +122,7 @@ def namelist(source, G0, dust_bin, nH, T, model, tables_dir, data_dir, nstep, fr
              + "\ngroupL1 = " + ", ".join(f"{x:g}" for x in GROUP_L1) + "\n/")
     cal = ["&CALIMA_PARAMS", "dust_pe_heating=.true.", "dust_pe_heating_isrf=.false.",
            "pah_pe_heating=.true.",
-           f"charging_model='{'WDB06rt' if model == 'new' else 'RM2026'}'",
+           f"charging_model='{'WDB06rt' if model == 'new' else 'WDB06isrf'}'",
            "dust_composition(1,6) = 1d0", "dust_composition(2,8)  = 4d0", "dust_composition(2,12) = 1d0",
            "dust_composition(2,14) = 1d0", "dust_composition(2,26) = 1d0", "dustbins_per_chemtype=2,2",
            "asize=0.01d0,0.1d0,0.005d0,0.1d0", "sgrain=2.2d0,2.2d0,3.3d0,3.3d0",

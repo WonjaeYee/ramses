@@ -2,7 +2,8 @@ module dust_interface
     use amr_commons, only:dp,ndim
     use amr_parameters, only: nvector
     use dust_charging_rtgroups, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, RTG_RECOMB_IMPORTANT, &
-                                      PSI_NIN, RI_ATOMIC
+                                      RI_ATOMIC
+    use dust_radiation, only: TdustLin
     use constants
     use dust_commons
     implicit none
@@ -35,10 +36,18 @@ module dust_interface
     type(RTGLast), allocatable, save :: rtg_last(:)
     real(dp), allocatable, save :: rtg_Zguess(:)
     real(dp), parameter :: RTG_DLNT = 1d-5, RTG_SERVE = 1.5d-5
+    real(dp), parameter :: RTG_SERVE_HI = exp(RTG_SERVE), RTG_SERVE_LO = exp(-RTG_SERVE)   ! rtg_served, without a log
     ! grain charging timer (dust_charging_timer): wall-clock seconds; calls per bin by path
-    ! (0: full solve, 1: uniform-G0 table, 2: from d/d ln T, 3: other charging models)
+    ! (0: full solve, 1: uniform-G0 table, 2: from d/d ln T, 3: other charging models,
+    ! 4: predicted from the cell's last full solve, rtgroups_predict)
     real(dp), save :: tchg = 0d0
-    integer(8), save :: nchg(0:3) = 0, nchg_fit = 0, nchg_disc = 0
+    integer(8), save :: nchg(0:4) = 0, nchg_fit = 0, nchg_disc = 0
+    ! the dust temperatures of the last update_T_dust and the inputs it had: the cooling solver's
+    ! T(1 +- 1e-5) calls with the same other inputs are served from it (serve_T_dust)
+    type(TdustLin), allocatable, save :: td_lin(:)
+    logical, save :: td_valid = .false., td_hasNp = .false.
+    real(dp), save :: td_T = 0d0, td_ne = 0d0, td_G0 = 0d0, td_nH2 = 0d0, td_nCO = 0d0
+    real(dp), allocatable, save :: td_nel(:), td_xion(:,:), td_Np(:), td_egy(:)
 
 contains
     subroutine rtgroups_reset_warm()
@@ -46,7 +55,9 @@ contains
         use dust_charging_rtgroups, only: rtgroups_dump_mark
         implicit none
         if (allocated(rtg_warm)) rtg_warm(:,:)%valid = .false.
+        if (allocated(rtg_warm)) rtg_warm(:,:)%anchored = .false.
         if (allocated(rtg_last)) rtg_last(:)%valid = .false.
+        td_valid = .false.
         if (dust_rtgroups_debug .or. dust_rtgroups_verify) call rtgroups_dump_mark()
     end subroutine rtgroups_reset_warm
 
@@ -73,7 +84,7 @@ contains
         use mpi_mod
         implicit none
         real(dp) :: t, tr, tl(2)
-        integer(8) :: n(0:6), nl(0:6)
+        integer(8) :: n(0:7), nl(0:7)
         real(dp), allocatable :: ta(:,:)
         integer(8), allocatable :: na(:,:)
         integer :: k
@@ -81,17 +92,17 @@ contains
         integer :: info
 #endif
         if (.not. dust_charging_timer) return
-        nl(0:3) = nchg
-        nl(4) = nchg_fit
-        nl(5) = nchg_disc
-        nl(6) = nrtz
+        nl(0:4) = nchg
+        nl(5) = nchg_fit
+        nl(6) = nchg_disc
+        nl(7) = nrtz
         tl = (/ tchg, trtz /)
-        allocate(ta(2, ncpu), na(0:6, ncpu))
+        allocate(ta(2, ncpu), na(0:7, ncpu))
         ta(:, 1) = tl
         na(:, 1) = nl
 #ifndef WITHOUTMPI
         call MPI_GATHER(tl, 2, MPI_DOUBLE_PRECISION, ta, 2, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
-        call MPI_GATHER(nl, 7, MPI_INTEGER8, na, 7, MPI_INTEGER8, 0, MPI_COMM_WORLD, info)
+        call MPI_GATHER(nl, 8, MPI_INTEGER8, na, 8, MPI_INTEGER8, 0, MPI_COMM_WORLD, info)
 #endif
         if (myid /= 1) return
         t = sum(ta(1, :))
@@ -100,14 +111,15 @@ contains
         write(*,'(A,A)') ' CALIMA grain charging timer, charging_model = ', trim(charging_model)
         write(*,'(A)') '   rank   RTZ steps  t(RTZ steps) [s]  t(charging) [s]  charging/RTZ step [ns]  RTZ step [ns]  charging share'
         do k = 1, ncpu
-            write(*,'(I7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') k, dble(na(6, k)), ta(2, k), ta(1, k), &
-                1d9*ta(1, k)/max(dble(na(6, k)), 1d0), 1d9*ta(2, k)/max(dble(na(6, k)), 1d0), ta(1, k)/max(ta(2, k), 1d-30)
+            write(*,'(I7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') k, dble(na(7, k)), ta(2, k), ta(1, k), &
+                1d9*ta(1, k)/max(dble(na(7, k)), 1d0), 1d9*ta(2, k)/max(dble(na(7, k)), 1d0), ta(1, k)/max(ta(2, k), 1d-30)
         end do
-        write(*,'(A7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') '  all', dble(n(6)), tr, t, 1d9*t/max(dble(n(6)), 1d0), &
-            1d9*tr/max(dble(n(6)), 1d0), t/max(tr, 1d-30)
-        write(*,'(A,ES10.3,A,F9.1,A)') '   ', dble(sum(n(0:3))), ' bin calls: ', 1d9*t/max(dble(sum(n(0:3))), 1d0), ' ns per call'
-        if (sum(n(0:2)) > 0) write(*,'(A,3ES11.3,A,ES11.3,A,ES11.3)') '   WDB06rt calls full / uniform table / from d/dlnT:', &
-            dble(n(0:2)), '; discrete', dble(n(5)), '; recombination fits', dble(n(4))
+        write(*,'(A7,ES12.4,2F17.3,F24.1,F15.1,F15.3)') '  all', dble(n(7)), tr, t, 1d9*t/max(dble(n(7)), 1d0), &
+            1d9*tr/max(dble(n(7)), 1d0), t/max(tr, 1d-30)
+        write(*,'(A,ES10.3,A,F9.1,A)') '   ', dble(sum(n(0:4))), ' bin calls: ', 1d9*t/max(dble(sum(n(0:4))), 1d0), ' ns per call'
+        if (sum(n(0:2)) + n(4) > 0) write(*,'(A,4ES11.3,A,ES11.3,A,ES11.3)') &
+            '   WDB06rt calls full / uniform table / from d/dlnT / predicted:', &
+            dble(n(0:2)), dble(n(4)), '; discrete', dble(n(6)), '; recombination fits', dble(n(5))
     end subroutine report_dust_charging_timer
 
     subroutine compute_local_anisotropy_factor(dinfo,Fp,Np)
@@ -127,6 +139,9 @@ contains
         integer :: i
         real(dp) :: rad_ani
 
+        ! the groups at the floor (skipped below) are isotropic and get no solid angle
+        dinfo%local_rad_ani = 0d0
+        dinfo%local_solid_angle = 0d0
         if (all(Np.le.dinfo%smallNp)) return
 
         if (fixed_rad_ani .eq. -1d0) then
@@ -214,7 +229,7 @@ contains
 
     subroutine compute_dust_precool(dinfo, G0_total, Tk, ne,&
                                     &nElement, xelem_ions, nH2, nCO, &
-                                    & Np)
+                                    & Np, rates_only)
         ! Pre-computes the dust and PAH cooling and heating rates for the given local conditions, 
         ! which can then be used in subsequent calls to compute_dust_coolrates to save computational time.
         ! dinfo --> the DustChemistryInfo instance to update with the computed rates
@@ -227,17 +242,18 @@ contains
         ! nCO --> local carbon monoxide density (cm^-3)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_dust_charge_dist, compute_Coulomb_focusing
+                                compute_dust_charge_dist, compute_Coulomb_focusing_ions,&
+                                isrf_lookup, ISRF_ND, ISRF_DCHARGE
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
                                             compute_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
                                             compute_pah_peh_equilibrium,&
                                             interpolate_pah_peh_equilibrium,&
                                             compute_pah_charge_equilibrium
-        use dust_radiation, only: update_T_dust
+        use dust_radiation, only: update_T_dust, serve_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
-                                          psitab_inputs, psitab_lookup, psitab_dump
+                                          rtgroups_predict, rtgroups_coulomb_ratio
         use amr_commons, only: myid
 
         implicit none
@@ -248,55 +264,42 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: nH2, nCO
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
+        logical, intent(in), optional :: rates_only   ! only the rates compute_dust_coolrates returns (not the Coulomb factors)
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
-        real(dp) :: Zel, nHI, prevD
+        real(dp) :: nHI
         integer :: n_charge
-        logical :: use_rtg, no_local, use_tab
-        real(dp) :: psi_in(PSI_NIN), alpha_tab(RTG_NRI)
+        logical :: use_rtg, no_local, use_isrf, predict, ok, skip_coulomb
+        real(dp), dimension(1:ndust) :: isrf_G, isrf_L         ! WDB06isrf: PE heating, recombination cooling
+        real(dp), dimension(ISRF_ND, 1:ndust) :: isrf_D        ! WDB06isrf: Coulomb factors over the exact P(Z)
+        ! WDB06rt Coulomb factors of the low impactor charges: 1 the Gaussian ones times rtg_D (the
+        ! exact-P(Z) ratio of the last full solve), 2 rtg_D (the ISRF tables, background-only cells)
+        integer, dimension(1:ndust) :: rtg_Dmode
+        real(dp), dimension(ISRF_ND, 1:ndust) :: rtg_D
+        real(dp) :: zz, ss, gg, ll
         real(dp) :: n_Hp, n_Hep, n_Hepp, h, t0
-        real(dp), dimension(1:dinfo%ndust) :: rtg_Pinj, rtg_Prec
+        ! sized by the compile-time ndust (= dinfo%ndust): on the stack, not allocated on each call
+        real(dp), dimension(1:ndust) :: rtg_Pinj, rtg_Prec
         type(RTGState), pointer :: st
-        type(RTGState), dimension(1:dinfo%ndust) :: st0s
+        type(RTGState), allocatable :: st0s(:)      ! the dumps only: an RTGState is large, and initialised on each call
         type(RTGResult) :: rr
-        type(RTGResult), dimension(1:dinfo%ndust) :: rrs
+        type(RTGResult), dimension(1:ndust) :: rrs
         integer :: path, ic, ndumped
-        integer, dimension(1:dinfo%ndust) :: paths
-        logical, dimension(1:dinfo%ndust) :: refined
-        real(dp) :: rate(RTG_NRI, 1:dinfo%ndust), tot(RTG_NRI), zg_used(1:dinfo%ndust)
-        real(dp) :: alpha_bins(RTG_NRI, 1:dinfo%ndust), n_grain
+        integer, dimension(1:ndust) :: paths
+        logical, dimension(1:ndust) :: refined
+        real(dp) :: rate(RTG_NRI, 1:ndust), tot(RTG_NRI), zg_used(1:ndust)
+        real(dp) :: alpha_bins(RTG_NRI, 1:ndust), n_grain
         real(kind=8) :: wallclock
 
         if (dinfo%ndust > 0) then
             ! 1. Compute the equilibrium dust charge
             if (dust_charging_timer) t0 = wallclock()
             use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
-            use_tab = trim(charging_model) == 'WDB06tab'
+            use_isrf = trim(charging_model) == 'WDB06isrf'
             alpha_bins = 0d0
-            if (use_tab) then
-                ! tables on (T, G_FUV sqrt(T)/ne, FUV hardness, G_EUV sqrt(T)/ne), n(H+) = ne
-                if (present(Np)) then
-                    call psitab_inputs(Np, dinfo%local_c, dinfo%G0_background, dinfo%group_eV, psi_in)
-                else
-                    call psitab_inputs(0d0*dinfo%group_eV, 0d0, dinfo%G0_background, dinfo%group_eV, psi_in)
-                end if
-                do ii = 1, dinfo%ndust
-                    call psitab_lookup(ii, Tk, ne, psi_in, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
-                                       rtg_Pinj(ii), rtg_Prec(ii), alpha_tab)
-                    alpha_bins(:, ii) = alpha_tab        ! 0 without dust_ion_recombination
-                    if (dust_rtgroups_debug .or. dust_rtgroups_verify) then
-                        call psitab_dump(ii, Tk, ne, psi_in, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), &
-                                         rtg_Pinj(ii), rtg_Prec(ii), alpha_tab, ndumped)
-                        if (dust_rtgroups_verify .and. ndumped >= dust_rtgroups_debug_max) then
-                            if (myid == 1) write(*,'(A,I7,A)') ' WDB06tab verify: ', ndumped, ' lookups dumped; stopping'
-                            call clean_stop
-                        end if
-                    end if
-                end do
-                if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
-            else if (use_rtg) then
+            if (use_rtg) then
                 ! Local-field charge balance on the RT photon groups (WDB06 yields),
                 ! which also gives the PE heating, recombination cooling and the
                 ! grain-assisted ion recombination (rr%alpha; dust_ion_recombination: dinfo%rec_ion_rate, for the RTZ chemistry)
@@ -307,8 +310,10 @@ contains
                 if (.not. allocated(rtg_warm)) call rtg_allocate()
                 ic = dinfo%icell
                 if (ic < 1 .or. ic > nvector) ic = nvector + 1
+                predict = rtg_predict_tol > 0d0 .and. ic <= nvector
                 do ii = 1, dinfo%ndust
                     paths(ii) = -1
+                    rtg_Dmode(ii) = 0
                     zg_used(ii) = rtg_Zguess(ii)
                     if (dinfo%rho_dust(ii) <= 0d0) then
                         ! empty bin: no charge or rates needed
@@ -320,12 +325,20 @@ contains
                     end if
                     st => rtg_warm(ic, ii)
                     if (ic == nvector + 1) st%valid = .false.
-                    if (dust_rtgroups_debug .or. dust_rtgroups_verify) st0s(ii) = st
+                    if (dust_rtgroups_debug .or. dust_rtgroups_verify) then
+                        if (.not. allocated(st0s)) allocate(st0s(1:dinfo%ndust))
+                        st0s(ii) = st
+                    end if
                     rr = RTGResult()
+                    ok = .false.
                     if (no_local .and. .not. dust_ion_recombination) then
                         ! only the uniform background: start-up table in (T, ne), which has no alpha
                         path = 1
                         call rtgroups_uniform_lookup(ii, dinfo%G0_background, Tk, ne, rr%Zmean, rr%Zsigma, rr%Gamma, rr%Lambda)
+                        if (Coulomb_precompute) then
+                            call isrf_lookup(ii, dinfo%G0_background, Tk, ne, zz, ss, gg, ll, rtg_D(:, ii))
+                            rtg_Dmode(ii) = 2
+                        end if
                     else if (rtg_served(ii)) then
                         ! the cooling solver's T(1 +- 1e-5) call: first order in ln T from the last solve
                         path = 2
@@ -336,11 +349,32 @@ contains
                         rr%Lambda = rtg_last(ii)%r%Lambda + rtg_last(ii)%r%Lambda_auto + h*rtg_last(ii)%r%dLambda
                         rr%Zstar = h
                     else
-                        ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
-                        path = 0
-                        call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
-                                                n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
-                                                st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), rr)
+                        ! first order from this cell's last full solve where the inputs changed little
+                        if (predict) call rtgroups_predict(ii, st, Np, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
+                                                           dinfo%G0_background, rtg_predict_tol, rtg_predict_tol_shape, rr, ok)
+                        if (ok) then
+                            path = 4
+                            if (Coulomb_precompute) then
+                                rtg_D(:, ii) = st%Dratio
+                                rtg_Dmode(ii) = 1
+                            end if
+                        else
+                            ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
+                            path = 0
+                            call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
+                                                    n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
+                                                    st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), &
+                                                    rr, sens=predict)
+                            if (Coulomb_precompute) then
+                                ! narrow P(Z): its exact Coulomb factors over the Gaussian ones (kept for the
+                                ! predictions from this solve); a wide one is close to its Gaussian
+                                st%Dratio = 1d0
+                                if (rr%discrete) call rtgroups_coulomb_ratio(ii, Np, dinfo%local_c, Tk, ne, n_Hp, n_Hep, &
+                                    n_Hepp, dinfo%G0_background, rr%Zstar, rr%Zsigma, rr%Zmean, st%Dratio)
+                                rtg_D(:, ii) = st%Dratio
+                                rtg_Dmode(ii) = 1
+                            end if
+                        end if
                         rtg_last(ii)%valid = .true.
                         rtg_last(ii)%T = Tk
                         rtg_last(ii)%ne = ne
@@ -354,7 +388,7 @@ contains
                         rtg_last(ii)%r = rr
                         rr%Lambda = rr%Lambda + rr%Lambda_auto
                         rtg_Zguess(ii) = rr%Zstar
-                        if (dust_charging_timer .and. rr%discrete) nchg_disc = nchg_disc + 1
+                        if (dust_charging_timer .and. rr%discrete .and. path == 0) nchg_disc = nchg_disc + 1
                     end if
                     paths(ii) = path
                     rrs(ii) = rr
@@ -365,12 +399,14 @@ contains
                     rtg_Prec(ii) = rr%Lambda
                 end do
                 ! grain-assisted recombination (pyCALIMA solve_cell): the fit only for the wide bins
-                ! that carry more than RTG_RECOMB_IMPORTANT of the cell's rate of some ion
+                ! solved here that carry more than RTG_RECOMB_IMPORTANT of the cell's rate of some ion
+                ! (the predicted bins count in that rate)
                 refined = .false.
                 if (dust_ion_recombination .and. any(paths == 0)) then
                     rate = 0d0
                     do ii = 1, dinfo%ndust
-                        if (paths(ii) == 0) rate(:, ii) = (dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain)*rtg_last(ii)%r%alpha
+                        if (paths(ii) == 0 .or. paths(ii) == 4) &
+                            rate(:, ii) = (dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain)*rtg_last(ii)%r%alpha
                     end do
                     tot = sum(rate, dim=2)
                     do ii = 1, dinfo%ndust
@@ -381,6 +417,7 @@ contains
                         st => rtg_warm(ic, ii)
                         call rtgroups_refine_alpha(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
                                                    dinfo%G0_background, st, rtg_last(ii)%r)
+                        if (st%anchored) st%ar%alpha = rtg_last(ii)%r%alpha      ! predictions scale the fitted alpha
                         if (dust_charging_timer) nchg_fit = nchg_fit + rtg_last(ii)%r%nfit
                     end do
                 end if
@@ -402,6 +439,20 @@ contains
                         call rtg_verify_print(ndumped)
                     end do
                 end if
+            else if (use_isrf) then
+                ! uniform-ISRF tables at the local G0: the charge, the PE heating and recombination
+                ! cooling, the Coulomb factors of the low impactor charges over the exact P(Z), and
+                ! the grain-assisted recombination (dust_ion_recombination)
+                do ii = 1, dinfo%ndust
+                    if (dust_ion_recombination) then
+                        call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), isrf_G(ii), isrf_L(ii), &
+                                         isrf_D(:, ii), alpha_bins(:, ii))
+                    else
+                        call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), isrf_G(ii), isrf_L(ii), &
+                                         isrf_D(:, ii))
+                    end if
+                end do
+                if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
             else
                 idx_g = -1
                 idx_T = -1
@@ -411,7 +462,7 @@ contains
                 end do
                 if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
             end if
-            if (dust_ion_recombination .and. (use_rtg .or. use_tab)) then
+            if (dust_ion_recombination .and. (use_rtg .or. use_isrf)) then
                 ! grain-assisted X+ -> X per X+ ion [s^-1]: sum over the bins of n_grain alpha (dust bins only)
                 dinfo%rec_ion_rate = 0d0
                 do ii = 1, dinfo%ndust
@@ -424,29 +475,47 @@ contains
             end if
             if (dust_charging_timer) tchg = tchg + (wallclock() - t0)
 
-            ! 2. If needed, precompute the Coulomb factors
-            dinfo%Coulomb_factor = 1d0
-            if (Coulomb_precompute) then
-                do ii = 1, dinfo%ndust
-                    prevD = 1d0
-                    do j = -1, dinfo%nion_charges
-                        Zel = dble(j)
-                        if (prevD <= 1d-5 .and. dinfo%Z_dust(ii)*Zel > 0d0) then
-                            dinfo%Coulomb_factor(ii,j:dinfo%nion_charges) = 1d-10
-                            exit
+            ! 2. If needed, precompute the Coulomb factors, for compute_dust_update: not in a call for
+            ! the rates only (the cooling solver's T(1 + 1e-5) call), whose factors differ from those
+            ! at T only to first order
+            skip_coulomb = .false.
+            if (present(rates_only)) skip_coulomb = rates_only
+            if (.not. skip_coulomb) then
+                dinfo%Coulomb_factor = 1d0
+                if (Coulomb_precompute) then
+                    do ii = 1, dinfo%ndust
+                        call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
+                                                           dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
+                        if (use_isrf) then
+                            ! the tabulated factors over the exact P(Z), where the Gaussian of <Z> and
+                            ! sigma_Z misses the tail at the opposite sign (small grains in cold gas)
+                            do j = 1, ISRF_ND
+                                if (ISRF_DCHARGE(j) <= dinfo%nion_charges) &
+                                    dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = max(isrf_D(j, ii), 1d-10)
+                            end do
+                        else if (use_rtg) then
+                            do j = 1, ISRF_ND
+                                if (ISRF_DCHARGE(j) > dinfo%nion_charges) cycle
+                                if (rtg_Dmode(ii) == 1) then
+                                    dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = &
+                                        max(dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) * rtg_D(j, ii), 1d-10)
+                                else if (rtg_Dmode(ii) == 2) then
+                                    dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = max(rtg_D(j, ii), 1d-10)
+                                end if
+                            end do
                         end if
-                        call compute_Coulomb_focusing(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),&
-                                                       &Zel,dinfo%Coulomb_factor(ii,j))
-                        prevD = dinfo%Coulomb_factor(ii,j)
                     end do
-                end do
+                end if
             end if
 
             ! 3. Compute the equilibrium dust photoelectric heating and recombination cooling rates
             if (dust_charging_timer) t0 = wallclock()
-            if (dust_pe_heating .and. (use_rtg .or. use_tab)) then
+            if (dust_pe_heating .and. use_rtg) then
                 dinfo%Pinj_dust(1:dinfo%ndust) = rtg_Pinj
                 dinfo%Prec_dust(1:dinfo%ndust) = rtg_Prec
+            elseif (dust_pe_heating .and. use_isrf) then
+                dinfo%Pinj_dust(1:dinfo%ndust) = isrf_G
+                dinfo%Prec_dust(1:dinfo%ndust) = isrf_L
             elseif (dust_pe_heating .and. present(Np)) then
                 do ii = 1, dinfo%ndust
                     if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
@@ -480,13 +549,35 @@ contains
             if (dust_charging_timer) tchg = tchg + (wallclock() - t0)
 
             ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
-            if (present(Np)) then
-                call update_T_dust(dinfo%G0_background,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
-                                    dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
-                                    Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:))
+            if (td_served()) then
+                ! the cooling solver's T(1 +- 1e-5) call: first order from the last update_T_dust
+                call serve_T_dust(td_lin,Tk,dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Z_dust(:),dinfo%Pcoll_dust(:),&
+                                  dinfo%Prad_dust(:),dinfo%T_dust(:))
             else
-                call update_T_dust(G0_total,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
-                                    dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:))
+                if (.not. allocated(td_lin)) allocate(td_lin(1:dinfo%ndust), td_nel(size(nElement)), &
+                                                      td_xion(size(xelem_ions,1), size(xelem_ions,2)))
+                if (present(Np)) then
+                    call update_T_dust(dinfo%G0_background,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
+                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
+                                        Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:),lin=td_lin)
+                    if (.not. allocated(td_Np)) allocate(td_Np(dinfo%nGroups), td_egy(dinfo%nGroups))
+                    td_Np = Np
+                    td_egy = dinfo%group_eV
+                    td_G0 = dinfo%G0_background
+                else
+                    call update_T_dust(G0_total,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
+                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
+                                        lin=td_lin)
+                    td_G0 = G0_total
+                end if
+                td_valid = .true.
+                td_hasNp = present(Np)
+                td_T = Tk
+                td_ne = ne
+                td_nH2 = nH2
+                td_nCO = nCO
+                td_nel = nElement
+                td_xion = xelem_ions
             end if
 
             ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
@@ -586,15 +677,37 @@ contains
         logical function rtg_served(ib)
             ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T
             integer, intent(in) :: ib
+            real(dp) :: x
             rtg_served = .false.
             if (.not. rtg_last(ib)%valid) return
-            if (abs(log(Tk/rtg_last(ib)%T)) > RTG_SERVE) return
+            x = Tk/rtg_last(ib)%T
+            if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
             if (ne /= rtg_last(ib)%ne .or. n_Hp /= rtg_last(ib)%n_Hp .or. n_Hep /= rtg_last(ib)%n_Hep .or. &
                 n_Hepp /= rtg_last(ib)%n_Hepp .or. dinfo%G0_background /= rtg_last(ib)%G0 .or. &
                 dinfo%local_c /= rtg_last(ib)%c_red) return
             if (any(Np /= rtg_last(ib)%Np) .or. any(dinfo%group_eV /= rtg_last(ib)%egy)) return
             rtg_served = .true.
         end function rtg_served
+
+        logical function td_served()
+            ! same inputs as the last update_T_dust but T, within RTG_SERVE in ln T (and the
+            ! recombination and photoelectric terms and the grain charge, which serve_T_dust takes to
+            ! first order)
+            real(dp) :: x
+            td_served = .false.
+            if (.not. td_valid .or. (td_hasNp .neqv. present(Np))) return
+            x = Tk/td_T
+            if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
+            if (ne /= td_ne .or. nH2 /= td_nH2 .or. nCO /= td_nCO) return
+            if (present(Np)) then
+                if (dinfo%G0_background /= td_G0) return
+                if (any(Np /= td_Np) .or. any(dinfo%group_eV /= td_egy)) return
+            else
+                if (G0_total /= td_G0) return
+            end if
+            if (any(nElement /= td_nel) .or. any(xelem_ions /= td_xion)) return
+            td_served = .true.
+        end function td_served
 
         subroutine rtg_allocate()
             integer :: ib
@@ -658,7 +771,7 @@ contains
         ! called before us this step), delegate to it now.  This eliminates ~148 lines
         ! of duplicated physics that previously lived in the non-precomp branch here.
         if (.not. dinfo%use_precomp) then
-            call compute_dust_precool(dinfo, G0_total, Tk, ne, nElement, xelem_ions, nH2, nCO, Np=Np)
+            call compute_dust_precool(dinfo, G0_total, Tk, ne, nElement, xelem_ions, nH2, nCO, Np=Np, rates_only=.true.)
         end if
 
         ! Read the precomputed rates from dinfo (populated either just above or by an

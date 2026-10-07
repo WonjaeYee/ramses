@@ -229,6 +229,6 @@ asize=0.01d0                 ! must match averaged_cross_section_DustBin_01.txt
 sgrain=2.2d0
 amin = 3d-3
 amax = 3d-2
-charging_model='RM2026'
+charging_model='WDB06isrf'
 dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
 /

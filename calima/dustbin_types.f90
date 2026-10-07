@@ -3,7 +3,7 @@ module dustbin_types
     use hydro_parameters, only:n_elements
     use dust_utils, only: interpolate1D_eqw, interpolate1D_noeqw, &
                           interpolate2D_eqw, interpolate2D_noeqw, &
-                          interpolate3D_eqw, interpolate3D_noeqw
+                          interpolate3D_eqw, interpolate3D_noeqw, locate, locate_eqw
 
     implicit none
 
@@ -25,6 +25,7 @@ module dustbin_types
         procedure, private :: interpolate_2d
         procedure, private :: interpolate_3d
         generic :: interpolate => interpolate_1d, interpolate_2d, interpolate_3d
+        procedure :: slope_1d, slope_2d
         procedure :: init => initialise_dust_table
     end type DustTable
 
@@ -187,8 +188,6 @@ module dustbin_types
         type(DustTable),dimension(1:n_elements) :: sputtering_tab ! Sputtering tables
         type(DustTable) :: sublimation_tab ! Thermal sublimation erosion rate table (function of dust temperature)
         type(DustTable),dimension(0:n_elements) :: collisional_tab ! Collisional tables (0 is for electrons)
-        type(DustTable) :: mean_charg_tab, sigma_charg_tab ! Charging tables
-        type(DustTable) :: peh_tab, rec_tab ! Photoelectric and recombination tables
         type(DustTable) :: cs_abs_tab, cs_scat_tab, cs_ext_tab ! Absorption, scattering and extinction cross-section tables
         type(DustTable) :: Rosseland_tab, Planck_tab ! Rosseland and Planck mean opacity tables
         type(DustTable),dimension(:),allocatable :: Im_n ! Imaginary part of the refractive index tables for each element
@@ -282,6 +281,81 @@ contains
             end if
         end select
     end subroutine interpolate_1d
+
+    subroutine slope_1d(this, xi, dydx)
+        ! d/dx of interpolate_1d at xi (the same slice, linear in the same cell); 0 where xi is
+        ! clamped at the edges of the table. At a node, the cell to the right (a forward difference)
+        class(DustTable), intent(in) :: this
+        real(dp), intent(in) :: xi
+        real(dp), intent(out) :: dydx
+        integer :: n1, i
+        real(dp) :: y0, y1
+
+        n1 = this%npts(1)
+        dydx = 0d0
+        if (xi <= this%tab1d(1,1) .or. xi >= this%tab1d(n1,1)) return
+        if (this%eqw) then
+            i = locate_eqw(this%tab1d(1:n1,1), n1, xi, this%inv_dx(1))
+        else
+            i = locate(this%tab1d(1:n1,1), n1, xi)
+        end if
+        if (i < n1 - 1 .and. xi >= this%tab1d(i+1,1)) i = i + 1
+        select case (this%ndim)
+        case (1)
+            y0 = this%tab1d(i,2)
+            y1 = this%tab1d(i+1,2)
+        case (2)
+            y0 = this%tab2d(i,this%ipos_zero(2),1)
+            y1 = this%tab2d(i+1,this%ipos_zero(2),1)
+        case default
+            y0 = this%tab3d(i,this%ipos_zero(2),this%ipos_zero(3),1)
+            y1 = this%tab3d(i+1,this%ipos_zero(2),this%ipos_zero(3),1)
+        end select
+        dydx = (y1 - y0) / (this%tab1d(i+1,1) - this%tab1d(i,1))
+    end subroutine slope_1d
+
+    subroutine slope_2d(this, xi, yi, dydx, dydy)
+        ! d/dx and d/dy of interpolate_2d at (xi, yi) (bilinear in the same cell); 0 along a
+        ! coordinate clamped at the edges of the table. At a node, the cell to the right
+        class(DustTable), intent(in) :: this
+        real(dp), intent(in) :: xi, yi
+        real(dp), intent(out) :: dydx, dydy
+        integer :: n1, n2, i, j
+        real(dp) :: xc, yc, t, u, r00, r10, r01, r11, dx, dy
+
+        n1 = this%npts(1)
+        n2 = this%npts(2)
+        xc = min(max(xi, this%tab1d(1,1)), this%tab1d(n1,1))
+        yc = min(max(yi, this%tab1d(1,2)), this%tab1d(n2,2))
+        if (this%eqw) then
+            i = locate_eqw(this%tab1d(1:n1,1), n1, xc, this%inv_dx(1))
+            j = locate_eqw(this%tab1d(1:n2,2), n2, yc, this%inv_dx(2))
+        else
+            i = locate(this%tab1d(1:n1,1), n1, xc)
+            j = locate(this%tab1d(1:n2,2), n2, yc)
+        end if
+        if (i < n1 - 1 .and. xc >= this%tab1d(i+1,1)) i = i + 1
+        if (j < n2 - 1 .and. yc >= this%tab1d(j+1,2)) j = j + 1
+        if (this%ndim == 2) then
+            r00 = this%tab2d(i,j,1)
+            r10 = this%tab2d(i+1,j,1)
+            r01 = this%tab2d(i,j+1,1)
+            r11 = this%tab2d(i+1,j+1,1)
+        else
+            r00 = this%tab3d(i,j,this%ipos_zero(3),1)
+            r10 = this%tab3d(i+1,j,this%ipos_zero(3),1)
+            r01 = this%tab3d(i,j+1,this%ipos_zero(3),1)
+            r11 = this%tab3d(i+1,j+1,this%ipos_zero(3),1)
+        end if
+        dx = this%tab1d(i+1,1) - this%tab1d(i,1)
+        dy = this%tab1d(j+1,2) - this%tab1d(j,2)
+        t = (xc - this%tab1d(i,1)) / dx
+        u = (yc - this%tab1d(j,2)) / dy
+        dydx = 0d0
+        dydy = 0d0
+        if (xi > this%tab1d(1,1) .and. xi < this%tab1d(n1,1)) dydx = ((1d0 - u)*(r10 - r00) + u*(r11 - r01)) / dx
+        if (yi > this%tab1d(1,2) .and. yi < this%tab1d(n2,2)) dydy = ((1d0 - t)*(r01 - r00) + t*(r11 - r10)) / dy
+    end subroutine slope_2d
 
     subroutine interpolate_2d(this, xi, yi, val, idx_x, idx_y)
         class(DustTable), intent(in) :: this

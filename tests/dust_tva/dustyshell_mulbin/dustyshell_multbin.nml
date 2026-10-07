@@ -134,6 +134,6 @@ e_escape_length=1d-7,1d-7 ! [cm]
 separate_refractive_index=.true.,.false.
 slope_frag_func=0.4333d0
 
-charging_model='RM2026'
+charging_model='WDB06isrf'
 dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
 /

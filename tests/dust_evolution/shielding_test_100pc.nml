@@ -121,7 +121,7 @@ accretion_model='LeBourlot2012'
 shattering_model='Smoluchowski1916'
 coagulation_model='Smoluchowski1916'
 dust_velocity_model='Hirashita2019'
-charging_model='RM2026'
+charging_model='WDB06isrf'
 ice_model='Hollenbach2019'
 nZmix=3
 
