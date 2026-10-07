@@ -2032,7 +2032,9 @@ module dust_radiation
             call dust_emission_power(j,c,P_rad)
             fc = P_abs + H0 + dH_dT*(c-T0) + recomb_heat - P_rad - pe_heat
 
-            if (abs(fc) < 1d-6) then
+            ! converged in T (the Newton test, 1e-3), or on the root; an absolute |fc| < 1e-6 erg/s
+            ! accepted any midpoint, as a grain radiates 1e-15-1e-10 erg/s
+            if (fc == 0d0 .or. (b - a) < 1d-3*c) then
                 T = c
                 return
             end if
