@@ -919,6 +919,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
       integer:: i_current_Ion
       real(dp):: Zsolar, advected_G0
+      ! Zsolar below is log10(Z/Zsun).  Z_over_Zsun is the LINEAR ratio, needed
+      ! wherever a metallicity multiplies an opacity.  dust_to_metal_over_mw is
+      ! the dust-to-METAL ratio relative to the MW, which is what the depletion
+      ! formula needs; dust_to_gas_mass_ratio_over_mw is dust-to-GAS, and the two
+      ! differ by Z/Zsun (see the comment at the depletion loop below).
+      real(dp):: Z_over_Zsun, dust_to_metal_over_mw
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: tau_dust_LW
       logical :: lw_groups_present
@@ -946,6 +952,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       !-----------------------------------------------------------------------
       real(dp)::alpha
+      real(dp),dimension(nGroups)::recrad_f
 
       ! RTZ variable initialization
       if (rtz_equilibrium_test.gt.0) then
@@ -956,18 +963,38 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Include dust if we are tracking oxygen
       if (elements(8)%atomic_number .lt. 1) then
          dust_to_gas_mass_ratio_over_mw = 0.d0
+         dust_to_metal_over_mw = 0.d0
          Zsolar = 1.d-40
+         Z_over_Zsun = 0.d0
          nElement_dep(1:n_elements) = nElement(1:n_elements,icell)
       else
          Zsolar = 12.d0 + log10((nElement(8, icell)+nCO(icell)+1.d-20)/(nElement(1, icell)+1.d-20))
          dust_to_gas_mass_ratio_over_mw = dust_to_gas_scale_RR14(Zsolar)
          Zsolar = Zsolar - 8.69d0
+         Z_over_Zsun = 10.d0**Zsolar
+         ! dust_to_gas_scale_RR14 returns (D/G)/(D/G)_MW, which is what the dust
+         ! OPACITY needs.  The depletion formula below, 1 - (1-f_MW)*x, returns MW
+         ! depletion at x=1 and none at x=0, so its argument is the fraction of the
+         ! MW's per-metal lock-up that is realised -- the dust-to-METAL ratio.  The
+         ! two differ by Z/Zsun, so passing the dust-to-gas value under-depletes by
+         ! that factor: harmless at solar, a factor 10 at 0.1 Zsun.  Above the RR14
+         ! knee alpha_H = 1, so D/G is proportional to Z and this correctly returns 1.
+         dust_to_metal_over_mw = max(min(dust_to_gas_mass_ratio_over_mw &
+                                         / max(Z_over_Zsun, 1.d-30), 1.d0), 0.d0)
+         ! Diagnostic switch: run the metals with no dust at all.  Zeroing both
+         ! ratios removes the grain opacity (dustAbs/dustSc/dustRp below) and,
+         ! consistently, the depletion of metals onto those grains -- in this
+         ! model they are the same quantity, so they must be turned off together.
+         if (.not. rtz_include_dust) then
+            dust_to_gas_mass_ratio_over_mw = 0.d0
+            dust_to_metal_over_mw = 0.d0
+         end if
          do iElement=1,n_elements
 ! we don't need to distinguish C and O from other elements...?
 !            if (iElement .eq. 6 .or. iElement .eq. 8) then
 !               nElement_dep(iElement) = (nElement(iElement,icell) + nCO(icell)) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw)) - nCO(icell)
 !            else
-               nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw))
+               nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_metal_over_mw))
 !            end if
          end do
       end if
@@ -985,6 +1012,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_to_gas_mass_ratio_over_mw = rho_dust_tot / rho * GD_solar
       Zsolar = 12.d0 + log10((nElement(8, icell)+nCO(icell)+1.d-20)/(nElement(1, icell)+1.d-20))
       Zsolar = Zsolar - 8.69d0
+      Z_over_Zsun = 10.d0**Zsolar
+      ! CALIMA carries the dust explicitly, so no depletion factor is applied here
+      dust_to_metal_over_mw = 0.d0
       do iElement=1,n_elements
          nElement_dep(iElement) = nElement(iElement,icell)
       end do
@@ -1171,31 +1201,36 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
          ! HKnote: OTSA is required with RTZ (for now)
 
-         ! try to mimic emission from gas under rt_solve_cooling
-         if (.not.rt_OTSA .and. rt_advect) then ! actually rt_advect does not need to be checked
-            do igroup=1,nGroups
-               ! photons from recombination should be spreaded on multiple radiation bins
-               ! but... at this moment dump on one bin
+         ! Emission from recombining gas, re-entering the radiation field.
+         !
+         ! The emission is spread over the groups using the table built at
+         ! startup (recombination_module::init_recrad_table): recombinations
+         ! straight to the ground state give a photon at the ionization edge,
+         ! the rest cascade and fluoresce to lower energies.  Some of the
+         ! helium fluorescence (He I 584 A at 21.2 eV, He II Ly-alpha at
+         ! 40.8 eV, the He II n=2 continuum at 13.6 eV) lands above the
+         ! hydrogen edge and ionizes hydrogen; the previous single-bin
+         ! treatment discarded all of it.
+         !
+         ! The rate is the case-A total, the same alpha the chemistry uses, so
+         ! emission and destruction are consistent by construction.
+         if (.not.rt_OTSA .and. rt_advect) then
+            call recrad_fractions(TK, 1, nGroups, recrad_f)
+            alpha = recombination(TK, 2, 1)                     ! H II -> H I
+            recRad(1:nGroups) = recRad(1:nGroups) &
+                 + alpha * nElement_dep(1)*dXion(1,2) * ne * recrad_f(1:nGroups)
 
-               ! H II -> H I
-               if ((groupL0(igroup) <= 13.60).and.(13.60 < groupL1(igroup))) then
-                  alpha = old_recombination_HII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(1)*dXion(1,2) * ne
-               end if
+            if (elements(2)%atomic_number > 0) then
+               call recrad_fractions(TK, 2, nGroups, recrad_f)
+               alpha = recombination(TK, 2, 2)                  ! He II -> He I
+               recRad(1:nGroups) = recRad(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * recrad_f(1:nGroups)
 
-               ! He II -> He I
-               if ((groupL0(igroup) <= 24.590).and.(24.590 < groupL1(igroup))) then
-                  alpha = old_recombination_HeII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,2) * ne
-               end if
-
-               ! He III -> He II
-               if ((groupL0(igroup) <= 54.420).and.(54.420 < groupL1(igroup))) then
-                  alpha = old_recombination_HeIII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,3) * ne
-               end if
-
-            end do
+               call recrad_fractions(TK, 3, nGroups, recrad_f)
+               alpha = recombination(TK, 3, 2)                  ! He III -> He II
+               recRad(1:nGroups) = recRad(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_f(1:nGroups)
+            end if
          end if
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS
@@ -1531,7 +1566,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             one_over_C_v = mH*mu*(gamma-1d0) / (rho*kB)
             E_rad = group_egy_erg(iIR) * dNp(iIR)
             dE_T = (rt_c_cgs(ilevel) * E_rad - c_cgs*a_r*TK**4)                    &
-                  /(1d0/(kAbs_loc(iIR) * Zsolar * rho * ddt(icell))  &
+                  ! Z_over_Zsun, not Zsolar: the latter is log10(Z/Zsun), which is
+                  ! negative below solar and exactly zero at solar.
+                  /(1d0/(kAbs_loc(iIR) * Z_over_Zsun * rho * ddt(icell))  &
                   +4d0*c_cgs * one_over_C_v *a_r*TK**3+rt_c_cgs(ilevel))
             dT2 = dT2 + 1d0/mu * one_over_C_v * dE_T
             dNp(iIR) = dNp(iIR) - dE_T * one_over_egy_IR_erg
