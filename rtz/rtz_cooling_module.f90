@@ -785,8 +785,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
-               ! Guard: ddt underflow to IEEE zero — can't make progress, bail
-               if (ddt(i) < 0d0) then
+               ! Guard: ddt underflow to IEEE zero — can't make progress, bail.
+               ! Halving never makes ddt negative, so the test must catch zero (and NaN): with
+               ! "ddt < 0" a cell that fails at any substep length spun to loopcnt_limit.
+               if (.not. (ddt(i) > 0d0)) then
+                  write(*,*) 'rtz_solve_cooling: the substep of cell', i, 'underflowed to zero, code', code
+                  write(*,*) '  n_H =', nH(i), 'cm^-3, T2 =', T2(i), 'K'
+                  ! With no hydrogen every rate is 0/0 (x_e = n_e/n_H): the clamp in the ion update
+                  ! turns the NaN into x_MIN and the step fails (code 8) whatever its length. This
+                  ! is what initial conditions without element mass fractions (var_region(1,:)=0)
+                  ! give once the network is on.
+                  if (.not. (nH(i) > 0d0)) write(*,*) '  no hydrogen: RTZ needs the element (and ion)', &
+                     ' mass fractions in the initial conditions, e.g. var_region'
                   err_idx = i
                   return
                end if
