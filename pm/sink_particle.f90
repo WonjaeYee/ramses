@@ -1234,7 +1234,10 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
            m_acc     =max(m_acc,0.0_dp)
            m_acc_smbh=max(m_acc_smbh,0.0_dp)
 
-           if(unew(indp(j,ind),1).le.(m_acc+m_acc_smbh)/vol_loc) then
+           ! uold, not unew: set_unew_sink zeroes unew in virtual boundary cells, which
+           ! made every cloud particle in a ghost cell skip accretion (the sink took only
+           ! a decomposition-dependent fraction of dMsink_overdt*dt)
+           if(uold(indp(j,ind),1).le.(m_acc+m_acc_smbh)/vol_loc) then
               ! temporal trial
               ! if the sink tries to accrete more than the cell mass, simply make no accretion
               ! ... this should be sophisticated more
