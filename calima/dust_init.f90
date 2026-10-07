@@ -5,6 +5,7 @@ module dust_init
     use dust_utils
     use dustbin_types
     use dust_commons
+    use dust_charging, only: init_dust_charging_isrf
     use dust_cooling, only: init_dust_coll_heating_BH80_cache
 #ifdef RTZ
     use rtz_module, only:elements
@@ -221,8 +222,21 @@ module dust_init
             end if
         end if
 #endif
-        if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06tab') then
-            if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06tab; ', &
+        select case (trim(charging_model))
+        case ('Ibanez2019', 'WDB06isrf')
+        case ('WDB06rt')
+#ifndef RT
+            if (myid == 1) write(*,*) 'Error: charging_model='//trim(charging_model)//' needs RT photon groups; ', &
+                'use WDB06isrf (uniform ISRF) or Ibanez2019'
+            check_params_dust = .false.
+#endif
+        case default
+            if (myid == 1) write(*,*) 'Error: unknown charging_model='//trim(charging_model)//' (WDB06rt, ', &
+                'WDB06isrf or Ibanez2019; the old (gamma, T) charge tables and WDB06tab were removed)'
+            check_params_dust = .false.
+        end select
+        if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06isrf') then
+            if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06isrf; ', &
                 'the RTZ chemistry keeps its grain recombination fit'
         end if
 #if defined(RT) && !defined(RTZ)
@@ -1288,11 +1302,11 @@ module dust_init
         ! 9. Read the dust collisional tables
         if (dust_coll_cooling) call init_dust_collisional_tables
 
-        ! 10. Read the dust charging tables
-        call init_dust_charging_tables
-
-        ! 11. Read the dust photoelectric heating tables
-        if (dust_pe_heating) call init_dust_peh_tables
+        ! 10. Read the uniform-ISRF charging tables: charging_model='WDB06isrf', the PE heating of the
+        ! models that do not compute their own (WDB06rt does), and the Coulomb factors of the WDB06rt
+        ! cells without local photons
+        if (trim(charging_model) == 'WDB06isrf' .or. (dust_pe_heating .and. trim(charging_model) /= 'WDB06rt') &
+            .or. (Coulomb_precompute .and. trim(charging_model) == 'WDB06rt')) call init_dust_charging_isrf
 
         ! 11b. Read the dust IR emission tables
         call init_dust_IR_emission_tables
@@ -1353,6 +1367,7 @@ module dust_init
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
                 dust_rtgroups_debug,dust_rtgroups_debug_max,dust_rtgroups_verify,dust_charging_timer,dust_ion_recombination,&
+                rtg_predict_tol,rtg_predict_tol_shape,&
                 ! PAH modelling options
                 photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
                 cluster_evaporation_model,&
@@ -1866,300 +1881,6 @@ module dust_init
         end do
 
     end subroutine init_dust_sublimation_tables
-
-    subroutine init_dust_charging_tables
-        ! This subroutine reads at the initialisation of dust parameters
-        ! the pre-computed charge distribution parameters of dust grains for
-        ! different charging parameters. This is based on the model built 
-        ! by Weingartner and Draine (2001b). The interpolation tables are
-        ! separated between neutral and ionised gas, as they present very
-        ! distinct behaviour for low gamma values.
-        ! NOTE: Keep in mind that these tables are already in log10, such that easy
-        ! linear interpolation in log-log space can be computed on the fly!
-        use amr_commons,only:myid
-        implicit none
-
-        logical :: ok, ok_all
-        integer :: ngamma,nT,nmax,istat,ii,j,k,n
-        character(len=20) :: dustlabel
-        character(len=128) :: charge_filename,sigma_filename
-        real(dp), allocatable :: gamma_grid(:), T_grid(:)
-
-        ! 1. Check first that all files are in the expected place
-        ok_all = .true.
-        do ii=1,ndust
-            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
-            write(charge_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_Z_vs_T_', trim(dustlabel)
-            inquire(file=charge_filename,exist=ok)
-            ok_all = ok_all .and. ok
-            write(sigma_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_sigma_vs_T_', trim(dustlabel)
-            inquire(file=sigma_filename,exist=ok)
-            ok_all = ok_all .and. ok
-        end do
-
-        if(.not. ok_all) then
-            if(myid.eq.1) then 
-                write(*,*)'ERROR IN DUST CHARGING TABLES'
-                write(*,*)'Cannot access dust directory ',TRIM(dust_tables_dir)
-                write(*,*)'Directory '//TRIM(dust_tables_dir)//' not found'
-                write(*,*)'You need to set this correctly for' // &
-                         ' dust_tables_dir in the namelist.'
-            endif
-            call clean_stop
-        end if
-
-        ! 2. Read per-grain charging tables into dustbins_props DustTables
-        do ii=1,ndust
-            write(dustlabel, '(A,I2.2)') 'DustBin_', ii
-            write(charge_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_Z_vs_T_', trim(dustlabel)
-            write(sigma_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_charge_sigma_vs_T_', trim(dustlabel)
-
-            open(26, file=trim(charge_filename), status='old', action='read', iostat=istat)
-            if (istat /= 0) then
-                write(*, *) 'Error opening file: ', trim(charge_filename)
-                call clean_stop
-            end if
-            open(27, file=trim(sigma_filename), status='old', action='read', iostat=istat)
-            if (istat /= 0) then
-                write(*, *) 'Error opening file: ', trim(sigma_filename)
-                call clean_stop
-            end if
-            
-            ! Skip the 6 first lines of the header
-            do n = 1, 6
-                 read(26,*)
-                 read(27,*)
-            end do
-  
-            ! Read the number of gamma and T points
-            read(26,*) ngamma,nT
-            read(27,*) j,k
-            if (j /= ngamma .or. k /= nT) then
-                write(*,*) 'Error: charge table dimensions mismatch for grain ', ii
-                call clean_stop
-            end if
-
-            ! Allocate charging DustTables for this grain
-            nmax = max(ngamma,nT)
-
-            if (allocated(dustbins_props(ii)%mean_charg_tab%npts)) deallocate(dustbins_props(ii)%mean_charg_tab%npts)
-            allocate(dustbins_props(ii)%mean_charg_tab%npts(1:2))
-            dustbins_props(ii)%mean_charg_tab%name = 'mean_charge_'//trim(dustlabel)
-            dustbins_props(ii)%mean_charg_tab%ndim = 2
-            dustbins_props(ii)%mean_charg_tab%npts(1) = ngamma
-            dustbins_props(ii)%mean_charg_tab%npts(2) = nT
-            if (allocated(dustbins_props(ii)%mean_charg_tab%tab1d)) deallocate(dustbins_props(ii)%mean_charg_tab%tab1d)
-            allocate(dustbins_props(ii)%mean_charg_tab%tab1d(1:nmax,1:2))
-            dustbins_props(ii)%mean_charg_tab%tab1d = 0d0
-            if (allocated(dustbins_props(ii)%mean_charg_tab%tab2d)) deallocate(dustbins_props(ii)%mean_charg_tab%tab2d)
-            allocate(dustbins_props(ii)%mean_charg_tab%tab2d(1:ngamma,1:nT,1:1))
-
-            if (allocated(dustbins_props(ii)%sigma_charg_tab%npts)) deallocate(dustbins_props(ii)%sigma_charg_tab%npts)
-            allocate(dustbins_props(ii)%sigma_charg_tab%npts(1:2))
-            dustbins_props(ii)%sigma_charg_tab%name = 'sigma_charge_'//trim(dustlabel)
-            dustbins_props(ii)%sigma_charg_tab%ndim = 2
-            dustbins_props(ii)%sigma_charg_tab%npts(1) = ngamma
-            dustbins_props(ii)%sigma_charg_tab%npts(2) = nT
-            if (allocated(dustbins_props(ii)%sigma_charg_tab%tab1d)) deallocate(dustbins_props(ii)%sigma_charg_tab%tab1d)
-            allocate(dustbins_props(ii)%sigma_charg_tab%tab1d(1:nmax,1:2))
-            dustbins_props(ii)%sigma_charg_tab%tab1d = 0d0
-            if (allocated(dustbins_props(ii)%sigma_charg_tab%tab2d)) deallocate(dustbins_props(ii)%sigma_charg_tab%tab2d)
-            allocate(dustbins_props(ii)%sigma_charg_tab%tab2d(1:ngamma,1:nT,1:1))
-
-            if (allocated(gamma_grid)) deallocate(gamma_grid)
-            if (allocated(T_grid)) deallocate(T_grid)
-            allocate(gamma_grid(1:ngamma))
-            allocate(T_grid(1:nT))
-
-            ! Read and store the temperature grid
-            read(26,*,iostat=istat) (T_grid(j), j=1,nT)
-            if (istat /= 0) then
-                write(*, *) 'Error reading temperature values from file: ', trim(charge_filename)
-                call clean_stop
-            end if
-            read(27,*,iostat=istat) 
-
-            ! Read and store the gamma grid
-            read(26,*,iostat=istat) (gamma_grid(j), j=1,ngamma)
-            if (istat /= 0) then
-                write(*, *) 'Error reading gamma values from file: ', trim(charge_filename)
-                call clean_stop
-            end if
-            read(27,*,iostat=istat)
-
-            ! Read the data
-            do j = 1, ngamma
-                read(26,*,iostat=istat) (dustbins_props(ii)%mean_charg_tab%tab2d(j,k,1), k=1,nT)
-                if (istat /= 0) then
-                    write(*, *) 'Error reading mean Z values from file: ', trim(charge_filename)
-                    call clean_stop
-                end if
-                read(27,*,iostat=istat) (dustbins_props(ii)%sigma_charg_tab%tab2d(j,k,1), k=1,nT)
-                if (istat /= 0) then
-                    write(*, *) 'Error reading sigma Z values from file: ', trim(sigma_filename)
-                    call clean_stop
-                end if
-            end do
-
-            dustbins_props(ii)%mean_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
-            dustbins_props(ii)%mean_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            call dustbins_props(ii)%mean_charg_tab%init()
-
-            dustbins_props(ii)%sigma_charg_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
-            dustbins_props(ii)%sigma_charg_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            call dustbins_props(ii)%sigma_charg_tab%init()
-
-            close(26)
-            close(27)
-            deallocate(gamma_grid,T_grid)
-        end do
-
-    end subroutine init_dust_charging_tables
-
-    subroutine init_dust_peh_tables
-        ! Initialize per-dust-bin PE heating / recombination tables.
-        ! Each dust bin reads its own files from dust_tables_dir:
-        !   - dust_rates_peh_DustBin_XX.dat
-        !   - dust_rates_rec_DustBin_XX.dat
-        use amr_commons,only:myid
-        implicit none
-
-        logical :: ok_peh, ok_rec, ok_all
-        integer :: ngamma, nT, istat, i, j, k, nmax, n
-        character(len=20) :: dustlabel
-        character(len=128) :: peh_filename, rec_filename
-        real(dp), allocatable :: gamma_grid(:), T_grid(:)
-
-        ok_all = .true.
-        do i = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'DustBin_', i
-            write(peh_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_peh_', trim(dustlabel)//'.dat'
-            write(rec_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_rec_', trim(dustlabel)//'.dat'
-            inquire(file=trim(peh_filename), exist=ok_peh)
-            inquire(file=trim(rec_filename), exist=ok_rec)
-            ok_all = ok_all .and. ok_peh .and. ok_rec
-        end do
-
-        if (.not. ok_all) then
-            if (myid.eq.1) then
-                write(*,*) 'ERROR IN PE HEATING / RECOMBINATION TABLES'
-                write(*,*) 'Missing per-bin PEH/rec grid or rate tables in ', trim(dust_tables_dir)
-                write(*,*) 'Expected names like dust_rates_peh_DustBin_01.dat, and dust_rates_rec_DustBin_01.dat'
-            end if
-            call clean_stop
-        end if
-
-        do i = 1, ndust
-            write(dustlabel, '(A,I2.2)') 'DustBin_', i
-            write(peh_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_peh_', trim(dustlabel)//'.dat'
-            write(rec_filename,'(A,A,A)') trim(dust_tables_dir), 'dust_rates_rec_', trim(dustlabel)//'.dat'
-
-            open(28, file=trim(peh_filename), status='old', action='read', iostat=istat)
-            if (istat /= 0) then
-                if (myid.eq.1) write(*,*) 'Error opening file: ', trim(peh_filename)
-                call clean_stop
-            end if
-            open(29, file=trim(rec_filename), status='old', action='read', iostat=istat)
-            if (istat /= 0) then
-                if (myid.eq.1) write(*,*) 'Error opening file: ', trim(rec_filename)
-                call clean_stop
-            end if
-
-            ! Skip the 6 header lines of file 28 and 29
-            do n = 1, 6
-                read(28,*)
-                read(29,*)
-            end do
-            read(28,*,iostat=istat) nT, ngamma
-            if (istat /= 0) then
-                if (myid.eq.1) write(*,*) 'Error reading ngamma and nT: ', trim(peh_filename)
-                call clean_stop
-            end if
-            read(29,*,iostat=istat) j,k
-            if (istat /= 0) then
-                if (myid.eq.1) write(*,*) 'Error reading ngamma and nT: ', trim(rec_filename)
-                call clean_stop
-            end if
-            if (j /= ngamma .or. k /= nT) then
-                if (myid.eq.1) write(*,*) 'Error: PEH/rec table dimensions mismatch for grain ', i
-                call clean_stop
-            end if
-            if (allocated(dustbins_props(i)%peh_tab%npts)) deallocate(dustbins_props(i)%peh_tab%npts)
-            allocate(dustbins_props(i)%peh_tab%npts(1:2))
-            dustbins_props(i)%peh_tab%name = 'dust_rates_peh_'//trim(dustlabel)
-            dustbins_props(i)%peh_tab%ndim = 2
-            dustbins_props(i)%peh_tab%npts(1) = ngamma
-            dustbins_props(i)%peh_tab%npts(2) = nT
-            if (allocated(dustbins_props(i)%peh_tab%ipos_zero)) deallocate(dustbins_props(i)%peh_tab%ipos_zero)
-            allocate(dustbins_props(i)%peh_tab%ipos_zero(1:2))
-            dustbins_props(i)%peh_tab%ipos_zero(:) = 1
-            nmax = max(ngamma, nT)
-            if (allocated(dustbins_props(i)%peh_tab%tab1d)) deallocate(dustbins_props(i)%peh_tab%tab1d)
-            allocate(dustbins_props(i)%peh_tab%tab1d(1:nmax,1:2))
-            dustbins_props(i)%peh_tab%tab1d = 0d0
-            if (allocated(dustbins_props(i)%peh_tab%tab2d)) deallocate(dustbins_props(i)%peh_tab%tab2d)
-            allocate(dustbins_props(i)%peh_tab%tab2d(1:ngamma,1:nT,1:1))
-
-            if (allocated(dustbins_props(i)%rec_tab%npts)) deallocate(dustbins_props(i)%rec_tab%npts)
-            allocate(dustbins_props(i)%rec_tab%npts(1:2))
-            dustbins_props(i)%rec_tab%name = 'dust_rates_rec_'//trim(dustlabel)
-            dustbins_props(i)%rec_tab%ndim = 2
-            dustbins_props(i)%rec_tab%npts(1) = ngamma
-            dustbins_props(i)%rec_tab%npts(2) = nT
-            if (allocated(dustbins_props(i)%rec_tab%ipos_zero)) deallocate(dustbins_props(i)%rec_tab%ipos_zero)
-            allocate(dustbins_props(i)%rec_tab%ipos_zero(1:2))
-            dustbins_props(i)%rec_tab%ipos_zero(:) = 1
-            if (allocated(dustbins_props(i)%rec_tab%tab1d)) deallocate(dustbins_props(i)%rec_tab%tab1d)
-            allocate(dustbins_props(i)%rec_tab%tab1d(1:nmax,1:2))
-            dustbins_props(i)%rec_tab%tab1d = 0d0
-            if (allocated(dustbins_props(i)%rec_tab%tab2d)) deallocate(dustbins_props(i)%rec_tab%tab2d)
-            allocate(dustbins_props(i)%rec_tab%tab2d(1:ngamma,1:nT,1:1))
-
-            if (allocated(gamma_grid)) deallocate(gamma_grid)
-            if (allocated(T_grid)) deallocate(T_grid)
-            allocate(gamma_grid(1:ngamma))
-            allocate(T_grid(1:nT))
-
-            read(28,*,iostat=istat) (T_grid(j), j=1,nT)
-            read(28,*,iostat=istat) (gamma_grid(j), j=1,ngamma)
-            if (istat /= 0) then
-                if (myid.eq.1) write(*,*) 'Error reading gamma grid from file: ', trim(peh_filename)
-                call clean_stop
-            end if
-            read(29,*,iostat=istat) ! Skip the T grid since its the same as in file 28
-            read(29,*,iostat=istat) ! Skip the gamma grid since its the same as in file 28
-            if (istat /= 0) then
-                if (myid.eq.1) write(*,*) 'Error reading T grid from file: ', trim(rec_filename)
-                call clean_stop
-            end if
-
-            dustbins_props(i)%peh_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
-            dustbins_props(i)%peh_tab%tab1d(1:nT,2) = T_grid(1:nT)
-            dustbins_props(i)%rec_tab%tab1d(1:ngamma,1) = gamma_grid(1:ngamma)
-            dustbins_props(i)%rec_tab%tab1d(1:nT,2) = T_grid(1:nT)
-
-            do j = 1, ngamma
-                read(28,*,iostat=istat) (dustbins_props(i)%peh_tab%tab2d(j,k,1), k=1,nT)
-                if (istat /= 0) then
-                    if (myid.eq.1) write(*,*) 'Error reading PEH table row ', j, ' from file: ', trim(peh_filename)
-                    call clean_stop
-                end if
-                read(29,*,iostat=istat) (dustbins_props(i)%rec_tab%tab2d(j,k,1), k=1,nT)
-                if (istat /= 0) then
-                    if (myid.eq.1) write(*,*) 'Error reading rec table row ', j, ' from file: ', trim(rec_filename)
-                    call clean_stop
-                end if
-            end do
-
-            close(28)
-            close(29)
-
-            call dustbins_props(i)%peh_tab%init()
-            call dustbins_props(i)%rec_tab%init()
-
-            deallocate(gamma_grid, T_grid)
-        end do
-    end subroutine init_dust_peh_tables
 
     subroutine init_pah_sputtering_tables
         ! This subroutine reads at the initialisation of dust parameters

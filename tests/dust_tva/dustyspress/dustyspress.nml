@@ -115,6 +115,6 @@ asize=0.1d0
 sgrain=2.2d0
 amin = 3d-2
 amax = 1.0d0
-charging_model='RM2026'
+charging_model='Ibanez2019' ! no charge-dependent process here; the uniform-ISRF tables (WDB06isrf) are for the 0.01 um DustBin_01
 dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
 /
