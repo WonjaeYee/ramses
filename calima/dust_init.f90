@@ -1,5 +1,5 @@
 module dust_init
-    use amr_parameters, only: dp
+    use amr_parameters, only: dp, metal
     use hydro_parameters, only:ndust,ndchemtype,npah,nmetals
     use constants
     use dust_utils
@@ -83,24 +83,44 @@ module dust_init
         real(dp):: fpah_total
 
         check_params_dust = .true.
-#if NDUST!=4
-        if (myid==1)write(*,*)'ERROR: This only works for NDUST==4 :('
-        check_params_dust = .false.
-#endif
         !-------------------------------------------------
         ! Check we have metals ON for dust
         !-------------------------------------------------
         if(.not. metal)then
-            if(myid==1)write(*,*)'Error: dust requires metal=.true.'
-            check_params_dust = .false.
+            if(myid==1)then
+                write(*,*)'WARNING: metal=.false., gas-phase elements are not defined.'
+                write(*,*)'Disabling CALIMA gas-exchange processes (accretion, sputtering, SN/wind seeding & destruction)'
+            end if
+            dust_accretion = .false.
+            pah_accretion = .false.
+            dust_sputtering = .false.
+            pah_sputtering = .false.
+            dust_inSN = .false.
+            dust_inSNIa = .false.
+            dust_inSW = .false.
+            pah_AGBwinds = .false.
+            dust_SNdest = .false.
+            pah_sn_destruction = .false.
+            pah_acc_spu = .false.
         end if
 #ifdef RTZ 
         metals_for_dust=(N_OXYGEN_IONS>0).and.(N_MAGNESIUM_IONS>0).and.(N_CARBON_IONS>0).and.(N_IRON_IONS>0).and.(N_SILICON_IONS>0)
         if (.not. metals_for_dust) then
-            write(*,*) "ERROR: you are missing metals required to track dust composition"
-            write(*,*) "oxygen_ions,magnesium_ions,carbon_ions,iron_ions,silicon_ions"
-            write(*,*) N_OXYGEN_IONS,N_MAGNESIUM_IONS,N_CARBON_IONS,N_IRON_IONS,N_SILICON_IONS
-            check_params_dust = .false.
+            if (myid==1) then
+                write(*,*) "WARNING: missing metals required to track dust composition."
+                write(*,*) "Disabling CALIMA gas-exchange processes."
+            end if
+            dust_accretion = .false.
+            pah_accretion = .false.
+            dust_sputtering = .false.
+            pah_sputtering = .false.
+            dust_inSN = .false.
+            dust_inSNIa = .false.
+            dust_inSW = .false.
+            pah_AGBwinds = .false.
+            dust_SNdest = .false.
+            pah_sn_destruction = .false.
+            pah_acc_spu = .false.
         end if
 #endif
         !-------------------------------------------------
@@ -1102,8 +1122,11 @@ module dust_init
         ! 7. Other constants and parameters
 #if NPAH>0
         if (dust_pahs) then
-            call init_pah_sputtering_tables
-            call init_pah_dissociation_tables
+            if (pah_sputtering) call init_pah_sputtering_tables
+            if (pah_photolysis) call init_pah_dissociation_tables
+            ! Always: the PAH charge tables (fcharge_tab) built here are also used by
+            ! the RT absorption (compute_dust_rad_rates), radiation pressure and the
+            ! cooling pre-computation, whether or not pah_pe_heating is on
             call init_pah_peh_tables
         end if
 #endif
@@ -1118,25 +1141,25 @@ module dust_init
         end if
 
         ! 8. Read the dust thermal sputtering tables
-        if (sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables
+        if (dust_sputtering .and. sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables
 
         ! 8b. Read the dust thermal sublimation tables
         if (dust_sublimation) call init_dust_sublimation_tables
 
         ! 9. Read the dust collisional tables
-        call init_dust_collisional_tables
+        if (dust_coll_cooling) call init_dust_collisional_tables
 
         ! 10. Read the dust charging tables
         call init_dust_charging_tables
 
         ! 11. Read the dust photoelectric heating tables
-        call init_dust_peh_tables
+        if (dust_pe_heating) call init_dust_peh_tables
 
         ! 11b. Read the dust IR emission tables
         call init_dust_IR_emission_tables
 
         ! 12. Cache the BH80 collisional heating factors that only depend on the dust bins
-        call init_dust_coll_heating_BH80_cache
+        if (dust_coll_cooling) call init_dust_coll_heating_BH80_cache
 
 
         ! Select the ODE solver procedure pointer
