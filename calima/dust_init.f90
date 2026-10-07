@@ -86,7 +86,6 @@ module dust_init
         ! to make sure that it is compliant with the required dust settings
         use hydro_parameters
 #ifdef RT
-        use rt_parameters, only: rt_isIRtrap, rt_isIR, rt_use_hll
 #endif
         implicit none
         logical :: check_params_dust
@@ -195,33 +194,10 @@ module dust_init
                           'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'
             end if
         end if
-#ifdef RT
-        ! Trapped-IR radiation pressure on the dust
-        if (dust_tva .and. rt_isIRtrap) then
-            if (nener <= 0) then
-                if(myid==1)write(*,*)'Error: rt_isIRtrap needs a non-thermal energy ', &
-                                     'variable; recompile with NENER>=1 (and NVAR+1)'
-                check_params_dust=.false.
-            end if
-            if (.not. rt_isIR) then
-                if(myid==1)write(*,*)'Error: rt_isIRtrap requires rt_isIR=.true. ', &
-                                     '(the trapped variable is the IR group)'
-                check_params_dust=.false.
-            end if
-            if (ndust <= 0) then
-                if(myid==1)write(*,*)'Error: trapped-IR pressure on dust requires NDUST>0'
-                check_params_dust=.false.
-            end if
-            if (rt_use_hll) then
-                ! Rosdahl & Teyssier 2015, footnote 3: the trapped/streaming
-                ! partition is matched to the numerical diffusion of the GLF
-                ! flux, so it is only consistent with rt_flux_scheme='glf'.
-                if(myid==1)write(*,*)'Error: rt_isIRtrap is only consistent with ', &
-                                     "rt_flux_scheme='glf', not 'hll'"
-                check_params_dust=.false.
-            end if
-        end if
-#endif
+        ! The trapped-IR requirements (NENER, rt_isIR, the GLF flux) are checked by
+        ! dust_dynamics:check_tva_rt_params on the first TVA step: this routine runs inside
+        ! read_CALIMA_params, before read_rt_params, where rt_isIRtrap and rt_isIR are still at
+        ! their defaults (and rt_use_hll is set later, in rt_init)
         select case (trim(charging_model))
         case ('Ibanez2019', 'WDB06isrf')
         case ('WDB06rt')

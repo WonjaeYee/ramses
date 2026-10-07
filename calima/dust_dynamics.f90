@@ -17,8 +17,48 @@ module dust_dynamics
     integer, allocatable, save :: rp_key(:), rp_stamp(:)
     real(dp), allocatable, save :: rp_val(:,:)
 #endif
+    logical, save :: tva_rt_checked = .false.   ! check_tva_rt_params done
 
     contains
+
+    subroutine check_tva_rt_params()
+        ! The trapped-IR radiation pressure on the dust needs a non-thermal energy variable, the IR
+        ! group and the GLF flux (Rosdahl & Teyssier 2015, footnote 3: the trapped/streaming
+        ! partition matches the GLF diffusion). Checked once, on the first TVA step, when the RT
+        ! parameters have been read (check_params_dust runs before read_rt_params)
+#ifdef RT
+        use amr_commons, only: myid
+        use hydro_parameters, only: nener
+        use rt_parameters, only: rt_isIRtrap, rt_isIR, rt_use_hll
+        logical :: ok
+#endif
+        if (tva_rt_checked) return
+        tva_rt_checked = .true.
+#ifdef RT
+        if (.not. (dust_tva .and. rt_isIRtrap)) return
+        ok = .true.
+        if (nener <= 0) then
+            if (myid == 1) write(*,*) 'Error: rt_isIRtrap needs a non-thermal energy ', &
+                                      'variable; recompile with NENER>=1 (and NVAR+1)'
+            ok = .false.
+        end if
+        if (.not. rt_isIR) then
+            if (myid == 1) write(*,*) 'Error: rt_isIRtrap requires rt_isIR=.true. ', &
+                                      '(the trapped variable is the IR group)'
+            ok = .false.
+        end if
+        if (ndust <= 0) then
+            if (myid == 1) write(*,*) 'Error: trapped-IR pressure on dust requires NDUST>0'
+            ok = .false.
+        end if
+        if (rt_use_hll) then
+            if (myid == 1) write(*,*) 'Error: rt_isIRtrap is only consistent with ', &
+                                      "rt_flux_scheme='glf', not 'hll'"
+            ok = .false.
+        end if
+        if (.not. ok) call clean_stop
+#endif
+    end subroutine check_tva_rt_params
 
     pure integer function ifind_ilo(idim, lo, f)
         integer, intent(in) :: idim, lo, f
@@ -521,6 +561,7 @@ module dust_dynamics
         integer  :: info
 #endif
 
+        call check_tva_rt_params()
         if (numbtot(1,ilevel) == 0) return
 
         call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
