@@ -241,6 +241,12 @@ module rt_parameters
   ! ~2/3 for an optically thick, H-rich nebula; the true value depends on the
   ! 584 A optical depth and on n(H0)/n(He0), so it is exposed here.
   real(dp)::rtz_He_fluor_yield=0.66d0
+  ! Substep acceptance of rtz_solve_cooling: a substep is rejected (and halved) when T2, an ion or
+  ! electron fraction, or a photon density / flux changes by more than this fraction. The defaults
+  ! are the values that were compile-time constants in rtz_cooling_module (single-precision literals,
+  ! kept so for bit-identical results). They bias an H II front by ~10% (0.01/0.01/0.02 is within
+  ! 1% of converged): see notebooks/matched/README.md, "The substep tolerance".
+  real(dp)::rtz_T_frac=0.1, rtz_x_frac=0.1, rtz_Np_frac=0.2, rtz_Fp_frac=0.5
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
