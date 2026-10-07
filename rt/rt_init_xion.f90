@@ -111,19 +111,26 @@ SUBROUTINE rt_init_xion_vsweep(ind_grid, ngrid)
 #ifdef RTZ
         ! In the case of RTZ, set everything to fully neutral
         ! In the case of RTZ, we set everything to neutral to start
+         ! Slot layout as read in cooling_fine: the ions of every element, then the H2 slot(s).
          counter = 1
          do iE=1,n_elements ! loop over elements
             if (elements(iE)%atomic_number.gt.0) then 
-               do iI=1,elements(iE)%n_ions + elements(iE)%n_mol ! loop over ions + molecules
+               do iI=1,elements(iE)%n_ions ! loop over ions
                   x = 0.d0
                   if (iI.eq.1) then 
                      x = 1.d0
                   end if
                   uold(ind_leaf(i),iIons-1+counter) = x*uold(ind_leaf(i),1)
                   counter = counter + 1
-               end do  ! end loop over ions + molecules
+               end do  ! end loop over ions
             end if
          end do ! end loop over elements
+         if (elements(1)%atomic_number.gt.0) then
+            do iI=1,elements(1)%n_mol ! molecules (H2): none at the start
+               uold(ind_leaf(i),iIons-1+counter) = 0.d0
+               counter = counter + 1
+            end do
+         end if
 #else
         call cmp_Equilibrium_Abundances(T2,nH,pHI_rates,mu,nSpec,Zsolar)
 
