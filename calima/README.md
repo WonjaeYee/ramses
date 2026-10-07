@@ -98,19 +98,24 @@ The typical order is:
   density (`tva_species`), radiation force and, for Draine drag, the rms charge of its charge-state
   distribution. All of them count in `eps_tot` and the barycentric acceleration.
   `tests/dust_tva/dustyshell_pah` checks their drift against the TVA prediction.
-- **Gas-phase metals do not follow the dust.** Only the dust and PAH density scalars are advected;
-  `imetal` is untouched. Dust carrying C/O/Mg/Si/Fe across a cell boundary does not move the
-  corresponding gas-phase element, so the per-element budget drifts over time. Watch the
-  `dust_log` mass-conservation output.
+- **The gas-phase scalars do not counter-drift.** Only the dust and PAH density scalars are
+  advected by the drift; the mixture density `uold(:,1)` and the gas-phase scalars (the element
+  block from `imetal`, ions, CO, H2) are not. The dust flux is conservative, so the box total per
+  element (gas + dust) is conserved to round-off in a closed box. What is not kept is the local
+  closure: in the barycentric frame the gas moves at `w_g = -sum eps_k w_k/(1-eps)`, so a cell
+  that gains dust should lose that gas mass, with its composition, and it does not. The error is
+  O(eps): in the step-13 `slab_tva` it ranges from -0.5% (evacuated H II gas) to +4% (the dust
+  pile-up front) of the cell mass.
 - **`tva_wmax_cs`** caps `|w_drift|` at that multiple of the local sound speed, in both
   `get_dust_courant_dt` and the flux routines. TVA assumes Stokes << 1, which fails once the drift
   approaches `c_s`; since `t_s ~ 1/rho_gas`, a single hot/diffuse cell would otherwise drive the
   global timestep to zero. Set `<= 0` to disable (not recommended). Clipping is counted and
   reported alongside the "dust drift sets dt" message.
 - **Enabling TVA changes the pure hydro** even before any drift matters: `ctoprim`
-  (`hydro/umuscl.f90`) and `cmpdt` (`hydro/courant_fine.f90`) switch the EoS from the mixture
-  density to the gas density `rho_mix*(1-eps_tot)`. A TVA run is therefore not bit-comparable to
-  the same setup with TVA off.
+  (`hydro/umuscl.f90`) and `cmpdt` (`hydro/courant_fine.f90`) take the sound speed of the gas,
+  `sqrt(gamma P/rho_gas)` with `rho_gas = rho_mix*(1-eps_tot)`, the pressure itself being unchanged,
+  `(gamma-1)(E - E_kin - E_rad)`. A TVA run is therefore not bit-comparable to the same setup with
+  TVA off.
 - **`condinit_kind`** values `dustydiffuse`, `dustyshock`, `dustyblast1d`, `dustyspress` and
   `dustygauss` select **test** branches that hardcode the stopping time and/or the thermodynamics.
   These are resolved once into `tva_test_mode` at startup and warned about. Production ICs must use
@@ -151,11 +156,14 @@ the barycentric part cancels exactly. Things to be aware of:
   rho_d`, so as dust leaves, `f_trap = exp(-1/tau) -> 0` and the force switches itself off. If you
   prescribe `E_trap` externally (as `condinit_kind='dustyirtrap'` does) that regulation is absent,
   which is why that test asserts the first-step drift rather than multi-step advection.
-- **The trapped-IR flux is anti-diffusive, so boundary blemishes grow.** For a single bin the mass
+- **The trapped-IR flux was anti-diffusive, so boundary blemishes grew** (history; since commit
+  `02493e12` the trapped-IR part of the flux is split as `F_t = A zeta + B rho_d`, with `zeta` the
+  opacity share, and upwinded on the opacity share, which removes the growing mode described
+  here). For a single bin the mass
   flux is `F = rho_d w_d = (-grad P_trap) t_s (1 - eps)^2`, which *decreases* with `rho_d`
-  (measured `dF/drho_d ~ -1.9e-3 < 0`) even though `w_d > 0`. The flux routine picks the donor cell
-  on `sign(w_face)`, i.e. on the material velocity, which is the opposite of this flux's
-  characteristic direction. A perturbation therefore grows instead of damping. In
+  (measured `dF/drho_d ~ -1.9e-3 < 0`) even though `w_d > 0`. The flux routine picked the donor
+  cell on `sign(w_face)`, i.e. on the material velocity, which is the opposite of this flux's
+  characteristic direction. A perturbation therefore grew instead of damping. In
   `tests/dust_tva/dustyirtrap` the seed is the domain boundary: the zero-gradient ghost fill makes
   the centred difference effectively one-sided there, so the two edge cells get
   `grad(P_trap) = -5e-6` instead of `-1e-5` — exactly half — which is an O(1) error in their drift.
@@ -470,9 +478,9 @@ the equilibrium RT15 quote.
   -- 1000x at `rt_c_fraction=1e-3`. The cooling path is correct: there the rate
   already carries a factor `rt_c_cgs` (`sigcr_dust = group_csr_dust*rt_c_cgs`)
   and the extra `one_over_rt_c_cgs` cancels it, leaving `chi*E_gamma/c`. This
-  one is **not fixed** -- it changes the drift in every existing run and the
-  `rt_isoPress` branch needs separate thought -- which is why `dustylev` runs
-  with `dust_radpressure=.false.`.
+  one is **now fixed** (the streaming force divides by `c_code = c/scale_v`); the
+  `rt_isoPress` branches still lack the factor `c_red/c` that RAMSES's `phAbs` carries.
+  `dustylev` runs with `dust_radpressure=.false.`.
 - **`dust_dynamics.f90`: the dust flux loops ran the transverse index from 0.**
   `dflux`/`eflux`/`mflux` are dimensioned `(if1:if2, jf1:jf2, kf1:kf2)` = 1:3,
   but the face loop took its transverse bounds from `ilo = MIN(1,iu1+1)` = 0
@@ -547,11 +555,13 @@ agreement.
 - **The drift can be large by construction**: a ~1% dust mass fraction absorbs ~100% of the IR
   momentum, so `w ~ t_s |grad P_trap| / rho_d`. At `tau_IR ~ 1` this is tens of km/s, well outside
   the `Stokes << 1` regime TVA assumes, so `tva_wmax_cs` will clip. Watch `tva_nclip`.
-- **PAHs contribute to `chi_R,tot` but do not drift**, so their share of the trapped force simply
-  stays on the barycentre. The TVA closure conserves barycentric momentum regardless.
+- **PAHs contribute to `chi_R,tot` and drift** as TVA species, so they feel their share of the
+  trapped force (`s_k`). The TVA closure conserves barycentric momentum.
 - Requires `NENER>=1`, `rt_isIR`, `NDUST>0` and `rt_flux_scheme='glf'` (RT15 footnote 3 — the
   trapped/streaming partition is matched to the GLF numerical diffusion, so HLL is inconsistent).
-  `check_params_dust` enforces all four.
+  `check_params_dust` tests all four, but it runs inside `read_CALIMA_params`, before
+  `read_rt_params` (amr/read_params.f90), so it sees the defaults of `rt_isIRtrap`, `rt_isIR` and
+  `rt_flux_scheme`: in this tree the checks never fire.
 
 ## Building CALIMA without RTZ (`RT=1 RTZ=0 CALIMA=1`)
 
