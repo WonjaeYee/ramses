@@ -1193,6 +1193,9 @@ module dust_dynamics
         
         ! Cell-Centered Base Primitives
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
+        real(dp) :: f_in, room
+        integer  :: io_l, jo_l, ko_l
+        real(dp), parameter :: EPS_ROOM = 0.999_dp   ! the eps_tot ceiling of ctoprim and cmpdt
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: eps
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
@@ -1523,6 +1526,46 @@ module dust_dynamics
                         end if
                     end do
 
+                end do
+            end do; end do; end do
+
+            ! ====================================================================
+            ! STEP 6: ROOM FOR THE DUST, AND POSITIVITY. Nothing else keeps eps_tot < 1: the mixture
+            ! density is not changed by the drift, so a cell where dust converges can
+            ! be given more dust than its mass (negative gas). The net dust inflow
+            ! through each of its 2 ndim faces is limited to that share of the room
+            ! rho (EPS_ROOM - eps_tot), scaling the species fluxes of the face alike
+            ! (conservative; inactive unless eps_tot approaches EPS_ROOM). Likewise the
+            ! outflow of each species through a face is at most 1/(2 ndim) of the donor's
+            ! content: the drift CFL bounds |w| dt/dx, not the predicted face states, and a
+            ! cell could be emptied below zero (inactive where the CFL keeps it positive)
+            ! ====================================================================
+            io_l = 0; jo_l = 0; ko_l = 0
+            if (idim == 1) io_l = 1
+            if (idim == 2) jo_l = 1
+            if (idim == 3) ko_l = 1
+            do k = ifind_klo(idim, klo_f, kf1), ifind_khi(idim, khi_f, kf2)
+            do j = ifind_jlo(idim, jlo_f, jf1), ifind_jhi(idim, jhi_f, jf2)
+            do i = ifind_ilo(idim, ilo_f, if1), ifind_ihi(idim, ihi_f, if2)
+                do l = 1, ngrid
+                    f_in = sum(dflux(l,i,j,k,1:ntva,idim))
+                    if (f_in > 0.0_dp) then
+                        room = rho_mix(l,i,j,k) * (EPS_ROOM - eps_tot(l,i,j,k))
+                    else
+                        room = rho_mix(l,i-io_l,j-jo_l,k-ko_l) * (EPS_ROOM - eps_tot(l,i-io_l,j-jo_l,k-ko_l))
+                    end if
+                    room = max(room, 0.0_dp) / dble(2*ndim)
+                    if (abs(f_in) > room) dflux(l,i,j,k,1:ntva,idim) = dflux(l,i,j,k,1:ntva,idim) * (room / abs(f_in))
+                    ! and no face takes more than its share of a species out of the donor (rho_d >= 0)
+                    do jbin = 1, ntva
+                        if (dflux(l,i,j,k,jbin,idim) > 0.0_dp) then
+                            dflux(l,i,j,k,jbin,idim) = min(dflux(l,i,j,k,jbin,idim), &
+                                max(rhod_cell(l,i-io_l,j-jo_l,k-ko_l,jbin), 0.0_dp) / dble(2*ndim))
+                        else
+                            dflux(l,i,j,k,jbin,idim) = max(dflux(l,i,j,k,jbin,idim), &
+                                -max(rhod_cell(l,i,j,k,jbin), 0.0_dp) / dble(2*ndim))
+                        end if
+                    end do
                 end do
             end do; end do; end do
 
@@ -1914,6 +1957,9 @@ module dust_dynamics
         
         ! Cell-centered primitive caches across the localized block
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Pg, rho_mix, c_s, eint_cell, eps_tot
+        real(dp) :: f_in, room
+        integer  :: io_l, jo_l, ko_l
+        real(dp), parameter :: EPS_ROOM = 0.999_dp   ! the eps_tot ceiling of ctoprim and cmpdt
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: eps
         ! Trapped-IR radiation pressure, exactly as the Riemann solver sees it
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
@@ -2467,6 +2513,46 @@ module dust_dynamics
                         dflux(l,i,j,k,jbin,idim) = flux_mass_bin
                     end do
 
+                end do
+            end do; end do; end do
+
+            ! ====================================================================
+            ! STEP 6: ROOM FOR THE DUST, AND POSITIVITY. Nothing else keeps eps_tot < 1: the mixture
+            ! density is not changed by the drift, so a cell where dust converges can
+            ! be given more dust than its mass (negative gas). The net dust inflow
+            ! through each of its 2 ndim faces is limited to that share of the room
+            ! rho (EPS_ROOM - eps_tot), scaling the species fluxes of the face alike
+            ! (conservative; inactive unless eps_tot approaches EPS_ROOM). Likewise the
+            ! outflow of each species through a face is at most 1/(2 ndim) of the donor's
+            ! content: the drift CFL bounds |w| dt/dx, not the predicted face states, and a
+            ! cell could be emptied below zero (inactive where the CFL keeps it positive)
+            ! ====================================================================
+            io_l = 0; jo_l = 0; ko_l = 0
+            if (idim == 1) io_l = 1
+            if (idim == 2) jo_l = 1
+            if (idim == 3) ko_l = 1
+            do k = ifind_klo(idim, klo_f, kf1), ifind_khi(idim, khi_f, kf2)
+            do j = ifind_jlo(idim, jlo_f, jf1), ifind_jhi(idim, jhi_f, jf2)
+            do i = ifind_ilo(idim, ilo_f, if1), ifind_ihi(idim, ihi_f, if2)
+                do l = 1, ngrid
+                    f_in = sum(dflux(l,i,j,k,1:ntva,idim))
+                    if (f_in > 0.0_dp) then
+                        room = rho_mix(l,i,j,k) * (EPS_ROOM - eps_tot(l,i,j,k))
+                    else
+                        room = rho_mix(l,i-io_l,j-jo_l,k-ko_l) * (EPS_ROOM - eps_tot(l,i-io_l,j-jo_l,k-ko_l))
+                    end if
+                    room = max(room, 0.0_dp) / dble(2*ndim)
+                    if (abs(f_in) > room) dflux(l,i,j,k,1:ntva,idim) = dflux(l,i,j,k,1:ntva,idim) * (room / abs(f_in))
+                    ! and no face takes more than its share of a species out of the donor (rho_d >= 0)
+                    do jbin = 1, ntva
+                        if (dflux(l,i,j,k,jbin,idim) > 0.0_dp) then
+                            dflux(l,i,j,k,jbin,idim) = min(dflux(l,i,j,k,jbin,idim), &
+                                max(rhod_cell(l,i-io_l,j-jo_l,k-ko_l,jbin), 0.0_dp) / dble(2*ndim))
+                        else
+                            dflux(l,i,j,k,jbin,idim) = max(dflux(l,i,j,k,jbin,idim), &
+                                -max(rhod_cell(l,i,j,k,jbin), 0.0_dp) / dble(2*ndim))
+                        end if
+                    end do
                 end do
             end do; end do; end do
         end do
