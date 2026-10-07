@@ -687,7 +687,8 @@ module dust_dynamics
                         Pg(l,i,j,k)  = (1.0_dp - eps_tot_arr(l,i,j,k)) * rho_mix(l,i,j,k)
                         c_s(l,i,j,k) = 1.0_dp
                     else
-                        Pg(l,i,j,k)  = max((gamma-1.0_dp) * rho_gas_cell * &
+                        ! the Godunov pressure (ctoprim): all the internal energy is the gas's
+                        Pg(l,i,j,k)  = max((gamma-1.0_dp) * rho_mix(l,i,j,k) * &
                             max(uloc(l,i,j,k,neul)/rho_mix(l,i,j,k) - eken - erad_cell, &
                                 smallc**2/gamma/(gamma-1.0_dp)), &
                             smallr * smallc**2)
@@ -1271,7 +1272,11 @@ module dust_dynamics
                 Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
                 c_s(l,i,j,k) = 1.0_dp
             else
-                Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_gas_cell * eint_cell(l,i,j,k), smallr*smallc**2)
+                ! The gas pressure is the Godunov one, (gamma-1)(E - E_kin - E_rad) as in ctoprim: the
+                ! internal energy per unit mixture mass eint_cell is all the gas's, so
+                ! P_g = (gamma-1) rho_gas (eint rho/rho_gas). (gamma-1) rho_gas eint was (1-eps) times it,
+                ! whose gradient adds -P grad(eps), a spurious drift at every dust front.
+                Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_mix(l,i,j,k) * eint_cell(l,i,j,k), smallr*smallc**2)
                 c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / rho_gas_cell)
             end if
         end do; end do; end do; end do
@@ -2013,7 +2018,11 @@ module dust_dynamics
                 Pg(l,i,j,k) = 1.0_dp**2 * (one - eps_tot(l,i,j,k)) * rho_mix(l,i,j,k)
                 c_s(l,i,j,k) = 1.0_dp
             else
-                Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_gas_cell * eint_cell(l,i,j,k), smallr*smallc**2)
+                ! The gas pressure is the Godunov one, (gamma-1)(E - E_kin - E_rad) as in ctoprim: the
+                ! internal energy per unit mixture mass eint_cell is all the gas's, so
+                ! P_g = (gamma-1) rho_gas (eint rho/rho_gas). (gamma-1) rho_gas eint was (1-eps) times it,
+                ! whose gradient adds -P grad(eps), a spurious drift at every dust front.
+                Pg(l,i,j,k) = max((gamma - 1.0_dp) * rho_mix(l,i,j,k) * eint_cell(l,i,j,k), smallr*smallc**2)
                 c_s(l,i,j,k) = sqrt(gamma * Pg(l,i,j,k) / rho_gas_cell)
             end if
         end do; end do; end do; end do

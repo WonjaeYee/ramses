@@ -4,10 +4,10 @@ Every species starts as the same Gaussian shell and is pushed by the uniform flu
 tva_test_mode = TVA_TEST_SPRESS (dust_radpressure.f90; no force on the gas, static gas). Each
 then drifts at
     w_k = t_s,k D_k - sum_l eps_l t_s,l D_l,   D_k = grad P_g / rho + a_k - sum_l eps_l a_l,
-    a_k = sigma_rp,k F / (m_k c),   P_g = (1 - eps) P,
-with Epstein t_s,k = sqrt(pi gamma / 8) rho_gr,k a_k / (rho_g c_s). The pressure term matters:
-once the 0.1 um shells run ahead, the gradient of eps across the slower shells moves those by up
-to ~10% of their radiation drift. The prediction is w_k in every cell of every output (centred
+    a_k = sigma_rp,k F / (m_k c),   P_g = P (the Godunov, and output, pressure),
+with Epstein t_s,k = sqrt(pi gamma / 8) rho_gr,k a_k / (rho_g c_s). P is uniform here, so the
+pressure term only checks that the code takes no spurious one (with P_g = (1 - eps) P it moved the
+slower shells by up to ~10% of their radiation drift). The prediction is w_k in every cell of every output (centred
 gradient, as the code), weighted by the shell's excess over the floor and integrated over the
 outputs (trapezoid). Nothing is calibrated:
 - sigma_rp,k is the group average of the CALIMA tables (averaged_cross_section_*Bin_NN.txt) with
@@ -141,7 +141,7 @@ def drift(S):
     et = eps.sum(axis=0)
     rho = S["density"] * scale_d
     P = S["pressure"] * scale_d * scale_v ** 2
-    Pg = (1 - et) * P
+    Pg = P                       # the gas pressure is the Godunov one, as dust_dynamics now takes it
     c_s = np.sqrt(gamma * Pg / ((1 - et) * rho))
     ts = geo[:, None] / ((1 - et) * rho * c_s)
     D = np.gradient(Pg, S["x"] * scale_l) / rho + acc[:, None] - (eps * acc[:, None]).sum(axis=0)
