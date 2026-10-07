@@ -3,9 +3,9 @@ Build with NDUST=4, NPAH=2 (the dustyshell_mulbin Makefile otherwise, NGROUPS=1,
 Every species starts as the same Gaussian shell (hydro/condinit.f90 :: dustyspress_condinit) and
 is pushed by the uniform 8 eV flux of tva_test_mode = TVA_TEST_SPRESS (no force on the gas), so
 each drifts at w_k = t_s,k D_k - sum_l eps_l t_s,l D_l, D_k = grad P_g / rho + a_k - sum_l eps_l a_l.
-The gas pressure term matters: P_g = (1 - eps) P, and once the 0.1 um shells run ahead the gradient
-of eps they leave across the slower shells moves those by up to ~10% of their radiation drift
-(independently of the flux: the separation, and so the gradient, grow with it).
+P_g is the Godunov pressure P, uniform here, so the drift is the radiation one. (With the old
+P_g = (1 - eps) P, the gradient of eps the 0.1 um shells left across the slower shells moved those
+by up to ~10% of their radiation drift: a spurious pressure gradient.)
 In 5-10 eV the neutral and ionised PAH cross sections are equal, so the PAH drift does not depend
 on the charge state. plot-dustyshell_pah.py predicts every drift from the tables, Epstein drag and
 the output gas state (no calibration factor), integrates it over the outputs and compares the
