@@ -82,8 +82,8 @@ epstein_coef = np.sqrt(np.pi * gamma / 8.0)
 sa_code = (s_grain / scale_d) * (a_grain_cm / scale_l)
 grad_Ptrap = -Ptrap_0 * Ptrap_dl / boxlen
 
-# condinit pre-divides the gas pressure by (1-eps), so the TVA solver sees a
-# UNIFORM Pg = p_region and grad(P_gas) = 0. The sound speed is then
+# condinit sets a UNIFORM gas pressure, which the TVA solver takes as it is (the
+# Godunov pressure): Pg = p_region and grad(P_gas) = 0. The sound speed is then
 # c_s = sqrt(gamma*Pg/rho_gas) with rho_gas = (1-eps)*rho_mix, i.e. eps-dependent.
 def cs_analytic(rho_d):
     eps = rho_d / rho_mix
