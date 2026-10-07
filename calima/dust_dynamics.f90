@@ -6,6 +6,17 @@ module dust_dynamics
 
     implicit none
 
+#ifdef RT
+    ! Radiation-pressure and drag state of the level cells of one stencil sweep
+    ! (get_dust_courant_dt, dust_push_fine; radpressure_acc_once). It depends only on
+    ! the cell's uold and rtuold, which a sweep does not change, yet every cell is in
+    ! the 6^ndim stencil of 3^ndim grids. Direct-mapped on (grid, son), at most
+    ! RP_NMAX entries; an entry is valid for the sweep that wrote it (rp_stamp).
+    integer, parameter :: RP_NMAX = 131072
+    integer, save :: rp_n = 0, rp_sweep = 0
+    integer, allocatable, save :: rp_key(:), rp_stamp(:)
+    real(dp), allocatable, save :: rp_val(:,:)
+#endif
 
     contains
 
@@ -354,6 +365,60 @@ module dust_dynamics
         end if
     end subroutine dust_shock_destruction
 
+#ifdef RT
+    subroutine rp_new_sweep()
+        ! start a sweep: the cache entries of the previous one become invalid
+        use amr_commons, only: ngridmax
+        implicit none
+        if (.not. allocated(rp_key)) then
+            rp_n = min(RP_NMAX, twotondim*ngridmax)
+            allocate(rp_key(rp_n), rp_stamp(rp_n))
+            allocate(rp_val((1 + max(1, ntva))*ndim + max(1, ntva) + ntva + 2, rp_n))
+            rp_key = 0
+            rp_stamp = 0
+        end if
+        rp_sweep = rp_sweep + 1
+    end subroutine rp_new_sweep
+
+    subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
+                                    irtrap_share, drag_state)
+        ! compute_gas_dust_radpressure_acc of the level cell icell (uold/rtuold index), computed
+        ! once per sweep and copied for the other stencils that hold the cell; a cache collision
+        ! recomputes, so the outputs are always those of the direct call
+        use amr_commons, only: ncoarse, ngridmax
+        use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
+        implicit none
+        integer, intent(in) :: icell, ilevel
+        real(dp), dimension(:), intent(in) :: cell_state, cell_rt_state
+        real(dp), intent(in) :: dx
+        real(dp), dimension(1:ndim), intent(out) :: gas_acc
+        real(dp), dimension(max(1, ntva), 1:ndim), intent(out) :: tva_acc
+        real(dp), dimension(max(1, ntva)), intent(out) :: irtrap_share
+        real(dp), dimension(1:ntva+2), intent(out) :: drag_state
+        integer :: s, n1, n2, n3
+        ! slot of (grid, son): (grid - 1) 2^ndim + son - 1, modulo the cache size
+        s = mod(mod(icell - ncoarse - 1, ngridmax)*twotondim + (icell - ncoarse - 1)/ngridmax, rp_n) + 1
+        n1 = ndim
+        n2 = n1 + max(1, ntva)*ndim
+        n3 = n2 + max(1, ntva)
+        if (rp_key(s) == icell .and. rp_stamp(s) == rp_sweep) then
+            gas_acc = rp_val(1:n1, s)
+            tva_acc = reshape(rp_val(n1+1:n2, s), (/ max(1, ntva), ndim /))
+            irtrap_share = rp_val(n2+1:n3, s)
+            drag_state = rp_val(n3+1:n3+ntva+2, s)
+            return
+        end if
+        call compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
+                                              irtrap_share, drag_state)
+        rp_key(s) = icell
+        rp_stamp(s) = rp_sweep
+        rp_val(1:n1, s) = gas_acc
+        rp_val(n1+1:n2, s) = reshape(tva_acc, (/ n2 - n1 /))
+        rp_val(n2+1:n3, s) = irtrap_share
+        rp_val(n3+1:n3+ntva+2, s) = drag_state
+    end subroutine radpressure_acc_once
+#endif
+
     subroutine get_dust_courant_dt(ilevel)
         ! ====================================================================
         ! Compute the dust-drift CFL timestep constraint by accessing uold
@@ -482,6 +547,9 @@ module dust_dynamics
         ! PART B: Stencil-based CFL using the true face pressure gradient
         ! ----------------------------------------------------------------
         if (.not. use_w_drift_test) then
+#ifdef RT
+            if (dust_radpressure) call rp_new_sweep()
+#endif
             ! Index bounds — identical to dust_upwind_correct1
             i1min=0; i1max=0; i2min=0; i2max=0; i3min=1; i3max=1
             j1min=0; j1max=0; j2min=0; j2max=0; j3min=1; j3max=1
@@ -560,9 +628,9 @@ module dust_dynamics
                                 do i=1,nbuffer; rt_uloc(ind_nexist(i),i3,j3,k3,ivar) = rt_u2(i,ind_son,ivar);     end do
                             end do
 
-                            ! Compute the radiation pressures for each cell
+                            ! Compute the radiation pressures for each cell (level cells: once per sweep)
                             do i=1,nexist
-                                call compute_gas_dust_radpressure_acc(uloc(ind_exist(i),i3,j3,k3,:),&
+                                call radpressure_acc_once(ind_cell(i), uloc(ind_exist(i),i3,j3,k3,:),&
                                                                         rt_uloc(ind_exist(i),i3,j3,k3,:),& 
                                                                         ilevel,dx,& 
                                                                         a_rad_g(ind_exist(i),i3,j3,k3,:),&
@@ -1498,6 +1566,7 @@ module dust_dynamics
 
         if (numbtot(1,ilevel)==0) return
         if (verbose) write(*,222) ilevel
+        call rp_new_sweep()
 
         ! Loop over active grids by vector sweeps
         ncache = active(ilevel)%ngrid
@@ -1639,9 +1708,9 @@ module dust_dynamics
                     do i=1,nbuffer; rt_uloc(ind_nexist(i),i3,j3,k3,ivar)=rt_u2(i,ind_son,ivar); end do
                 end do
 
-                ! Compute the radiation pressures for each cell
+                ! Compute the radiation pressures for each cell (level cells: once per sweep)
                 do i=1,nexist
-                    call compute_gas_dust_radpressure_acc(uloc(ind_exist(i),i3,j3,k3,:),&
+                    call radpressure_acc_once(ind_cell(i), uloc(ind_exist(i),i3,j3,k3,:),&
                                                             rt_uloc(ind_exist(i),i3,j3,k3,:),& 
                                                             ilevel,dx,& 
                                                             a_rad_g(ind_exist(i),i3,j3,k3,:),&

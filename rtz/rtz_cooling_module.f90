@@ -1508,6 +1508,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      one_over_egy_IR_erg
             end do
          end if
+         ! WDB06rt: the T(1 +- 1e-5) calls below stay served from the precool solve
+         call rtgroups_ir_emitted(iIR, TK, ne, dNp(iIR))
       end if
 #else
                     & )
