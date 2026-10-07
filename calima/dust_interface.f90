@@ -196,6 +196,10 @@ contains
                         ! Consider the contribution from the UV background
                         call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
                                                         &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
+                        ! Recombination cooling depends on the charge distribution and n_e, not on
+                        ! the field: keep only the one compute_dust_peh_rate adds below, at the
+                        ! charge of the total field (the table's is at the background's charge)
+                        dinfo%Prec_dust(ii) = 0d0
                         ! Now consider the contribution from the local radiation field
                         call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
                                                     dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
@@ -260,6 +264,9 @@ contains
                                                             ne,Tk,dinfo%fcharge_pah(:,ii),&
                                                             dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
+                        ! As for the grains: the recombination cooling is added once, by the full
+                        ! model below, at the charge state of the total field
+                        dinfo%Prec_pah(ii) = 0d0
                         ! And now the full model for the local radiation field
                         call compute_pah_peh_equilibrium(ii,dinfo%csa_pah(i_neutral,:),&
                                                             dinfo%csa_pah(i_neutral,:),&
