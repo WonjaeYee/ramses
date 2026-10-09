@@ -897,7 +897,8 @@ subroutine output_frame()
                                            end if
 
                                            ! Store the ion fraction
-                                           xion(iii,jjj) = uold(ind_cell(i),iIons+counter)/uold(ind_cell(i),1)
+                                           ! an ion slot holds x_ion*rho_element
+                                           xion(iii,jjj) = uold(ind_cell(i),iIons+counter)/max(uold(ind_cell(i),imetal+e_counter),smallr)
 
                                            ! Update the electron density
                                            electron_density = electron_density + (nElement(iii) * real(jjj-1,kind=dp) * xion(iii,jjj))
@@ -919,7 +920,7 @@ subroutine output_frame()
 
                                   ! deal with molecules separately
                                   if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-                                     xion(1,3) = uold(ind_cell(i),iIons+counter)/uold(ind_cell(i),1)
+                                     xion(1,3) = uold(ind_cell(i),iIons+counter)/max(uold(ind_cell(i),elements(1)%u_hydro_idx),smallr)
                                      m_bar = m_bar + (nElement(1) * xion(1,3) * elements(1)%atomic_mass)
                                      n_hat = n_hat + (0.5d0 * nElement(1) * xion(1,3))
                                      counter = counter + 1

@@ -718,6 +718,9 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
   use amr_parameters
   use hydro_parameters
   use const
+#if defined(RTZ) && NVAR > NHYDRO
+  use hydro_commons, only: ps_active
+#endif
   implicit none
 
   integer ::ngrid
@@ -786,6 +789,14 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
                  qright(l,n) = qp(l,i,j,k,n,xdim)
               end do
            end do
+#ifdef RTZ
+           ! Consistent multi-fluid advection: species fractions of both face states
+           ! sum to their parent's, so the species fluxes sum to the mass flux
+           if(ps_active)then
+              call ps_cma_faces(qleft ,ngrid)
+              call ps_cma_faces(qright,ngrid)
+           end if
+#endif
 #endif
            ! Solve Riemann problem
            if(riemann.eq.'acoustic')then

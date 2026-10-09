@@ -120,7 +120,8 @@ SUBROUTINE rt_init_xion_vsweep(ind_grid, ngrid)
                   if (iI.eq.1) then 
                      x = 1.d0
                   end if
-                  uold(ind_leaf(i),iIons-1+counter) = x*uold(ind_leaf(i),1)
+                  ! an ion slot holds x_ion*rho_element
+                  uold(ind_leaf(i),iIons-1+counter) = x*uold(ind_leaf(i),elements(iE)%u_hydro_idx)
                   counter = counter + 1
                end do  ! end loop over ions
             end if

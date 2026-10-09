@@ -1097,6 +1097,10 @@ module dust_dynamics
             end do; end do; end do
         end do
 
+
+        ! The gas carries the opposite of the drift mass flux (barycentric frame), so that
+        ! the gas species plus the TVA species still sum to rho
+        if (ps_active) call tva_gas_counterflux(uloc,dflux,ind_grid,ncache)
         ! Update neighboring coarser cells (flux correction at coarse-fine boundaries)
         do idim=1,ndim
             i0=0; j0=0; k0=0
@@ -1165,6 +1169,123 @@ module dust_dynamics
 
     end subroutine dust_upwind_correct1
 
+    subroutine tva_gas_counterflux(uloc,dflux,ind_grid,ncache)
+        ! In the terminal-velocity approximation rho is the mixture density and the TVA
+        ! species drift with w_d relative to the barycentre, so the gas drifts with
+        ! w_g = -sum(rho_d w_d)/rho_g: every face carrying the TVA mass flux
+        ! Ftot = sum(dflux) must carry -Ftot of gas. It is shared between the gas slots
+        ! (elements, CO, ion stages, H2) in proportion to their densities in the upwind
+        ! cell of the gas drift, so that sum(gas top slots) gets exactly -Ftot and the
+        ! ions of every element exactly their element's share. Applied like dflux:
+        ! to this grid's cells and, at coarse-fine boundaries, to the coarse neighbour.
+        use amr_commons
+        use hydro_commons
+        implicit none
+        integer::ncache
+        integer,dimension(1:nvector)::ind_grid
+        real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar_all)::uloc
+        real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ntva,1:ndim)::dflux
+        real(dp),allocatable,dimension(:,:,:,:,:,:),save::gflux
+        integer,dimension(1:nvector)::ind_buffer,ind_lcl
+        integer::i,g,idim,i0,j0,k0,i2,j2,k2,i3,j3,k3,iu,ju,ku,ind_son,iskip,nb_noneigh
+        integer::i2max,j2max,k2max,i3min,i3max,j3min,j3max,k3min,k3max
+        real(dp)::ftot,sup,oneontwotondim
+
+        if(ps_ngas==0)return
+        if(.not.allocated(gflux))allocate(gflux(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:ps_ngas,1:ndim))
+        oneontwotondim=1d0/dble(twotondim)
+        i2max=0; j2max=0; k2max=0; i3min=1; i3max=1; j3min=1; j3max=1; k3min=1; k3max=1
+        if(ndim>0)then; i2max=1; i3max=2; end if
+        if(ndim>1)then; j2max=1; j3max=2; end if
+        if(ndim>2)then; k2max=1; k3max=2; end if
+
+        gflux=0d0
+        do idim=1,ndim
+            i0=0; j0=0; k0=0
+            if(idim==1)i0=1
+            if(idim==2)j0=1
+            if(idim==3)k0=1
+            do k3=k3min,k3max+k0; do j3=j3min,j3max+j0; do i3=i3min,i3max+i0
+                do i=1,ncache
+                    ftot=sum(dflux(i,i3,j3,k3,1:ntva,idim))
+                    if(ftot==0d0)cycle
+                    ! upwind cell of the gas (mass flux -ftot)
+                    if(ftot<0d0)then
+                        iu=i3-i0; ju=j3-j0; ku=k3-k0
+                    else
+                        iu=i3; ju=j3; ku=k3
+                    end if
+                    sup=0d0
+                    do g=1,ps_ngastop
+                        sup=sup+max(uloc(i,iu,ju,ku,ps_gastop(g)),0d0)
+                    end do
+                    if(sup<=0d0)cycle
+                    do g=1,ps_ngas
+                        gflux(i,i3,j3,k3,g,idim)=-ftot*max(uloc(i,iu,ju,ku,ps_gas(g)),0d0)/sup
+                    end do
+                end do
+            end do; end do; end do
+        end do
+
+        ! this grid's cells
+        do idim=1,ndim
+            i0=0; j0=0; k0=0
+            if(idim==1)i0=1
+            if(idim==2)j0=1
+            if(idim==3)k0=1
+            do k2=0,k2max; do j2=0,j2max; do i2=0,i2max
+                ind_son=1+i2+2*j2+4*k2
+                iskip=ncoarse+(ind_son-1)*ngridmax
+                i3=1+i2; j3=1+j2; k3=1+k2
+                do g=1,ps_ngas
+                    do i=1,ncache
+                        unew(iskip+ind_grid(i),ps_gas(g))=unew(iskip+ind_grid(i),ps_gas(g))+ &
+                            (gflux(i,i3,j3,k3,g,idim)-gflux(i,i3+i0,j3+j0,k3+k0,g,idim))
+                    end do
+                end do
+            end do; end do; end do
+        end do
+
+        ! coarser neighbours across coarse-fine boundaries
+        do idim=1,ndim
+            i0=0; j0=0; k0=0
+            if(idim==1)i0=1
+            if(idim==2)j0=1
+            if(idim==3)k0=1
+            nb_noneigh=0
+            do i=1,ncache
+                if(son(nbor(ind_grid(i),2*idim-1))==0)then
+                    nb_noneigh=nb_noneigh+1
+                    ind_buffer(nb_noneigh)=nbor(ind_grid(i),2*idim-1)
+                    ind_lcl(nb_noneigh)=i
+                end if
+            end do
+            do g=1,ps_ngas
+                do k3=k3min,k3max-k0; do j3=j3min,j3max-j0; do i3=i3min,i3max-i0
+                    do i=1,nb_noneigh
+                        unew(ind_buffer(i),ps_gas(g))=unew(ind_buffer(i),ps_gas(g)) &
+                            - gflux(ind_lcl(i),i3,j3,k3,g,idim)*oneontwotondim
+                    end do
+                end do; end do; end do
+            end do
+            nb_noneigh=0
+            do i=1,ncache
+                if(son(nbor(ind_grid(i),2*idim))==0)then
+                    nb_noneigh=nb_noneigh+1
+                    ind_buffer(nb_noneigh)=nbor(ind_grid(i),2*idim)
+                    ind_lcl(nb_noneigh)=i
+                end if
+            end do
+            do g=1,ps_ngas
+                do k3=k3min+k0,k3max; do j3=j3min+j0,j3max; do i3=i3min+i0,i3max
+                    do i=1,nb_noneigh
+                        unew(ind_buffer(i),ps_gas(g))=unew(ind_buffer(i),ps_gas(g)) &
+                            + gflux(ind_lcl(i),i3+i0,j3+j0,k3+k0,g,idim)*oneontwotondim
+                    end do
+                end do; end do; end do
+            end do
+        end do
+    end subroutine tva_gas_counterflux
     subroutine calculate_pure_drag_fluxes(uloc, dflux, eflux, dx, dt, ngrid, &
                                         & agrain_code, sgrain_code)
         use amr_parameters
@@ -1802,6 +1923,10 @@ module dust_dynamics
             end do
         end do; end do; end do
 
+
+        ! The gas carries the opposite of the drift mass flux (barycentric frame), so that
+        ! the gas species plus the TVA species still sum to rho
+        if (ps_active) call tva_gas_counterflux(uloc,dflux,ind_grid,ncache)
         ! Update neighboring coarser cells (flux correction at coarse-fine boundaries)
         do idim=1,ndim
             i0=0; j0=0; k0=0

@@ -122,6 +122,10 @@ subroutine dump_all
      filename=TRIM(filedir)//'hydro_'//TRIM(nchar)//'.out'
      filename_desc = trim(filedir)//'hydro_file_descriptor.txt'
      call backup_hydro(filename, filename_desc)
+#if defined(RTZ) && !defined(SOLVERmhd)
+     ! passive-scalar consistency since the previous output
+     if(rt.or.neq_chem)call ps_report
+#endif
 #ifndef WITHOUTMPI
      if(synchro_when_io) call MPI_BARRIER(MPI_COMM_WORLD,info)
 #endif

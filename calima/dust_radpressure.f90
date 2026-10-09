@@ -120,7 +120,8 @@ contains
         do id=1,n_elements
            if (elements(id)%atomic_number.gt.0) then
               do iion=1,elements(id)%n_ions
-                 xion(id,iion) = cell_state(iIons+counter) / rho_loc
+                 ! an ion slot holds x_ion*rho_element
+                 xion(id,iion) = cell_state(iIons+counter) / max(cell_state(imetal+e_counter), smallr)
                  counter = counter + 1
               end do
               elements(id)%scale_n = scale_d / elements(id)%atomic_mass_g
@@ -131,7 +132,7 @@ contains
            end if
         end do
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-           xion(1,3) = cell_state(iIons+counter) / rho_loc
+           xion(1,3) = cell_state(iIons+counter) / max(cell_state(elements(1)%u_hydro_idx), smallr)
            counter = counter + 1
         end if
 #else

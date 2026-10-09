@@ -351,7 +351,12 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            work = scale_v/c_cgs * (chi_R_IR * scale_l / max(uold(il,1),smallr)) &
                 * sum(uold(il,2:ndim+1)*flux) * dtnew(ilevel) !         Eq A6
 #else
+#ifdef RTZ
+           ! the HII slot holds x_HII*rho_H
+           xHII = uold(il,iIons-1+ixHII)/max(uold(il,elements(1)%u_hydro_idx),smallr)
+#else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
+#endif
            f_dust = (1d0-xHII)                     ! No dust in ionised gas
            work = scale_v/c_cgs * kIR * sum(uold(il,2:ndim+1)*flux) &
                 * Zsolar(i) * f_dust * dtnew(ilevel) !               Eq A6
@@ -480,6 +485,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      if(neq_chem) then
         ! Get the ionization fractions
 #ifdef RTZ
+        ! Consistency of the passive scalars after the hydro step (counted, reported at
+        ! each output; renormalised only with passive_renorm)
+        if(ps_ntop>0) call ps_check_cells(ind_leaf,nleaf)
         counter = 0
         e_counter = 0
         nElement = 0d0
@@ -488,7 +496,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
                  do i=1,nleaf !loop over leaf cells
-                    xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
+                    ! an ion slot holds x_ion*rho_element
+                    if (uold(ind_leaf(i),imetal+e_counter).gt.0d0) then
+                       xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),imetal+e_counter)
+                    else if (jj.eq.1) then
+                       xion(ii,jj,i) = 1d0
+                    else
+                       xion(ii,jj,i) = 0d0
+                    end if
                     if (jj.eq.1) then
                        ! This gives us a number density [Atoms/cm^3]
                        elements(ii)%scale_n = scale_d / elements(ii)%atomic_mass_g
@@ -505,7 +520,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         ! deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            do i=1,nleaf !loop over leaf cells
-              xion(1,3,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
+              ! the H2 slot holds the density of the hydrogen in H2
+              xion(1,3,i) = uold(ind_leaf(i),iIons+counter)/max(uold(ind_leaf(i),elements(1)%u_hydro_idx),smallr)
            end do ! end loop over leaf cells
            counter = counter + 1
         endif
@@ -998,7 +1014,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
                  do i=1,nleaf !loop over leaf cells
-                    uold(ind_leaf(i),iIons+counter) = xion(ii,jj,i)*nH(i)
+                    ! x_ion times the element density written back below (after CO
+                    ! formation and the CALIMA depletion/return), so that the ion
+                    ! stages of every element still sum to it
+                    uold(ind_leaf(i),iIons+counter) = xion(ii,jj,i)*nElement(ii,i)/elements(ii)%scale_n
                  end do ! end loop over leaf cells
                  counter = counter + 1
               end do ! end loop over ions
@@ -1008,7 +1027,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         ! deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            do i=1,nleaf !loop over leaf cells
-              uold(ind_leaf(i),iIons+counter) = xion(1,3,i)*nH(i)
+              uold(ind_leaf(i),iIons+counter) = xion(1,3,i)*nElement(1,i)/elements(1)%scale_n
            end do ! end loop over leaf cells
            counter = counter + 1
         endif

@@ -1059,7 +1059,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
   real(dp)::ijm, ije, sn_e_code_units
   logical::is_hn, is_sn, is_central_cloud_particle
-  integer::counter, iElement, pre_accretion_evolution_flag
+  integer::counter, iElement, pre_accretion_evolution_flag, elem_k
   real(dp)::star_met_fe
   integer::ielem,jelem
   real(dp)::fchem
@@ -1515,12 +1515,18 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  
                  ! Update ion fractions
                  counter = 0
+                 elem_k = 0
                  do iElement= 1, n_elements
                     if (elements(iElement)%atomic_number .gt. 0) then
+                       elem_k = elem_k + 1
                        ! only neutrals are dumped
-                       ! it will not work for other passive scalars!
                        ! also this might cause problems if putting ionized materials is important
-                       unew(indp(j,ind),iIons+counter) = unew(indp(j,ind),iIons+counter) + ijm
+                       ! An ion slot holds x_ion*rho_element, so each element's own
+                       ! ejected mass goes into its neutral stage (the same amount
+                       ! as into the element slot above): the ion stages of every
+                       ! element keep summing to the element
+                       unew(indp(j,ind),iIons+counter) = unew(indp(j,ind),iIons+counter) + &
+                             & ((loc_metal_yield(elem_k) / (scale_m/M_sun)) * (weight/volume) / vol_loc)
                        counter = counter + elements(iElement)%n_ions
                     end if
                  end do
