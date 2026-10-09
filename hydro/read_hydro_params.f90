@@ -480,9 +480,8 @@ subroutine read_hydro_params(nml_ok)
   inener=nhydro+1
   imetal=inener+nener
   idelay=imetal
-#if NMETALS > 1
-  idelay=imetal+nmetals
 #ifdef RTZ
+  ! element slots (also with a single tracked element, NMETALS=1: hydrogen only)
   counter = 0
   do i=1,n_elements
      if (elements(i)%atomic_number.gt.0) then
@@ -491,6 +490,8 @@ subroutine read_hydro_params(nml_ok)
      end if
   end do
 #endif
+#if NMETALS > 1
+  idelay=imetal+nmetals
 #else
   if(metal)idelay=imetal+1
 #endif
