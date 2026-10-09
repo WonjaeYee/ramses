@@ -1330,13 +1330,14 @@ subroutine ps_prolong(u1,u2,nn)
   ! Make the children of an AMR prolongation consistent without breaking the
   ! conservation of each species: interpol_hydro limits every variable on its own, so
   ! the children of each species average to the father but their sum differs from the
-  ! interpolated rho by e_c (sum over children of e_c = 0 when the father is
-  ! consistent).  e_c is shared between the species in proportion to the father's own
-  ! composition, which keeps every species' children average and makes the sums exact.
-  ! If that would make a child value negative, the father's composition is injected
-  ! instead (child = rho_child * father fraction: conservative, consistent, positive).
+  ! interpolated rho by e_c.  e_c minus its mean over the children (the mean is the
+  ! father's own defect, round-off for a consistent father) is shared between the species
+  ! in proportion to the father's composition: each species keeps its children average
+  ! exactly and the children sums equal rho_child up to the father's defect.  If that
+  ! would make a child value negative, the father's composition is injected instead
+  ! (child = father * rho_child/rho_father: conservative, consistent, positive).
   ! The same is then done for the ions of each element, with the corrected element
-  ! values as the target.
+  ! values of the children as the target.
   use amr_parameters
   use hydro_commons
   implicit none
@@ -1344,7 +1345,8 @@ subroutine ps_prolong(u1,u2,nn)
   real(dp),dimension(1:nvector,0:twondim  ,1:nvar)::u1
   real(dp),dimension(1:nvector,1:twotondim,1:nvar)::u2
   integer::i,j,k,n,ind
-  real(dp)::sfat,e,w
+  real(dp)::sfat,ebar,w
+  real(dp),dimension(1:twotondim)::e
   logical::neg
   do i=1,nn
      ! top level
@@ -1352,17 +1354,20 @@ subroutine ps_prolong(u1,u2,nn)
      do k=1,ps_ntop
         sfat=sfat+max(u1(i,0,ps_top(k)),0d0)
      end do
-     if(sfat<=0d0)cycle
+     if(sfat<=0d0.or.u1(i,0,1)<=0d0)cycle
+     do ind=1,twotondim
+        e(ind)=u2(i,ind,1)
+        do k=1,ps_ntop
+           e(ind)=e(ind)-u2(i,ind,ps_top(k))
+        end do
+     end do
+     ebar=sum(e)/dble(twotondim)
      neg=.false.
      do ind=1,twotondim
-        e=u2(i,ind,1)
-        do k=1,ps_ntop
-           e=e-u2(i,ind,ps_top(k))
-        end do
         do k=1,ps_ntop
            n=ps_top(k)
            w=max(u1(i,0,n),0d0)/sfat
-           u2(i,ind,n)=u2(i,ind,n)+w*e
+           u2(i,ind,n)=u2(i,ind,n)+w*(e(ind)-ebar)
            if(u2(i,ind,n)<0d0)neg=.true.
         end do
      end do
@@ -1370,7 +1375,7 @@ subroutine ps_prolong(u1,u2,nn)
         do ind=1,twotondim
            do k=1,ps_ntop
               n=ps_top(k)
-              u2(i,ind,n)=u2(i,ind,1)*max(u1(i,0,n),0d0)/sfat
+              u2(i,ind,n)=max(u1(i,0,n),0d0)*u2(i,ind,1)/u1(i,0,1)
            end do
         end do
      end if
@@ -1380,7 +1385,8 @@ subroutine ps_prolong(u1,u2,nn)
         do k=ps_cstart(j),ps_cstart(j+1)-1
            sfat=sfat+max(u1(i,0,ps_child(k)),0d0)
         end do
-        if(sfat<=0d0)then
+        if(sfat<=0d0.or.u1(i,0,ps_par(j))<=0d0)then
+           ! no ion (or no element) in the father: the element's children go to stage 1
            do ind=1,twotondim
               do k=ps_cstart(j),ps_cstart(j+1)-1
                  u2(i,ind,ps_child(k))=0d0
@@ -1389,16 +1395,19 @@ subroutine ps_prolong(u1,u2,nn)
            end do
            cycle
         end if
+        do ind=1,twotondim
+           e(ind)=u2(i,ind,ps_par(j))
+           do k=ps_cstart(j),ps_cstart(j+1)-1
+              e(ind)=e(ind)-u2(i,ind,ps_child(k))
+           end do
+        end do
+        ebar=sum(e)/dble(twotondim)
         neg=.false.
         do ind=1,twotondim
-           e=u2(i,ind,ps_par(j))
-           do k=ps_cstart(j),ps_cstart(j+1)-1
-              e=e-u2(i,ind,ps_child(k))
-           end do
            do k=ps_cstart(j),ps_cstart(j+1)-1
               n=ps_child(k)
               w=max(u1(i,0,n),0d0)/sfat
-              u2(i,ind,n)=u2(i,ind,n)+w*e
+              u2(i,ind,n)=u2(i,ind,n)+w*(e(ind)-ebar)
               if(u2(i,ind,n)<0d0)neg=.true.
            end do
         end do
@@ -1406,7 +1415,7 @@ subroutine ps_prolong(u1,u2,nn)
            do ind=1,twotondim
               do k=ps_cstart(j),ps_cstart(j+1)-1
                  n=ps_child(k)
-                 u2(i,ind,n)=u2(i,ind,ps_par(j))*max(u1(i,0,n),0d0)/sfat
+                 u2(i,ind,n)=max(u1(i,0,n),0d0)*u2(i,ind,ps_par(j))/u1(i,0,ps_par(j))
               end do
            end do
         end if
