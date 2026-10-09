@@ -8,6 +8,9 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
   use const
 #ifdef RT
   use rt_parameters
+#ifdef RTZ
+  use rtz_module, only: elements
+#endif
 #endif
   implicit none
   ! dummy arguments
@@ -20,6 +23,10 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
   integer::k,idim,irad
   real(dp),dimension(1:nvector),save::eking,ekinm,ekind
   real(dp)::dg,dm,dd,pg,pm,pd,vg,vm,vd,cg,cm,cd,error
+#ifdef RT
+  integer::iHII
+  logical::ok_xH
+#endif
 
   ! Convert to primitive variables
   do k = 1,nn
@@ -110,12 +117,22 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
   end if
 
 #ifdef RT
+#ifdef RTZ
+  ! In RTZ ixHII is not set and hydrogen's ion block starts at iIons (H I,
+  ! then H II); the passive scalars are already fractions here (divided by
+  ! rho above). Without hydrogen there is nothing to refine on.
+  ok_xH = elements(1)%atomic_number.gt.0
+  iHII = iIons+1
+#else
+  ok_xH = .true.
+  iHII = iIons
+#endif
   ! Ionization state (only Hydrogen)
-  if(rt_err_grad_xHII >= 0.) then !---------------------------------------
+  if(rt_err_grad_xHII >= 0. .and. ok_xH) then !---------------------------
      do k=1,nn
-        dg=min(1d0,max(0d0,ug(k,iIons)))
-        dm=min(1d0,max(0d0,um(k,iIons)))
-        dd=min(1d0,max(0d0,ud(k,iIons)))
+        dg=min(1d0,max(0d0,ug(k,iHII)))
+        dm=min(1d0,max(0d0,um(k,iHII)))
+        dd=min(1d0,max(0d0,ud(k,iHII)))
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHII)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHII)) )
@@ -124,11 +141,18 @@ subroutine hydro_refine(ug,um,ud,ok,nn)
   end if
 
   ! Neutral state (only Hydrogen)
-  if(rt_err_grad_xHI  >= 0.) then !---------------------------------------
+  if(rt_err_grad_xHI  >= 0. .and. ok_xH) then !---------------------------
      do k=1,nn
+#ifdef RTZ
+        ! H I has its own slot in RTZ (1 - xHII would count H2 as H I)
+        dg=min(1d0,max(0d0,ug(k,iIons)))
+        dm=min(1d0,max(0d0,um(k,iIons)))
+        dd=min(1d0,max(0d0,ud(k,iIons)))
+#else
         dg=min(1d0,max(0d0,1d0 - ug(k,iIons)))
         dm=min(1d0,max(0d0,1d0 - um(k,iIons)))
         dd=min(1d0,max(0d0,1d0 - ud(k,iIons)))
+#endif
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHI)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHI)) )

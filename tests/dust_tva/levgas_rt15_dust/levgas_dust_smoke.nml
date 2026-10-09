@@ -43,9 +43,9 @@ reference folder are the temperature dependence of kappa and the dust dynamics.
 
 The gas opacity is zero by construction: the single group is the far-IR band
 (0.001-0.1 eV), below every ionisation threshold RTZ tracks, and
-photoionisation is off in the network. Note rt_init RECOMPUTES group_egy for
-that band as 6.696e-2 eV, so rt_n_bound below is F_* divided by THAT, not by
-the namelist group_egy.
+photoionisation is off in the network. group_egy is left unset, so rt_init
+computes it for that band as 6.696e-2 eV, and rt_n_bound below is F_* divided
+by that.
 
 SMOKE TEST. Identical to the production namelist EXCEPT: 64^2 over 32 h_*
 (same dy = 0.5 h_* as production), tend = 3 t_*, and rt_c_ramp_nstep = 300 so
@@ -208,8 +208,9 @@ rt_Tconst=82.0d0
 /
 
 &RT_GROUPS
-! Far-IR band. group_egy is RECOMPUTED by rt_init for a CALIMA build.
-group_egy     = 0.01
+! Far-IR band.
+! group_egy is not set: rt_init fills it from a blackbody at rtz_source_temperature
+! (1e5 K) over groupL0..groupL1. A value given here would be used as is.
 groupL0       = 0.001
 groupL1       = 0.1
 /

@@ -170,9 +170,8 @@ rtz_max_cool_timestep=1.d20
 ! subcycle, so it acts as a steady, perfectly absorbing inflow boundary.
 ! F_E = group_egy * rt_n_source = 3.300000e+03 erg/cm2/s  ->  T_rad = 61.760 K,
 ! kappa_R = 83.038 cm2/g (per gram of dust).
-! NOTE ON group_egy: RAMSES-RT RECOMPUTES group_egy(1) from the band edges at
-! startup (a 1e5 K blackbody weighting over groupL0..groupL1), overwriting the
-! namelist value. For 0.001-0.1 eV it comes out at 6.696e-2 eV, not 0.01 --
+! NOTE ON group_egy: it is left unset, so RAMSES-RT computes group_egy(1) from
+! the band edges at startup (a 1e5 K blackbody weighting over groupL0..groupL1). For 0.001-0.1 eV it comes out at 6.696e-2 eV, not 0.01 --
 ! see "egy [eV]" in info_rt_*.txt. rt_n_source below is F_E/6.696e-2 eV; the
 ! analysis script reads egy back out of info_rt so the check never relies on
 ! the namelist number.
@@ -188,9 +187,10 @@ rt_src_group(1) = 1
 
 &RT_GROUPS
 ! One group only: the far-IR band where ~30-60 K dust radiates.
-! group_egy below is OVERWRITTEN by rt_init (see the note above): the code
-! uses 6.696e-2 eV for this band.
-group_egy     = 0.01
+! group_egy is left unset, so rt_init computes it (see the note above): the
+! code uses 6.696e-2 eV for this band.
+! group_egy is not set: rt_init fills it from a blackbody at rtz_source_temperature
+! (1e5 K) over groupL0..groupL1. A value given here would be used as is.
 groupL0       = 0.001
 groupL1       = 0.1
 /
