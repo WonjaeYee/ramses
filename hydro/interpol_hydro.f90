@@ -389,6 +389,12 @@ subroutine interpol_hydro(u1,u2,nn)
   end do
   ! End loop over variables
 
+#ifdef RTZ
+  ! Species sums of the children equal to their parent's (rho, element), each
+  ! species still conserved: see ps_prolong (hydro/godunov_utils.f90)
+  if(ps_active)call ps_prolong(u1,u2,nn)
+#endif
+
   ! If necessary, convert children internal energy into total energy
   ! and velocities back to momenta
   if(interpol_var==1 .or. interpol_var==2)then

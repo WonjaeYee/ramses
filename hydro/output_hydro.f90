@@ -34,7 +34,7 @@ subroutine backup_hydro(filename, filename_desc)
   integer :: info_var_count
   character(len=100) :: field_name
 #ifdef RTZ
-  integer :: counter, i_elements, i_ions
+  integer :: counter, i_elements, i_ions, jps, kps
 #endif
 #ifdef CALIMA
    integer :: i_dust, i_pah
@@ -233,6 +233,24 @@ subroutine backup_hydro(filename, filename_desc)
                     if (isH2_rtz) then
                        if (ivar.eq.counter + iIons + 1) field_name = 'H2'
                     end if
+
+#ifndef SOLVERmhd
+                    ! An ion slot holds x_ion*rho_element: dump the ionisation
+                    ! fraction x_ion (what u/rho was in the former convention)
+                    do jps=1,ps_npar
+                       do kps=ps_cstart(jps),ps_cstart(jps+1)-1
+                          if (ps_child(kps).eq.ivar) then
+                             do i = 1, ncache
+                                if (uold(ind_grid(i)+iskip,ps_par(jps)).gt.0d0) then
+                                   xdp(i) = uold(ind_grid(i)+iskip,ivar)/uold(ind_grid(i)+iskip,ps_par(jps))
+                                else
+                                   xdp(i) = 0d0
+                                end if
+                             end do
+                          end if
+                       end do
+                    end do
+#endif
 
                  else
                     write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener

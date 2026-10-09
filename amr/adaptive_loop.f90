@@ -39,6 +39,11 @@ subroutine adaptive_loop
 #ifdef RT
   if(rt.or.neq_chem) call rt_init_hydro ! Initialize radiation variables
 #endif
+#if defined(RTZ) && !defined(SOLVERmhd)
+  ! Passive-scalar constraint tree (needs iIons from rt_init); converts the ion
+  ! fractions of a restart into ion mass densities
+  if(hydro.and.(rt.or.neq_chem)) call init_passive_groups
+#endif
   if(poisson)call init_poisson       ! Initialize poisson variables
 #ifdef ATON
   if(aton)call init_radiation        ! Initialize radiation variables

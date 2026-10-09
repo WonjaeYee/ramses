@@ -139,6 +139,16 @@ module hydro_parameters
   character(LEN=10)::scheme='muscl'
   character(LEN=10)::riemann='llf'
 
+  ! Passive-scalar consistency (RTZ: elements + CO + dust + PAH = rho, ions + H2 = element)
+  ! passive_cma: Consistent Multi-fluid Advection (Plewa & Mueller 1999) at the face
+  !   states, nested over the constraint tree, the matching AMR prolongation and the
+  !   gas counter-flux of the TVA drift. passive_renorm: renormalise the cell values in
+  !   cooling_fine if they drift beyond passive_tol (a non-conservative safety net,
+  !   counted and reported either way).
+  logical ::passive_cma=.true.
+  logical ::passive_renorm=.false.
+  real(dp)::passive_tol=1d-10
+
   ! Interpolation parameters
   integer ::interpol_var=0
   integer ::interpol_type=1

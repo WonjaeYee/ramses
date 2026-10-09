@@ -215,6 +215,10 @@ subroutine make_boundary_hydro(ilevel)
               end do
 
               call boundana(xx,uu,dx_loc,ibound,ngrid)
+#if defined(RTZ) && !defined(SOLVERmhd)
+              ! boundary_var holds x_ion*rho for the ions: store x_ion*rho_element
+              call ps_frac_to_mass(uu,ngrid)
+#endif
 
               ! Scatter variables
               do ivar=1,nvar
