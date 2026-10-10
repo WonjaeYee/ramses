@@ -110,7 +110,7 @@ module dust_dynamics
         end function G_draine
     end function draine2011_stopping_time
 
-    function grain_relative_velocity(model,T,rho_gas,nH,v_turb&
+    function grain_relative_velocity(model,T,rho_gas,nH,ne,v_turb&
                                     &,local_mu,inject_L&
                                     &,target_a,projectile_a&
                                     &,target_s,projectile_s&
@@ -126,6 +126,7 @@ module dust_dynamics
         ! T            => gas temperature [K]
         ! rho_gas      => gas density [g/cm**3]
         ! nH           => Hydrogen number density [1/cm**3]
+        ! ne           => electron number density [1/cm**3] (the ionised fraction of the gas viscosity)
         ! v_turb       => turbulent velocity [cm]
         ! local_mu     => local mean molecular weight
         ! inject_L     => turbulent injection scale [cm]
@@ -137,13 +138,17 @@ module dust_dynamics
         ! projectile_m => projectile grain mass [g]
         implicit none
         character(len=30), intent(in) :: model
-        real(dp), intent(in) :: T,rho_gas,nH,v_turb,local_mu,inject_L
+        real(dp), intent(in) :: T,rho_gas,nH,ne,v_turb,local_mu,inject_L
         real(dp), intent(in) :: target_a,target_s,target_m
         real(dp), intent(in) :: projectile_a,projectile_s,projectile_m
 
         real(dp) :: grain_relative_velocity
         real(dp) :: dV_thermal,cs_gas,v_th
-        real(dp) :: mfp,tau_L,Re,tau_eta,rc
+        real(dp) :: tau_L,Re,tau_eta,rc,x_ion,sigma_C,nu
+        real(dp) :: St1,St2,St_star,dVI2,dVII2
+        ! Gas viscosity (Ormel2007): neutral (H, H2) kinetic cross-section, as Ormel et al. (2009),
+        ! and the Coulomb logarithm of the ion-ion collisions (Braginskii 1965)
+        real(dp), parameter :: sigma_neutral = 2d-15, coulomb_log = 20d0
         real(dp) :: ts_target,ts_projectile
         real(dp) :: St_target,St_projectile
         real(dp) :: Stmin,dV_turb
@@ -152,30 +157,38 @@ module dust_dynamics
 
         ! Cache for gas-phase invariants to avoid redundant calculations within a cell
         real(dp),save :: last_T=-1d0, last_rho_gas=-1d0, last_nH=-1d0, last_v_turb=-1d0, last_mu=-1d0, last_L=-1d0
+        real(dp),save :: last_ne=-1d0
         character(len=30),save :: last_model=''
-        real(dp),save :: cs_gas_save, v_th_save, tau_L_save, Re_save, tau_eta_save, mfp_save
+        real(dp),save :: cs_gas_save, v_th_save, tau_L_save, Re_save, tau_eta_save
         if (T /= last_T .or. rho_gas /= last_rho_gas .or. nH /= last_nH .or. &
             v_turb /= last_v_turb .or. local_mu /= last_mu .or. inject_L /= last_L .or. &
-            model /= last_model) then
-            
+            ne /= last_ne .or. model /= last_model) then
+
             last_T = T; last_rho_gas = rho_gas; last_nH = nH
             last_v_turb = v_turb; last_mu = local_mu; last_L = inject_L
-            last_model = model
+            last_ne = ne; last_model = model
 
             ! Gas sound speed (assumed gas with adiabatic constant of 5d0/3d0)
             cs_gas_save = sqrt(5d0/3d0 * kB * T / (mH * local_mu))
-            ! Thermal velocity (Maxwelian distribution)
-            v_th_save = sqrt(8d0/pi) * cs_gas_save
+            ! Thermal velocity: the Maxwellian mean speed of the gas particles, with no adiabatic index
+            v_th_save = sqrt(8d0 * kB * T / (pi * mH * local_mu))
 
-            if (trim(model) == 'Ormel2007') then
+            if (trim(model) == 'Ormel2007' .and. v_turb > 0d0) then
+                ! Kinematic viscosity of the neutral + ionised (x_ion = ne/nH) mixture, each weighted by
+                ! its mass fraction: nu = sum_s f_s v_th mfp_s / 3. Neutrals collide (with neutrals and
+                ! ions) at sigma_neutral; ions also with each other through Coulomb collisions,
+                ! sigma_C = pi rc^2 ln(Lambda) (Braginskii 1965). The Coulomb mean free path alone,
+                ! used at any ionisation before, gave Re ~ 1e20-1e24 in neutral gas at 10-100 K.
+                x_ion = min(max(ne / nH, 0d0), 1d0)
                 ! Distance of closest particle approach (ionised)
                 rc = e2instatC / (kB * T)
-                ! Particle mean free path
-                mfp_save = 1d0 / (nH * rc**2d0)
+                sigma_C = pi * rc**2 * coulomb_log
+                nu = v_th_save / (3d0 * nH) * ((1d0 - x_ion) / sigma_neutral &
+                                              + x_ion / (x_ion * sigma_C + (1d0 - x_ion) * sigma_neutral))
                 ! Eddie injection timescale
                 tau_L_save = inject_L / v_turb
                 ! Reynolds number (ratio of inertial to viscous forces)
-                Re_save = 3d0 * v_turb * inject_L / (cs_gas_save * mfp_save)
+                Re_save = max(v_turb * inject_L / nu, 1d0)
                 ! Disipation timescale
                 tau_eta_save = tau_L_save / sqrt(Re_save)
             end if
@@ -188,33 +201,53 @@ module dust_dynamics
             ! This is based on the formulation presented in Kawasaki & Machida (2023)
             ! which is basically the analytical model of Ormel & Cuzzi (2007)
 
-            ! 1. Contribution to relative velocity from thermal (Brownian) motion
-            dV_thermal = sqrt(8.d0 * kB * T * (target_m + projectile_m)/(target_m * projectile_m))
+            ! 1. Contribution to relative velocity from thermal (Brownian) motion: (8 kB T / pi m_red)^1/2
+            dV_thermal = sqrt(8.d0 * kB * T * (target_m + projectile_m)/(pi * target_m * projectile_m))
+            if (v_turb <= 0d0) then
+                grain_relative_velocity = dV_thermal
+                return
+            end if
 
             ! 2. Assume that the injection scale of turbulence is a cell size of inject_L length and
             ! the velocity is given by the largest size eddie velocity
             tau_L = tau_L_save
             Re = Re_save
             tau_eta = tau_eta_save
-            
+
             ! 3. Stopping time computation (we are always in the Epstein regime for large particles)
             ts_target = target_s * target_a / (rho_gas * v_th)
             ts_projectile = projectile_s * projectile_a / (rho_gas * v_th)
 
-            ! 4. Stokes' number for both particles
+            ! 4. Stokes' number for both particles, ordered St1 >= St2: the callers pass the pair in
+            ! either order, and with the larger grain as projectile the tightly coupled branch took
+            ! the square root of a negative number (NaN)
             St_target = ts_target / tau_L
             St_projectile = ts_projectile / tau_L
+            St1 = max(St_target, St_projectile)
+            St2 = min(St_target, St_projectile)
 
-            ! 5. Finally compute the relative velocity between the particles
+            ! 5. Finally the turbulent relative velocity: the full closed form of Ormel & Cuzzi (2007,
+            ! Eqs. 16-18), continuous across the tightly coupled, intermediate and heavy regimes (their
+            ! Eqs. 26-29 are its limits; switching between those left jumps of up to x2.4 at tau_eta
+            ! and tau_L). Times are in units of tau_L, so Stmin = tau_eta/tau_L = Re^-1/2. The class I/II
+            ! boundary eddy is t* = 1.6 t_s (their Sect. 3.2.1), within [tau_eta, tau_L], and t* = tau_L
+            ! once t_s >= tau_L; no root solve, and the exact boundary differs by a few per cent, only
+            ! for 0.1 < St < 1.
             Stmin = tau_eta / tau_L
-            if (ts_target < tau_eta) then
-                dV_turb = sqrt(3d0/2d0) * v_turb * sqrt((St_target-St_projectile)/(St_target+St_projectile)) &
-                            * sqrt((St_target**2d0/(St_target+Stmin))-(St_projectile**2d0/(St_projectile+Stmin)))
-            else if ((tau_eta.le.ts_target).and.(ts_target<tau_L)) then
-                dV_turb = sqrt(3d0/2d0) * v_turb * sqrt(OC07_function(St_projectile/St_target)*St_target)
-            else if (ts_target.ge.tau_L) then
-                dV_turb = sqrt(3d0/2d0) * v_turb * sqrt(1d0/(1d0+St_target) + 1d0/(1d0+St_projectile))
+            if (St1 < 1d0) then
+                St_star = min(max(1.6d0 * St1, Stmin), 1d0)
+            else
+                St_star = 1d0
             end if
+            if (St1 + St2 > 0d0) then
+                dVI2 = (St1 - St2) / (St1 + St2) * (St1**2 / (St_star + St1) - St1**2 / (1d0 + St1) &
+                                                  - St2**2 / (St_star + St2) + St2**2 / (1d0 + St2))
+            else
+                dVI2 = 0d0
+            end if
+            dVII2 = 2d0 * (St_star - Stmin) + St1**2 / (St1 + St_star) - St1**2 / (St1 + Stmin) &
+                                            + St2**2 / (St2 + St_star) - St2**2 / (St2 + Stmin)
+            dV_turb = sqrt(3d0/2d0) * v_turb * sqrt(max(dVI2 + dVII2, 0d0))
             grain_relative_velocity = sqrt(dV_thermal**2d0 + dV_turb**2d0)
         else if (trim(model).eq.'Hirashita2019') then
             ! Velocity scaling with the Mach number as given by the model of Hirashita & Aoyama (2019)
@@ -233,19 +266,6 @@ module dust_dynamics
             grain_relative_velocity = v_turb
         end if
     end function grain_relative_velocity
-
-    function OC07_function(x)
-
-        ! Limiting function for the intermediate case in Ormel & Cuzzi (2007)
-        ! x => Stokes' number ratio between target and projectiles
-        implicit none
-
-        real(dp), intent(in) :: x
-        
-        real(dp) :: OC07_function
-
-        OC07_function = 3.2d0 - (1d0 + x) + 2d0/(1d0 + x) * (1d0/2.6d0 + x**3d0/(1.6d0 + x))
-    end function OC07_function
 
     subroutine dust_shock_destruction(tempvar,shocked_mass,metal_load,numofSN, &
                                         &SN_type,cell_vol,fraction_loadSN)

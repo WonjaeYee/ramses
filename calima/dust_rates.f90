@@ -111,7 +111,7 @@ module dust_rates
                     kk_loc = kk - ii1 + 1
                     v_rel = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,&
                                                     dust_info%local_rho,dust_info%local_nH,&
-                                                    temp_sigma,dust_info%local_mu,temp_L,&
+                                                    dust_info%local_ne,temp_sigma,dust_info%local_mu,temp_L,&
                                                     dustbins_props(ii)%asize_cm,&
                                                     dustbins_props(kk)%asize_cm,&
                                                     dustbins_props(ii)%sgrain,&
@@ -151,7 +151,7 @@ module dust_rates
             do kk = dust_start, dust_end
                 if (.not. dustbins_props(kk)%interact_pah) cycle
                 v_rel = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
-                                               dust_info%local_nH,temp_sigma,dust_info%local_mu,temp_L,&
+                                               dust_info%local_nH,dust_info%local_ne,temp_sigma,dust_info%local_mu,temp_L,&
                                                dustbins_props(kk)%asize_cm,pahbins_props(pp)%apah_cm,&
                                                dustbins_props(kk)%sgrain,pahbins_props(pp)%spah,&
                                                dustbins_props(kk)%mgrain,pahbins_props(pp)%mpah)
@@ -1232,7 +1232,7 @@ module dust_rates
 
         ! 1. Compute the relative velocity of two grains
         v_rel_out = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
-                                        dust_info%local_nH,local_sigma,dust_info%local_mu,local_L,&
+                                        dust_info%local_nH,dust_info%local_ne,local_sigma,dust_info%local_mu,local_L,&
                                         dustbins_props(id1)%asize_cm,dustbins_props(id2)%asize_cm,&
                                         dustbins_props(id1)%sgrain,dustbins_props(id2)%sgrain,&
                                         dustbins_props(id1)%mgrain,dustbins_props(id2)%mgrain)
