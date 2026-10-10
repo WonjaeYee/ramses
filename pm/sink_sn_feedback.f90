@@ -98,19 +98,28 @@ subroutine make_sn_stellar
 
     ! determine random location within that distance
     ! find a random point within a sphere of radius < 1
-    norm=2.
-    do while (norm .gt. 1)
-       norm=0.
-       do idim = 1, ndim
-          call random_number(xseed)
-          xshift(idim) = (xseed-0.5)*2.
-          norm = norm + xshift(idim)**2
+    ! Only the master draws the random offset; every rank must use the exact
+    ! same offset for this SN, otherwise each rank places (and later
+    ! MPI_ALLREDUCE-sums the sphere average of) the explosion at a different
+    ! physical location.
+    if (myid == 1) then
+       norm=2.
+       do while (norm .gt. 1)
+          norm=0.
+          do idim = 1, ndim
+             call random_number(xseed)
+             xshift(idim) = (xseed-0.5)*2.
+             norm = norm + xshift(idim)**2
+          end do
        end do
-    end do
-    do idim = 1, ndim
-        ! shift should not be more than half the box size
-        xshift(idim) = xshift(idim) * min(distance_sn,0.5d0*boxlen)
-    end do
+       do idim = 1, ndim
+           ! shift should not be more than half the box size
+           xshift(idim) = xshift(idim) * min(distance_sn,0.5d0*boxlen)
+       end do
+    endif
+#ifndef WITHOUTMPI
+    call MPI_BCAST(xshift, 3, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+#endif
 
     ! place the supernovae around sink particles
     x_sn(:) = xsink(isink, :) + xshift(:)

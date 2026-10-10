@@ -99,7 +99,8 @@ rt_src_group(1) = 1
 /
 
 &RT_GROUPS
-group_egy     = 8.0
+! group_egy is not set: rt_init fills it from a blackbody at rtz_source_temperature
+! (1e5 K) over groupL0..groupL1. A value given here would be used as is.
 groupL0       = 5.0
 groupL1       = 10.0
 /

@@ -773,7 +773,8 @@ INTEGER FUNCTION group_of(E, L0, L1, n)
    integer :: i
    group_of = 0
    do i = 1, n
-      if (E >= L0(i) .and. E < L1(i)) then
+      ! L1 = 0 is rt_init's sentinel for an unbounded top group
+      if (E >= L0(i) .and. (E < L1(i) .or. L1(i) == 0d0)) then
          group_of = i
          return
       end if
