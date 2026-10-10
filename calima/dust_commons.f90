@@ -69,6 +69,13 @@ module dust_commons
     integer, parameter :: ntva = npah + ndust
     logical ::dust_tva=.false.                   ! Activate the dust dynamics using the Terminal Velocity Approximation (TVA)
     logical ::dust_radpressure=.false.           ! Activate the dust dynamics using the radiation pressure force
+    logical ::dust_drift_collisions=.true.       ! With the TVA: the drift difference of two species enters their
+                                                 ! collisions (coagulation, shattering, PAH freezing), as a systematic
+                                                 ! velocity on top of the turbulent one (Guillet et al. 2020, App. C)
+    ! The TVA drift kept for those collisions: per cell (indexed as uold, code units, set by the TVA
+    ! flux step) and for the cells of the cooling_fine batch (cm/s, read in rtz_cool_step)
+    real(dp),dimension(:,:,:),allocatable :: tva_wdrift        ! (cell, ntva, ndim)
+    real(dp),dimension(:,:,:),allocatable :: tva_wdrift_batch  ! (nvector, ntva, ndim)
     logical ::use_w_drift_test=.false.           ! Override the drift velocity with a constant value for testing
     real(dp),dimension(1:3)::w_drift_test=0.0_dp ! Constant drift velocity for each dimension (X, Y, Z)
     real(dp),dimension(1:ndust)::drag_coefficient=1d0 ! Constant drag coefficient for testing

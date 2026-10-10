@@ -115,10 +115,10 @@ module dust_dynamics
                                     &,target_a,projectile_a&
                                     &,target_s,projectile_s&
                                     &,target_m,projectile_m)
-        ! This function returns the relative collision velocity
-        ! of two grains (target and projectile) based on a particular
-        ! collision model. For further details see Section 2.3.1
-        ! in Rodriguez Montero et al. (2023).
+        ! This function returns the rms relative velocity Delta V of two grains (target and
+        ! projectile) based on a particular collision model, the width of their Gaussian relative
+        ! velocity distribution (see gaussian_collision_speeds for the speeds the kernels use).
+        ! For further details see Section 2.3.1 in Rodriguez Montero et al. (2023).
 
         ! model        => name of collision model to use
         ! T            => gas temperature [K]
@@ -253,23 +253,106 @@ module dust_dynamics
             Mach = v_turb / cs_gas
             v_target = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(target_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(target_s/3.5d0)
             v_projectile = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(projectile_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(projectile_s/3.5d0)
-            ! The two grain velocities at an isotropic relative angle: the mean of
-            ! |v_t - v_p| = sqrt(v_t^2 + v_p^2 - 2 v_t v_p cos(theta)) over cos(theta) uniform in [-1, 1],
-            !   ((v_t + v_p)^3 - |v_t - v_p|^3) / (6 v_t v_p),
-            ! (4/3 v for equal speeds), not one random draw: the draw used the star-formation stream
-            ! (pm_commons localseed), which is unseeded (-1) before the first star forms, and from that
-            ! state ranf returns only negative numbers, so cos(theta) was clamped to -1 (head-on, v_t + v_p)
-            if (v_target > 0d0 .and. v_projectile > 0d0) then
-                grain_relative_velocity = ((v_target + v_projectile)**3 - abs(v_target - v_projectile)**3) &
-                                        / (6d0 * v_target * v_projectile)
-            else
-                grain_relative_velocity = max(v_target, v_projectile)
-            end if
+            ! Each grain velocity is a random, isotropic turbulent velocity of rms v(a), independent of
+            ! the other (Gaussian reading, as Flower et al. 2005 and Guillet et al. 2020 for Ormel's
+            ! velocities): the relative velocity is Gaussian with rms (v_t^2 + v_p^2)^1/2, and the
+            ! collision kernels average over that distribution (gaussian_collision_speeds). Not one
+            ! random cos(theta) draw: the draw used the star-formation stream (pm_commons localseed),
+            ! unseeded (-1) before the first star forms, from which ranf returns only negative numbers
+            ! (cos(theta) clamped to -1, every collision head-on).
+            grain_relative_velocity = sqrt(v_target**2 + v_projectile**2)
         else
             ! Just assume that the relative velocity is given by the turbulent velocity
             grain_relative_velocity = v_turb
         end if
     end function grain_relative_velocity
+
+    logical function tva_collision_drift()
+        ! The TVA drift enters the grain-grain collisions when it exists and something collides
+        tva_collision_drift = dust_tva .and. dust_drift_collisions .and. ntva > 1 .and. &
+                              (dust_coagulation .or. dust_shattering .or. pah_freezing)
+    end function tva_collision_drift
+
+    subroutine store_tva_drift(ind_grid, ncache, wcell)
+        ! Copy the cell-centred drift [code units] of the ncache grids' own cells into tva_wdrift,
+        ! indexed by cell as uold, for the dust update in cooling_fine
+        use amr_commons, only: ncoarse, ngridmax
+        integer, intent(in) :: ncache
+        integer, dimension(1:nvector), intent(in) :: ind_grid
+        real(dp), dimension(1:nvector,1:2,1:2,1:2,1:ntva,1:ndim), intent(in) :: wcell
+        integer :: i, i2, j2, k2, ind_son, iskip, j2max, k2max
+        if (.not. allocated(tva_wdrift)) then
+            allocate(tva_wdrift(1:ncoarse+twotondim*ngridmax, 1:ntva, 1:ndim))
+            tva_wdrift = 0d0
+        end if
+        j2max = 0; k2max = 0
+        if (ndim > 1) j2max = 1
+        if (ndim > 2) k2max = 1
+        do k2 = 0, k2max; do j2 = 0, j2max; do i2 = 0, 1
+            ind_son = 1 + i2 + 2*j2 + 4*k2
+            iskip = ncoarse + (ind_son-1)*ngridmax
+            do i = 1, ncache
+                tva_wdrift(iskip+ind_grid(i),1:ntva,1:ndim) = wcell(i,1+i2,1+j2,1+k2,1:ntva,1:ndim)
+            end do
+        end do; end do; end do
+    end subroutine store_tva_drift
+
+    pure subroutine gaussian_collision_speeds(dV, mu, V, v_stick, v_mean, v_rms)
+        ! Speeds of a grain pair whose relative velocity is Gaussian, each component of variance
+        ! dV^2/3, shifted by a systematic drift mu (the TVA drift difference of the two species):
+        ! a skewed Maxwellian of the relative speed, f(v) = alpha/(sqrt(pi) mu) v
+        ! [exp(-alpha^2 (v-mu)^2) - exp(-alpha^2 (v+mu)^2)], alpha = sqrt(3/2)/dV
+        ! (Guillet et al. 2020, A&A 643, A17, Appendix C, after Flower et al. 2005).
+        ! dV      => rms relative velocity of the random part [cm/s] (grain_relative_velocity)
+        ! mu      => systematic relative drift [cm/s] (0 without TVA)
+        ! V       => velocity limit of the collisions that count [cm/s] (sticking threshold)
+        ! v_stick <= int_0^V v f(v) dv: collisions below V (coagulation, sticking; Eqs. 18-19)
+        ! v_mean  <= int_0^inf v f(v) dv: all collisions (collision rate), sqrt(8/(3 pi)) dV for mu = 0
+        ! v_rms   <= (dV^2 + mu^2)^1/2: rms relative speed (impact energy)
+        real(dp), intent(in)  :: dV, mu, V
+        real(dp), intent(out) :: v_stick, v_mean, v_rms
+        real(dp), parameter :: sqrt_8_3pi = 0.9213177319235613d0, sqrt_pi = 1.7724538509055159d0
+        real(dp) :: a, xi, chi, h, ex
+
+        v_rms = sqrt(dV**2 + mu**2)
+        if (v_rms <= 0d0) then
+            v_stick = 0d0; v_mean = 0d0
+            return
+        end if
+        if (dV <= 1d-8 * mu) then
+            ! pure drift (no random part): every collision at mu
+            v_mean = mu
+            v_stick = 0d0
+            if (mu < V) v_stick = mu
+            return
+        end if
+        a = sqrt(1.5d0) / dV
+        xi = a * mu
+        chi = a * max(V, 0d0)
+        if (xi < 1d-4) then
+            ! no drift (Eq. 18): f is a Maxwellian; the drift correction is O(xi^2)
+            v_mean = sqrt_8_3pi * dV
+            v_stick = v_mean * (1d0 - (1d0 + chi**2) * exp(-chi**2))
+            return
+        end if
+        v_mean = (exp(-xi**2) / sqrt_pi + (xi + 0.5d0 / xi) * erf(xi)) / a
+        if (chi - xi > 27d0) then
+            ! threshold far above the distribution: every collision counts
+            v_stick = v_mean
+            return
+        end if
+        ! Eq. 19 / C.16, h = erf(xi) - (erf(chi+xi) - erf(chi-xi))/2 in erfc form, so that it keeps
+        ! its precision when xi and chi are both several sigma
+        if (chi >= xi) then
+            h = 1d0 - erfc(xi) + 0.5d0 * erfc(chi + xi) - 0.5d0 * erfc(chi - xi)
+        else
+            h = -erfc(xi) + 0.5d0 * erfc(chi + xi) + 0.5d0 * erfc(xi - chi)
+        end if
+        ex = exp(-xi**2) - 0.5d0 * (exp(-(chi - xi)**2) * (1d0 + chi / xi) &
+                                   + exp(-(chi + xi)**2) * (1d0 - chi / xi))
+        v_stick = (ex / sqrt_pi + (xi + 0.5d0 / xi) * h) / a
+        v_stick = min(max(v_stick, 0d0), v_mean)
+    end subroutine gaussian_collision_speeds
 
     subroutine dust_shock_destruction(tempvar,shocked_mass,metal_load,numofSN, &
                                         &SN_type,cell_vol,fraction_loadSN)
@@ -977,6 +1060,8 @@ module dust_dynamics
         real(dp),dimension(1:nvector,0:twondim,1:nvar_all)::u1
         real(dp),dimension(1:nvector,1:twotondim,1:nvar_all)::u2
 
+        logical :: keep_drift
+        real(dp), allocatable, save :: wcell_save(:,:,:,:,:,:)
         integer::i,j,ivar,idim,iskip,ind_son,nb_noneigh
         integer::i0,j0,k0,i1,j1,k1,i2,j2,k2,i3,j3,k3,nexist,nbuffer,ind_father_idx,i3max_loop,j3max_loop,k3max_loop
         integer::i1min,i1max,j1min,j1max,k1min,k1max
@@ -1066,7 +1151,17 @@ module dust_dynamics
         end do; end do; end do
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
-        call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code)
+        keep_drift = tva_collision_drift()
+        if (keep_drift) then
+            if (.not. allocated(wcell_save)) allocate(wcell_save(1:nvector,1:2,1:2,1:2,1:ntva,1:ndim))
+            call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code,wcell=wcell_save)
+        else
+            call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code)
+        end if
+
+        ! Keep the cell-centred drift of every species for the grain-grain collisions of the
+        ! dust update (cooling_fine runs after this step on the same cells)
+        if (keep_drift) call store_tva_drift(ind_grid, ncache, wcell_save)
 
         ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
         ! zero out the flux; the finer level handles it and restricts it down later
@@ -1190,7 +1285,7 @@ module dust_dynamics
     end subroutine dust_upwind_correct1
 
     subroutine calculate_pure_drag_fluxes(uloc, dflux, eflux, dx, dt, ngrid, &
-                                        & agrain_code, sgrain_code)
+                                        & agrain_code, sgrain_code, wcell)
         use amr_parameters
         use hydro_parameters
         use const
@@ -1207,6 +1302,9 @@ module dust_dynamics
         real(dp), dimension(1:nvector, if1:if2, jf1:jf2, kf1:kf2, 1:ndim), intent(out) :: eflux
         
         real(dp), dimension(1:ntva), intent(in) :: agrain_code, sgrain_code
+        ! Cell-centred drift of every TVA species in the grid's own cells (1:2 per active
+        ! direction), for the grain-grain collisions (dust_drift_collisions)
+        real(dp), dimension(1:nvector, 1:2, 1:2, 1:2, 1:ntva, 1:ndim), intent(out), optional :: wcell
 
         ! ========================================================================
         ! 2. LOCAL WORKSPACE FIELDS
@@ -1236,6 +1334,7 @@ module dust_dynamics
 
         dflux = 0.0_dp
         eflux = 0.0_dp
+        if (present(wcell)) wcell = 0.0_dp
 
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
@@ -1382,6 +1481,13 @@ module dust_dynamics
                     end if
                 end if
             end do; end do; end do; end do
+
+            ! The drift of the grid's own cells, for the grain-grain collisions
+            if (present(wcell)) then
+                do k = 1, min(2, ku2); do j = 1, min(2, ju2); do i = 1, 2; do l = 1, ngrid
+                    wcell(l,i,j,k,1:ntva,idim) = w_d_cell(l,i,j,k,1:ntva)
+                end do; end do; end do; end do
+            end if
 
             ! ====================================================================
             ! STEP 3: TVD SPATIAL SLOPES 
@@ -1638,6 +1744,8 @@ module dust_dynamics
         real(dp),dimension(1:nvector,0:twondim,1:nrtvar)::rt_u1
         real(dp),dimension(1:nvector,1:twotondim,1:nrtvar)::rt_u2
 
+        logical :: keep_drift
+        real(dp), allocatable, save :: wcell_save(:,:,:,:,:,:)
         integer::i,j,ivar,idim,iskip,ind_son,nb_noneigh
         integer::i0,j0,k0,i1,j1,k1,i2,j2,k2,i3,j3,k3,nexist,nbuffer,ind_father_idx,i3max_loop,j3max_loop,k3max_loop
         integer::i1min,i1max,j1min,j1max,k1min,k1max
@@ -1759,8 +1867,20 @@ module dust_dynamics
         end do; end do; end do
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
-        call calculate_drag_rad_fluxes(uloc,dflux,eflux,qdrag,dx,dt,ncache,&
-                                        a_rad_g,a_rad_d,s_IRtrap,drag_state,agrain_code,sgrain_code)
+        keep_drift = tva_collision_drift()
+        if (keep_drift) then
+            if (.not. allocated(wcell_save)) allocate(wcell_save(1:nvector,1:2,1:2,1:2,1:ntva,1:ndim))
+            call calculate_drag_rad_fluxes(uloc,dflux,eflux,qdrag,dx,dt,ncache,&
+                                            a_rad_g,a_rad_d,s_IRtrap,drag_state,agrain_code,sgrain_code,&
+                                            wcell=wcell_save)
+        else
+            call calculate_drag_rad_fluxes(uloc,dflux,eflux,qdrag,dx,dt,ncache,&
+                                            a_rad_g,a_rad_d,s_IRtrap,drag_state,agrain_code,sgrain_code)
+        end if
+
+        ! Keep the cell-centred drift of every species for the grain-grain collisions of the
+        ! dust update (cooling_fine runs after this step on the same cells)
+        if (keep_drift) call store_tva_drift(ind_grid, ncache, wcell_save)
 
         ! Synchronize at refinement boundaries: if a finer cell exists next to this face,
         ! zero out the flux; the finer level handles it and restricts it down later
@@ -1898,7 +2018,7 @@ module dust_dynamics
 
     subroutine calculate_drag_rad_fluxes(uloc, dflux, eflux, qdrag, dx, dt, ngrid, &
                                         & a_rad_g, a_rad_d, s_IRtrap, drag_state, &
-                                        & agrain_code, sgrain_code)
+                                        & agrain_code, sgrain_code, wcell)
         use amr_parameters
         use hydro_parameters
         use const
@@ -1928,6 +2048,9 @@ module dust_dynamics
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), intent(in) :: drag_state
         ! Grain properties (sizes and material densities) [code units]
         real(dp), dimension(1:ntva), intent(in)   :: agrain_code, sgrain_code
+        ! Cell-centred drift of every TVA species in the grid's own cells (1:2 per active
+        ! direction), for the grain-grain collisions (dust_drift_collisions)
+        real(dp), dimension(1:nvector, 1:2, 1:2, 1:2, 1:ntva, 1:ndim), intent(out), optional :: wcell
 
         ! ========================================================================
         ! 2. LOCAL WORKSPACE FIELDS
@@ -1975,6 +2098,7 @@ module dust_dynamics
         dflux = 0.0_dp
         eflux = 0.0_dp
         qdrag = 0.0_dp
+        if (present(wcell)) wcell = 0.0_dp
         call units(scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2)
         call tva_species(a_cm_tva, s_cgs_tva)
 
@@ -2279,6 +2403,13 @@ module dust_dynamics
                     qdrag(l,i,j,k) = qdrag(l,i,j,k) + q_work
                 end if
             end do; end do; end do; end do
+
+            ! The drift of the grid's own cells, for the grain-grain collisions
+            if (present(wcell)) then
+                do k = 1, min(2, ku2); do j = 1, min(2, ju2); do i = 1, 2; do l = 1, ngrid
+                    wcell(l,i,j,k,1:ntva,idim) = w_d_cell(l,i,j,k,1:ntva)
+                end do; end do; end do; end do
+            end if
 
             ! ====================================================================
             ! STEP 3: TVD SPATIAL SLOPES 
