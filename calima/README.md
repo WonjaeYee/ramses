@@ -115,6 +115,13 @@ The typical order is:
   `dustygauss` select **test** branches that hardcode the stopping time and/or the thermodynamics.
   These are resolved once into `tva_test_mode` at startup and warned about. Production ICs must use
   a different `condinit_kind` (the default `region`).
+- **CALIMA builds without RT**, for the TVA tests above and for runs without radiation. The single-bin
+  tests use `bin_dust` with `RT=0 RTZ=0 CALIMA=1 NGROUPS=0 NDIM=1 NDUST=1 NPAH=0 NDCHEMTYPE=1`
+  (`NDCHEMTYPE` must match the namelist's compositions). Radiation pressure
+  (`dust_radpressure_module`) and the LW groups need RT and are compiled only with it; without RT the
+  default `charging_model` is `WDB06isrf`, whose tables are for the shipped grain bins, so idealised
+  setups with other grain sizes set `charging_model='Ibanez2019'`. CALIMA with plain RT (`RT=1
+  RTZ=0`) also builds.
 
 ## Trapped IR radiation pressure on the dust
 

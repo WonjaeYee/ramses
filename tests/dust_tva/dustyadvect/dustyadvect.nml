@@ -52,6 +52,7 @@ interpol_type=2
 /
 
 &CALIMA_PARAMS
+charging_model='Ibanez2019' ! no charge-dependent process here; the WDB06isrf tables (the default without RT) are for the 0.01 um DustBin_01
 dust_tva=.true.
 use_w_drift_test=.true.
 w_drift_test=1.0,0.0,0.0

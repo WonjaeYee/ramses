@@ -3,6 +3,9 @@
 ! This module computes the radiation pressure force vectors for the gas
 ! and individual dust/PAH bins directly in code units for the RTZ network.
 !=======================================================================
+#ifdef RT
+! Radiation pressure needs the RT photon groups: the module (and its only callers, in
+! dust_dynamics) is compiled with RT only, so CALIMA also builds without RT.
 module dust_radpressure_module
     use amr_parameters, only: dp, ndim
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS, ntva
@@ -674,3 +677,4 @@ contains
     end subroutine compute_gas_dust_radpressure_force
 
 end module dust_radpressure_module
+#endif

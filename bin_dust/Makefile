@@ -318,8 +318,11 @@ MODOBJ += poisson_commons.o hydro_parameters.o hydro_commons.o \
           gadgetreadfile.o write_makefile.o write_patch.o write_gitinfo.o \
           metal_yields_module.o sink_sn_feedback.o
 ifeq ($(CALIMA),1)
+   # the dust modules use rt_parameters / rt_hydro_commons when RT is on: build them first
    ifeq ($(RTZ),1)
       MODOBJ += rtz_module.o rt_parameters.o molecules_module.o rt_hydro_commons.o
+   else ifeq ($(RT),1)
+      MODOBJ += rt_parameters.o rt_hydro_commons.o
    endif
    MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_charging_rtgroups.o dust_cooling.o \
                dust_photophysics.o dust_radpressure.o dust_dynamics.o dust_seeding.o  \
@@ -327,8 +330,10 @@ ifeq ($(CALIMA),1)
                dust_init.o dust_test.o
 endif
 ifeq ($(RT),1)
-   MODOBJ += rt_parameters.o rt_hydro_commons.o coolrates_module.o \
-             rt_spectra.o rt_cooling_module.o rt_flux_module.o
+   ifneq ($(CALIMA),1)
+      MODOBJ += rt_parameters.o rt_hydro_commons.o
+   endif
+   MODOBJ += coolrates_module.o rt_spectra.o rt_cooling_module.o rt_flux_module.o
 endif
 ifeq ($(RTZ),1)
    ifeq ($(CALIMA),0)
