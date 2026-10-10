@@ -1203,7 +1203,9 @@ module dust_init
                         & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/3d0) &
                         & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
                         & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
-                    dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
+                    ! times the mean speed of the sticking collisions, v_stick (dust_rates; it carries
+                    ! the sqrt(8/(3 pi)) of the Gaussian relative velocity)
+                    dustbins_props(ii)%k0_coa(1) = 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
                                                 & / dustbins_props(ii)%mgrain ! [cm3/s/g]
                 else if (trim(coagulation_model).eq.'Smoluchowski1916') then
                     ! 5.2 This is the correct treatment of individual grain coagulation
@@ -1240,7 +1242,7 @@ module dust_init
                             & (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**3d0) &
                             & * dustbins_props(ii)%surf_energy**(5d0/3d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
-                        dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
+                        dustbins_props(ii)%k0_coa(kk_loc) = pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
                                                     & / (dustbins_props(ii)%mgrain * dustbins_props(jbin)%mgrain / (dustbins_props(ii)%mgrain + dustbins_props(jbin)%mgrain)) ! [cm3/s/g]
                     end do
                 end if
@@ -1362,7 +1364,7 @@ module dust_init
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
-                dust_tva, dust_radpressure, use_w_drift_test, w_drift_test,drag_coefficient,&
+                dust_tva, dust_radpressure, dust_drift_collisions, use_w_drift_test, w_drift_test,drag_coefficient,&
                 tva_wmax_cs,drag_model,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&

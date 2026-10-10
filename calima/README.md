@@ -102,6 +102,15 @@ The typical order is:
   `imetal` is untouched. Dust carrying C/O/Mg/Si/Fe across a cell boundary does not move the
   corresponding gas-phase element, so the per-element budget drifts over time. Watch the
   `dust_log` mass-conservation output.
+- **The drift enters the grain-grain collisions** (`dust_drift_collisions`, default on, only
+  with coagulation, shattering or PAH freezing). The flux step keeps the cell-centred drift of every
+  species (`tva_wdrift`), and the dust update treats the drift difference of a pair, mu, as a
+  systematic velocity on top of its Gaussian turbulent relative velocity (rms Delta V from
+  `grain_relative_velocity`): a skewed Maxwellian (Guillet et al. 2020, Appendix C;
+  `gaussian_collision_speeds`). Coagulation and PAH freezing use the mean speed of the collisions
+  below the sticking threshold (their Eqs. 18-19), shattering the mean speed of all collisions for
+  the rate and (Delta V^2 + mu^2)^1/2 for the impact energy. Without TVA, mu = 0 and the same
+  formulas give the Maxwellian ones.
 - **`tva_wmax_cs`** caps `|w_drift|` at that multiple of the local sound speed, in both
   `get_dust_courant_dt` and the flux routines. TVA assumes Stokes << 1, which fails once the drift
   approaches `c_s`; since `t_s ~ 1/rho_gas`, a single hot/diffuse cell would otherwise drive the

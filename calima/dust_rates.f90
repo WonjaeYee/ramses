@@ -11,16 +11,29 @@ module dust_rates
 
     public :: compute_rate_caches
 
-    ! Cached relative velocities and rate prefactors to avoid redundant calculations and RNG noise
+    ! Cached collision speeds of every pair [cm/s], over its Gaussian relative velocity (rms from
+    ! grain_relative_velocity, shifted by the TVA drift difference; gaussian_collision_speeds):
+    !   v_rel   the rms relative speed (shattering impact energy)
+    !   v_mean  the mean over all collisions (shattering collision rate)
+    !   v_stick the mean over the collisions below the sticking threshold (coagulation, PAH freezing)
     real(dp), allocatable, save :: cached_v_rel_dust_dust(:,:)
-    real(dp), allocatable, save :: cached_v_rel_pah_dust(:,:)
-    real(dp), allocatable, save :: cached_p_stick_dust_dust(:,:)
-    real(dp), allocatable, save :: cached_p_stick_pah_dust(:,:)
+    real(dp), allocatable, save :: cached_v_mean_dust_dust(:,:)
+    real(dp), allocatable, save :: cached_v_stick_dust_dust(:,:)
+    real(dp), allocatable, save :: cached_v_stick_pah_dust(:,:)
     real(dp), allocatable, save :: cached_chi_frag_dust(:,:,:)
     real(dp), allocatable, save :: cached_chi_frag_pah(:,:,:)
     real(dp), allocatable, save :: cached_chi_frag_dest(:,:)
 
     contains
+
+    pure real(dp) function pair_drift(dust_info, is1, is2)
+        ! |w_1 - w_2|: the systematic relative velocity of TVA species is1 and is2 (PAH bins, then
+        ! dust bins) in this cell [cm/s]; 0 without the TVA drift
+        class(DustChemistryInfo), intent(in) :: dust_info
+        integer, intent(in) :: is1, is2
+        pair_drift = 0d0
+        if (dust_info%has_drift) pair_drift = sqrt(sum((dust_info%w_drift(is1,:) - dust_info%w_drift(is2,:))**2))
+    end function pair_drift
 
     subroutine ensure_rate_caches(dust_info)
         ! Ensure that the rate cache arrays are allocated with the correct dimensions.
@@ -32,27 +45,27 @@ module dust_rates
         
         if (.not. allocated(cached_v_rel_dust_dust)) then
             allocate(cached_v_rel_dust_dust(ndust, ndust))
-            allocate(cached_p_stick_dust_dust(ndust, ndust))
+            allocate(cached_v_mean_dust_dust(ndust, ndust))
+            allocate(cached_v_stick_dust_dust(ndust, ndust))
             allocate(cached_chi_frag_dust(ndust, ndust, ndust))
             allocate(cached_chi_frag_pah(ndust, ndust, npah))
             allocate(cached_chi_frag_dest(ndust, ndust))
         else if (size(cached_v_rel_dust_dust,1) /= ndust) then
-            deallocate(cached_v_rel_dust_dust, cached_p_stick_dust_dust, &
+            deallocate(cached_v_rel_dust_dust, cached_v_mean_dust_dust, cached_v_stick_dust_dust, &
                        cached_chi_frag_dust, cached_chi_frag_pah, cached_chi_frag_dest)
             allocate(cached_v_rel_dust_dust(ndust, ndust))
-            allocate(cached_p_stick_dust_dust(ndust, ndust))
+            allocate(cached_v_mean_dust_dust(ndust, ndust))
+            allocate(cached_v_stick_dust_dust(ndust, ndust))
             allocate(cached_chi_frag_dust(ndust, ndust, ndust))
             allocate(cached_chi_frag_pah(ndust, ndust, npah))
             allocate(cached_chi_frag_dest(ndust, ndust))
         end if
         
-        if (.not. allocated(cached_v_rel_pah_dust)) then
-            allocate(cached_v_rel_pah_dust(npah, ndust))
-            allocate(cached_p_stick_pah_dust(npah, ndust))
-        else if (size(cached_v_rel_pah_dust,1) /= npah .or. size(cached_v_rel_pah_dust,2) /= ndust) then
-            deallocate(cached_v_rel_pah_dust, cached_p_stick_pah_dust)
-            allocate(cached_v_rel_pah_dust(npah, ndust))
-            allocate(cached_p_stick_pah_dust(npah, ndust))
+        if (.not. allocated(cached_v_stick_pah_dust)) then
+            allocate(cached_v_stick_pah_dust(npah, ndust))
+        else if (size(cached_v_stick_pah_dust,1) /= npah .or. size(cached_v_stick_pah_dust,2) /= ndust) then
+            deallocate(cached_v_stick_pah_dust)
+            allocate(cached_v_stick_pah_dust(npah, ndust))
         end if
     end subroutine ensure_rate_caches
 
@@ -61,12 +74,12 @@ module dust_rates
         ! fragment distributions for all grain pairs to avoid redundant computations inside
         ! the ODE solver RHS evaluations.
         ! dust_info --> DustChemistryInfo type with the current cell's physical properties.
-        use dust_dynamics, only: grain_relative_velocity
+        use dust_dynamics, only: grain_relative_velocity, gaussian_collision_speeds
         class(DustChemistryInfo), intent(in) :: dust_info
         real(dp), intent(in) :: nElement(:)
         integer :: ii, kk, jj, pp, C_index, ii1, ii2, kk_loc, dust_start, dust_end
         real(dp) :: temp_sigma, temp_L
-        real(dp) :: v_rel, v_coag, p_stick
+        real(dp) :: v_rel, v_coag, mu, v_stick, v_mean, v_rms
         real(dp) :: reduced_mass, v_stick_thresh
         logical :: interact_pah_flag
         
@@ -101,7 +114,7 @@ module dust_rates
             end do
         end if
 
-        ! 1. Cache dust-dust relative velocities and sticking probabilities
+        ! 1. Cache dust-dust collision speeds
         do jj = 1, ndchemtype
             ii1 = istart_chemtype(jj)
             ii2 = ii1 + dustbins_per_chemtype(jj) - 1
@@ -118,9 +131,8 @@ module dust_rates
                                                     dustbins_props(kk)%sgrain,&
                                                     dustbins_props(ii)%mgrain,&
                                                     dustbins_props(kk)%mgrain)
-                    cached_v_rel_dust_dust(ii,kk) = v_rel
-                    cached_v_rel_dust_dust(kk,ii) = v_rel
-                    
+                    ! Coagulation threshold (Chokshi et al. 1993): only the collisions below it stick
+                    v_coag = 0d0
                     if (allocated(dustbins_props(ii)%vthresh_coag)) then
                         if (kk_loc <= size(dustbins_props(ii)%vthresh_coag)) then
                             v_coag = dustbins_props(ii)%vthresh_coag(kk_loc)
@@ -128,20 +140,21 @@ module dust_rates
                                 enhan_factor_pair = 0.5d0 * (enhan_factor(ii) + enhan_factor(kk))
                                 v_coag = enhan_factor_pair * v_coag
                             end if
-                            p_stick = sticking_probability_from_velocity(v_rel, v_coag)
-                        else
-                            p_stick = 0d0
                         end if
-                    else
-                        p_stick = 0d0
                     end if
-                    cached_p_stick_dust_dust(ii,kk) = p_stick
-                    cached_p_stick_dust_dust(kk,ii) = p_stick
+                    mu = pair_drift(dust_info, dust_info%npah+ii, dust_info%npah+kk)
+                    call gaussian_collision_speeds(v_rel, mu, v_coag, v_stick, v_mean, v_rms)
+                    cached_v_rel_dust_dust(ii,kk) = v_rms
+                    cached_v_rel_dust_dust(kk,ii) = v_rms
+                    cached_v_mean_dust_dust(ii,kk) = v_mean
+                    cached_v_mean_dust_dust(kk,ii) = v_mean
+                    cached_v_stick_dust_dust(ii,kk) = v_stick
+                    cached_v_stick_dust_dust(kk,ii) = v_stick
                 end do
             end do
         end do
 
-        ! 2. Cache PAH-dust relative velocities and sticking probabilities
+        ! 2. Cache PAH-dust sticking speeds
 #if NPAH > 0
         do pp = 1, dust_info%npah
             dust_start = pahbins_props(pp)%dust_index_interact
@@ -155,12 +168,13 @@ module dust_rates
                                                dustbins_props(kk)%asize_cm,pahbins_props(pp)%apah_cm,&
                                                dustbins_props(kk)%sgrain,pahbins_props(pp)%spah,&
                                                dustbins_props(kk)%mgrain,pahbins_props(pp)%mpah)
-                cached_v_rel_pah_dust(pp,kk) = v_rel
-                
+                ! the PAH sticks below the speed of a collision energy of 1 eV
                 reduced_mass = 5d-1 * (pahbins_props(pp)%mpah * dustbins_props(kk)%mgrain) / &
                                (pahbins_props(pp)%mpah + dustbins_props(kk)%mgrain)
                 v_stick_thresh = sqrt(2d0 * eV2erg / max(reduced_mass, 1d-99))
-                cached_p_stick_pah_dust(pp,kk) = sticking_probability_from_velocity(v_rel, v_stick_thresh)
+                mu = pair_drift(dust_info, pp, dust_info%npah+kk)
+                call gaussian_collision_speeds(v_rel, mu, v_stick_thresh, v_stick, v_mean, v_rms)
+                cached_v_stick_pah_dust(pp,kk) = v_stick
             end do
         end do
 #endif
@@ -670,7 +684,7 @@ module dust_rates
         ! ---- Local variables ----
         integer :: jj, ii, ii1, ii2, index
         real(dp) :: rate1, rate2
-        real(dp) :: v_rel, p_stick
+        real(dp) :: v_stick
 
         speciesloop: do jj = 1, ndchemtype
             ! 1. Loop over the dust chemical species.
@@ -680,15 +694,13 @@ module dust_rates
             do ii = ii1, ii2-1
                 index = ii+dust_info%npah
                 
-                v_rel = cached_v_rel_dust_dust(ii, ii)
-                p_stick = cached_p_stick_dust_dust(ii, ii)
-                if (p_stick <= 1d-20) cycle
+                v_stick = cached_v_stick_dust_dust(ii, ii)
+                if (v_stick <= 0d0) cycle
 
-                ! 4. Collision rate calculation
-                ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
-                ! Marchand et al. (2021) and considers that grain velocities along the x-,
-                ! y-, and z-axes are Gaussian distributed
-                rate1 = dustbins_props(ii)%k0_coa(1) * v_rel * y_dust(index) * p_stick
+                ! 4. Collision rate calculation: v_stick is the mean relative speed of the collisions
+                ! below the coagulation threshold, over the Gaussian relative velocity, shifted by the TVA
+                ! drift difference when there is one (Guillet et al. 2020, Eqs. 18-19; Marchand et al. 2021)
+                rate1 = dustbins_props(ii)%k0_coa(1) * v_stick * y_dust(index)
                 if (present(kmax)) then
                     kmax = max(kmax, rate1)
                 end if
@@ -720,7 +732,7 @@ module dust_rates
         ! ---- Local variables ----
         integer :: jj, ii, ii1, ii2, index, kk, kk1, kk2, kk_loc, idest
         real(dp) :: rate1, rate2
-        real(dp) :: v_rel, p_stick
+        real(dp) :: v_stick
         real(dp) :: mi, mk, msum, loss_ii, loss_kk
 
         speciesloop: do jj = 1, ndchemtype
@@ -735,15 +747,13 @@ module dust_rates
                 do kk = kk1, kk2
                     kk_loc = kk - ii1 + 1
                     
-                    v_rel = cached_v_rel_dust_dust(ii,kk)
-                    p_stick = cached_p_stick_dust_dust(ii,kk)
-                    if (p_stick <= 1d-20) cycle
+                    v_stick = cached_v_stick_dust_dust(ii,kk)
+                    if (v_stick <= 0d0) cycle
 
-                    ! 4. Collision rate calculation
-                    ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
-                    ! Marchand et al. (2021) and considers that grain velocities along the x-,
-                    ! y-, and z-axes are Gaussian distributed
-                    rate1 = dustbins_props(ii)%k0_coa(kk_loc) * v_rel * y_dust(index) * p_stick
+                    ! 4. Collision rate calculation: v_stick is the mean relative speed of the collisions
+                    ! below the coagulation threshold, over the Gaussian relative velocity, shifted by the TVA
+                    ! drift difference when there is one (Guillet et al. 2020, Eqs. 18-19; Marchand et al. 2021)
+                    rate1 = dustbins_props(ii)%k0_coa(kk_loc) * v_stick * y_dust(index)
 
                     if (present(kmax)) then
                         kmax = max(kmax, rate1)
@@ -975,7 +985,7 @@ module dust_rates
         ! ---- Local variables ----
         integer :: jj, ii, ii1, ii2, index, pp, ll, iel
         real(dp) :: rate1, rate_dest
-        real(dp) :: coll_factor, v_rel
+        real(dp) :: coll_factor
         real(dp) :: chi_frag_dest
         real(dp), dimension(:), allocatable :: chi_frag
         real(dp), dimension(:), allocatable :: chi_frag_pah
@@ -995,18 +1005,16 @@ module dust_rates
             do jj = ii2, ii1, -1
                 index = jj + dust_info%npah
 
-                v_rel = cached_v_rel_dust_dust(jj, jj)
                 chi_frag_dest = cached_chi_frag_dest(jj, jj)
                 chi_frag(ii1:ii2) = cached_chi_frag_dust(jj, jj, ii1:ii2)
                 if (interact_pah_flag) then
                     chi_frag_pah(1:dust_info%npah) = cached_chi_frag_pah(jj, jj, 1:dust_info%npah)
                 end if
 
-                ! 3. Compute the collision rate factor
-                ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
-                ! Marchand et al. (2021) and considers that grain velocities along the x-,
-                ! y-, and z-axes are Gaussian distributed.
-                coll_factor = sqrt(8d0/(3d0*pi)) * 4d0 * pi * (dustbins_props(jj)%asize_cm)**2d0 * v_rel
+                ! 3. Compute the collision rate factor, with the mean relative speed over the Gaussian
+                ! relative velocity (sqrt(8/(3 pi)) times its rms without a TVA drift; Guillet et al.
+                ! 2020, Marchand et al. 2021)
+                coll_factor = 4d0 * pi * (dustbins_props(jj)%asize_cm)**2d0 * cached_v_mean_dust_dust(jj, jj)
 
                 ! 4. Compute the mass loss rate from shattering collisions [g cm-3 s-1]
                 rate1 = coll_factor * y_dust(index) / dustbins_props(jj)%mgrain
@@ -1071,7 +1079,7 @@ module dust_rates
         ! ---- Local variables ----
         integer :: ichem, ii, jj, ii1, ii2, index_i, index_j, pp, ll, iel
         real(dp) :: rate_dest, mass_rate
-        real(dp) :: coll_factor, v_rel
+        real(dp) :: coll_factor
         real(dp) :: chi_frag_dest
         real(dp), dimension(:), allocatable :: chi_frag
         real(dp), dimension(:), allocatable :: chi_frag_pah
@@ -1098,18 +1106,16 @@ module dust_rates
                     if (y_dust(index_j) < 1d-40) cycle
 
                     ! 2. Compute shattered fragments for target ii impacted by jj.
-                    v_rel = cached_v_rel_dust_dust(ii, jj)
                     chi_frag_dest = cached_chi_frag_dest(ii, jj)
                     chi_frag(ii1:ii2) = cached_chi_frag_dust(ii, jj, ii1:ii2)
                     if (interact_pah_flag) then
                         chi_frag_pah(1:dust_info%npah) = cached_chi_frag_pah(ii, jj, 1:dust_info%npah)
                     end if
 
-                    ! 3. Compute the collision rate factor for pair (ii,jj).
-                    ! The factor of sqrt(8/(3*pi)) is taken from Guillet et al. (2020) and
-                    ! Marchand et al. (2021) and considers that grain velocities along the x-,
-                    ! y-, and z-axes are Gaussian distributed.
-                    coll_factor = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jj)%asize_cm)**2d0 * v_rel
+                    ! 3. Compute the collision rate factor for pair (ii,jj), with the mean relative speed
+                    ! over the Gaussian relative velocity (Guillet et al. 2020, Marchand et al. 2021)
+                    coll_factor = pi * (dustbins_props(ii)%asize_cm + dustbins_props(jj)%asize_cm)**2d0 &
+                                * cached_v_mean_dust_dust(ii, jj)
 
                     ! 4. Collision event rate (events cm^-3 s^-1) × target mass:
                     !    mass_rate_ii = R * m_ii  = coll_factor * n_jj * rho_ii
@@ -1152,7 +1158,6 @@ module dust_rates
                     !    For ii/=jj: chi_frag is recomputed for target jj hit by ii.
                     !    For ii==jj: chi_frag is identical by symmetry; reuse directly.
                     if (ii /= jj) then
-                        v_rel = cached_v_rel_dust_dust(jj, ii)
                         chi_frag_dest = cached_chi_frag_dest(jj, ii)
                         chi_frag(ii1:ii2) = cached_chi_frag_dust(jj, ii, ii1:ii2)
                         if (interact_pah_flag) then
@@ -1666,8 +1671,8 @@ module dust_rates
         ! ---- Local variables ----
         integer :: pp, kk, ii, izion
         integer :: dust_start, dust_end, index_dust
-        real(dp) :: v_rel, D_av, Z_single
-        real(dp) :: coll_factor, rate1, rate2, weight, p_stick
+        real(dp) :: v_stick, D_av, Z_single
+        real(dp) :: coll_factor, rate1, rate2, weight
 
 #if NPAH > 0
         pahloop: do pp = 1, dust_info%npah
@@ -1680,8 +1685,10 @@ module dust_rates
                 index_dust = kk + dust_info%npah
                 if (y_dust(index_dust) < 1d-40) cycle
 
-                ! 1. Relative velocity between PAH pp and dust bin kk.
-                v_rel = cached_v_rel_pah_dust(pp, kk)
+                ! 1. Mean relative speed of the PAH pp - dust bin kk collisions below the sticking
+                !    threshold (a collision energy of 1 eV), over their Gaussian relative velocity
+                v_stick = cached_v_stick_pah_dust(pp, kk)
+                if (v_stick <= 0d0) cycle
 
                 ! 2. Coulomb focusing averaged over PAH charge distribution,
                 !    using precomputed dust_info%Coulomb_factor for this grain.
@@ -1704,15 +1711,10 @@ module dust_rates
                 D_av = max(D_av,1d-10)
 
                 ! 3. Pair collision factor.
-                coll_factor = pi * (pahbins_props(pp)%apah_cm + dustbins_props(kk)%asize_cm)**2d0 * v_rel * D_av
+                coll_factor = pi * (pahbins_props(pp)%apah_cm + dustbins_props(kk)%asize_cm)**2d0 * v_stick * D_av
 
                 ! 4. Collision rate from PAH-dust encounters, analogous to all-bin coagulation.
                 rate1 = coll_factor * y_dust(index_dust) / dustbins_props(kk)%mgrain
-                if (rate1 <= 0d0) cycle
-
-                ! 5. Maxwellian sticking probability using a threshold equivalent to E_col = 1 eV.
-                p_stick = cached_p_stick_pah_dust(pp, kk)
-                rate1 = rate1 * p_stick
                 if (rate1 <= 0d0) cycle
 
                 if (present(kmax)) then

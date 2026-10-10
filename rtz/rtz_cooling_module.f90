@@ -14,7 +14,7 @@ module rtz_cooling_module
    use safe_math, only: safe_exp
    use molecules_module, only: comp_SH2, comp_SCO
 #ifdef CALIMA
-   use dust_commons, only: dust_helper,dust_ion_recombination,charging_model,sigca_dust,sigcs_dust,sigcr_dust,&
+   use dust_commons, only: dust_helper,tva_wdrift_batch,ntva,dust_ion_recombination,charging_model,sigca_dust,sigcs_dust,sigcr_dust,&
                            sigcrat_dust,sigca_pah,sigcs_pah,sigcr_pah,&
                            group_csa_dust, group_css_dust, group_csr_dust,&
                            group_csa_pah, group_css_pah, group_csr_pah,&
@@ -1723,6 +1723,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_G0 = (advected_G0 + UV_background_G0) * safe_exp(-tau_dust_LW)
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
+      ! TVA drift of every species in this cell, for the grain-grain collisions
+      dust_helper%has_drift = .false.
+      if (allocated(tva_wdrift_batch) .and. rtz_equilibrium_test <= 0) then
+         if (.not. allocated(dust_helper%w_drift)) allocate(dust_helper%w_drift(1:ntva,1:ndim))
+         dust_helper%w_drift = tva_wdrift_batch(icell,1:ntva,1:ndim)
+         dust_helper%has_drift = .true.
+      end if
       if (ndust_processes .gt. 0 .or. npah_processes .gt. 0) then
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
