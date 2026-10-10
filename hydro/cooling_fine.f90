@@ -352,8 +352,11 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                 * sum(uold(il,2:ndim+1)*flux) * dtnew(ilevel) !         Eq A6
 #else
 #ifdef RTZ
-           ! the HII slot holds x_HII*rho_H
-           xHII = uold(il,iIons-1+ixHII)/max(uold(il,elements(1)%u_hydro_idx),smallr)
+           ! ixHII is not set in RTZ: hydrogen's ion block starts at iIons (H I, then H II),
+           ! and the HII slot holds x_HII*rho_H
+           xHII = 0d0
+           if (elements(1)%atomic_number.gt.0) &
+                xHII = uold(il,iIons+1)/max(uold(il,elements(1)%u_hydro_idx),smallr)
 #else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
 #endif
