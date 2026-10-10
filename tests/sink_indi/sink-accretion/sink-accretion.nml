@@ -323,7 +323,7 @@
     shattering_model='Smoluchowski1916'
     coagulation_model='Smoluchowski1916'
     dust_velocity_model='Hirashita2019'
-    charging_model='RM2026'
+    charging_model='WDB06isrf' ! dust processes are off; WDB06isrf (the replacement of RM2026) reads only the shipped calima_data tables
     nZmix=3 ! Number of representative charges to reconstruct grain-ion interactions
 
     !----------- PAH modelling choices -----------!
