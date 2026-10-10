@@ -802,6 +802,7 @@ contains
         use dust_rhs_mod, only: dust_rhs
         use dust_rates, only: compute_rate_caches
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 #ifdef RTZ
         use rtz_module, only:elements
 #endif
@@ -912,6 +913,16 @@ contains
                                 y_gas_out,y_dust_out,h_init_val,0d0,dt,&
                                 debug_flag=dust_debug,step_ok=step_ok,h_last=last_h_ode)
 
+        ! 3b. A NaN/Inf result is never a valid state, and it passes every later check of the caller
+        ! (comparisons with NaN are false): the RTZ step then rejected each retry on the ions, halved
+        ! ddt to zero and froze the cell. Reject it here, before it reaches nElement and the dust,
+        ! and stop if the rates are already non-finite at the starting state (a bug in a rate).
+        if (.not. (all(ieee_is_finite(y_dust_out(1:ndust_total))) .and. all(ieee_is_finite(y_gas_out)))) then
+            call check_dust_rates_finite(dinfo, dt, y_gas, y_dust(1:ndust_total))
+            step_ok = .false.
+            return
+        end if
+
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then
             do ii = 1, n_elements
@@ -971,6 +982,56 @@ contains
 #endif
 
     end subroutine compute_dust_update
+
+    subroutine check_dust_rates_finite(dinfo, dt, y_gas, y_dust)
+        ! Called when a dust update came out NaN/Inf. Finite rates at the starting state mean the step
+        ! blew up: return, and the caller retries with a smaller dt. Non-finite rates there are a bug in
+        ! a rate (a smaller dt cannot help): print the cell and stop. With dust_debug, also name the
+        ! process(es) that produced it.
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+        use dust_rhs_mod, only: dust_rhs
+        implicit none
+        class(DustChemistryInfo), intent(in) :: dinfo
+        real(dp), intent(in) :: dt, y_gas(:,:), y_dust(:)
+        real(dp), allocatable :: dydt_gas(:,:), dydt_dust(:,:)
+        integer :: i
+
+        allocate(dydt_gas(size(y_gas,1), size(y_gas,2)), dydt_dust(size(y_dust), 2))
+        call dust_rhs(dinfo, y_gas, y_dust, dydt_gas, dydt_dust, write_cache=.false.)
+        if (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust))) then
+            if (dust_debug) write(*,'(A,ES10.3,A)') ' CALIMA: dust update NaN/Inf over dt = ', dt, &
+                                                   ' s with finite rates at its start; step rejected'
+            return
+        end if
+
+        write(*,'(A)') ' CALIMA ERROR: NaN/Inf dust rates at the start of a dust update'
+        write(*,'(A,4ES12.4)') '   T [K], nH, ne [cm-3], rho [g cm-3] = ', dinfo%local_Tk, dinfo%local_nH, &
+                                dinfo%local_ne, dinfo%local_rho
+        write(*,'(A,3ES12.4)') '   mu, sigma [cm s-1], dx [cm]       = ', dinfo%local_mu, dinfo%local_sigma, dinfo%local_dx
+        if (dust_eq_test) write(*,'(A)') '   (dust_eq_test: the grain-grain rates use sigma and L set from nH, not these)'
+        write(*,'(A,*(ES12.4))') '   rho bins (PAH first) [g cm-3]     = ', y_dust
+        write(*,'(A,*(ES12.4))') '   d/dt, production                  = ', dydt_dust(:,1)
+        write(*,'(A,*(ES12.4))') '   d/dt, destruction                 = ', dydt_dust(:,2)
+        if (dust_debug) then
+            ! each process on its own (the running sum would carry one process's NaN into the rest)
+            do i = 1, ndust_processes
+                dydt_gas = 0d0; dydt_dust = 0d0
+                call dust_processes_list(i)%comp_rate(dinfo, y_gas, y_dust, dydt_gas, dydt_dust)
+                if (.not. (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust)))) &
+                    write(*,'(A,A)') '   NaN/Inf from dust process: ', trim(dust_processes_list(i)%name)
+            end do
+            do i = 1, npah_processes
+                dydt_gas = 0d0; dydt_dust = 0d0
+                call pah_processes_list(i)%comp_rate(dinfo, y_gas, y_dust, dydt_gas, dydt_dust)
+                if (.not. (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust)))) &
+                    write(*,'(A,A)') '   NaN/Inf from PAH process: ', trim(pah_processes_list(i)%name)
+            end do
+        else
+            write(*,'(A)') '   rerun with dust_debug=.true. to see which process'
+        end if
+        flush(6)   ! clean_stop aborts MPI, which can drop unflushed output
+        call clean_stop
+    end subroutine check_dust_rates_finite
 
     subroutine ensure_update_cache(n1, n2, ndust_total)
         integer, intent(in) :: n1, n2, ndust_total
