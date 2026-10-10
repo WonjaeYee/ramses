@@ -1,0 +1,87 @@
+! tests/passive_scalars/sink: one individual-star sink (INDIVIDUAL_SINK_STARS, MIST winds)
+! on the main sequence in a uniform 3D box of ionised low-metallicity gas; the wind
+! injects mass, momentum and metals (pm/sink_particle.f90, accrete_sink) and blows a
+! bubble. No chemistry (rtz_cooling=.false.): the injected metals stay neutral, so the
+! neutral mass of every element must grow exactly like the element mass.
+&RUN_PARAMS
+pic=.true.
+sink=.true.
+clumpfind=.false.
+poisson=.false.
+hydro=.true.
+rt=.false.
+nsubcycle=20*1
+ncontrol=10
+nstepmax=1000000
+/
+&AMR_PARAMS
+levelmin={levelmin}
+levelmax={levelmax}
+ngridmax=200000
+npartmax=1000
+boxlen=32.0
+/
+&INIT_PARAMS
+condinit_kind='table'
+/
+&OUTPUT_PARAMS
+foutput=100000000
+tend={tend}
+delta_tout={delta_tout}
+/
+&HYDRO_PARAMS
+gamma=1.6666667
+courant_factor=0.8
+scheme='muscl'
+slope_type={slope}
+riemann='{riemann}'
+pressure_fix=.true.
+beta_fix=0.5
+data_dir='{data_dir}'
+{hydro_extra}
+/
+&REFINE_PARAMS
+interpol_var=1
+interpol_type=2
+sink_refine=.false.
+{refine}
+/
+&COOLING_PARAMS
+cooling=.false.
+metal=.true.
+neq_chem=.true.
+z_ave=1
+/
+&UNITS_PARAMS
+units_density=1.660539e-24
+units_time=3003860471423912.0
+units_length=3.0856776e+18
+/
+&BOUNDARY_PARAMS
+{boundary}
+/
+&SINK_PARAMS
+create_sinks=.false.
+nsinkmax=1
+ir_cloud=2
+accretion_scheme='bondi'
+mass_sink_seed=1e0
+d_sink=1d10
+/
+&RT_PARAMS
+X=0.74
+Y=0.25
+rt_is_init_xion=.false.
+rtz_cooling=.false.
+isHe={isHe}
+isH2_rtz={isH2}
+isCO_rtz={isCO}
+{rt_extra}
+/
+&RT_GROUPS
+groupL0 = 13.6
+groupL1 = 500
+/
+&INDI_STAR
+mist_sample='{mist}'
+/
