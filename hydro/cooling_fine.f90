@@ -170,8 +170,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   call rt_units(scale_Np, scale_Fp)
 #endif
 
-  ! to compute Jeans length
-  factG=1d0
+  ! to compute Jeans length: G in code units (1 only if the user units were chosen that way)
+  factG=6.674d-8*scale_d*scale_t**2
   if(cosmo)factG=3d0/4d0/twopi*omega_m*aexp
 
   ! Typical ISM density in H/cc
@@ -745,6 +745,11 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
               dx_SS_H2(i) = (gamma-1.0) * (uold(ind_leaf(i),neul) - ekk(i) - err(i) - emag(i))
               ! coolfine1 runs only over active cells ... hopefully the density is nonzero
               dx_SS_H2(i) = (pi/factG * dx_SS_H2(i))**0.5 / uold(ind_leaf(i),1)
+              ! At most the cell: the shielding factors multiply the RT-propagated field, whose
+              ! photons absorbed between cells the RT has already removed, so a longer column would
+              ! count that attenuation twice (and the Jeans column overestimates N(H2) at n < 1e4
+              ! cm^-3, Wolcott-Green et al. 2011)
+              dx_SS_H2(i) = min(dx_SS_H2(i), dx_loc)
               ! don't forget to give dx_SS_H2 in unit of cm
               dx_SS_H2(i) = dx_SS_H2(i) * scale_l
            end do
