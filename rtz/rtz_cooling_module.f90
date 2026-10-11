@@ -1204,6 +1204,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call compute_dust_rad_rates(dust_helper,advected_G0+UV_background_G0,Tk,ne,&
                                     &dustAbs,dustSc,dustRp,&
                                     &pahAbs,pahSc,pahRp)
+         ! PAHs absorb and scatter the photons too: from here on the grain rates carry them
+         ! (photon depletion, flux, momentum, re-emission into the IR group, LW shielding)
+         dustAbs = dustAbs + pahAbs
+         dustSc  = dustSc  + pahSc
+         dustRp  = dustRp  + pahRp
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_end)
             t_dust_rad_rates = t_dust_rad_rates + (t_sub_end - t_sub_start)
