@@ -5,7 +5,7 @@ MODULE rt_flux_module
 
   private   ! default
 
-  public read_hll_eigenvalues, cmp_rt_faces, cmp_column_faces
+  public read_hll_eigenvalues, cmp_rt_faces
 
 CONTAINS
 
@@ -420,72 +420,6 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
 #endif
 
 end subroutine cmp_rt_faces
-
-!************************************************************************
-SUBROUTINE cmp_column_faces(uin, iFlx, iL0, iC0, ngrid)
-
-!  Intercell fluxes of the H2-column group (rtz_h2_column_group): its
-!  photon density M = N_LW N2 / N_ref is a passive quantity carried by the
-!  LW photons, so through each face it moves with the LW fluxes (density and
-!  flux components) times the upwind ratio M/N_LW. Its own M1 closure and the
-!  diffusion of the face solver would otherwise move M along its own gradient,
-!  which is not that of the photons carrying it.
-!  iL0, iC0 => first RT variable index of the LW and of the column group
-!------------------------------------------------------------------------
-  use amr_parameters
-  use amr_commons
-  real(dp),dimension(nvector,iu1:iu2,ju1:ju2,ku1:ku2, 1:nrtvar)::uin
-  real(dp),dimension(nvector,if1:if2,jf1:jf2,kf1:kf2, 1:nrtvar, 1:ndim)::iFlx
-  integer ::iL0, iC0, ngrid
-  integer ::i, j, k, n
-!------------------------------------------------------------------------
-  do i=if1,if2
-  do j=jf1,jf2
-  do k=kf1,kf2
-     if(ndim.gt.1 .and. j.eq.jf2) cycle
-     if(ndim.gt.2 .and. k.eq.kf2) cycle
-     do n=1,ngrid
-        call upwind(uin(n,i-1,j,k,:), uin(n,i,j,k,:), iFlx(n,i,j,k,:,1))
-     end do
-  end do
-  end do
-  end do
-#if NDIM>1
-  do i=if1,if2-1
-  do j=jf1,jf2
-  do k=kf1,kf2
-     if(ndim.gt.2 .and. k.eq.kf2) cycle
-     do n=1,ngrid
-        call upwind(uin(n,i,j-1,k,:), uin(n,i,j,k,:), iFlx(n,i,j,k,:,2))
-     end do
-  end do
-  end do
-  end do
-#endif
-#if NDIM>2
-  do i=if1,if2-1
-  do j=jf1,jf2-1
-  do k=kf1,kf2
-     do n=1,ngrid
-        call upwind(uin(n,i,j,k-1,:), uin(n,i,j,k,:), iFlx(n,i,j,k,:,3))
-     end do
-  end do
-  end do
-  end do
-#endif
-contains
-  subroutine upwind(udn, uup, f)
-    real(dp), dimension(1:nrtvar) :: udn, uup, f
-    real(dp) :: r
-    if (f(iL0) >= 0d0) then
-       r = udn(iC0) / max(udn(iL0), 1d-300)
-    else
-       r = uup(iC0) / max(uup(iL0), 1d-300)
-    end if
-    f(iC0:iC0+ndim) = r * f(iL0:iL0+ndim)
-  end subroutine upwind
-END SUBROUTINE cmp_column_faces
-
 
 
 END MODULE rt_flux_module

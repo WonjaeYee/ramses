@@ -956,9 +956,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer :: nlw, ig_lw
       real(dp), dimension(nGroups) :: tau_lw_g, f_lw_g
       real(dp) :: trans_lw, trans_lw_co
-      integer :: igc, ilw_g
-      real(dp) :: N2_up, chi_lw, hb_g, hb_Tb, hb_k, hb_sd, kap_h2, nh2_co
-      real(dp), dimension(1:ndim) :: fsrc_col
+      logical :: h2_derived
+      integer :: ilw_g
+      real(dp) :: chi_lw, hb_sab, hb_sd, sg_loc
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -1136,36 +1136,29 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       sh2_loc = 1d0
       if (isH2_rtz .and. rtz_h2_lw_sigma_abs .le. 0d0) &
          sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK)
-      ! Line-by-line band shielding (rtz_h2_column_group > 0): N2 is the photon-weighted H2 column the
-      ! LW photons have crossed, M/N_LW of the column group; chi the incident field, the local LW photon
-      ! flux undone for the H2 attenuation (2.06e7 cm^-2 s^-1 = Draine 1978, 11.2-13.6 eV). The local
-      ! factor carries the table's sigma_d over the group cross-section and f_diss/T_band (N_LW is
-      ! already the attenuated field).
-      igc = rtz_h2_column_group; kap_h2 = 0d0; N2_up = 0d0
-      nh2_co = 0.5d0*nElement_dep(1)*dXion(1,3)
+      if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
+      ! Derived grey scheme (rtz_h2_band_file): the dissociation is sigma_d c N_LW with the line-by-line
+      ! sigma_d, and nothing local multiplies it: the H2 and the dust inside the cell are in the RT
+      ! (N_LW is the cell average). chi: the local LW photon flux in Draine units (2.06e7 cm^-2 s^-1)
+      h2_derived = .false.
 #ifdef RT
-      if (isH2_rtz .and. igc > 0 .and. rt_advect) then
+      h2_derived = isH2_rtz .and. rt_advect .and. len_trim(rtz_h2_band_file) > 0
+      if (h2_derived) then
          ilw_g = 0
          do igroup = 1, nGroups
             if (isLW(igroup) == 1 .and. ilw_g == 0) ilw_g = igroup
          end do
-         if (dNp(ilw_g) > smallNp) N2_up = rtz_h2_col_ref * dNp(igc) / dNp(ilw_g)
          chi_lw = dNp(ilw_g) * rt_c_cgs(ilevel) / 2.06d7
-         call h2_band_lookup(TK, nElement_dep(1), chi_lw, N2_up, hb_g, hb_Tb, hb_k, hb_sd)
-         call h2_band_lookup(TK, nElement_dep(1), chi_lw / hb_Tb, N2_up, hb_g, hb_Tb, hb_k, hb_sd)
-         sh2_loc = hb_g * hb_sd * rt_c_cgs(ilevel) / signc(ilw_g,1,3)
-         kap_h2 = hb_k
-         nh2_co = N2_up / dx_SS_H2(icell)      ! CO: the H2 column upstream, as the LW photons see it
+         call h2_band_lookup(TK, nElement_dep(1), chi_lw, 1.9d-21, hb_sab, hb_sd)
+         sh2_loc = hb_sd * rt_c_cgs(ilevel) / signc(ilw_g,1,3)
+         f_shd = sh2_loc
       end if
 #endif
-      if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
-      ! the column scheme takes the dust inside the cell from the RT too (N_LW is the cell average)
-      if (isH2_rtz .and. kap_h2 > 0d0) f_shd = sh2_loc
       if (isCO_rtz) then
          ! rtz_shielding_config 0,1: no CO shielding (f_shd_CO stays 1); 2: CO line shielding only;
          ! 3 [default]: line shielding and dust, exp(-3.53 A_V) for CO (co_dust_to_lw)
          if (rtz_shielding_config .ge. 2) then
-            f_shd_CO = comp_SCO(nCO(icell), nh2_co, dx_SS_H2(icell))
+            f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
             if (rtz_shielding_config .ge. 3) &
                f_shd_CO = f_shd_CO * lw_transmission(co_dust_to_lw * tau_dust_LW, 0d0)
          end if
@@ -1331,9 +1324,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Deal with molecules separately
                if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-                  if (isLW(igroup).eq.1 .and. igc .gt. 0 .and. rt_advect) then
-                     ! line-by-line band opacity at the upstream column (kappa_band = -dlnT_band/dN2)
-                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * kap_h2 * rt_c_cgs(ilevel)
+                  if (isLW(igroup).eq.1 .and. h2_derived) then
+                     ! sigma_abs = sigma_g / G at the dust LW cross-section the RT applies here
+                     sg_loc = dustAbs(igroup) / (rt_c_cgs(ilevel) * nElement_dep(1))
+                     call h2_band_lookup(TK, nElement_dep(1), chi_lw, sg_loc, hb_sab, hb_sd)
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * hb_sab * rt_c_cgs(ilevel)
                   else if (isLW(igroup).eq.1 .and. rtz_h2_lw_sigma_abs .gt. 0d0) then
                      ! Nickerson+18: H2 removes many more LW photons than it dissociates (line overlap)
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * rtz_h2_lw_sigma_abs * rt_c_cgs(ilevel)
@@ -1360,27 +1355,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dustAbs(:) = 0d0 ! Set to zero since we have already included it in the absorption rates
 #endif
 
-         ! The column group loses its photons with the LW ones (all absorption and scattering)
-         if (igc > 0 .and. rt_advect .and. isH2_rtz) then
-            phAbs(igc) = phAbs(ilw_g); dustAbs(igc) = dustAbs(ilw_g)
-            phSc(igc) = phSc(ilw_g); dustSc(igc) = dustSc(ilw_g); dustRp(igc) = 0d0
-         end if
-
          dmom(1:ndim)=0d0
          do igroup=1,nGroups     ! ----------------- Do the update of N and F
-            fsrc_col(:) = 0d0
-            if (igroup == igc .and. rt_advect .and. isH2_rtz) then
-               ! each LW photon gains the H2 column it crosses: c n_H2 per unit time (LW updated above)
-               recRad(igc) = rt_c_cgs(ilevel) * 0.5d0*nElement_dep(1)*dXion(1,3) * dNp(ilw_g) / rtz_h2_col_ref
-               fsrc_col(:) = rt_c_cgs(ilevel) * 0.5d0*nElement_dep(1)*dXion(1,3) * dFp(:,ilw_g) / rtz_h2_col_ref
-            end if
             dNp(igroup)= MAX(smallNp,                                      &
                            (ddt(icell)*(recRad(igroup)+dNpdt(igroup,icell)) &
                                        +dNp(igroup))                        &
                            / (1d0+ddt(icell)*(phAbs(igroup)+dustAbs(igroup))))
             dUU = ABS(dNp(igroup)-Np(igroup,icell))                        &
                   /(Np(igroup,icell)+Np_MIN) * one_over_Np_FRAC
-            if (igroup == igc) dUU = 0d0  ! a passive tracer: never limits the step
             fracMax=MAX(fracMax,dUU)      ! To check if ddt can be increased
             if(dUU .gt. 1d0) then
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -1415,7 +1397,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
             do idim=1,ndim
                dFp(idim,igroup) = &
-                     (ddt(icell)*(dFpdt(idim,igroup,icell)+fsrc_col(idim))+dFp(idim,igroup)) &
+                     (ddt(icell)*dFpdt(idim,igroup,icell)+dFp(idim,igroup)) &
                      /(1d0+ddt(icell)*(phAbs(igroup)+phSc(igroup) &
                      +dustAbs(igroup)+dustSc(igroup)))
             end do
@@ -1425,7 +1407,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                dUU = ABS(dFp(idim,igroup)-Fp(idim,igroup,icell))           &
                      / (ABS(Fp(idim,igroup,icell))+Np_MIN*rt_c_cgs(ilevel))         &
                      * one_over_Fp_FRAC
-               if (igroup == igc) dUU = 0d0
                fracMax=MAX(fracMax,dUU)   ! To check if ddt can be increased
                if(dUU .gt. 1d0) then
                   dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -1460,7 +1441,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end do
 
          do igroup=1,nGroups ! -------Momentum transfer from photons to gas:
-            if (igroup == igc) cycle
             mom_fact = ddt(icell) * (phAbs(igroup) + phSc(igroup) + dustRp(igroup)) &
                   * group_egy_erg(igroup) * one_over_clight
 
@@ -1534,9 +1514,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             end do
             trans_lw = trans_lw / nlw; trans_lw_co = trans_lw_co / nlw
             if (isH2_rtz) f_shd = sh2_loc * trans_lw
-            if (isH2_rtz .and. kap_h2 > 0d0) f_shd = sh2_loc
+            if (h2_derived) f_shd = sh2_loc
             if (isCO_rtz .and. rtz_shielding_config .ge. 3) &
-               f_shd_CO = comp_SCO(nCO(icell), nh2_co, dx_SS_H2(icell)) * trans_lw_co
+               f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * trans_lw_co
          end if
       end if
 

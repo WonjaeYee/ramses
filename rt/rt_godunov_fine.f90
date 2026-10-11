@@ -401,17 +401,6 @@ SUBROUTINE rt_godfine1(ind_grid, ncache, ilevel, dt)
      call cmp_rt_faces(uloc, flux, dx, dx, dx, dt, iGroups(i), ncache   &
           ,ilevel)
   end do
-#ifdef RTZ
-  ! The H2-column group rides on the LW photons (rt_flux_module, cmp_column_faces)
-  if (rtz_h2_column_group > 0) then
-     do i = 1,nGroups
-        if (isLW(i) == 1) then
-           call cmp_column_faces(uloc, flux, iGroups(i), iGroups(rtz_h2_column_group), ncache)
-           exit
-        end if
-     end do
-  end if
-#endif
 
   !----------------------------------------------------------------------
   ! Reset flux along direction at refined interface, if not rt-subcycling

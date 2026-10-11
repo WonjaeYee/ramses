@@ -217,13 +217,11 @@ module rt_parameters
   ! local H2 self-shielding factor (the shielding is the RT attenuation itself). 0 [default]: the
   ! local comp_SH2 factor on both. Nickerson+18 calibrate 400 x 2.1e-19 = 8.4e-17.
   real(dp)::rtz_h2_lw_sigma_abs=0d0
-  ! H2 shielding from line-by-line transfer of the LW group (CRISpy lw_band tables): > 0 is the index
-  ! of an extra RT group (no sources, below every threshold) that carries M = N_LW N2 / rtz_h2_col_ref,
-  ! so N2 = rtz_h2_col_ref M / N_LW is the photon-weighted H2 column the LW photons have crossed. The
-  ! dissociation is then sigma_d c N_LW f(N2)/T_band(N2) and the LW absorption by H2 c n_H2 kappa(N2),
-  ! from the table rtz_h2_band_file on (T, n_H, chi, N2). 0 [default]: off.
-  integer::rtz_h2_column_group=0
-  real(dp)::rtz_h2_col_ref=1d24
+  ! The same scheme with sigma_abs and sigma_d derived from line-by-line transfer through the H2 data over
+  ! the LW group (CRISpy lw_band; RAMSES_dev/h2_lines/export_sigma_abs_table.py): sigma_abs = sigma_g/G,
+  ! G = sigma_g int f_diss exp(-2 sigma_g N2) dN2 (Sternberg et al. 2014) at the cell's T, n_H, LW field
+  ! and dust LW cross-section sigma_g, so that the grey photon budget gives the H I column of the line
+  ! data. Set: used instead of rtz_h2_lw_sigma_abs. '' [default]: off.
   character(len=256)::rtz_h2_band_file=''
   logical::rtz_include_collisional_ionization=.true.
   logical::rtz_include_photoionization=.true.
