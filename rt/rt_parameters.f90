@@ -212,6 +212,11 @@ module rt_parameters
   !  2 = new CO line: CALIMA per-bin tau for H2, comp_SCO line shielding applied to CO (no dust)
   !  3 = full (default): CALIMA per-bin tau for H2, comp_SCO * exp(-tau) applied to CO
   integer::rtz_shielding_config=3
+  ! H2 self-shielding through the RT (Nickerson, Teyssier & Rosdahl 2018): > 0 is the effective
+  ! cross-section [cm^2] with which H2 absorbs LW-group photons, and the dissociation then carries no
+  ! local H2 self-shielding factor (the shielding is the RT attenuation itself). 0 [default]: the
+  ! local comp_SH2 factor on both. Nickerson+18 calibrate 400 x 2.1e-19 = 8.4e-17.
+  real(dp)::rtz_h2_lw_sigma_abs=0d0
   logical::rtz_include_collisional_ionization=.true.
   logical::rtz_include_photoionization=.true.
   logical::rtz_include_cosmic_ray_ionization=.true.
