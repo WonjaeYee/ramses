@@ -17,7 +17,6 @@ subroutine init_time
   use recombination_module, only: load_recombination_data
   use rtz_coolrates_module, only: initialize_high_temperature_metal_cooling, initialize_fine_structure_tables
   use metal_yields_module, only: initialize_SN_yields
-  use molecules_module, only: initialize_SCO_table
 #else
   use rt_cooling_module
 #endif
@@ -351,9 +350,6 @@ subroutine init_time
 
   ! Initialize the low temperature cooling tables
   call initialize_fine_structure_tables()
-
-  ! Initialize tables for CO self-shielding
-  call initialize_SCO_table()
 
   ! Single-cell cooling test: replay a crash dump and stop before full sim init
   if (rtz_single_cell_test) then
