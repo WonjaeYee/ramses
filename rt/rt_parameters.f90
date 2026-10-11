@@ -217,6 +217,14 @@ module rt_parameters
   ! local H2 self-shielding factor (the shielding is the RT attenuation itself). 0 [default]: the
   ! local comp_SH2 factor on both. Nickerson+18 calibrate 400 x 2.1e-19 = 8.4e-17.
   real(dp)::rtz_h2_lw_sigma_abs=0d0
+  ! H2 shielding from line-by-line transfer of the LW group (CRISpy lw_band tables): > 0 is the index
+  ! of an extra RT group (no sources, below every threshold) that carries M = N_LW N2 / rtz_h2_col_ref,
+  ! so N2 = rtz_h2_col_ref M / N_LW is the photon-weighted H2 column the LW photons have crossed. The
+  ! dissociation is then sigma_d c N_LW f(N2)/T_band(N2) and the LW absorption by H2 c n_H2 kappa(N2),
+  ! from the table rtz_h2_band_file on (T, n_H, chi, N2). 0 [default]: off.
+  integer::rtz_h2_column_group=0
+  real(dp)::rtz_h2_col_ref=1d24
+  character(len=256)::rtz_h2_band_file=''
   logical::rtz_include_collisional_ionization=.true.
   logical::rtz_include_photoionization=.true.
   logical::rtz_include_cosmic_ray_ionization=.true.

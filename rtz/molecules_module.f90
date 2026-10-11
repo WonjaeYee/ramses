@@ -7,6 +7,7 @@ module molecules_module
   private  ! everything is private by default
   public :: alpha_H2, beta_H2_umist, beta_H2, beta_H2_krome, alpha_CO, beta_CO, alpha_H2_prim, alpha_H2_dust
   public :: comp_SH2, comp_Sd, comp_SCO, lw_transmission, tau_dust_lw_mw, co_dust_to_lw
+  public :: h2_band_lookup
 
   ! Dust attenuation in the Lyman-Werner band (1000 A) per H nucleus, for MW dust (R_V = 3.1), on the
   ! total hydrogen column N(H) + 2N(H2) + N(H+): Draine & Bertoldi (1996, Sect. 2.4), an effective
@@ -17,6 +18,14 @@ module molecules_module
   real(dp), parameter :: co_dust_to_lw = 3.53d0 / 3.74d0
 
 #include "co_shield_visser09.inc"
+
+  ! H2 shielding of the LW RT group from line-by-line transfer (rtz_h2_column_group, CRISpy
+  ! crispy_cr.radiation.lw_band): log10 of f_diss/T_band, T_band and kappa_band [cm^2] on
+  ! (N2, chi, n_H, T), and log10 sigma_d [cm^2] on (chi, n_H, T); axes in log10
+  logical, save :: hb_loaded = .false.
+  integer, save :: hb_nT, hb_nden, hb_nchi, hb_ncol
+  real(dp), allocatable, save :: hb_lT(:), hb_lden(:), hb_lchi(:), hb_lcol(:)
+  real(dp), allocatable, save :: hb_lg(:,:,:,:), hb_lTb(:,:,:,:), hb_lk(:,:,:,:), hb_lsd(:,:,:)
 
 CONTAINS
 
@@ -423,5 +432,71 @@ contains
   end subroutine visser_index
 END FUNCTION comp_SCO
 
+
+SUBROUTINE h2_band_load()
+  ! Read the table written by RAMSES_dev/h2_lines/export_band_table.py (rtz_h2_band_file)
+  use rt_parameters, only: rtz_h2_band_file
+  implicit none
+  integer :: u, ios
+  open(newunit=u, file=trim(rtz_h2_band_file), status='old', action='read', iostat=ios)
+  if (ios /= 0) then
+     write(*,*) 'h2_band_load: cannot open rtz_h2_band_file = ', trim(rtz_h2_band_file)
+     stop
+  end if
+  read(u,*)                                   ! header line
+  read(u,*) hb_nT, hb_nden, hb_nchi, hb_ncol
+  allocate(hb_lT(hb_nT), hb_lden(hb_nden), hb_lchi(hb_nchi), hb_lcol(hb_ncol))
+  allocate(hb_lg(hb_ncol,hb_nchi,hb_nden,hb_nT), hb_lTb(hb_ncol,hb_nchi,hb_nden,hb_nT))
+  allocate(hb_lk(hb_ncol,hb_nchi,hb_nden,hb_nT), hb_lsd(hb_nchi,hb_nden,hb_nT))
+  read(u,*) hb_lT; read(u,*) hb_lden; read(u,*) hb_lchi; read(u,*) hb_lcol
+  read(u,*) hb_lsd; read(u,*) hb_lg; read(u,*) hb_lTb; read(u,*) hb_lk
+  close(u)
+  hb_loaded = .true.
+END SUBROUTINE h2_band_load
+
+SUBROUTINE h2_band_lookup(T, nH, chi, N2, g, Tb, kap, sigd)
+  ! f_diss/T_band (g), T_band, kappa_band [cm^2] and sigma_d [cm^2] at temperature T, hydrogen
+  ! density nH, incident field chi (Draine units, 11.2-13.6 eV photons) and H2 column N2:
+  ! linear in log10 on the table, clamped at its edges (below its first column N2 is unshielded)
+  implicit none
+  real(dp), intent(in) :: T, nH, chi, N2
+  real(dp), intent(out) :: g, Tb, kap, sigd
+  integer :: iT, idn, ic, icol, a, b2, c2, d
+  real(dp) :: wT, wden, wc, wcol, w, sg, sTb, sk, ss
+  if (.not. hb_loaded) call h2_band_load()
+  call hb_index(log10(max(T, 1d-30)), hb_lT, hb_nT, iT, wT)
+  call hb_index(log10(max(nH, 1d-30)), hb_lden, hb_nden, idn, wden)
+  call hb_index(log10(max(chi, 1d-30)), hb_lchi, hb_nchi, ic, wc)
+  call hb_index(log10(max(N2, 1d-30)), hb_lcol, hb_ncol, icol, wcol)
+  sg = 0d0; sTb = 0d0; sk = 0d0; ss = 0d0
+  do a = 0, 1; do b2 = 0, 1; do c2 = 0, 1
+     w = merge(wT, 1d0-wT, a==1) * merge(wden, 1d0-wden, b2==1) * merge(wc, 1d0-wc, c2==1)
+     ss = ss + w * hb_lsd(ic+c2, idn+b2, iT+a)
+     do d = 0, 1
+        sg  = sg  + w * merge(wcol, 1d0-wcol, d==1) * hb_lg (icol+d, ic+c2, idn+b2, iT+a)
+        sTb = sTb + w * merge(wcol, 1d0-wcol, d==1) * hb_lTb(icol+d, ic+c2, idn+b2, iT+a)
+        sk  = sk  + w * merge(wcol, 1d0-wcol, d==1) * hb_lk (icol+d, ic+c2, idn+b2, iT+a)
+     end do
+  end do; end do; end do
+  g = 10d0**sg; Tb = 10d0**sTb; kap = 10d0**sk; sigd = 10d0**ss
+contains
+  subroutine hb_index(x, grid, n, i, wgt)
+    real(dp), intent(in) :: x, grid(:)
+    integer, intent(in) :: n
+    integer, intent(out) :: i
+    real(dp), intent(out) :: wgt
+    if (x <= grid(1)) then
+       i = 1; wgt = 0d0
+    else if (x >= grid(n)) then
+       i = n - 1; wgt = 1d0
+    else
+       i = 1
+       do while (grid(i+1) < x)
+          i = i + 1
+       end do
+       wgt = (x - grid(i)) / (grid(i+1) - grid(i))
+    end if
+  end subroutine hb_index
+END SUBROUTINE h2_band_lookup
 
 end module molecules_module
