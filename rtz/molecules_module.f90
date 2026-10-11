@@ -6,10 +6,17 @@ module molecules_module
 
   private  ! everything is private by default
   public :: alpha_H2, beta_H2_umist, beta_H2, beta_H2_krome, alpha_CO, beta_CO, alpha_H2_prim, alpha_H2_dust
-  public :: comp_SH2, comp_Sd, comp_SCO, initialize_SCO_table
+  public :: comp_SH2, comp_Sd, comp_SCO, lw_transmission, tau_dust_lw_mw, co_dust_to_lw
 
-  real(dp), dimension(52, 2):: sco_table ! self shielding coefficient vs. CO column density
-  real(dp), dimension(43, 2):: sh2_table ! self shielding coefficient vs. H2 column density
+  ! Dust attenuation in the Lyman-Werner band (1000 A) per H nucleus, for MW dust (R_V = 3.1), on the
+  ! total hydrogen column N(H) + 2N(H2) + N(H+): Draine & Bertoldi (1996, Sect. 2.4), an effective
+  ! attenuation cross-section (~0.76 of the extinction one, as forward-scattered light is not removed)
+  real(dp), parameter :: sigma_dust_lw_mw = 2.0d-21
+  ! CO and H2 dust attenuation in units of A_V: CO exp(-3.53 A_V) (Visser et al. 2009; van Dishoeck
+  ! et al. 2006), H2 sigma_dust_lw_mw N_H = 3.74 A_V for N_H/A_V = 1.87e21 cm^-2 mag^-1
+  real(dp), parameter :: co_dust_to_lw = 3.53d0 / 3.74d0
+
+#include "co_shield_visser09.inc"
 
 CONTAINS
 
@@ -281,144 +288,139 @@ FUNCTION beta_CO(G0, xi_cr_H2) result(rate)
 
 END FUNCTION beta_CO
 
-FUNCTION comp_Sd(nHI, nH2, dx_SS, Z) result(ss_factor)
-  ! Returns the dust LW self-shielding factor.
-  ! Uses a fixed MW grain cross-section; with CALIMA the caller should use
-  ! compute_lw_dust_optical_depth (dust_photophysics.f90) instead.
-  ! see section 2.2 http://iopscience.iop.org/0004-637X/697/1/55/pdf/apj_697_1_55.pdf
+FUNCTION tau_dust_lw_mw(nH_tot, dx_SS, Z) result(tau)
+  ! Dust optical depth in the Lyman-Werner band over dx_SS for MW dust scaled by Z (the dust-to-gas
+  ! ratio in MW units), on the total hydrogen column (Draine & Bertoldi 1996)
+  ! nH_tot : hydrogen nuclei number density, all states [cm^-3]
   implicit none
-  real(dp), intent(in) :: nHI, nH2, dx_SS, Z
-  real(dp)             :: ss_factor
-  real(dp)             :: Sdeff, cNHI, cNH2
-  Sdeff = 2.34d-21    ! dust cross section cm^2 — bare graphite-silicate at MW
-  cNHI = nHI * dx_SS
-  cNH2 = nH2 * dx_SS
-  ss_factor = safe_exp(-Sdeff * Z * (cNHI + (2.d0 * cNH2)))
+  real(dp), intent(in) :: nH_tot, dx_SS, Z
+  real(dp) :: tau
+  tau = sigma_dust_lw_mw * Z * nH_tot * dx_SS
+END FUNCTION tau_dust_lw_mw
+
+FUNCTION lw_transmission(tau, f_ani) result(trans)
+  ! Mean-intensity transmission of a slab of normal optical depth tau for a field that is a beam
+  ! (fraction f_ani, at normal incidence) plus an isotropic part: f e^-tau + (1-f) E2(tau). Exact in
+  ! both limits, where exp(-(2-f) tau) only holds for tau << 1 (it is 4x too small at tau = 3).
+  implicit none
+  real(dp), intent(in) :: tau, f_ani
+  real(dp) :: trans, f
+  f = min(max(f_ani, 0d0), 1d0)
+  trans = f * safe_exp(-tau) + (1d0 - f) * expint_E2(tau)
+END FUNCTION lw_transmission
+
+FUNCTION expint_E2(x) result(e2)
+  ! Exponential integral E2(x) = exp(-x) - x E1(x), x >= 0; E1 by its series (x <= 1) or continued
+  ! fraction (x > 1), to ~1e-12 (Numerical Recipes, expint)
+  implicit none
+  real(dp), intent(in) :: x
+  real(dp) :: e2, e1, b, c, d, h, a, term, fact
+  real(dp), parameter :: euler = 0.5772156649015329d0, eps = 1d-14
+  integer :: k
+  if (x <= 0d0) then
+     e2 = 1d0
+     return
+  end if
+  if (x > 700d0) then
+     e2 = 0d0
+     return
+  end if
+  if (x <= 1d0) then
+     e1 = -euler - log(x)
+     fact = 1d0
+     do k = 1, 100
+        fact = -fact * x / k
+        term = -fact / k
+        e1 = e1 + term
+        if (abs(term) < eps * abs(e1)) exit
+     end do
+  else
+     b = x + 1d0
+     c = 1d0 / 1d-300
+     d = 1d0 / b
+     h = d
+     do k = 1, 200
+        a = -dble(k) * dble(k)
+        b = b + 2d0
+        d = 1d0 / (a * d + b)
+        c = b + a / c
+        h = h * c * d
+        if (abs(c * d - 1d0) < eps) exit
+     end do
+     e1 = h * exp(-x)
+  end if
+  e2 = exp(-x) - x * e1
+END FUNCTION expint_E2
+
+FUNCTION comp_Sd(nH_tot, dx_SS, Z) result(ss_factor)
+  ! Dust shielding of the Lyman-Werner band for MW dust scaled by Z, isotropic field
+  ! (lw_transmission with f = 0); with CALIMA the per-bin grain cross-sections are used instead
+  ! (compute_lw_dust_optical_depth in dust_photophysics.f90)
+  implicit none
+  real(dp), intent(in) :: nH_tot, dx_SS, Z
+  real(dp) :: ss_factor
+  ss_factor = lw_transmission(tau_dust_lw_mw(nH_tot, dx_SS, Z), 0d0)
 END FUNCTION comp_Sd
 
-FUNCTION comp_SH2(nH2, dx_SS) result(ss_factor)
-  ! Returns the self shielding factor for dust
-  ! see section 2.2 http://iopscience.iop.org/0004-637X/697/1/55/pdf/apj_697_1_55.pdf
+FUNCTION comp_SH2(nH2, dx_SS, T) result(ss_factor)
+  ! H2 self-shielding of its photodissociation: Wolcott-Green, Haiman & Bryan (2011, eq. 10), the
+  ! Draine & Bertoldi (1996, eq. 37) form with exponent 1.1 instead of 2,
+  !   f = 0.965/(1 + x/b5)^1.1 + 0.035/(1 + x)^0.5 exp(-8.5e-4 (1 + x)^0.5),
+  ! x = N(H2)/5e14 cm^-2, b5 = b/(1 km/s) with the thermal Doppler parameter b = (2kT/m_H2)^1/2.
+  ! (Replaces the Gnedin, Tassis & Kravtsov 2009 form with omega = 0.2 and b5 = 1, a calibration for
+  ! unresolved clumping that gives 5.7x weaker shielding above N(H2) ~ 1e17 cm^-2.)
+  ! nH2 : H2 number density [cm^-3]; dx_SS : shielding length [cm]; T : gas temperature [K]
   implicit none
-  real(dp), intent(in):: nH2, dx_SS
+  real(dp), intent(in):: nH2, dx_SS, T
   real(dp):: ss_factor
-  real(dp):: xfac, cNH2, wH2, Sa, Sb, Sc
-
-  cNH2 = nH2*dx_SS  !H2 column density
-  xfac = cNH2/(5.d14)
-  wH2 = 0.2d0
-
-  Sa = (1.d0 - wH2)/((1.d0 + xfac)*(1.d0 + xfac))
-  Sb = wH2/sqrt(1.d0 + xfac)
-  Sc = safe_exp(-0.00085d0*sqrt(1.d0 + xfac))
-
-  ss_factor = Sa + (Sb*Sc)
+  real(dp):: x, b5
+  real(dp), parameter :: kB_over_mH = 8.2504d7   ! k_B/m_H [cm^2 s^-2 K^-1], so b = (kT/m_H)^1/2 for H2
+  x = nH2 * dx_SS / 5.d14
+  b5 = sqrt(kB_over_mH * max(T, 1d0)) / 1d5
+  ss_factor = 0.965d0 / (1.d0 + x / b5)**1.1d0 &
+            + 0.035d0 / sqrt(1.d0 + x) * safe_exp(-8.5d-4 * sqrt(1.d0 + x))
 END FUNCTION comp_SH2
 
-SUBROUTINE initialize_SCO_table()
-  implicit none
-
-  sco_table(:,1) = (/ &
-  1.000d+00, 1.000d+12, 1.650d+12, 2.995d+12, 5.979d+12, 1.313d+13, &
-  3.172d+13, 8.429d+13, 2.464d+14, 7.923d+14, 1.670d+15, 2.595d+15, &
-  4.435d+15, 6.008d+15, 8.952d+15, 1.334d+16, 1.661d+16, 2.274d+16, &
-  3.115d+16, 4.266d+16, 5.843d+16, 8.002d+16, 1.096d+17, 1.501d+17, &
-  2.055d+17, 2.815d+17, 4.241d+17, 6.389d+17, 9.625d+17, 1.450d+18, &
-  2.184d+18, 3.291d+18, 4.124d+18, 5.685d+18, 7.838d+18, 1.080d+19, &
-  1.285d+19, 1.681d+19, 2.199d+19, 2.538d+19, 3.222d+19, 4.091d+19, &
-  5.193d+19, 5.893d+19, 7.356d+19, 8.269d+19, 9.246d+19, 1.031d+20, &
-  1.148d+20, 1.277d+20, 1.419d+20, 1.578d+20 /)
-
-  sco_table(:,2) = (/ &
-  1.000d+00, 9.990d-01, 9.981d-01, 9.961d-01, 9.912d-01, 9.815d-01, &
-  9.601d-01, 9.113d-01, 8.094d-01, 6.284d-01, 4.808d-01, 3.889d-01, &
-  2.827d-01, 2.293d-01, 1.695d-01, 1.224d-01, 1.017d-01, 7.764d-02, &
-  5.931d-02, 4.546d-02, 3.506d-02, 2.728d-02, 2.143d-02, 1.700d-02, &
-  1.360d-02, 1.094d-02, 8.273d-03, 6.283d-03, 4.773d-03, 3.611d-03, &
-  2.704d-03, 1.986d-03, 1.657d-03, 1.258d-03, 9.332d-04, 6.745d-04, &
-  5.596d-04, 4.123d-04, 2.982d-04, 2.490d-04, 1.827d-04, 1.324d-04, &
-  9.473d-05, 7.891d-05, 5.668d-05, 4.732d-05, 3.967d-05, 3.327d-05, &
-  2.788d-05, 2.331d-05, 1.944d-05, 1.619d-05 /)
-
-  sh2_table(:,1) = (/ &
-  1.000d+00, 2.666d+13, 3.801d+14, 6.634d+15, 8.829d+16, 9.268d+17, &
-  1.007d+18, 2.021d+18, 3.036d+18, 4.051d+18, 5.066d+18, 6.082d+18, &
-  7.097d+18, 8.112d+18, 9.341d+18, 1.014d+19, 2.030d+19, 3.045d+19, &
-  4.061d+19, 5.076d+19, 6.092d+19, 7.107d+19, 8.123d+19, 9.353d+19, &
-  1.015d+20, 2.031d+20, 3.047d+20, 4.062d+20, 5.078d+20, 6.094d+20, &
-  7.109d+20, 8.125d+20, 9.355d+20, 1.016d+21, 2.031d+21, 3.047d+21, &
-  4.063d+21, 5.078d+21, 6.094d+21, 7.110d+21, 8.125d+21, 9.355d+21, &
-  1.016d+22 /) 
-
-  sh2_table(:,2) = (/ &
-  1.000d+00, 9.999d-01, 9.893d-01, 9.678d-01, 9.465d-01, 9.137d-01, &
-  9.121d-01, 8.966d-01, 8.862d-01, 8.781d-01, 8.716d-01, 8.660d-01, &
-  8.612d-01, 8.569d-01, 8.524d-01, 8.497d-01, 8.262d-01, 8.118d-01, &
-  8.011d-01, 7.921d-01, 7.841d-01, 7.769d-01, 7.702d-01, 7.626d-01, &
-  7.579d-01, 7.094d-01, 6.712d-01, 6.378d-01, 6.074d-01, 5.791d-01, &
-  5.524d-01, 5.271d-01, 4.977d-01, 4.793d-01, 2.837d-01, 1.526d-01, &
-  7.774d-02, 3.952d-02, 2.093d-02, 1.199d-02, 7.666d-03, 5.333d-03, &
-  4.666d-03 /) 
-
-END SUBROUTINE initialize_SCO_table
-
 FUNCTION comp_SCO(nco_mol, nh2, dx_SS) result(ss_factor)
-  ! Returns the self shielding factor for CO
+  ! CO line shielding theta(N(CO), N(H2)) of Visser et al. (2009): self-shielding, and screening by
+  ! H2 lines, from their 2D table (co_shield_visser09.inc), bilinear in log N and log theta; columns
+  ! beyond the table take its edge values. Dust is applied separately (co_dust_to_lw).
+  ! nco_mol, nh2 : CO and H2 number densities [cm^-3]; dx_SS : shielding length [cm]
   implicit none
   real(dp), intent(in):: nco_mol, nh2, dx_SS
   real(dp):: ss_factor
-  real(dp):: logsCO, effcNCO, logeffcNCO
-  real(dp):: logsH2, effcNH2, logeffcNH2
-  integer:: i, idxCO, idxH2 ! Lower closest index
-
-  ! initialize to 1.0
-  ss_factor = 1.d0
-
-  ! Pinned to table at lower boundary, extrapolated above upper boundary
-  effcNCO = MAX(nco_mol*dx_SS, sco_table(1,1))
-  if (effcNCO.ge.1.578d+20) then 
-     ss_factor = ss_factor * 1.619d-05
-  else
-     ! Find the lower closest index
-     idxCO = 1
-     do i=1, 51 ! If above upper boundary then extrapolate using the slope 
-        !between the last two points, so conveniently we set i to not go to 52
-        if (effcNCO .ge. sco_table(i,1)) idxCO = i
+  real(dp):: wco, wh2, t00, t10, t01, t11
+  integer :: ic, ih
+  call visser_index(nco_mol * dx_SS, nco_grid_visser, nco_visser, ic, wco)
+  call visser_index(nh2 * dx_SS, nh2_grid_visser, nh2_visser, ih, wh2)
+  t00 = log10(theta_visser(ic, ih));       t10 = log10(theta_visser(ic+1, ih))
+  t01 = log10(theta_visser(ic, ih+1));     t11 = log10(theta_visser(ic+1, ih+1))
+  ss_factor = 10d0**((1d0-wco)*(1d0-wh2)*t00 + wco*(1d0-wh2)*t10 + (1d0-wco)*wh2*t01 + wco*wh2*t11)
+contains
+  subroutine visser_index(col, grid, n, i, w)
+     ! lower index i and weight w in log col on grid(1:n); grid(1) stands for 0 (below grid(2): i = 1,
+     ! weight on log N between grid(1) and grid(2)); clamped at the top
+     real(dp), intent(in) :: col, grid(:)
+     integer, intent(in) :: n
+     integer, intent(out) :: i
+     real(dp), intent(out) :: w
+     real(dp) :: lcol
+     integer :: k
+     if (col <= grid(1)) then
+        i = 1; w = 0d0
+        return
+     end if
+     if (col >= grid(n)) then
+        i = n - 1; w = 1d0
+        return
+     end if
+     i = 1
+     do k = 1, n - 1
+        if (col >= grid(k)) i = k
      end do
-
-     logeffcNCO = log10(effcNCO)
-     ! Interpolate or extrapolate automatically
-     logsCO = log10(sco_table(idxCO,2)) &
-     + (log10(sco_table(idxCO+1,2)) - log10(sco_table(idxCO,2))) &
-     * (logeffcNCO - log10(sco_table(idxCO,1))) &
-     / (log10(sco_table(idxCO+1,1)) - log10(sco_table(idxCO,1)))
-
-     ss_factor = ss_factor * (10.d0 ** logsCO)
-  end if
-
-
-  ! Pinned to table at lower boundary, extrapolated above upper boundary
-  effcNH2 = MAX(nh2*dx_SS, sh2_table(1,1))
-  if (effcNH2.ge.1.016d+22) then 
-      ss_factor = ss_factor * 4.666d-03
-  else 
-      ! Find the lower closest index
-      idxH2 = 1
-      do i=1, 42 ! If above upper boundary then extrapolate using the slope 
-        !between the last two points, so conveniently we set i to not go to 43
-        if (effcNH2 .ge. sh2_table(i,1)) idxH2 = i
-      end do
-
-      logeffcNH2 = log10(effcNH2)
-      ! Interpolate or extrapolate automatically
-      logsH2 = log10(sh2_table(idxH2,2)) &
-      + (log10(sh2_table(idxH2+1,2)) - log10(sh2_table(idxH2,2))) &
-      * (logeffcNH2 - log10(sh2_table(idxH2,1))) &
-      / (log10(sh2_table(idxH2+1,1)) - log10(sh2_table(idxH2,1)))
-
-      ss_factor = ss_factor * (10.d0 ** logsH2)
-  end if
-
+     lcol = log10(col)
+     w = (lcol - log10(grid(i))) / (log10(grid(i+1)) - log10(grid(i)))
+  end subroutine visser_index
 END FUNCTION comp_SCO
 
 

@@ -195,21 +195,7 @@ contains
         end if
 #endif
 
-        ! 3. H2 shielding
-        f_shd = 1.d0
-#ifdef RTZ
-        if (isH2_rtz) then
-           dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
-           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3),dx) * &
-                   comp_Sd(nElement(1)*xion(1,1),0.5d0*nElement(1)*xion(1,3),dx,dtg_mw)
-        end if
-#else
-        ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
-        ! LW-band gas opacity in _force, which is inert unless isH2 and some
-        ! group is flagged LW.
-#endif
-
-        ! 4. Electron density
+        ! 3. Electron density
 #ifdef RTZ
         ne = getNe(xion, nElement)
 #else
@@ -217,7 +203,7 @@ contains
         if (isHe) ne = ne + nHe_loc*(xHeII_loc + 2d0*xHeIII_loc)
 #endif
 
-        ! 5. Temperature
+        ! 4. Temperature
         P_gas = (gamma - 1) * (cell_state(neul) - 0.5_dp * sum(cell_state(2:ndim+1)**2) / cell_state(1))
 #if NENER > 0
         do counter = 1, nener
@@ -242,7 +228,21 @@ contains
 #endif
         Tk = P_gas / rho_loc * scale_T2 * mu
 
-        ! 6. Habing band radiation field G0
+        ! H2 shielding (as rtz_cool_step, isotropic: Wolcott-Green et al. 2011 at Tk, MW dust of
+        ! Draine & Bertoldi 1996 on the total hydrogen column, over the cell)
+        f_shd = 1.d0
+#ifdef RTZ
+        if (isH2_rtz) then
+           dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
+           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3), dx, Tk) * comp_Sd(nElement(1), dx, dtg_mw)
+        end if
+#else
+        ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
+        ! LW-band gas opacity in _force, which is inert unless isH2 and some
+        ! group is flagged LW.
+#endif
+
+        ! 5. Habing band radiation field G0
 #ifdef RTZ
         G0 = rtz_UV_background_G0
 #else
@@ -288,13 +288,13 @@ contains
                                            sig_R_pah,  sig_P_pah, T_rad_loc)
         end if
 
-        ! 7. Call compute_gas_dust_radpressure_force
+        ! 6. Call compute_gas_dust_radpressure_force
         call compute_gas_dust_radpressure_force(cell_rt_state, ilevel, sig_R_dust, sig_R_pah, &
             gas_force, dust_force, pah_force, &
             nElement, xion, rho_dust, rho_pah, &
             Tk, ne, G0, f_shd)
 
-        ! 8. Calculate accelerations. The PAHs drift as TVA species, so the gas phase is the
+        ! 7. Calculate accelerations. The PAHs drift as TVA species, so the gas phase is the
         ! mixture without the dust and the PAHs
         rho_gas_tva = rho_gas
 #if NPAH>0
