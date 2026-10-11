@@ -951,7 +951,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! formula needs; dust_to_gas_mass_ratio_over_mw is dust-to-GAS, and the two
       ! differ by Z/Zsun (see the comment at the depletion loop below).
       real(dp):: Z_over_Zsun, dust_to_metal_over_mw
-      real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
+      real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO, sh2_loc
       real(dp):: tau_dust_LW
       integer :: nlw, ig_lw
       real(dp), dimension(nGroups) :: tau_lw_g, f_lw_g
@@ -1129,8 +1129,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          tau_dust_LW = tau_dust_lw_mw(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw)
 #endif
       end if
-      if (isH2_rtz) f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK) &
-                          * lw_transmission(tau_dust_LW, 0d0)
+      ! local H2 line self-shielding; none when the RT carries it (rtz_h2_lw_sigma_abs > 0)
+      sh2_loc = 1d0
+      if (isH2_rtz .and. rtz_h2_lw_sigma_abs .le. 0d0) &
+         sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK)
+      if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
       if (isCO_rtz) then
          ! rtz_shielding_config 0,1: no CO shielding (f_shd_CO stays 1); 2: CO line shielding only;
          ! 3 [default]: line shielding and dust, exp(-3.53 A_V) for CO (co_dust_to_lw)
@@ -1301,7 +1304,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Deal with molecules separately
                if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-                  if (isLW(igroup).eq.1) then
+                  if (isLW(igroup).eq.1 .and. rtz_h2_lw_sigma_abs .gt. 0d0) then
+                     ! Nickerson+18: H2 removes many more LW photons than it dissociates (line overlap)
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * rtz_h2_lw_sigma_abs * rt_c_cgs(ilevel)
+                  else if (isLW(igroup).eq.1) then
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
                   else
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
@@ -1482,7 +1488,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                trans_lw_co = trans_lw_co + lw_transmission(co_dust_to_lw * tau_lw_g(ig_lw), f_lw_g(ig_lw))
             end do
             trans_lw = trans_lw / nlw; trans_lw_co = trans_lw_co / nlw
-            if (isH2_rtz) f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK) * trans_lw
+            if (isH2_rtz) f_shd = sh2_loc * trans_lw
             if (isCO_rtz .and. rtz_shielding_config .ge. 3) &
                f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * trans_lw_co
          end if

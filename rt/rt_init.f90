@@ -193,6 +193,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,cosmic_rays                                                    &
 #ifdef RTZ
        & ,rtz_cooling, rtz_equilibrium_test, rtz_shielding_config         &
+       & ,rtz_h2_lw_sigma_abs                                             &
        & ,rtz_include_collisional_ionization, rtz_include_photoionization&
        & ,rtz_include_cosmic_ray_ionization, rtz_include_charge_exchange &
        & ,rtz_include_dust_recombination, rtz_include_HM12_UVB           &
