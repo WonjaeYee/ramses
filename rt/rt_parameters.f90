@@ -221,8 +221,12 @@ module rt_parameters
   ! the LW group (CRISpy lw_band; RAMSES_dev/h2_lines/export_sigma_abs_table.py): sigma_abs = sigma_g/G,
   ! G = sigma_g int f_diss exp(-2 sigma_g N2) dN2 (Sternberg et al. 2014) at the cell's T, n_H, LW field
   ! and dust LW cross-section sigma_g, so that the grey photon budget gives the H I column of the line
-  ! data. Set: used instead of rtz_h2_lw_sigma_abs. '' [default]: off.
+  ! data. Several LW groups (same band) are the terms of an exponential-sum fit of the shielding, each with
+  ! its k_i; the source must split its LW photons by the table's w_i. Set: used instead of
+  ! rtz_h2_lw_sigma_abs. '' [default]: off.
   character(len=256)::rtz_h2_band_file=''
+  ! With several LW groups, take the field chi for the table from the last (tail) group, N_tail/w_tail
+  logical::rtz_h2_tail_chi=.false.
   logical::rtz_include_collisional_ionization=.true.
   logical::rtz_include_photoionization=.true.
   logical::rtz_include_cosmic_ray_ionization=.true.

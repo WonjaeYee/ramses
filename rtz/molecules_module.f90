@@ -7,7 +7,7 @@ module molecules_module
   private  ! everything is private by default
   public :: alpha_H2, beta_H2_umist, beta_H2, beta_H2_krome, alpha_CO, beta_CO, alpha_H2_prim, alpha_H2_dust
   public :: comp_SH2, comp_Sd, comp_SCO, lw_transmission, tau_dust_lw_mw, co_dust_to_lw
-  public :: h2_band_lookup
+  public :: h2_band_lookup, h2_band_split
 
   ! Dust attenuation in the Lyman-Werner band (1000 A) per H nucleus, for MW dust (R_V = 3.1), on the
   ! total hydrogen column N(H) + 2N(H2) + N(H+): Draine & Bertoldi (1996, Sect. 2.4), an effective
@@ -19,12 +19,13 @@ module molecules_module
 
 #include "co_shield_visser09.inc"
 
-  ! Grey H2 scheme from line-by-line transfer (rtz_h2_band_file): log10 sigma_d [cm^2] on (chi, n_H, T)
-  ! and log10 sigma_abs [cm^2] on (sigma_g, chi, n_H, T); axes in log10
+  ! Grey H2 scheme from line-by-line transfer (rtz_h2_band_file): the shielding fitted by an exponential
+  ! sum over hb_nk LW groups, f_diss ~ sum_i w_i exp(-k_i N2) (w_i the photon split, set at the source);
+  ! log10 sigma_d [cm^2] on (chi, n_H, T) and log10 k_i [cm^2] on (sigma_g, chi, n_H, T); axes in log10
   logical, save :: hb_loaded = .false.
-  integer, save :: hb_nT, hb_nden, hb_nchi, hb_nsg
-  real(dp), allocatable, save :: hb_lT(:), hb_lden(:), hb_lchi(:), hb_lsg(:)
-  real(dp), allocatable, save :: hb_lsd(:,:,:), hb_lsab(:,:,:,:)
+  integer, save :: hb_nT, hb_nden, hb_nchi, hb_nsg, hb_nk
+  real(dp), allocatable, save :: hb_w(:), hb_lT(:), hb_lden(:), hb_lchi(:), hb_lsg(:)
+  real(dp), allocatable, save :: hb_lsd(:,:,:), hb_lk(:,:,:,:,:)
 
 CONTAINS
 
@@ -443,25 +444,32 @@ SUBROUTINE h2_band_load()
      stop
   end if
   read(u,*)                                   ! header line
-  read(u,*) hb_nT, hb_nden, hb_nchi, hb_nsg
-  allocate(hb_lT(hb_nT), hb_lden(hb_nden), hb_lchi(hb_nchi), hb_lsg(hb_nsg))
-  allocate(hb_lsd(hb_nchi,hb_nden,hb_nT), hb_lsab(hb_nsg,hb_nchi,hb_nden,hb_nT))
+  read(u,*) hb_nT, hb_nden, hb_nchi, hb_nsg, hb_nk
+  allocate(hb_w(hb_nk), hb_lT(hb_nT), hb_lden(hb_nden), hb_lchi(hb_nchi), hb_lsg(hb_nsg))
+  allocate(hb_lsd(hb_nchi,hb_nden,hb_nT), hb_lk(hb_nsg,hb_nchi,hb_nden,hb_nT,hb_nk))
+  read(u,*) hb_w
   read(u,*) hb_lT; read(u,*) hb_lden; read(u,*) hb_lchi; read(u,*) hb_lsg
-  read(u,*) hb_lsd; read(u,*) hb_lsab
+  read(u,*) hb_lsd; read(u,*) hb_lk
   close(u)
+  write(*,'(A,I2,A,*(ES11.4))') ' h2_band_load: ', hb_nk, ' LW group(s), photon split ', hb_w
   hb_loaded = .true.
 END SUBROUTINE h2_band_load
 
-SUBROUTINE h2_band_lookup(T, nH, chi, sg, sigabs, sigd)
-  ! sigma_abs and sigma_d [cm^2] at temperature T, hydrogen density nH, LW field chi (Draine units,
-  ! 11.2-13.6 eV photons) and dust LW cross-section sg [cm^2 per H]: linear in log10, clamped at the
-  ! edges of the table
+SUBROUTINE h2_band_lookup(T, nH, chi, sg, nk, kabs, sigd)
+  ! H2 absorption cross-sections k_i of the nk LW groups and sigma_d [cm^2] at temperature T, hydrogen
+  ! density nH, LW field chi (Draine units, 11.2-13.6 eV photons) and dust LW cross-section sg [cm^2 per
+  ! H]: linear in log10, clamped at the edges of the table; nk must be that of the table
   implicit none
   real(dp), intent(in) :: T, nH, chi, sg
-  real(dp), intent(out) :: sigabs, sigd
+  integer, intent(in) :: nk
+  real(dp), intent(out) :: kabs(nk), sigd
   integer :: iT, idn, ic, isg, a, b2, c2, d
-  real(dp) :: wT, wden, wc, wsg, w, sa, ss
+  real(dp) :: wT, wden, wc, wsg, w, sa(nk), ss
   if (.not. hb_loaded) call h2_band_load()
+  if (nk /= hb_nk) then
+     write(*,*) 'h2_band_lookup: ', nk, ' LW groups in the run but ', hb_nk, ' in rtz_h2_band_file'
+     stop
+  end if
   call hb_index(log10(max(T, 1d-30)), hb_lT, hb_nT, iT, wT)
   call hb_index(log10(max(nH, 1d-30)), hb_lden, hb_nden, idn, wden)
   call hb_index(log10(max(chi, 1d-30)), hb_lchi, hb_nchi, ic, wc)
@@ -471,10 +479,10 @@ SUBROUTINE h2_band_lookup(T, nH, chi, sg, sigabs, sigd)
      w = merge(wT, 1d0-wT, a==1) * merge(wden, 1d0-wden, b2==1) * merge(wc, 1d0-wc, c2==1)
      ss = ss + w * hb_lsd(ic+c2, idn+b2, iT+a)
      do d = 0, 1
-        sa = sa + w * merge(wsg, 1d0-wsg, d==1) * hb_lsab(isg+d, ic+c2, idn+b2, iT+a)
+        sa = sa + w * merge(wsg, 1d0-wsg, d==1) * hb_lk(isg+d, ic+c2, idn+b2, iT+a, :)
      end do
   end do; end do; end do
-  sigabs = 10d0**sa; sigd = 10d0**ss
+  kabs = 10d0**sa; sigd = 10d0**ss
 contains
   subroutine hb_index(x, grid, n, i, wgt)
     real(dp), intent(in) :: x, grid(:)
@@ -494,5 +502,14 @@ contains
     end if
   end subroutine hb_index
 END SUBROUTINE h2_band_lookup
+
+FUNCTION h2_band_split(i) result(w)
+  ! Photon split w_i of LW group i (the table's exponential-sum weight, set at the source)
+  implicit none
+  integer, intent(in) :: i
+  real(dp) :: w
+  if (.not. hb_loaded) call h2_band_load()
+  w = hb_w(i)
+END FUNCTION h2_band_split
 
 end module molecules_module

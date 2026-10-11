@@ -957,8 +957,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp), dimension(nGroups) :: tau_lw_g, f_lw_g
       real(dp) :: trans_lw, trans_lw_co
       logical :: h2_derived
-      integer :: ilw_g
-      real(dp) :: chi_lw, hb_sab, hb_sd, sg_loc
+      integer :: ilw_g, nlw_h2, ik
+      integer, dimension(nGroups) :: lw_rank
+      real(dp) :: chi_lw, hb_sd, sg_loc
+      real(dp), dimension(nGroups) :: hb_k
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -1144,13 +1146,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef RT
       h2_derived = isH2_rtz .and. rt_advect .and. len_trim(rtz_h2_band_file) > 0
       if (h2_derived) then
-         ilw_g = 0
+         ! the LW groups in their RT order are the terms of the table's exponential sum (lw_rank)
+         ilw_g = 0; nlw_h2 = 0; lw_rank = 0; chi_lw = 0d0
          do igroup = 1, nGroups
-            if (isLW(igroup) == 1 .and. ilw_g == 0) ilw_g = igroup
+            if (isLW(igroup) == 1) then
+               nlw_h2 = nlw_h2 + 1; lw_rank(igroup) = nlw_h2
+               if (ilw_g == 0) ilw_g = igroup
+               chi_lw = chi_lw + dNp(igroup) * rt_c_cgs(ilevel) / 2.06d7
+               ! several groups: the field that pumps the H2 is the incident one attenuated by dust, which
+               ! the last (tail, least H2-absorbed) group measures; the summed flux collapses once the
+               ! H2 has taken the line-core group
+               if (rtz_h2_tail_chi .and. nlw_h2 > 1) &
+                  chi_lw = dNp(igroup) * rt_c_cgs(ilevel) / (2.06d7 * h2_band_split(nlw_h2))
+            end if
          end do
-         chi_lw = dNp(ilw_g) * rt_c_cgs(ilevel) / 2.06d7
-         call h2_band_lookup(TK, nElement_dep(1), chi_lw, 1.9d-21, hb_sab, hb_sd)
-         sh2_loc = hb_sd * rt_c_cgs(ilevel) / signc(ilw_g,1,3)
+         call h2_band_lookup(TK, nElement_dep(1), chi_lw, 1.9d-21, nlw_h2, hb_k(1:nlw_h2), hb_sd)
+         sh2_loc = hb_sd * rt_c_cgs(ilevel) / signc(ilw_g,1,3)   ! every LW group dissociates with sigma_d
          f_shd = sh2_loc
       end if
 #endif
@@ -1325,10 +1336,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Deal with molecules separately
                if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
                   if (isLW(igroup).eq.1 .and. h2_derived) then
-                     ! sigma_abs = sigma_g / G at the dust LW cross-section the RT applies here
+                     ! k_i of this group's term at the dust LW cross-section the RT applies here (one
+                     ! group: k = sigma_g / G - 2 sigma_g, Sternberg+14 G of the line-by-line shielding)
                      sg_loc = dustAbs(igroup) / (rt_c_cgs(ilevel) * nElement_dep(1))
-                     call h2_band_lookup(TK, nElement_dep(1), chi_lw, sg_loc, hb_sab, hb_sd)
-                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * hb_sab * rt_c_cgs(ilevel)
+                     call h2_band_lookup(TK, nElement_dep(1), chi_lw, sg_loc, nlw_h2, hb_k(1:nlw_h2), hb_sd)
+                     ik = lw_rank(igroup)
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * hb_k(ik) * rt_c_cgs(ilevel)
                   else if (isLW(igroup).eq.1 .and. rtz_h2_lw_sigma_abs .gt. 0d0) then
                      ! Nickerson+18: H2 removes many more LW photons than it dissociates (line overlap)
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * rtz_h2_lw_sigma_abs * rt_c_cgs(ilevel)
