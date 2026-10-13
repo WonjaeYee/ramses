@@ -462,7 +462,7 @@ subroutine init_flow_fine(ilevel)
                  uold(ind_cell(i),ivar)=rr*uold(ind_cell(i),ivar)
               end do
            end do
-#if defined(RTZ) && !defined(SOLVERmhd)
+#ifdef RTZ
            ! ion slots: x_ion*rho -> x_ion*rho_element
            do jps=1,ps_npar
               do kps=ps_cstart(jps),ps_cstart(jps+1)-1
@@ -512,7 +512,7 @@ subroutine init_flow_fine(ilevel)
            end do
            ! Call initial condition routine
            call condinit(xx,uu,dx_loc,ngrid)
-#if defined(RTZ) && !defined(SOLVERmhd)
+#ifdef RTZ
            ! condinit gives x_ion*rho for the ions: store x_ion*rho_element
            call ps_frac_to_mass(uu,ngrid)
 #endif

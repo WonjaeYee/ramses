@@ -122,7 +122,7 @@ subroutine dump_all
      filename=TRIM(filedir)//'hydro_'//TRIM(nchar)//'.out'
      filename_desc = trim(filedir)//'hydro_file_descriptor.txt'
      call backup_hydro(filename, filename_desc)
-#if defined(RTZ) && !defined(SOLVERmhd)
+#ifdef RTZ
      ! passive-scalar consistency since the previous output
      if(rt.or.neq_chem)call ps_report
 #endif

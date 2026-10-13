@@ -9,7 +9,7 @@ module hydro_commons
   real(dp)::mass_tot=0,mass_tot_0=0
   real(dp)::ana_xmi,ana_xma,ana_ymi,ana_yma,ana_zmi,ana_zma
   integer::nbins
-  ! Passive-scalar constraint tree (init_passive_groups, hydro/godunov_utils.f90):
+  ! Passive-scalar constraint tree (init_passive_groups, hydro/cooling_fine.f90):
   ! the ps_ntop "top" slots sum to rho; parent ps_par(j) is the sum of the slots
   ! ps_child(ps_cstart(j):ps_cstart(j+1)-1); ps_gas are the gas-phase slots (elements,
   ! CO, ions, H2) that carry the counter-flux of the TVA drift.

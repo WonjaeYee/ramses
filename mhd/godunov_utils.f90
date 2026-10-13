@@ -16,7 +16,7 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   implicit none
   ! dummy arguments
   integer nn,ilevel
-#if NENER>0
+#if NENER>0 || NVAR>NHYDRO+NENER
   integer::irad
 #endif
   real(dp)::ug(1:nvector,1:nvar+3)
@@ -205,9 +205,16 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   ! Ionization state (only Hydrogen)
   if(rt_err_grad_xHII >= 0. .and. ok_xH) then !---------------------------
      do k=1,nn
+#ifdef RTZ
+        ! RTZ: the HI and HII slots hold x*rho_H
+        dg=min(1d0,max(0d0,ug(k,iHII)/max(ug(k,elements(1)%u_hydro_idx),1d-30)))
+        dm=min(1d0,max(0d0,um(k,iHII)/max(um(k,elements(1)%u_hydro_idx),1d-30)))
+        dd=min(1d0,max(0d0,ud(k,iHII)/max(ud(k,elements(1)%u_hydro_idx),1d-30)))
+#else
         dg=min(1d0,max(0d0,ug(k,iHII)))
         dm=min(1d0,max(0d0,um(k,iHII)))
         dd=min(1d0,max(0d0,ud(k,iHII)))
+#endif
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHII)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHII)) )
@@ -219,10 +226,10 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   if(rt_err_grad_xHI  >= 0. .and. ok_xH) then !---------------------------
      do k=1,nn
 #ifdef RTZ
-        ! H I has its own slot in RTZ (1 - xHII would count H2 as H I)
-        dg=min(1d0,max(0d0,ug(k,iIons)))
-        dm=min(1d0,max(0d0,um(k,iIons)))
-        dd=min(1d0,max(0d0,ud(k,iIons)))
+        ! H I has its own slot in RTZ (1 - xHII would count H2 as H I), holding x*rho_H
+        dg=min(1d0,max(0d0,ug(k,iIons)/max(ug(k,elements(1)%u_hydro_idx),1d-30)))
+        dm=min(1d0,max(0d0,um(k,iIons)/max(um(k,elements(1)%u_hydro_idx),1d-30)))
+        dd=min(1d0,max(0d0,ud(k,iIons)/max(ud(k,elements(1)%u_hydro_idx),1d-30)))
 #else
         dg=min(1d0,max(0d0,1d0 - ug(k,iIons)))
         dm=min(1d0,max(0d0,1d0 - um(k,iIons)))

@@ -234,7 +234,6 @@ subroutine backup_hydro(filename, filename_desc)
                        if (ivar.eq.counter + iIons + 1) field_name = 'H2'
                     end if
 
-#ifndef SOLVERmhd
                     ! An ion slot holds x_ion*rho_element: dump the ionisation
                     ! fraction x_ion (what u/rho was in the former convention)
                     do jps=1,ps_npar
@@ -250,7 +249,6 @@ subroutine backup_hydro(filename, filename_desc)
                           end if
                        end do
                     end do
-#endif
 
                  else
                     write(field_name, '("scalar_", i0.2)') ivar - nhydro - 1 - nener
