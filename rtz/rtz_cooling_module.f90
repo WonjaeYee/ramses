@@ -30,10 +30,11 @@ module rtz_cooling_module
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
-   real(dp),parameter::T_min=0.1, T_frac=0.1
-   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6, x_frac=0.1
-   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
-   real(dp),parameter::Fp_frac=0.5
+   real(dp),parameter::T_min=0.1
+   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6
+   real(dp),parameter::Np_min=1d-13
+   ! The substep tolerances T_frac, x_frac, Np_frac, Fp_frac are namelist parameters now
+   ! (rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac in &RT_PARAMS, rt_parameters.f90)
    real(dp),dimension(nGroups, 3)::signc_dust
    real(dp), save :: t_rad = 0.0_dp
    real(dp), save :: t_cool = 0.0_dp
@@ -277,11 +278,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    call rtz_updateRTGroups_CoolConstants(ilevel)
 #endif
    ! Store some temporary variables reduce computations
-   one_over_T_FRAC = 1d0 / T_FRAC
-   one_over_x_FRAC = 1d0 / x_FRAC
+   one_over_T_FRAC = 1d0 / rtz_T_frac
+   one_over_x_FRAC = 1d0 / rtz_x_frac
 #ifdef RT
-   one_over_Np_FRAC = 1d0 / Np_FRAC
-   one_over_Fp_FRAC = 1d0 / Fp_FRAC
+   one_over_Np_FRAC = 1d0 / rtz_Np_frac
+   one_over_Fp_FRAC = 1d0 / rtz_Fp_frac
    one_over_rt_c_cgs = 1d0 / rt_c_cgs(ilevel)
    group_egy_erg(1:nGroups) = group_egy(1:nGroups) * eV2erg
    if(rt_isIR) then
