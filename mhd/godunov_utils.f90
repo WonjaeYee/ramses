@@ -9,11 +9,14 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   use const
 #ifdef RT
   use rt_parameters
+#ifdef RTZ
+  use rtz_module, only: elements
+#endif
 #endif
   implicit none
   ! dummy arguments
   integer nn,ilevel
-#if NENER>0
+#if NENER>0 || NVAR>NHYDRO+NENER
   integer::irad
 #endif
   real(dp)::ug(1:nvector,1:nvar+3)
@@ -188,9 +191,16 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   ! Ionization state (only Hydrogen)
   if(rt_err_grad_xHII >= 0.) then !---------------------------------------
      do k=1,nn
+#ifdef RTZ
+        ! RTZ: HI then HII slots, each holding x*rho_H
+        dg=min(1d0,max(0d0,ug(k,iIons+1)/max(ug(k,elements(1)%u_hydro_idx),1d-30)))
+        dm=min(1d0,max(0d0,um(k,iIons+1)/max(um(k,elements(1)%u_hydro_idx),1d-30)))
+        dd=min(1d0,max(0d0,ud(k,iIons+1)/max(ud(k,elements(1)%u_hydro_idx),1d-30)))
+#else
         dg=min(1d0,max(0d0,ug(k,iIons)))
         dm=min(1d0,max(0d0,um(k,iIons)))
         dd=min(1d0,max(0d0,ud(k,iIons)))
+#endif
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHII)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHII)) )
@@ -201,9 +211,15 @@ subroutine hydro_refine(ug,um,ud,ok,nn,ilevel)
   ! Neutral state (only Hydrogen)
   if(rt_err_grad_xHI  >= 0.) then !---------------------------------------
      do k=1,nn
+#ifdef RTZ
+        dg=min(1d0,max(0d0,ug(k,iIons)/max(ug(k,elements(1)%u_hydro_idx),1d-30)))
+        dm=min(1d0,max(0d0,um(k,iIons)/max(um(k,elements(1)%u_hydro_idx),1d-30)))
+        dd=min(1d0,max(0d0,ud(k,iIons)/max(ud(k,elements(1)%u_hydro_idx),1d-30)))
+#else
         dg=min(1d0,max(0d0,1d0 - ug(k,iIons)))
         dm=min(1d0,max(0d0,1d0 - um(k,iIons)))
         dd=min(1d0,max(0d0,1d0 - ud(k,iIons)))
+#endif
         error=2.0d0*MAX( &
              & ABS((dd-dm)/(dd+dm+rt_floor_xHI)) , &
              & ABS((dm-dg)/(dm+dg+rt_floor_xHI)) )

@@ -215,7 +215,7 @@ subroutine make_boundary_hydro(ilevel)
               end do
 
               call boundana(xx,uu,dx_loc,ibound,ngrid)
-#if defined(RTZ) && !defined(SOLVERmhd)
+#ifdef RTZ
               ! boundary_var holds x_ion*rho for the ions: store x_ion*rho_element
               call ps_frac_to_mass(uu,ngrid)
 #endif
