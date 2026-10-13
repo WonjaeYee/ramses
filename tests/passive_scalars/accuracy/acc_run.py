@@ -1,6 +1,6 @@
 """Run a matrix of advection-accuracy cases and collect the errors.
 
-    acc_run.py --matrix full|nightly --out OUT --builds BUILDS [--tree TREE] [-j 8] [--keep] [--only SUBSTR]
+    acc_run.py --matrix full|nightly --out OUT --builds BUILDS [--tree TREE] [-j 8] [--keep] [--only S1,S2]
 
 BUILDS/<solver>_<ndim>d/ramses_acc<ndim>d are the executables; with --tree, the missing ones are built from
 TREE (acc_build.sh).  Every case runs in OUT/runs/<case>/ (snapshots deleted after the check unless --keep;
@@ -70,7 +70,8 @@ def main():
     ap.add_argument("--only", default="")
     ap.add_argument("--timeout", type=float, default=600)
     a = ap.parse_args()
-    cases = [c for c in A.matrix(a.matrix) if a.only in A.case_name(c)]
+    only = a.only.split(",")
+    cases = [c for c in A.matrix(a.matrix) if any(o in A.case_name(c) for o in only)]
     exes = {}
     for c in cases:
         key = (c["solver"], c["ndim"])
