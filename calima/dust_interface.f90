@@ -255,6 +255,12 @@ contains
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
                                           rtgroups_predict, rtgroups_coulomb_ratio
         use amr_commons, only: myid
+#ifdef RT
+        use rt_parameters, only: rt_isIR
+#ifdef RTZ
+        use rt_parameters, only: rtz_equilibrium_test, rtz_single_cell_test
+#endif
+#endif
 
         implicit none
 
@@ -272,6 +278,8 @@ contains
         real(dp) :: nHI
         integer :: n_charge
         logical :: use_rtg, no_local, use_isrf, predict, ok, skip_coulomb
+        logical :: need_T, need_Z   ! the grain temperature, the grain charge, are used
+        logical, save :: cm_known = .false., cm_rt = .false., cm_isrf = .false.
         real(dp), dimension(1:ndust) :: isrf_G, isrf_L         ! WDB06isrf: PE heating, recombination cooling
         real(dp), dimension(ISRF_ND, 1:ndust) :: isrf_D        ! WDB06isrf: Coulomb factors over the exact P(Z)
         ! WDB06rt Coulomb factors of the low impactor charges: 1 the Gaussian ones times rtg_D (the
@@ -294,10 +302,31 @@ contains
         real(kind=8) :: wallclock
 
         if (dinfo%ndust > 0) then
+            ! The grain temperature and charge only where something uses them: T_dust in the gas-grain
+            ! collisional heating, H2 formation, the dust and PAH processes, the dust IR emission and
+            ! the equilibrium-test output; the charge in those (through the T_dust balance), the PE
+            ! heating and recombination cooling, the Coulomb factors, the grain-assisted recombination
+            ! and charged sputtering. Otherwise both were solved in every RTZ substep and discarded
+            ! (the TVA Draine drag solves its own charge, dust_radpressure).
+            need_T = dust_coll_cooling .or. H2ondust .or. ndust_processes > 0 .or. npah_processes > 0
+#ifdef RT
+            need_T = need_T .or. rt_isIR
+#ifdef RTZ
+            need_T = need_T .or. rtz_equilibrium_test > 0 .or. rtz_single_cell_test
+#endif
+#endif
+            need_Z = need_T .or. dust_pe_heating .or. Coulomb_precompute .or. dust_ion_recombination &
+                     .or. dust_sputtering_charge
             ! 1. Compute the equilibrium dust charge
             if (dust_charging_timer) t0 = wallclock()
-            use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
-            use_isrf = trim(charging_model) == 'WDB06isrf'
+            if (.not. cm_known) then
+                ! charging_model is fixed for the run: compare the strings once, not per cell and substep
+                cm_rt = trim(charging_model) == 'WDB06rt'
+                cm_isrf = trim(charging_model) == 'WDB06isrf'
+                cm_known = .true.
+            end if
+            use_rtg = cm_rt .and. present(Np) .and. need_Z
+            use_isrf = cm_isrf .and. need_Z
             alpha_bins = 0d0
             if (use_rtg) then
                 ! Local-field charge balance on the RT photon groups (WDB06 yields),
@@ -453,7 +482,7 @@ contains
                     end if
                 end do
                 if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
-            else
+            else if (need_Z) then
                 idx_g = -1
                 idx_T = -1
                 do ii = 1, dinfo%ndust
@@ -549,7 +578,9 @@ contains
             if (dust_charging_timer) tchg = tchg + (wallclock() - t0)
 
             ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
-            if (td_served()) then
+            if (.not. need_T) then
+                ! nothing uses T_dust, P_rad or the collisional heating (0 without dust_coll_cooling)
+            else if (td_served()) then
                 ! the cooling solver's T(1 +- 1e-5) call: first order from the last update_T_dust
                 call serve_T_dust(td_lin,Tk,dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Z_dust(:),dinfo%Pcoll_dust(:),&
                                   dinfo%Prad_dust(:),dinfo%T_dust(:))
