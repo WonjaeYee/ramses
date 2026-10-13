@@ -1197,10 +1197,12 @@ module dust_init
                     allocate(dustbins_props(ii)%vthresh_coag(1))
                     allocate(dustbins_props(ii)%k0_coa(1))
                     dustbins_props(ii)%idend_coag(1) = ii + 1
-                    ! Compute the threshold velocity for coagulation (Choski et al. 1993)
+                    ! Compute the threshold velocity for coagulation (Chokshi et al. 1993; Hirashita & Yan
+                    ! 2009 eq. 8): v ~ gamma^(5/6) / (E^(1/3) R^(5/6) s^(1/2)), the only power of the surface
+                    ! energy gamma that gives cm/s
                     R = 0.5d0 * dustbins_props(ii)%asize_cm
                     dustbins_props(ii)%vthresh_coag(1) = &
-                        & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/3d0) &
+                        & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/6d0) &
                         & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
                         & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
                     dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
@@ -1232,13 +1234,15 @@ module dust_init
                             end if
                         end do
                         dustbins_props(ii)%idend_coag(kk_loc) = idest
-                        ! Compute the threshold velocity for coagulation (Choski et al. 1993)
+                        ! Compute the threshold velocity for coagulation (Chokshi et al. 1993; Hirashita & Yan
+                        ! 2009 eq. 8): v ~ gamma^(5/6) / (E^(1/3) R^(5/6) s^(1/2)), the only power of the surface
+                        ! energy gamma that gives cm/s
                         R = (dustbins_props(ii)%asize_cm * dustbins_props(jbin)%asize_cm) &
                             & / (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)
                         dustbins_props(ii)%vthresh_coag(kk_loc) = &
                             & 21.4d0 * sqrt((dustbins_props(ii)%asize_cm**3d0+dustbins_props(jbin)%asize_cm**3d0)/&
                             & (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**3d0) &
-                            & * dustbins_props(ii)%surf_energy**(5d0/3d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
+                            & * dustbins_props(ii)%surf_energy**(5d0/6d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
                         dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
                                                     & / (dustbins_props(ii)%mgrain * dustbins_props(jbin)%mgrain / (dustbins_props(ii)%mgrain + dustbins_props(jbin)%mgrain)) ! [cm3/s/g]
