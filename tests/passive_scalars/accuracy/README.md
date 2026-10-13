@@ -53,7 +53,7 @@ has 52 cases that run in a few seconds.
 
 - **Scalar flux by Riemann solver:**
   - hllc, exact and acoustic (hydro), and hlld and roe (MHD), upwind the scalar by the contact speed.
-  - llf and hll flux it with the acoustic (fast) wave speeds. Their scalar diffusion scales with c_s, not v: at Mach 0.1, N = 128, D_num is 5x hllc's at first order, 9x with minmod and 30x with MC.
+  - llf and hll flux it with the acoustic (fast) wave speeds. Their scalar diffusion scales with c_s, not v: at Mach 0.1, N = 128, D_num is about 11x hllc's at first order (theory), 8-9x with minmod and 21-23x with MC.
   - hll is upwind once the flow is supersonic (S_L = 0).
 - **MHD `riemann='upwind'`** calls the Lax-Friedrichs flux for the faces (`iriemann=4` in `mhd/umuscl.f90`). For the scalars it is llf.
 - **slope_type 5 (ultrabee) and 6 (unlimited)** act on the density only; every other variable, the scalars included, gets a zero slope. For passive scalars they are first order.
