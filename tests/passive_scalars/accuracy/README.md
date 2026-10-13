@@ -64,5 +64,5 @@ has 52 cases that run in a few seconds.
   - Upwind fluxes make none (`acc_compare.py` "monotone").
 - **slope_type 8 uses theta = 1.5:** `slope_theta` is not in the `hydro_params` namelist.
 - **Building:**
-  - MHD with passive scalars needs NENER > 0: `irad` in `mhd/godunov_utils.f90` is declared only for NENER > 0.
+  - MHD with passive scalars and NENER=0 did not compile (`irad` in `mhd/godunov_utils.f90` was declared only for NENER > 0). This is fixed on feature/passive-scalar-cma (fcbbe38a); the tests still build MHD with NENER=1, which works on any tree.
   - `slope_mag_type` defaults to `slope_type` and has no 3, so MHD 2-D with slope_type 3 needs `slope_mag_type` set.
