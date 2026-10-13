@@ -1690,7 +1690,9 @@ module dust_optics
         ! nHI                  : HI number density  [cm^-3]  -- fallback only
         ! nH2                  : H2 molecule number density  [cm^-3]  -- fallback only
         ! tau_LW               : output LW optical depth  [dimensionless]
+#ifdef RT
         use rt_parameters, only: isLW
+#endif
         implicit none
         real(dp), intent(in)  :: rho_dust_cell(ndust)
         real(dp), intent(in)  :: dx, dust_to_gas_mw, nHI, nH2
@@ -1698,6 +1700,7 @@ module dust_optics
         integer :: i, ig
 
         tau_LW = 0d0
+#ifdef RT
         do i = 1, ndust
             if (dustbins_props(i)%mgrain > 0d0) then
                 do ig = 1, size(group_csa_dust, 2)
@@ -1708,6 +1711,7 @@ module dust_optics
                 end do
             end if
         end do
+#endif
         ! Fall back to fixed cross-section when no LW groups are present.
         ! sigma_eff = 2.34e-21 cm^2/H (bare graphite-silicate, Gnedin & Kravtsov 2009).
         if (tau_LW .eq. 0d0) then
@@ -1744,7 +1748,9 @@ module dust_optics
         ! has_lw_groups (out) : .true. if at least one RT group has isLW=1.
         !                       When .false., the caller should retain the result of
         !                       compute_lw_dust_optical_depth (grain cross-section formula).
+#ifdef RT
         use rt_parameters, only: isLW
+#endif
         implicit none
         real(dp), intent(in)  :: dustAbs_in(:)   ! [s^-1], size nGroups
         real(dp), intent(in)  :: rad_ani(:)       ! [0,1],  size nGroups
@@ -1760,6 +1766,7 @@ module dust_optics
 
         if (local_c <= 0d0) return
 
+#ifdef RT
         do ig = 1, size(dustAbs_in)
             if (isLW(ig) .eq. 1) then
                 has_lw_groups = .true.
@@ -1768,6 +1775,7 @@ module dust_optics
                 tau_LW  = tau_LW + (2.0d0 - f_ani) * tau_abs
             end if
         end do
+#endif
     end subroutine compute_lw_tau_effective
 
 end module dust_optics
