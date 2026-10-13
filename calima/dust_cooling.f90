@@ -41,7 +41,7 @@ module dust_cooling
         implicit none
 
         integer :: iel, i
-        real(dp) :: agrain, mproj
+        real(dp) :: agrain, mproj, msurf
 
         if (bh80_cache_ready) return
 
@@ -67,9 +67,14 @@ module dust_cooling
             agrain = dustbins_props(i)%asize_cm
             bh80_h2_prefactor(i) = sqrt(8d0*kB/(pi*2d0*mH)) * pi * agrain**2d0
             bh80_co_prefactor(i) = sqrt(8d0*kB/(pi*(mC_amu+mO_amu)*amu2g)) * pi * agrain**2d0
-            ! BH83 accommodation coefficient: alpha_0 = 4*m_proj*m_grain/(m_proj+m_grain)^2
-            bh80_h2_accomm_zero(i) = 8d0 * mH * dustbins_props(i)%mgrain / (2d0*mH + dustbins_props(i)%mgrain)**2d0
-            bh80_h_accomm_zero(i) = 4d0 * mH * dustbins_props(i)%mgrain / (mH + dustbins_props(i)%mgrain)**2d0
+            ! BH83 accommodation coefficient: alpha_0 = 4*m_proj*m_s/(m_proj+m_s)^2, the energy a
+            ! projectile leaves with a surface atom of mass m_s (hard cube): the mean atomic mass of the
+            ! grain material, 1/sum(f_k/m_k) over its mass fractions f_k, not the mass of the whole
+            ! grain (which gave alpha_0 ~ 4 m_H/m_grain ~ 1e-6)
+            msurf = 1d0 / sum(dustbins_props(i)%el_mfractions(1:dustbins_props(i)%nelements) &
+                              / dustbins_props(i)%el_atomic_masses_g(1:dustbins_props(i)%nelements))
+            bh80_h2_accomm_zero(i) = 8d0 * mH * msurf / (2d0*mH + msurf)**2d0
+            bh80_h_accomm_zero(i) = 4d0 * mH * msurf / (mH + msurf)**2d0
 
             do iel = 1, n_elements
 #ifdef RTZ
