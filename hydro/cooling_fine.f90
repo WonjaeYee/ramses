@@ -262,12 +262,25 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      ! photon-trapping optical depth (:1022) and the rt_vc radiation work term
      ! (:334). It was never assigned in an RTZ build (the block above is
      ! #ifndef RTZ), so both were silently dead: tau = 0 gave f_trap = 0 and
-     ! nothing was ever trapped. Fall back to z_ave, which is what the
-     ! non-metal branch above does. The CALIMA build does not use this: it
+     ! nothing was ever trapped. Derive Z/Zsun from the cell's O/H number ratio
+     ! (12+log10(O/H) = 8.69 for the Sun, Asplund et al. 2009), counting the
+     ! oxygen locked in CO, as the RTZ solver does internally; fall back to
+     ! z_ave if oxygen is not tracked. The CALIMA build does not use this: it
      ! substitutes the real Rosseland extinction (see the #ifdef CALIMA blocks).
-     do i=1,nleaf
-        Zsolar(i)=z_ave
-     end do
+     if (elements(8)%atomic_number.gt.0 .and. elements(1)%atomic_number.gt.0) then
+        do i=1,nleaf
+           Zsolar(i) = uold(ind_leaf(i),elements(8)%u_hydro_idx) / elements(8)%atomic_mass_g
+#ifdef CO
+           if (isCO_rtz) Zsolar(i) = Zsolar(i) + uold(ind_leaf(i),iCO) / mCO
+#endif
+           Zsolar(i) = Zsolar(i) / &
+                & MAX(uold(ind_leaf(i),elements(1)%u_hydro_idx)/elements(1)%atomic_mass_g, 1d-30) / 4.8978d-4
+        end do
+     else
+        do i=1,nleaf
+           Zsolar(i)=z_ave
+        end do
+     end if
 #endif
 
 #ifdef RT
@@ -351,7 +364,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            work = scale_v/c_cgs * (chi_R_IR * scale_l / max(uold(il,1),smallr)) &
                 * sum(uold(il,2:ndim+1)*flux) * dtnew(ilevel) !         Eq A6
 #else
+#ifdef RTZ
+           ! ixHII is not set in RTZ: hydrogen's ion block starts at iIons
+           ! (H I, then H II), each slot holding x_ion * rho
+           xHII = 0d0
+           if (elements(1)%atomic_number.gt.0) xHII = uold(il,iIons+1)/uold(il,1)
+#else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
+#endif
            f_dust = (1d0-xHII)                     ! No dust in ionised gas
            work = scale_v/c_cgs * kIR * sum(uold(il,2:ndim+1)*flux) &
                 * Zsolar(i) * f_dust * dtnew(ilevel) !               Eq A6
