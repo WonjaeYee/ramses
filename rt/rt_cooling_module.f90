@@ -526,10 +526,6 @@ contains
           pahAbs  = 0d0 ; pahSc  = 0d0 ; pahRp  = 0d0
           call compute_dust_rad_rates(dust_helper, G0_dust, TK, ne,         &
                     dustAbs, dustSc, dustRp, pahAbs, pahSc, pahRp)
-          ! PAHs absorb and scatter the photons too: from here on the grain rates carry them
-          dustAbs = dustAbs + pahAbs
-          dustSc  = dustSc  + pahSc
-          dustRp  = dustRp  + pahRp
        else
           ! RT15 mode: the reference treatment, but with the REAL dust-to-gas
           ! ratio in place of the Zsolar*(1-xHII) proxy.
