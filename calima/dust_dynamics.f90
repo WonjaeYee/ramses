@@ -419,6 +419,63 @@ module dust_dynamics
     end subroutine radpressure_acc_once
 #endif
 
+    subroutine draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps, eps_tot, a_rad_g, a_rad_d, s_IRtrap, &
+                               drag_state, do_irtrap, a_cm, s_cgs, scale_v, scale_t, ts)
+        use hydro_parameters, only: smallr, iu1, iu2, ju1, ju2, ku1, ku2
+        ! Draine (2011) stopping time [code] of every TVA species at every cell of a stencil, from
+        ! the magnitude of its full driving acceleration D (main.tex eq:draine_terminal): G(s) is
+        ! nonlinear in the drift, so in 2D/3D t_s(|D|) differs from t_s(|D_idim|) of a direction
+        ! sweep. D_k = grad(P_g)/rho + a_k - a_mix (- the trapped-IR term), with the gradients of
+        ! the flux routine: central inside the stencil, one-sided on its outer planes. ndim >= 2 only
+        ! (in 1D the sweeps take t_s(|D_x|), the same thing).
+        integer, intent(in) :: ngrid
+        real(dp), intent(in) :: dx, scale_v, scale_t
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2), intent(in) :: Pg, Ptrap, rho_mix, eps_tot
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), intent(in) :: eps, s_IRtrap
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ndim), intent(in) :: a_rad_g
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva, 1:ndim), intent(in) :: a_rad_d
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), intent(in) :: drag_state
+        logical, intent(in) :: do_irtrap
+        real(dp), dimension(1:ntva), intent(in) :: a_cm, s_cgs
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), intent(out) :: ts
+        integer :: l, i, j, k, d, jbin, i0, j0, k0, lo, hi, c
+        real(dp) :: gP, gT, amix, rho
+        real(dp), dimension(1:ntva) :: D2
+        do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
+            rho = max(rho_mix(l,i,j,k), smallr)
+            D2 = 0.0_dp
+            do d = 1, ndim
+                i0 = 0; j0 = 0; k0 = 0
+                if (d == 1) then; i0 = 1; c = i; lo = iu1; hi = iu2; end if
+                if (d == 2) then; j0 = 1; c = j; lo = ju1; hi = ju2; end if
+                if (d == 3) then; k0 = 1; c = k; lo = ku1; hi = ku2; end if
+                if (c == lo) then
+                    gP = (Pg(l,i+i0,j+j0,k+k0) - Pg(l,i,j,k)) / dx
+                    gT = (Ptrap(l,i+i0,j+j0,k+k0) - Ptrap(l,i,j,k)) / dx
+                else if (c == hi) then
+                    gP = (Pg(l,i,j,k) - Pg(l,i-i0,j-j0,k-k0)) / dx
+                    gT = (Ptrap(l,i,j,k) - Ptrap(l,i-i0,j-j0,k-k0)) / dx
+                else
+                    gP = (Pg(l,i+i0,j+j0,k+k0) - Pg(l,i-i0,j-j0,k-k0)) / (2.0_dp * dx)
+                    gT = (Ptrap(l,i+i0,j+j0,k+k0) - Ptrap(l,i-i0,j-j0,k-k0)) / (2.0_dp * dx)
+                end if
+                amix = (1.0_dp - eps_tot(l,i,j,k)) * a_rad_g(l,i,j,k,d)
+                do jbin = 1, ntva
+                    amix = amix + eps(l,i,j,k,jbin) * a_rad_d(l,i,j,k,jbin,d)
+                end do
+                do jbin = 1, ntva
+                    D2(jbin) = D2(jbin) + (gP / rho + a_rad_d(l,i,j,k,jbin,d) - amix &
+                        - merge(gT * (s_IRtrap(l,i,j,k,jbin) / max(rho_mix(l,i,j,k) * eps(l,i,j,k,jbin), smallr) &
+                                      - 1.0_dp / rho), 0.0_dp, do_irtrap))**2
+                end do
+            end do
+            do jbin = 1, ntva
+                ts(l,i,j,k,jbin) = draine2011_stopping_time(a_cm(jbin), s_cgs(jbin), sqrt(D2(jbin)) * scale_v / scale_t, &
+                    drag_state(l,i,j,k,1), drag_state(l,i,j,k,2), drag_state(l,i,j,k,2+jbin)) / scale_t
+            end do
+        end do; end do; end do; end do
+    end subroutine draine_ts_cells
+
     subroutine get_dust_courant_dt(ilevel)
         ! ====================================================================
         ! Compute the dust-drift CFL timestep constraint by accessing uold
@@ -516,6 +573,9 @@ module dust_dynamics
         real(dp) :: w_cap, wmax_all
         integer(kind=8) :: nclip_all
         real(dp), dimension(1:ntva) :: a_rad_d_face, D_bin
+        ! Draine stopping times from |D| (2D/3D) at the stencil cells; a face takes their mean
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: ts_draine
+        logical  :: draine_cells
 
 #ifndef WITHOUTMPI
         integer  :: info
@@ -716,6 +776,17 @@ module dust_dynamics
                 end if
 #endif
 
+                ! Draine drag in 2D/3D: the cells' stopping times of their full |D|, as the fluxes
+                draine_cells = ndim > 1 .and. draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                               .or. tva_test_mode >= TVA_TEST_SPRESS)
+#ifdef RT
+                if (draine_cells) call draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps_arr, eps_tot_arr, &
+                                                       a_rad_g, a_rad_d, s_IRtrap, drag_state, do_irtrap, &
+                                                       a_cm_tva, s_cgs_tva, scale_v, scale_t, ts_draine)
+#else
+                draine_cells = .false.
+#endif
+
                 ! ============================================================
                 ! STEP 2: Face CFL from true pressure gradient
                 ! ============================================================
@@ -855,7 +926,15 @@ module dust_dynamics
                                 end if
                                 ! Draine (2011) drag is nonlinear in the drift, so its
                                 ! stopping time needs the driving acceleration D first.
-                                if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                                if (draine_cells) then
+                                    if (idim == 1) then
+                                        t_s_face_arr(jbin) = half * (ts_draine(l,i-1,j,k,jbin) + ts_draine(l,i,j,k,jbin))
+                                    else if (idim == 2) then
+                                        t_s_face_arr(jbin) = half * (ts_draine(l,i,j-1,k,jbin) + ts_draine(l,i,j,k,jbin))
+                                    else
+                                        t_s_face_arr(jbin) = half * (ts_draine(l,i,j,k-1,jbin) + ts_draine(l,i,j,k,jbin))
+                                    end if
+                                else if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
                                     .or. tva_test_mode >= TVA_TEST_SPRESS)) then
                                     if (idim == 1) then
                                         drag_state_face = half * (drag_state(l,i-1,j,k,:) + drag_state(l,i,j,k,:))
@@ -1946,6 +2025,9 @@ module dust_dynamics
         real(dp) :: W_t, f_cap, w_unc, G_face, A_face, B_face, zeta_L, zeta_R, zeta_up, rhod_up_B
         real(dp) :: flux_A, v_lim
         integer  :: io, jo, ko
+        ! Draine stopping times from |D| (2D/3D), at every stencil cell
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: ts_draine
+        logical  :: draine_cells
 
         ! Initialize output flux arrays
         dflux = 0.0_dp
@@ -2042,6 +2124,13 @@ module dust_dynamics
             end do; end do; end do; end do
         end if
 #endif
+
+        ! Draine drag in 2D/3D: the stopping time of the full |D| of each cell, once, for every sweep
+        draine_cells = ndim > 1 .and. draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                       .or. tva_test_mode >= TVA_TEST_SPRESS) .and. .not. use_w_drift_test
+        if (draine_cells) call draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps, eps_tot, a_rad_g, a_rad_d, &
+                                               s_IRtrap, drag_state, do_irtrap, a_cm_tva, s_cgs_tva, &
+                                               scale_v, scale_t, ts_draine)
 
         ! ========================================================================
         ! MAIN DIRECTION SWEEP LOOP (idim = 1: X-sweep, 2: Y-sweep, 3: Z-sweep)
@@ -2165,7 +2254,9 @@ module dust_dynamics
                         end if
                         ! Draine (2011) drag is nonlinear in the drift, so its
                         ! stopping time needs the driving acceleration D first.
-                        if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                        if (draine_cells) then
+                            t_s_intrinsic(jbin) = ts_draine(l,i,j,k,jbin)
+                        else if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
                             .or. tva_test_mode >= TVA_TEST_SPRESS)) then
                             t_s_intrinsic(jbin) = draine2011_stopping_time(a_cm_tva(jbin), &
                                 s_cgs_tva(jbin), D_bin(jbin) * scale_v / scale_t,          &
