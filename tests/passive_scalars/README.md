@@ -46,6 +46,11 @@ PASS/FAIL line per case plus a table of the worst errors per (test, set, profile
 run directory: `common/ps_check.py <rundir>` (writes `check.json`, `check.png`).
 Data: `$RTZ_DATA` (default `RAMSES_dev/rtzdata_for_public_ramses/`).
 
+MHD: `build.sh <tree> <set> 1 <exedir>/mhd_<set>_1d SOLVER=mhd` builds with the tree's
+`mhd/condinit.f90` plus `patch/table_condinit_mhd.f90` (the same table, B = 0); label `mhd`
+runs those executables with `riemann='hlld'` (`ps_run.py --label mhd`).  Not `full_np0`: the
+MHD build does not accept NPAH=0.
+
 ## Tolerances
 
 Round-off where the scheme guarantees the property (`ps_check.ROUNDOFF`): box mass of every

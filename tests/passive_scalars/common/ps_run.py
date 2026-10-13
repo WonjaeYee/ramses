@@ -32,6 +32,8 @@ TESTDIR = os.path.join(HERE, "..")
 # reconstruction), to separate the effect of the convention from that of CMA
 PREFIX = {"cmaoff": "cma"}
 EXTRA = {"cmaoff": "passive_cma=.false."}
+# label 'mhd': executables built with SOLVER=mhd (patch/table_condinit_mhd.f90, B = 0), run with hlld
+RIEMANN = {"mhd": "hlld"}
 
 
 def subs_for(case, lay):
@@ -68,6 +70,7 @@ def prepare(case, rundir, label=""):
     os.makedirs(os.path.join(rundir, "SEDtables"), exist_ok=True)
     sub, ncell = subs_for(case, lay)
     sub["hydro_extra"] = EXTRA.get(label, "")
+    sub["riemann"] = RIEMANN.get(label, sub["riemann"])
     x = (np.arange(ncell) + 0.5) / ncell
     kw = {k: case[k] for k in ("rho_contrast", "w", "m", "u0") if k in case}
     rho, u, p, f = C.profile(lay, case["prof"], x, conc=case["conc"], **kw)

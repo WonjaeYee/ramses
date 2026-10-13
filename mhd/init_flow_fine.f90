@@ -67,6 +67,7 @@ subroutine init_flow_fine(ilevel)
   integer,parameter::tag=1107
 
 #ifdef RTZ
+  integer::jps,kps
   integer::counter,ielements,jions
   real(dp)::total_element_mass
 #endif
@@ -455,6 +456,17 @@ subroutine init_flow_fine(ilevel)
                  uold(ind_cell(i),ivar)=rr*uold(ind_cell(i),ivar)
               end do
            end do
+#ifdef RTZ
+           ! ion slots: x_ion*rho -> x_ion*rho_element
+           do jps=1,ps_npar
+              do kps=ps_cstart(jps),ps_cstart(jps+1)-1
+                 do i=1,ngrid
+                    uold(ind_cell(i),ps_child(kps))=uold(ind_cell(i),ps_child(kps)) &
+                         & *uold(ind_cell(i),ps_par(jps))/max(uold(ind_cell(i),1),smallr)
+                 end do
+              end do
+           end do
+#endif
 #endif
         end do
         ! End loop over cells
@@ -494,6 +506,10 @@ subroutine init_flow_fine(ilevel)
            end do
            ! Call initial condition routine
            call condinit(xx,uu,dx_loc,ngrid)
+#ifdef RTZ
+           ! condinit gives x_ion*rho for the ions: store x_ion*rho_element
+           call ps_frac_to_mass(uu,ngrid)
+#endif
            ! Scatter variables
            do ivar=1,nvar+3
               do i=1,ngrid

@@ -391,7 +391,7 @@ subroutine interpol_hydro(u1,u2,nn)
 
 #ifdef RTZ
   ! Species sums of the children equal to their parent's (rho, element), each
-  ! species still conserved: see ps_prolong (hydro/godunov_utils.f90)
+  ! species still conserved: see ps_prolong (hydro/cooling_fine.f90)
   if(ps_active)call ps_prolong(u1,u2,nn)
 #endif
 
