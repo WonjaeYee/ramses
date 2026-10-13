@@ -115,6 +115,13 @@ def planck_lam(lam_cm, T):
 
 rows = [l.split() for l in io.open(_tbl_path()) if not l.startswith("#") and len(l.split()) == 4]
 wav_A, c_abs, c_sca, c_rp = np.array(rows, dtype=float).T
+# cm^2 per gram of dust (the current tables, per their "# Columns:" header) -> per grain, as
+# dust_photophysics converts them; older tables are already per grain
+_cols = [l for l in io.open(_tbl_path()) if l.startswith("#") and "Columns:" in l and "C_abs" in l]
+if not _cols or ("cm^2/g_dust" not in _cols[0] and "C_abs[cm^2]" not in _cols[0]):
+    raise SystemExit("%s: no cross-section units in its '# Columns:' header" % _tbl_path())
+if "cm^2/g_dust" in _cols[0]:
+    c_abs, c_sca, c_rp = c_abs * m_grain, c_sca * m_grain, c_rp * m_grain
 wav_cm = wav_A * 1e-8
 
 def band_cs(E0, E1, cs, T=1.0e5):
