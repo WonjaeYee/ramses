@@ -18,6 +18,7 @@ the quantity the chemistry works with).
 | `sod/`    | a Sod tube whose waves sweep three compositions (contacts through a shock and a rarefaction) |
 | `amr/`    | the same on an AMR grid refined on the contacts: prolongation of new cells, coarse-fine fluxes, restriction |
 | `tva/`    | CALIMA dust/PAH bins drifting relative to the mixture (TVA, imposed drift): the gas counter-flux |
+| `accuracy/` | advection accuracy of three plain scalars (top-hat, Gaussian, sine) by slope limiter, Riemann solver, Mach number, Courant factor, resolution and direction, hydro and MHD, against exact cell averages (its own README) |
 | `replica/`| a Python replica of the 1D MUSCL-Hancock step, sweeping the same matrix in seconds, with the remedies side by side |
 | `common/` | case matrix and species sets (`ps_cases.py`), runner (`ps_run.py`), checker (`ps_check.py`), summary table (`ps_table.py`) |
 | `patch/`  | `condinit.f90` with `condinit_kind='table'`: initial conditions read from `ic_table.dat` |
