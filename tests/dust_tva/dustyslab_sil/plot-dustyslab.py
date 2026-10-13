@@ -22,6 +22,7 @@ Usage:  python3 plot-dustyslab.py [dustyslab.nml|dustyslab_dense.nml]
 """
 import glob
 import io
+import re
 import os
 import shutil
 import subprocess
@@ -282,7 +283,17 @@ if len(snaps) < 2:
 # rt_output_hydro writes photon_flux_NN = rt_c*Np (flux magnitude) and
 # photon_flux_NN_x = Fp_x, both in code units; *scale_v gives photons/cm2/s.
 # Verified by recovering rt_n_source exactly at the injection edge.
-E_UV, E_IR = 6.0 * eV, 0.01 * eV
+# Group energies as RAMSES uses them: rt_init recomputes egy from each band (info_rt), so the nominal values
+# are not what the code uses (IR: 0.067 eV, not 0.01 eV, for 0.001-0.1 eV). Group 1 is the IR, group 2 the UV.
+def _group_egy():
+    for f in sorted(glob.glob("output_*/info_rt_*.txt")):
+        e = re.findall(r"egy\s+\[eV\]\s*=\s*([0-9.Ee+-]+)", io.open(f).read())
+        if len(e) >= 2:
+            return float(e[1]), float(e[0])
+    raise SystemExit("no group energies in output_*/info_rt_*.txt")
+
+
+E_UV, E_IR = (g * eV for g in _group_egy())
 acc_code_to_cgs = scale_v / scale_t
 
 
