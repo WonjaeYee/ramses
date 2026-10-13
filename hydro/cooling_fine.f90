@@ -933,7 +933,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      if(.not. static) then
         ! Update gas momentum and kinetic energy:
         do i=1,nleaf
-           uold(ind_leaf(i),2:neul-1) = p_gas(:,i) /scale_d /scale_v
+           uold(ind_leaf(i),2:ndim+1) = p_gas(:,i) /scale_d /scale_v   ! the ndim momenta (MHD always has 3)
         end do
         ! Energy update ==================================================
         ! Calculate NEW pressure from updated momentum
