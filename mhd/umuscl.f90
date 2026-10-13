@@ -32,6 +32,9 @@ subroutine mag_unsplit(uin,gravin,flux,emfx,emfy,emfz,tmp,dx,dy,dz,dt,ngrid)
   use amr_parameters
   use const
   use hydro_parameters
+#ifdef RTZ
+  use hydro_commons, only: ps_active
+#endif
   implicit none
 
   integer ::ngrid
@@ -98,6 +101,11 @@ subroutine mag_unsplit(uin,gravin,flux,emfx,emfy,emfz,tmp,dx,dy,dz,dt,ngrid)
 #endif
 #if NDIM==3
      call trace3d(qin,bf,dq,dbf,qm,qp,qRT,qRB,qLT,qLB,dx,dy,dz,dt,ngrid)
+#endif
+
+#ifdef RTZ
+  ! Consistent multi-fluid advection on the face states (see hydro/umuscl.f90)
+  if(ps_active)call ps_cma_states(qin,qm,qp,ngrid)
 #endif
 
   ! Solve for 1D flux in X direction
@@ -1312,9 +1320,6 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
   use amr_parameters
   use hydro_parameters
   use const
-#if defined(RTZ) && NVAR > NHYDRO
-  use hydro_commons, only: ps_active
-#endif
   implicit none
 
   integer ::ngrid
@@ -1375,14 +1380,6 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
                  qleft (n) = qm(l,i,j,k,n,xdim)
                  qright(n) = qp(l,i,j,k,n,xdim)
               end do
-#ifdef RTZ
-              ! Consistent multi-fluid advection: species fractions of both face states
-              ! sum to their parent's, so the species fluxes sum to the mass flux
-              if(ps_active)then
-                 call ps_cma_face(qleft)
-                 call ps_cma_face(qright)
-              end if
-#endif
 #endif
               ! Solve 1D Riemann problem
               zero_flux = one
