@@ -1245,6 +1245,8 @@ end subroutine cmp_Eddington_tensor
 ! more compositions meet in a stencil; passive_cma restores them by renormalising the
 ! face states (Consistent Multi-fluid Advection, Plewa & Mueller 1999, A&A 342, 179),
 ! top level first, then each element's ions to the element's renormalised face value.
+! The targets are the sums of the cell the face state belongs to (ps_cma_states), which
+! are one in a consistent cell; a cell that is not keeps its own sums.
 !
 ! These routines live here, in a file that both the hydro and the MHD solver compile
 ! (godunov_utils.f90 has a solver-specific copy), so that no Makefile needs a new object.
@@ -1375,16 +1377,78 @@ subroutine ps_frac_to_mass_uold
   end do
 end subroutine ps_frac_to_mass_uold
 !###########################################################
-subroutine ps_cma_faces(q,ngrid)
-  ! Nested CMA on a face state q(:,1:nvar) (primitive: passive = mass fraction of rho).
+subroutine ps_cma_states(q,qm,qp,ngrid)
+  ! Nested CMA on the traced face states of every cell (called after trace, before the
+  ! Riemann solvers; q: cell-centred primitive, passive = mass fraction of rho).  The top
+  ! fractions of both face states of a cell are scaled to sum to the cell's own top sum,
+  ! and each element's ions to that element's (scaled) face value times the cell's
+  ! ion/element ratio.  In a consistent cell both targets are one; a cell that is not (a
+  ! setup whose fractions do not sum to one, or a cell an inconsistent process has left
+  ! off) keeps its own sums instead of having its species fluxes scaled up to them.
+  use amr_parameters
+  use hydro_commons
+  implicit none
+  integer::ngrid
+  real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar)::q
+  real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar,1:ndim)::qm,qp
+  integer::i,j,k,l,m,n,idim,ilo,ihi,jlo,jhi,klo,khi
+  real(dp),dimension(1:nvector)::ttop
+  real(dp),dimension(1:nvector,1:max(ps_npar,1))::rch
+  real(dp),dimension(1:nvector,1:nvar)::f
+  real(dp)::sc
+  if(ps_ntop==0)return
+  ilo=MIN(1,iu1+1); ihi=MAX(1,iu2-1)
+  jlo=MIN(1,ju1+1); jhi=MAX(1,ju2-1)
+  klo=MIN(1,ku1+1); khi=MAX(1,ku2-1)
+  do k=klo,khi
+     do j=jlo,jhi
+        do i=ilo,ihi
+           ! the cell's own targets
+           do l=1,ngrid
+              ttop(l)=0d0
+              do n=1,ps_ntop
+                 ttop(l)=ttop(l)+max(q(l,i,j,k,ps_top(n)),0d0)
+              end do
+           end do
+           do n=1,ps_npar
+              do l=1,ngrid
+                 sc=0d0
+                 do m=ps_cstart(n),ps_cstart(n+1)-1
+                    sc=sc+max(q(l,i,j,k,ps_child(m)),0d0)
+                 end do
+                 if(q(l,i,j,k,ps_par(n))>0d0.and.sc>0d0)then
+                    rch(l,n)=sc/q(l,i,j,k,ps_par(n))
+                 else
+                    rch(l,n)=1d0
+                 end if
+              end do
+           end do
+           do idim=1,ndim
+              f(1:ngrid,1:nvar)=qm(1:ngrid,i,j,k,1:nvar,idim)
+              call ps_cma_target(f,ngrid,ttop,rch)
+              qm(1:ngrid,i,j,k,1:nvar,idim)=f(1:ngrid,1:nvar)
+              f(1:ngrid,1:nvar)=qp(1:ngrid,i,j,k,1:nvar,idim)
+              call ps_cma_target(f,ngrid,ttop,rch)
+              qp(1:ngrid,i,j,k,1:nvar,idim)=f(1:ngrid,1:nvar)
+           end do
+        end do
+     end do
+  end do
+end subroutine ps_cma_states
+!###########################################################
+subroutine ps_cma_target(q,ngrid,ttop,rch)
+  ! Nested CMA on face states q(:,1:nvar): top fractions sum to ttop, the ions of parent j
+  ! to rch(:,j) times the parent's (scaled) face fraction.
   use amr_parameters
   use hydro_commons
   implicit none
   integer::ngrid
   real(dp),dimension(1:nvector,1:nvar)::q
+  real(dp),dimension(1:nvector)::ttop
+  real(dp),dimension(1:nvector,1:max(ps_npar,1))::rch
   integer::i,j,k,n
   real(dp),dimension(1:nvector)::s
-  ! top level: sum to one
+  ! top level
   s(1:ngrid)=0d0
   do k=1,ps_ntop
      n=ps_top(k)
@@ -1394,7 +1458,7 @@ subroutine ps_cma_faces(q,ngrid)
      end do
   end do
   do i=1,ngrid
-     if(s(i)>0d0)then; s(i)=1d0/s(i); else; s(i)=0d0; end if
+     if(s(i)>0d0)then; s(i)=ttop(i)/s(i); else; s(i)=0d0; end if
   end do
   do k=1,ps_ntop
      n=ps_top(k)
@@ -1402,7 +1466,7 @@ subroutine ps_cma_faces(q,ngrid)
         q(i,n)=q(i,n)*s(i)
      end do
   end do
-  ! children: sum to the (renormalised) parent fraction
+  ! children: sum to rch times the (scaled) parent fraction
   do j=1,ps_npar
      s(1:ngrid)=0d0
      do k=ps_cstart(j),ps_cstart(j+1)-1
@@ -1414,10 +1478,10 @@ subroutine ps_cma_faces(q,ngrid)
      end do
      do i=1,ngrid
         if(s(i)>0d0)then
-           s(i)=q(i,ps_par(j))/s(i)
+           s(i)=rch(i,j)*q(i,ps_par(j))/s(i)
         else
            ! no ion left in the face state: put the element in its first stage
-           q(i,ps_child(ps_cstart(j)))=q(i,ps_par(j))
+           q(i,ps_child(ps_cstart(j)))=rch(i,j)*q(i,ps_par(j))
            s(i)=1d0
         end if
      end do
@@ -1428,19 +1492,7 @@ subroutine ps_cma_faces(q,ngrid)
         end do
      end do
   end do
-end subroutine ps_cma_faces
-!###########################################################
-subroutine ps_cma_face(q)
-  ! ps_cma_faces on a single face state q(1:nvar): mhd/umuscl.f90 solves face by face
-  use amr_parameters
-  use hydro_commons
-  implicit none
-  real(dp),dimension(1:nvar)::q
-  real(dp),dimension(1:nvector,1:nvar)::qv
-  qv(1,1:nvar)=q(1:nvar)
-  call ps_cma_faces(qv,1)
-  q(1:nvar)=qv(1,1:nvar)
-end subroutine ps_cma_face
+end subroutine ps_cma_target
 !###########################################################
 subroutine ps_prolong(u1,u2,nn)
   ! Make the children of an AMR prolongation consistent without breaking the
