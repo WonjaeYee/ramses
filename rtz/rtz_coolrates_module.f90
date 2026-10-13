@@ -1864,8 +1864,14 @@ FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr, h2
     real(dp):: E_form1_dust, E_form2_dust, H2_formation_rate_dust
     real(dp):: E_form1_prim, E_form2_prim, H2_formation_rate_prim
 
+    ! D0 I_UV must be the photodissociation rate the chemistry uses, D = 5.68e-11 G0 s^-1
+    ! (rtz_cool_step, de_H2), so that the heating per dissociation is 0.4 eV plus the pumping share.
+    ! I_UV = 1.7 G0 made it 1.7 times larger than the chemistry's: 1.7 converts a Draine-normalised
+    ! field into Habing units, the opposite direction of what Bialy & Sternberg (2019, I_UV in
+    ! Draine units, D0 = 5.8e-11) would need for a Habing G0, and needless if G0 is Draine-normalised
+    ! as D0 = 5.68e-11 per G0 implies.
     D0 = 5.68d-11
-    I_UV = 1.7d0 * G0
+    I_UV = G0
 
     E_pump = 1.12d0 * EV_2_ERG
     n_crit = 1.1d5 / sqrt(T/1000.d0)
