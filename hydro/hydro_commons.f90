@@ -17,6 +17,9 @@ module hydro_commons
   integer::ps_ntop=0,ps_npar=0,ps_ngas=0
   integer,allocatable,dimension(:)::ps_top,ps_par,ps_cstart,ps_child,ps_gas,ps_gastop
   integer::ps_ngastop=0
+  ! CMA targets of the cells of the current sweep (ps_cma_cell_targets)
+  real(dp),allocatable,dimension(:,:,:,:)::ps_ttop
+  real(dp),allocatable,dimension(:,:,:,:,:)::ps_rch
   ! consistency diagnostics accumulated in cooling_fine since the last report
   integer(kind=8)::ps_nbad_top=0,ps_nbad_child=0,ps_ncheck=0,ps_nrenorm=0
   real(dp)::ps_maxdev_top=0,ps_maxdev_child=0
