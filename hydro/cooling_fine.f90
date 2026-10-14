@@ -81,7 +81,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use constants, only: a_r, Myr2sec, mH, pi, rhoc, twopi
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb,dustbins_props,pahbins_props, &
-                          tva_test_mode,TVA_TEST_IRTRAP
+                          tva_test_mode,TVA_TEST_IRTRAP,tva_wdrift,tva_wdrift_batch,ntva
   use dust_utils, only: cmp_sigma_turb
   use dust_optics, only: get_IR_mean_cross_sections
 #endif
@@ -588,6 +588,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
             sigma(i) = sqrt(sigma2) * scale_v   ! cmp_sigma_turb works in code velocity units
          end do
       endif
+      ! The TVA drift of every species in these cells [cm/s], kept by this step's TVA fluxes,
+      ! for the grain-grain collisions of the dust update (rtz_cool_step)
+      if (allocated(tva_wdrift)) then
+         if (.not. allocated(tva_wdrift_batch)) allocate(tva_wdrift_batch(1:nvector,1:ntva,1:ndim))
+         do i=1,nleaf
+            tva_wdrift_batch(i,1:ntva,1:ndim) = tva_wdrift(ind_leaf(i),1:ntva,1:ndim) * scale_v
+         end do
+      end if
       ! Dust densities in g/cm^3
       do i=1,nleaf
          do jbin=1,ndust
