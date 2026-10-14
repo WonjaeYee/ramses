@@ -1189,6 +1189,10 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  m_acc_smbh=0
               end if
            else
+              ! threshold accretion sets only m_acc: without this, m_acc_smbh kept a stale
+              ! (or uninitialised) value and was accreted into msmbh
+              m_acc     =0d0
+              m_acc_smbh=0d0
               if (bondi_accretion.or.flux_accretion)then
                  m_acc      = dMsink_overdt(isink)*dtnew(ilevel)*weight/volume
                  m_acc_smbh = dMsmbh_overdt(isink)*dtnew(ilevel)*weight/volume
