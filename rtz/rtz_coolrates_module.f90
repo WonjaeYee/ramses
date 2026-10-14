@@ -1502,7 +1502,7 @@ FUNCTION FeI_fine_structure(T, n_ion, nH, nHp, &
                        A_10, A_20, A_21, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
-                       16, 17, 18)
+                       17, 16, 18)
 
     rate = MAX(rate,1.d-100)
 END FUNCTION FeI_fine_structure
@@ -1572,7 +1572,7 @@ FUNCTION SI_fine_structure(T, n_ion, nH, nHp, &
                        A_10, A_20, A_21, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
-                       25, 26, 27)
+                       26, 25, 27)
 
     rate = MAX(rate,1.d-100)
 END FUNCTION SI_fine_structure
