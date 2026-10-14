@@ -700,6 +700,12 @@ subroutine star_formation(ilevel)
            y=(xg(ind_grid_new(i),2)+xc(ind,2)-skip_loc(2))*scale
            z=(xg(ind_grid_new(i),3)+xc(ind,3)-skip_loc(3))*scale
            tg=uold(ind_cell_new(i),5)*(gamma-1)*scale_T2
+           ! NOTE (RTZ): imetal is not a metallicity when RTZ is compiled in -- it
+           ! is the mass fraction of the first tracked element, i.e. HYDROGEN (the
+           ! passive scalars are in primitive form here), so zg below would be
+           ! ~0.75 rather than Z. A proper RTZ metallicity has to be built from
+           ! the element slots, e.g. from O/H as hydro/cooling_fine.f90 does.
+           ! Not fixed: this routine is unused in the sink-based RTZ setups.
            if(metal)zg=uold(ind_cell_new(i),imetal)
 
            ! Set star particle variables

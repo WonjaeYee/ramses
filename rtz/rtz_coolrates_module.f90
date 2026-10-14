@@ -24,6 +24,12 @@ module rtz_coolrates_module
   real(dp):: high_t_cooling_temp_CIE(N_HIGH_T_COOLING_TEMP_CIE)
   real(dp):: high_t_cooling_fracs_CIE(N_HIGH_T_COOLING_TEMP_CIE,27,27)
   logical:: high_t_cooling_rates_tflag(27,27)
+  ! For the ions with a fine-structure solver (high_t_cooling_rates_tflag), the table without its
+  ! ground-term fine-structure lines (log10): the table minus the solver at the table's own
+  ! conditions (n_e = 1 cm^-3, no other collider). Below 1e4 K the solver replaces the table for
+  ! these ions, and this keeps the optical/UV forbidden lines ([O III] 5007, [N II] 6584, ...) the
+  ! solver does not have.
+  real(dp):: high_t_cooling_rates_opt(N_HIGH_T_COOLING_TEMP,27,27)
   real(dp):: fs_cool_tab(27,160,8)  ! Array for fine structure cooling rates  
 
   real(dp):: G0_heating_rates(26) = (/ &
@@ -198,6 +204,41 @@ FUNCTION collisional_excitation_cooling_HI_seon20(T) result(rate)
     rate = MAX(rate,1.d-100)
 
 END FUNCTION collisional_excitation_cooling_HI_seon20
+
+FUNCTION collisional_excitation_cooling_HI_2s(T) result(rate)
+    ! Collisional excitation H(1s) -> H(2s), which decays by two-photon emission and so is not in
+    ! the Lyman-alpha rate of collisional_excitation_cooling_HI_seon20. Effective collision
+    ! strengths of Anderson et al. (2000, 2002 erratum), as tabulated in Cloudy's h_coll_str.dat,
+    ! interpolated linearly in ln(kT) and held constant outside 0.5-25 eV;
+    ! Lambda = E_12 * 8.629e-6 Upsilon / (g_1 sqrt(T)) exp(-E_12/kT), g_1 = 2, E_12 = 10.199 eV.
+    implicit none
+    real(dp), intent(in):: T
+    real(dp):: rate
+    real(dp), parameter:: kT_tab(8) = (/ 0.5d0, 1.d0, 3.d0, 5.d0, 10.d0, 15.d0, 20.d0, 25.d0 /)
+    real(dp), parameter:: ups_tab(8) = (/ 0.260d0, 0.296d0, 0.326d0, 0.339d0, 0.373d0, 0.406d0, 0.436d0, 0.461d0 /)
+    real(dp), parameter:: E12_K = 118352.d0          ! 10.199 eV / k
+    real(dp), parameter:: E12_erg = 10.199d0 * 1.602176634d-12
+    real(dp):: kT, ups, w
+    integer:: i
+
+    kT = 8.617333d-5 * T
+    if (kT <= kT_tab(1)) then
+        ups = ups_tab(1)
+    else if (kT >= kT_tab(8)) then
+        ups = ups_tab(8)
+    else
+        i = 1
+        do while (kT > kT_tab(i+1))
+            i = i + 1
+        end do
+        w = log(kT / kT_tab(i)) / log(kT_tab(i+1) / kT_tab(i))
+        ups = ups_tab(i) + w * (ups_tab(i+1) - ups_tab(i))
+    end if
+    rate = E12_erg * 8.629d-6 * ups / (2.d0 * sqrt(T)) * safe_exp(-E12_K / T)
+
+    rate = MAX(rate,1.d-100)
+
+END FUNCTION collisional_excitation_cooling_HI_2s
 
 FUNCTION collisional_excitation_cooling_HeII(T) result(rate)
     ! From Cen 1992
@@ -823,10 +864,13 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
           loc_cooling_rate = 10.d0**loc_cooling_rate
 
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                 * 10.d0**(frac_low * high_t_cooling_rates_opt(idx_low,i,j) &
+                           + frac_high * high_t_cooling_rates_opt(idx_low+1,i,j))
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -844,10 +888,13 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
           loc_cooling_rate = 10.d0**loc_cooling_rate
 
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                 * 10.d0**(frac_low * high_t_cooling_rates_opt(idx_low,i,j) &
+                           + frac_high * high_t_cooling_rates_opt(idx_low+1,i,j))
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -865,10 +912,13 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
           loc_cooling_rate = 10.d0**loc_cooling_rate
 
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                 * 10.d0**(frac_low * high_t_cooling_rates_opt(idx_low,i,j) &
+                           + frac_high * high_t_cooling_rates_opt(idx_low+1,i,j))
           end if
 
           rate = rate + ((CIE_frac_used / CIE_frac_theo) * element_number_densities(i) * high_t_cooling_fracs_CIE(CIE_Tidx,i,j) * ne * loc_cooling_rate * loc_temp_smooth)
@@ -920,8 +970,56 @@ SUBROUTINE initialize_fine_structure_tables()
         close(unit_num)
 
     end do
+
+    call build_optical_metal_tables()
     
 END SUBROUTINE initialize_fine_structure_tables
+
+SUBROUTINE build_optical_metal_tables()
+    ! high_t_cooling_rates_opt: see its declaration. The Cloudy tables are per ion and electron in
+    ! the low-density limit (one zone, n_e = 1 cm^-3, n_ion = 1 cm^-3), so the fine-structure solver
+    ! is evaluated with n_ion = n_e = 1 and no other collider, at z = 0.
+    use amr_commons, only: myid
+    implicit none
+    integer:: i, j, k
+    real(dp):: T, tab, fs
+    high_t_cooling_rates_opt = high_t_cooling_rates
+    do i = 1, 27
+       do j = 1, 27
+          if (.not. high_t_cooling_rates_tflag(i,j)) cycle
+          do k = 1, N_HIGH_T_COOLING_TEMP
+             if (high_t_cooling_temp(k) > 4.95d0) exit          ! the solver's table ends at 10^4.975 K
+             T = 10.d0**high_t_cooling_temp(k)
+             fs = fine_structure_ion(i, j, T, 1.d0, 0.d0, 0.d0, 1.d0, 0.d0, 0.d0, 0.d0, 0.d0, 0.d0)
+             tab = 10.d0**high_t_cooling_rates(k,i,j)
+             high_t_cooling_rates_opt(k,i,j) = log10(max(tab - fs, 1.d-50))
+          end do
+       end do
+    end do
+    if (myid == 1) write(*,*) 'Built the optical metal-line tables (table minus fine structure)'
+END SUBROUTINE build_optical_metal_tables
+
+FUNCTION fine_structure_ion(i, j, T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z) result(rate)
+    ! The fine-structure solver of element i, ion stage j (0 if there is none)
+    implicit none
+    integer, intent(in):: i, j
+    real(dp), intent(in):: T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z
+    real(dp):: rate
+    rate = 0.d0
+    select case (100*i + j)
+    case (601);  rate = CI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (602);  rate = CII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (702);  rate = NII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (801);  rate = OI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (803);  rate = OIII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1002); rate = NeII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1401); rate = SiI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1402); rate = SiII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1601); rate = SI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (2601); rate = FeI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (2602); rate = FeII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    end select
+END FUNCTION fine_structure_ion
 
 FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
                      A_10, A_20, A_21, z, T, n_ion, ne, nH, &
@@ -1508,7 +1606,7 @@ FUNCTION FeI_fine_structure(T, n_ion, nH, nHp, &
                        A_10, A_20, A_21, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
-                       16, 17, 18)
+                       17, 16, 18)
 
     rate = MAX(rate,1.d-100)
 END FUNCTION FeI_fine_structure
@@ -1578,7 +1676,7 @@ FUNCTION SI_fine_structure(T, n_ion, nH, nHp, &
                        A_10, A_20, A_21, &
                        z, T, &
                        n_ion, ne, nH, nHp, nHe, nHep, nHepp, nH2, &
-                       25, 26, 27)
+                       26, 25, 27)
 
     rate = MAX(rate,1.d-100)
 END FUNCTION SI_fine_structure
@@ -1864,8 +1962,14 @@ FUNCTION H2_heating_bialy(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr, h2
     real(dp):: E_form1_dust, E_form2_dust, H2_formation_rate_dust
     real(dp):: E_form1_prim, E_form2_prim, H2_formation_rate_prim
 
+    ! D0 I_UV must be the photodissociation rate the chemistry uses, D = 5.68e-11 G0 s^-1
+    ! (rtz_cool_step, de_H2), so that the heating per dissociation is 0.4 eV plus the pumping share.
+    ! I_UV = 1.7 G0 made it 1.7 times larger than the chemistry's: 1.7 converts a Draine-normalised
+    ! field into Habing units, the opposite direction of what Bialy & Sternberg (2019, I_UV in
+    ! Draine units, D0 = 5.8e-11) would need for a Habing G0, and needless if G0 is Draine-normalised
+    ! as D0 = 5.68e-11 per G0 implies.
     D0 = 5.68d-11
-    I_UV = 1.7d0 * G0
+    I_UV = G0
 
     E_pump = 1.12d0 * EV_2_ERG
     n_crit = 1.1d5 / sqrt(T/1000.d0)
@@ -2144,7 +2248,8 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     metal_cool_smooth_f2 = 0.5d0 * (tanh( (5.d-3) * ( (-1.d0 * T) + 1.d4 ) ) + 1.d0 )
 
     ! Cooling from primordial species
-    cooling_HI = (collisional_ionization_cooling_HI(T) + collisional_excitation_cooling_HI_seon20(T)) * ne * nH_I
+    cooling_HI = (collisional_ionization_cooling_HI(T) + collisional_excitation_cooling_HI_seon20(T) &
+                  + collisional_excitation_cooling_HI_2s(T)) * ne * nH_I
     cooling_HII = recombination_cooling_case_B_HII(T) * ne * nH_II
     cooling_HeI = collisional_ionization_cooling_HeI(T) * ne * nHe_I
     cooling_HeII = (collisional_ionization_cooling_HeII(T) + collisional_excitation_cooling_HeII(T) + recombination_cooling_case_B_HeII(T) + dielectronic_recombination_cooling_HeII(T)) * ne * nHe_II

@@ -521,7 +521,8 @@ module dust_rates
                             do iion = 1, nions_loc
                                 izion = iion - 1
                                 if (y_gas(e_index, iion+1) <= min_abundance_density) cycle
-                                ion_flux = y_gas(e_index, iion+1) * bin_prefactor * dust_info%Coulomb_factor(ii,izion)
+                                ! the ion's share of element_pot_rate_1, which has no bin_prefactor
+                                ion_flux = y_gas(e_index, iion+1) * dust_info%Coulomb_factor(ii,izion)
                                 depletion = rate * bin%el_mfractions(1) * (ion_flux / element_pot_rate_1)
                                 dydt_gas(e_index, iion+1) = dydt_gas(e_index, iion+1) - depletion
                                 dydt_gas(e_index, 1)      = dydt_gas(e_index, 1)      - depletion

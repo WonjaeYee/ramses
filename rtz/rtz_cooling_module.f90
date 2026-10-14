@@ -30,10 +30,11 @@ module rtz_cooling_module
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
-   real(dp),parameter::T_min=0.1, T_frac=0.1
-   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6, x_frac=0.1
-   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
-   real(dp),parameter::Fp_frac=0.5
+   real(dp),parameter::T_min=0.1
+   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6
+   real(dp),parameter::Np_min=1d-13
+   ! The substep tolerances T_frac, x_frac, Np_frac, Fp_frac are namelist parameters now
+   ! (rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac in &RT_PARAMS, rt_parameters.f90)
    real(dp),dimension(nGroups, 3)::signc_dust
    real(dp), save :: t_rad = 0.0_dp
    real(dp), save :: t_cool = 0.0_dp
@@ -277,11 +278,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    call rtz_updateRTGroups_CoolConstants(ilevel)
 #endif
    ! Store some temporary variables reduce computations
-   one_over_T_FRAC = 1d0 / T_FRAC
-   one_over_x_FRAC = 1d0 / x_FRAC
+   one_over_T_FRAC = 1d0 / rtz_T_frac
+   one_over_x_FRAC = 1d0 / rtz_x_frac
 #ifdef RT
-   one_over_Np_FRAC = 1d0 / Np_FRAC
-   one_over_Fp_FRAC = 1d0 / Fp_FRAC
+   one_over_Np_FRAC = 1d0 / rtz_Np_frac
+   one_over_Fp_FRAC = 1d0 / rtz_Fp_frac
    one_over_rt_c_cgs = 1d0 / rt_c_cgs(ilevel)
    group_egy_erg(1:nGroups) = group_egy(1:nGroups) * eV2erg
    if(rt_isIR) then
@@ -785,8 +786,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
-               ! Guard: ddt underflow to IEEE zero — can't make progress, bail
-               if (ddt(i) < 0d0) then
+               ! Guard: ddt underflow to IEEE zero — can't make progress, bail.
+               ! Halving never makes ddt negative, so the test must catch zero (and NaN): with
+               ! "ddt < 0" a cell that fails at any substep length spun to loopcnt_limit.
+               if (.not. (ddt(i) > 0d0)) then
+                  write(*,*) 'rtz_solve_cooling: the substep of cell', i, 'underflowed to zero, code', code
+                  write(*,*) '  n_H =', nH(i), 'cm^-3, T2 =', T2(i), 'K'
+                  ! With no hydrogen every rate is 0/0 (x_e = n_e/n_H): the clamp in the ion update
+                  ! turns the NaN into x_MIN and the step fails (code 8) whatever its length. This
+                  ! is what initial conditions without element mass fractions (var_region(1,:)=0)
+                  ! give once the network is on.
+                  if (.not. (nH(i) > 0d0)) write(*,*) '  no hydrogen: RTZ needs the element (and ion)', &
+                     ' mass fractions in the initial conditions, e.g. var_region'
                   err_idx = i
                   return
                end if
@@ -1247,7 +1258,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! Scattering rate; reduce the photon flux, but not photon density:
          phSc(1:nGroups)=0.
 
-         ! HKnote: OTSA is required with RTZ (for now)
+         ! With rt_OTSA the ground-state recombination photons are not emitted here, and
+         ! recombination() returns the case-B rate instead (the on-the-spot approximation).
 
          ! Emission from recombining gas, re-entering the radiation field.
          !
