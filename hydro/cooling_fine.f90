@@ -1245,7 +1245,7 @@ end subroutine cmp_Eddington_tensor
 ! more compositions meet in a stencil; passive_cma restores them by renormalising the
 ! face states (Consistent Multi-fluid Advection, Plewa & Mueller 1999, A&A 342, 179),
 ! top level first, then each element's ions to the element's renormalised face value.
-! The targets are the sums of the cell the face state belongs to (ps_cma_states), which
+! The targets are the sums of the cell the face state belongs to (ps_cma_cell_targets), which
 ! are one in a consistent cell; a cell that is not keeps its own sums.
 !
 ! These routines live here, in a file that both the hydro and the MHD solver compile
@@ -1323,6 +1323,9 @@ subroutine init_passive_groups
   ps_gas(1:ps_ngastop)=ps_gastop
   ps_gas(ps_ngastop+1:ps_ngas)=ps_child(1:n)
   ps_active=passive_cma
+  allocate(ps_ttop(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2))
+  allocate(ps_rch(1:max(ps_npar,1),1:nvector,iu1:iu2,ju1:ju2,ku1:ku2))
+  ps_ttop=1d0; ps_rch=1d0
 
   ! A restart file holds the ionisation fractions (see output_hydro), which init_hydro
   ! multiplied by rho like every passive scalar: turn them into ion mass densities
@@ -1377,75 +1380,66 @@ subroutine ps_frac_to_mass_uold
   end do
 end subroutine ps_frac_to_mass_uold
 !###########################################################
-subroutine ps_cma_states(q,qm,qp,ngrid)
-  ! Nested CMA on the traced face states of every cell (called after trace, before the
-  ! Riemann solvers; q: cell-centred primitive, passive = mass fraction of rho).  The top
-  ! fractions of both face states of a cell are scaled to sum to the cell's own top sum,
-  ! and each element's ions to that element's (scaled) face value times the cell's
-  ! ion/element ratio.  In a consistent cell both targets are one; a cell that is not (a
-  ! setup whose fractions do not sum to one, or a cell an inconsistent process has left
-  ! off) keeps its own sums instead of having its species fluxes scaled up to them.
+subroutine ps_cma_cell_targets(q,ngrid)
+  ! The CMA targets of the cells whose face states the Riemann solvers use (called once per
+  ! sweep, before cmpflxm; q: cell-centred primitive, passive = mass fraction of rho):
+  ! ps_ttop, the cell's top sum, and ps_rch, the ion/element ratio of every parent.  In a
+  ! consistent cell they are one; a cell that is not (a setup whose fractions do not sum
+  ! to one, or a cell an inconsistent process has left off) keeps its own sums, instead of
+  ! having its species fluxes scaled up to them.  cmpflxm uses the faces of the grid's own
+  ! cells only, so the cells needed are those with at most one index outside 1..2.
   use amr_parameters
   use hydro_commons
   implicit none
   integer::ngrid
   real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar)::q
-  real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar,1:ndim)::qm,qp
-  integer::i,j,k,l,m,n,idim,ilo,ihi,jlo,jhi,klo,khi
-  real(dp),dimension(1:nvector)::ttop
-  real(dp),dimension(1:nvector,1:max(ps_npar,1))::rch
-  real(dp),dimension(1:nvector,1:nvar)::f
-  real(dp)::sc
-  if(ps_ntop==0)return
+  integer::i,j,k,l,m,n,ilo,ihi,jlo,jhi,klo,khi,nout
+  real(dp)::s,sc
   ilo=MIN(1,iu1+1); ihi=MAX(1,iu2-1)
   jlo=MIN(1,ju1+1); jhi=MAX(1,ju2-1)
   klo=MIN(1,ku1+1); khi=MAX(1,ku2-1)
   do k=klo,khi
      do j=jlo,jhi
         do i=ilo,ihi
-           ! the cell's own targets
+           nout=0
+           if(i<1.or.i>2)nout=nout+1
+           if(ndim>1.and.(j<1.or.j>2))nout=nout+1
+           if(ndim>2.and.(k<1.or.k>2))nout=nout+1
+           if(nout>1)cycle
            do l=1,ngrid
-              ttop(l)=0d0
+              s=0d0
               do n=1,ps_ntop
-                 ttop(l)=ttop(l)+max(q(l,i,j,k,ps_top(n)),0d0)
+                 s=s+max(q(l,i,j,k,ps_top(n)),0d0)
               end do
-           end do
-           do n=1,ps_npar
-              do l=1,ngrid
+              ps_ttop(l,i,j,k)=s
+              do n=1,ps_npar
                  sc=0d0
                  do m=ps_cstart(n),ps_cstart(n+1)-1
                     sc=sc+max(q(l,i,j,k,ps_child(m)),0d0)
                  end do
                  if(q(l,i,j,k,ps_par(n))>0d0.and.sc>0d0)then
-                    rch(l,n)=sc/q(l,i,j,k,ps_par(n))
+                    ps_rch(n,l,i,j,k)=sc/q(l,i,j,k,ps_par(n))
                  else
-                    rch(l,n)=1d0
+                    ps_rch(n,l,i,j,k)=1d0
                  end if
               end do
-           end do
-           do idim=1,ndim
-              f(1:ngrid,1:nvar)=qm(1:ngrid,i,j,k,1:nvar,idim)
-              call ps_cma_target(f,ngrid,ttop,rch)
-              qm(1:ngrid,i,j,k,1:nvar,idim)=f(1:ngrid,1:nvar)
-              f(1:ngrid,1:nvar)=qp(1:ngrid,i,j,k,1:nvar,idim)
-              call ps_cma_target(f,ngrid,ttop,rch)
-              qp(1:ngrid,i,j,k,1:nvar,idim)=f(1:ngrid,1:nvar)
            end do
         end do
      end do
   end do
-end subroutine ps_cma_states
+end subroutine ps_cma_cell_targets
 !###########################################################
-subroutine ps_cma_target(q,ngrid,ttop,rch)
-  ! Nested CMA on face states q(:,1:nvar): top fractions sum to ttop, the ions of parent j
-  ! to rch(:,j) times the parent's (scaled) face fraction.
+subroutine ps_cma_target(q,ld,ngrid,ttop,rch)
+  ! Nested CMA on face states q(1:ngrid,1:nvar) (leading dimension ld: nvector for the
+  ! hydro solver's vectors, 1 for one MHD face): top fractions sum to ttop, the ions of
+  ! parent j to rch(j,:) times the parent's (scaled) face fraction.
   use amr_parameters
   use hydro_commons
   implicit none
-  integer::ngrid
-  real(dp),dimension(1:nvector,1:nvar)::q
-  real(dp),dimension(1:nvector)::ttop
-  real(dp),dimension(1:nvector,1:max(ps_npar,1))::rch
+  integer::ld,ngrid
+  real(dp),dimension(1:ld,1:nvar)::q
+  real(dp),dimension(1:ld)::ttop
+  real(dp),dimension(1:max(ps_npar,1),1:ld)::rch
   integer::i,j,k,n
   real(dp),dimension(1:nvector)::s
   ! top level
@@ -1478,10 +1472,10 @@ subroutine ps_cma_target(q,ngrid,ttop,rch)
      end do
      do i=1,ngrid
         if(s(i)>0d0)then
-           s(i)=rch(i,j)*q(i,ps_par(j))/s(i)
+           s(i)=rch(j,i)*q(i,ps_par(j))/s(i)
         else
            ! no ion left in the face state: put the element in its first stage
-           q(i,ps_child(ps_cstart(j)))=rch(i,j)*q(i,ps_par(j))
+           q(i,ps_child(ps_cstart(j)))=rch(j,i)*q(i,ps_par(j))
            s(i)=1d0
         end if
      end do
