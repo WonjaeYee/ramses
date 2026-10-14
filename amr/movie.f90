@@ -785,6 +785,11 @@ subroutine output_frame()
                                      ! Metallicity map
                                   else if(movie_vars(kk).eq.i_mv_metallicity)then
                                      ok_frame=.true.
+                                     ! NOTE (RTZ): imetal is the first tracked element's
+                                     ! density, i.e. HYDROGEN, not a metallicity -- so this
+                                     ! movie field is the hydrogen mass fraction in RTZ runs.
+                                     ! Not fixed; build Z from the element slots (e.g. O/H) if
+                                     ! a real metallicity map is needed.
                                      uvar = uold(ind_cell(i),imetal)/max(uold(ind_cell(i),1),smallr)
 
                                      ! Any scalars map
