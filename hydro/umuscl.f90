@@ -1090,6 +1090,21 @@ subroutine uslope(q,dq,dx,dt,ngrid)
                     if((dlft*drgt)<=zero)dlim=zero
                     dq(l,i,j,k,n,1) = dsgn*min(dlim,abs(dcen))
                  end do
+              else if (slope_type==99) then
+                 if ((1<=n).and.(n<=1+ndim+1+nener)) then
+                    do l = 1, ngrid
+                       dlft = MIN(slope_type,2)*(q(l,i  ,j,k,n) - q(l,i-1,j,k,n))
+                       drgt = MIN(slope_type,2)*(q(l,i+1,j,k,n) - q(l,i  ,j,k,n))
+                       dcen = half*(dlft+drgt)/MIN(slope_type,2)
+                       dsgn = sign(one, dcen)
+                       slop = min(abs(dlft),abs(drgt))
+                       dlim = slop
+                       if((dlft*drgt)<=zero)dlim=zero
+                       dq(l,i,j,k,n,1) = dsgn*min(dlim,abs(dcen))
+                    end do
+                 else
+                    dq(1:ngrid,i,j,k,n,1) = zero
+                 end if
               else
                  write(*,*)'Unknown slope type',dx,dt
                  stop
@@ -1223,6 +1238,39 @@ subroutine uslope(q,dq,dx,dt,ngrid)
                     dcen = half*(dlft+drgt)
                     dsgn = sign(one,dcen)
                     slop = min(slope_theta*abs(dlft),slope_theta*abs(drgt))
+                    dlim = slop
+                    if((dlft*drgt)<=zero)dlim=zero
+                    dq(l,i,j,k,n,2) = dsgn*min(dlim,abs(dcen))
+                 end do
+              end do
+           end do
+        end do
+     end do
+  else if (slope_type==99) then
+     dq = zero
+
+     do n = 1, 1+ndim+1+nener
+        do k = klo, khi
+           do j = jlo, jhi
+              do i = ilo, ihi
+                 ! slopes in first coordinate direction
+                 do l = 1, ngrid
+                    dlft = slope_type*(q(l,i  ,j,k,n) - q(l,i-1,j,k,n))
+                    drgt = slope_type*(q(l,i+1,j,k,n) - q(l,i  ,j,k,n))
+                    dcen = half*(dlft+drgt)/slope_type
+                    dsgn = sign(one, dcen)
+                    slop = min(abs(dlft),abs(drgt))
+                    dlim = slop
+                    if((dlft*drgt)<=zero)dlim=zero
+                    dq(l,i,j,k,n,1) = dsgn*min(dlim,abs(dcen))
+                 end do
+                 ! slopes in second coordinate direction
+                 do l = 1, ngrid
+                    dlft = slope_type*(q(l,i,j  ,k,n) - q(l,i,j-1,k,n))
+                    drgt = slope_type*(q(l,i,j+1,k,n) - q(l,i,j  ,k,n))
+                    dcen = half*(dlft+drgt)/slope_type
+                    dsgn = sign(one,dcen)
+                    slop = min(abs(dlft),abs(drgt))
                     dlim = slop
                     if((dlft*drgt)<=zero)dlim=zero
                     dq(l,i,j,k,n,2) = dsgn*min(dlim,abs(dcen))
@@ -1466,6 +1514,53 @@ subroutine uslope(q,dq,dx,dt,ngrid)
                     dlim = slop
                     if((dlft*drgt)<=zero)dlim=zero
                     dq(l,i,j,k,n,3) = dsgn*min(dlim,abs(dcen))
+                 end do
+              end do
+           end do
+        end do
+     end do
+  else if(slope_type==99)then
+     dq = zero
+
+     do n = 1, 1+ndim+1+nener
+        do k = klo, khi
+           do j = jlo, jhi
+              do i = ilo, ihi
+                 ! slopes in first coordinate direction
+                 do l = 1, ngrid
+                    dlft = q(l,i  ,j,k,n) - q(l,i-1,j,k,n)
+                    drgt = q(l,i+1,j,k,n) - q(l,i  ,j,k,n)
+                    if((dlft*drgt)<=zero) then
+                       dq(l,i,j,k,n,1) = zero
+                    else if(dlft>0) then
+                       dq(l,i,j,k,n,1) = min(dlft,drgt)
+                    else
+                       dq(l,i,j,k,n,1) = max(dlft,drgt)
+                    end if
+                 end do
+                 ! slopes in second coordinate direction
+                 do l = 1, ngrid
+                    dlft = q(l,i,j  ,k,n) - q(l,i,j-1,k,n)
+                    drgt = q(l,i,j+1,k,n) - q(l,i,j  ,k,n)
+                    if((dlft*drgt)<=zero) then
+                       dq(l,i,j,k,n,2) = zero
+                    else if(dlft>0) then
+                       dq(l,i,j,k,n,2) = min(dlft,drgt)
+                    else
+                       dq(l,i,j,k,n,2) = max(dlft,drgt)
+                    end if
+                 end do
+                 ! slopes in third coordinate direction
+                 do l = 1, ngrid
+                    dlft = q(l,i,j,k  ,n) - q(l,i,j,k-1,n)
+                    drgt = q(l,i,j,k+1,n) - q(l,i,j,k  ,n)
+                    if((dlft*drgt)<=zero) then
+                       dq(l,i,j,k,n,3) = zero
+                    else if(dlft>0) then
+                       dq(l,i,j,k,n,3) = min(dlft,drgt)
+                    else
+                       dq(l,i,j,k,n,3) = max(dlft,drgt)
+                    end if
                  end do
               end do
            end do
