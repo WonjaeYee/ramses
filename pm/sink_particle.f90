@@ -1054,20 +1054,16 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max
   real(sp)::t_pre,t_now
-  real(dp),dimension(1:ndim)::pwind, ijp
+  real(dp),dimension(1:ndim)::ijp
   real(dp),dimension(1:NMETALS)::loc_metal_yield
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
-  real(dp)::ijm, ije, sn_e_code_units
+  real(dp)::ijm, pwind, ewind, ije, sn_e_code_units, weight_cic
   logical::is_hn, is_sn, is_central_cloud_particle
   integer::counter, iElement, pre_accretion_evolution_flag, elem_k
   real(dp)::star_met_fe
   integer::ielem,jelem
   real(dp)::fchem
 
-  ! strict initialization 
-  injected_mass = 0d0
-  loc_metal_yield = 0d0
-  pwind = 0d0
 #endif
 
   ! Conversion factor from user units to cgs units
@@ -1328,6 +1324,17 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 
 
 #ifdef INDIVIDUAL_SINK_STARS
+           ! strict initialization 
+           injected_mass = 0d0
+           loc_metal_yield = 0d0
+           sn_e_code_units = 0d0
+           pwind = 0d0
+
+           ! switch r_rel from sink->cell to sink->cloud
+           ! hoping this can give a bit more accurate vector direction for ejecta...
+           r_rel(1:ndim) = xpart(j,1:ndim) - xsink(isink,1:ndim)
+           r_len = sqrt(sum(r_rel**2))
+
            ! SN feedback
            if(.not.on_creation)then
               ! Initialize SN feedback to false
@@ -1442,7 +1449,12 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        sn_e = 0d0
 
                        ! get vector from radial momentum of stellar wind
-                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m) * (r_rel / max(r_len, tiny(0.0_dp)))
+                       ! 2026.10.08
+                       ! at this point, get the scalar value of wind momentum
+                       ! [g km/s] -> [code m code l / code t]
+                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m)
+
+                       ! ewind = 1d41
                     end if
                  end if
               end if 
@@ -1485,12 +1497,65 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  ! Update hydro variables in the relevant cells
                  sn_e_code_units = sn_e/scale_d/scale_l/scale_l/scale_l/scale_v/scale_v
 
-                 ijm = injected_mass * (weight/volume) / vol_loc ! injected mass density
+!                  ! test purpose:
+!                  ! to make a pressure gradient, modify the weight
+!                  ! normalization of weight should be still the total volume
+! 
+!                  ! 1. all region -> half
+!                  weight = 0.5d0 * weight
+! 
+!                  ! 2. inner region -> + CIC volume
+!                  ! trial 1. just the central cloud particle
+!                  if (r_len <= 0.5*dx_cloud) then
+!                     weight = weight + 0.5d0*volume*vol(j,ind)
+!                  end if
+! 
+!                  ! ! trial 2. central and its 26 neighbors
+!                  ! if (all(abs(r_rel)<1.5d0*dx_cloud)) then
+!                  !    weight_cic = 1.0d0
+!                  !    do idim=1,ndim
+!                  !       weight_cic = weight_cic * 0.5d0*min(0.0d0, 2.0d0*dx_cloud-abs(r_rel(idim)))
+!                  !    end do
+!                  !    weight_cic = weight_cic / (8.0d0 * vol_cloud)
+!                  !    weight = weight + 0.5d0*volume*vol(j,ind)*weight_cic
+!                  ! end if
+! 
+!                  ! trial 3. inject only in the central cell
+!                  weight = 0.0d0
+!                  if (r_len <= 0.5*dx_cloud) then
+!                     
+!                     ! temporarily inject only in one cell
+!                     if (vol(j,ind)>0.5d0) then
+!                        weight = volume
+!                     end if
+!                     ! weight = volume*vol(j,ind)
+!                  end if
 
-                 ijp = pwind(1:ndim) * (weight/volume) / vol_loc ! injected momentum density
+                 ! injected mass density
+                 ijm = injected_mass * (weight/volume) / vol_loc
+
+                 ! injected momentum density
+                 ! far-field approximation
+                 if (r_len > dx_loc) then
+                    ijp = pwind * (weight/volume) / vol_loc * (r_rel/r_len)
+                 ! near-field approximation
+                 else
+                    ijp = pwind * (weight/volume) / vol_loc * (r_rel/dx_loc)
+                 end if
                  ijp = ijp + ijm*vsink(isink,1:ndim) ! also consider motion of the sink
 
-                 ije = 0.5d0 * sum(ijp**2) / (ijm+tiny(0.0d0))
+!                  ! trial 4. no momentum injection
+!                  ijp = 0.0d0
+                 
+                 ! injected energy density
+                 ! notice that this assumes the energy is purely kinetic
+                 ! thermal energy from the stellar wind is neglected
+                 ije = 0.5d0 * pwind**2/injected_mass * (weight/volume) / vol_loc
+
+                 ! test purpose: add artificial energy density at the center cell
+                 ! if (r_len < 0.5*dx_loc) then
+                 !    ije = ije * 1.0d2
+                 ! end if
 
 #ifdef NO_FEEDBACK_ALL
                  ! test purpose: temporarily set no feedback
