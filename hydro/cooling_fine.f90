@@ -631,6 +631,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         do i=1,nleaf
            rho_cell = MAX(uold(ind_leaf(i),1),smallr) * scale_d
            if (abs(rho_total_check(i) - rho_cell) / rho_cell .gt. rho_total_tol) then
+              write(*,*) 'myid:', myid
               write(*,*) 'Total density check failed in cell ', ind_leaf(i)
               write(*,*) 'Total density            [g/cm^3]: ', rho_cell
               write(*,*) 'Sum of species densities [g/cm^3]: ', rho_total_check(i)
@@ -845,7 +846,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) 'This is raised in `coolfine1`'
            write(*,*) '  myid:', myid
            write(*,*) 'ilevel:', ilevel
-           ! write(*,*) 'ind_leaf:', ind_leaf(err_idx)
+           write(*,*) 'err_idx:', err_idx
+           write(*,*) 'ind_leaf:', ind_leaf(err_idx)
            
            write(*,*) 'error cell, before the update'
            write(*,*) '  uold:', uold(ind_leaf(err_idx),:)

@@ -39,11 +39,6 @@ recursive subroutine amr_step(ilevel,icount)
 
   if(verbose)write(*,999)icount,ilevel
 
-!  if(myid==9.and.ilevel==8) then
-!   write(*,*) 'from `amr_step`, right after called'
-!   write(*,*) 'uold(68849, 18:):', uold(68849, 18:)
-!  end if
-
   !-------------------------------------------
   ! Make new refinements and update boundaries
   !-------------------------------------------
@@ -688,3 +683,111 @@ subroutine rt_step(ilevel)
 
 end subroutine rt_step
 #endif
+
+! subroutine brutal_check(ilevel, after)
+! 
+!    use amr_commons
+!    use hydro_commons
+!    use rt_parameters, only: iIons
+!    use mpi_mod
+! 
+!    implicit none
+! 
+!    integer::ilevel
+!    character(len=*)::after
+! 
+!    real(dp)::max_error_uold, min_error_uold, max_error_unew, min_error_unew
+!    real(dp)::max_error_uold_tot, min_error_uold_tot, max_error_unew_tot, min_error_unew_tot
+!    real(dp)::check1, check2, check3
+!    integer::i,ind,iskip
+!    logical::any_nan_uold, any_nan_unew
+!    logical::any_nan_uold_tot, any_nan_unew_tot
+!    real(dp)::min_rho_uold, min_rho_unew
+!    real(dp)::min_rho_uold_tot, min_rho_unew_tot
+!    integer::info
+! 
+!    max_error_uold = 0.0d0
+!    min_error_uold = 0.0d0
+! 
+!    max_error_unew = 0.0d0
+!    min_error_unew = 0.0d0
+! 
+!    any_nan_uold = .false.
+!    any_nan_unew = .false.
+! 
+!    min_rho_uold = huge(1.0_dp)
+!    min_rho_unew = huge(1.0_dp)
+! 
+!    max_error_uold_tot = 0.0d0
+!    min_error_uold_tot = 0.0d0
+! 
+!    max_error_unew_tot = 0.0d0
+!    min_error_unew_tot = 0.0d0
+! 
+!    any_nan_uold_tot = .false.
+!    any_nan_unew_tot = .false.
+! 
+!    min_rho_uold_tot = huge(1.0_dp)
+!    min_rho_unew_tot = huge(1.0_dp)
+! 
+!    ! loop over all active cells
+!    do ind=1,twotondim
+! 
+!       iskip=ncoarse+(ind-1)*ngridmax
+! 
+!       do i=1,active(ilevel)%ngrid
+! 
+!          ! check uold
+!          check1 = sum(uold(active(ilevel)%igrid(i)+iskip,imetal:iIons-1))
+!          check2 = uold(active(ilevel)%igrid(i)+iskip,1)
+!          check3 = (check1-check2)/check2
+! 
+!          max_error_uold = max(check3, max_error_uold)
+!          min_error_uold = min(check3, min_error_uold)
+! 
+!          any_nan_uold = any_nan_uold .or. any(isnan(uold(active(ilevel)%igrid(i)+iskip,2:4)))
+! 
+!          min_rho_uold = min(min_rho_uold, uold(active(ilevel)%igrid(i)+iskip,1))
+! 
+!          ! check unew
+!          check1 = sum(unew(active(ilevel)%igrid(i)+iskip,imetal:iIons-1))
+!          check2 = unew(active(ilevel)%igrid(i)+iskip,1)
+!          check3 = (check1-check2)/check2
+! 
+!          max_error_unew = max(check3, max_error_unew)
+!          min_error_unew = min(check3, min_error_unew)
+! 
+!          any_nan_unew = any_nan_unew .or. any(isnan(unew(active(ilevel)%igrid(i)+iskip,2:4)))
+! 
+!          min_rho_unew = min(min_rho_unew, unew(active(ilevel)%igrid(i)+iskip,1))
+! 
+!       end do
+! 
+!    end do
+! 
+! #ifdef WITHOUTMPI
+!    write(*,*) "ilevel:", ilevel, "after: ", trim(after)
+!    write(*,*) "uold:", min_error_uold, max_error_uold
+!    write(*,*) "unew:", min_error_unew, max_error_unew
+!    write(*,*) "NaNs:", any_nan_uold, any_nan_unew
+!    write(*,*) "dens:", min_rho_uold, min_rho_unew
+! #else
+!    call mpi_allreduce(min_error_uold,min_error_uold_tot,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_WORLD,info)
+!    call mpi_allreduce(max_error_uold,max_error_uold_tot,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,info)
+!    call mpi_allreduce(min_error_unew,min_error_unew_tot,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_WORLD,info)
+!    call mpi_allreduce(max_error_unew,max_error_unew_tot,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,info)
+!    
+!    call mpi_allreduce(any_nan_uold,any_nan_uold_tot,1,MPI_LOGICAL,MPI_LOR,MPI_COMM_WORLD,info)
+!    call mpi_allreduce(any_nan_unew,any_nan_unew_tot,1,MPI_LOGICAL,MPI_LOR,MPI_COMM_WORLD,info)
+! 
+!    call mpi_allreduce(min_rho_uold,min_rho_uold_tot,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_WORLD,info)
+!    call mpi_allreduce(min_rho_unew,min_rho_unew_tot,1,MPI_DOUBLE_PRECISION,MPI_MIN,MPI_COMM_WORLD,info)
+! 
+!    if (myid==1) then
+!       write(*,*) "ilevel:", ilevel, "after: ", trim(after)
+!       write(*,*) "uold:", min_error_uold_tot, max_error_uold_tot, min_rho_uold_tot, any_nan_uold_tot
+!       write(*,*) "unew:", min_error_unew_tot, max_error_unew_tot, min_rho_unew_tot, any_nan_unew_tot
+!    end if
+! #endif
+! 
+! end subroutine brutal_check

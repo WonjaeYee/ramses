@@ -738,6 +738,39 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! ddt(i) = dt_rec              ! Potentially optimized approach
                ! Guard: ddt underflow to IEEE zero — can't make progress, bail
                if (ddt(i) <= 0d0) then
+                  write(*,*) "This is raised in `rtz_solve_cooling`"
+                  write(*,*) "ddt(i)<=0.0 for", i
+                  write(*,"(A11, *(X, I6))") ' loopCodes:', loopCodes(0:10)
+                  write(*,*) '(from code 0)'
+                  write(*,"(A11, *(X, I6))") 'loopCodes01:', loopCodes01
+                  write(*,*) '(Np update: nGroups)'
+                  write(*,"(A11)") 'loopCodes02:'
+                  do loopCode_idx1=1,nGroups
+                     write(*,"(*(X, I6))") loopCodes02(loopCode_idx1, 1:ndim)
+                  end do
+                  write(*,*) '(Fp update: nGroups, ndim)'
+                  write(*,"(A11)") 'loopCodes08:'
+                  do loopCode_idx1=1,n_elements
+                     if (elements(loopCode_idx1)%atomic_number > 0) then
+                        write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes08(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+                     end if
+                  end do
+                  write(*,*) '(xion update: n_elements, n_ions)'
+                  write(*,"(A11)") 'loopCodes09:'
+                  do loopCode_idx1=1,n_elements
+                     if (elements(loopCode_idx1)%atomic_number > 0) then
+                        write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes09(loopCode_idx1, 1:elements(loopCode_idx1)%n_ions)
+                     end if
+                  end do
+                  write(*,*) '(ne update: n_elements, n_ions)'
+                  write(*,"(A11)") 'loopCodes10:'
+                  do loopCode_idx1=1,n_elements
+                     if (elements(loopCode_idx1)%atomic_number > 0) then
+                        write(*,"(I2, A, *(X,I6))") loopCode_idx1, ':', loopCodes10(loopCode_idx1, 0:elements(loopCode_idx1)%n_ions)
+                     end if
+                  end do
+                  write(*,*) '(negative density from dust update: n_elements, n_ions)'
+                  ! Wonjae error message above
                   err_idx = i
                   return
                end if
@@ -810,6 +843,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
       end do
       write(*,*) '(negative density from dust update: n_elements, n_ions)'
+      write(*,*) 'err_idx:', err_idx
       ! Wonjae error message above
 #endif
 
