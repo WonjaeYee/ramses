@@ -5,6 +5,7 @@ module rtz_module
 
   private
   public:: elements, n_elements, initialize_elements
+  public:: getNe, dust_to_gas_scale_RR14, getMu_RTZ, get_rho_rtz, get_n_rtz
 
   type Element
       integer(KIND=4) :: atomic_number
@@ -185,5 +186,170 @@ SUBROUTINE initialize_elements()
 #endif
 
 END SUBROUTINE initialize_elements
+
+!************************************************************************
+   FUNCTION getNe(xion,nion) result(ne)
+      !Returns the electron number density by looping over all elements 
+      !and summing their contributions
+      implicit none
+
+      real(dp), intent(in)::xion(1:n_elements,1:n_elements)
+      real(dp), intent(in)::nion(1:n_elements)
+      real(dp)::ne
+      integer::iIons, iElement, n_ions
+
+      ne = 0.d0
+
+      !Loop over all elements
+      do iElement=1,n_elements
+         if (elements(iElement)%atomic_number .gt. 0) then
+            !Get the number of ions
+            n_ions = elements(iElement)%n_ions
+
+            !Loop over all ions 
+            !Start loop at 2, no electrons in the ground state
+            do iIons=2,n_ions
+               ne = ne + (nion(iElement) * xion(iElement,iIons) * real(iIons - 1, dp)) 
+            end do
+         end if
+      end do
+
+   END FUNCTION getNe
+
+   FUNCTION dust_to_gas_scale_RR14(log10_O_over_H) result(ratio)
+      ! This returns the dust-to-metal ratio relative to the local value
+      !------------------------------------
+      ! Zsolar: metallicity in solar units
+      ! D2Z_solar ~ D2Z / 0.3
+      !------------------------------------
+      ! based on Remy-Ruyer, Madden, Galliano et al. (2014)
+      ! https://arxiv.org/pdf/1312.3442.pdfR
+      ! Broken power law with X_{CO,Z} case (Table 1)
+      implicit none
+
+      real(dp),intent(in)::log10_O_over_H
+      real(dp)::ratio
+      real(dp)::a,alphaH,b,alphaL,xt,x,Xsun
+      real(dp)::G2D,G2D_sol,y
+
+      ! y = log (G/D)
+      ! x = 12 + log10(O/H)
+      ! Xsun = 8.69
+      ! 
+      ! y = a + alphaH * (Xsun - x) for x>xt
+      ! y = b + alphaL * (Xsun - x) for x<=xt
+      a      = 2.21d0
+      alphaH = 1.00d0 ! MW case
+      b      = 0.96d0 ! 0.68
+      alphaL = 3.10d0 ! 3.08 
+      xt     = 8.10d0 ! 7.96
+      Xsun   = 8.69d0
+      x = max(log10_O_over_H,5.d0) ! Mild extrapolation
+
+      if (log10_O_over_H>xt)then
+         y = a + alphaH * (Xsun - x)
+      else
+         y = b + alphaL * (Xsun - x)
+      endif
+
+      G2D = 10.d0**y
+      G2D_sol = 10.d0**a
+
+      ratio = max(min(G2D_sol / G2D, 1.d0), 0.d0)
+
+   END FUNCTION dust_to_gas_scale_RR14
+
+#ifdef CO
+   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions, include_H2, nCO) result(mu)
+#else
+   FUNCTION getMu_RTZ(ne, element_number_densities, element_ion_fractions, include_H2) result(mu)
+#endif
+      implicit none
+      real(dp), intent(in):: ne
+      real(dp), intent(in):: element_number_densities(27)
+      real(dp), intent(in):: element_ion_fractions(27,27)
+      logical, intent(in):: include_H2
+#ifdef CO
+      real(dp), intent(in):: nCO
+#endif
+      real(dp):: mu
+      real(dp):: m_bar, n_hat
+
+      integer:: i, j
+
+      m_bar = 0.d0
+      n_hat = 0.d0
+
+      do i=1,n_elements
+         if (elements(i)%atomic_number.gt.0) then
+            do j=1,elements(i)%n_ions
+               m_bar = m_bar + (element_number_densities(i) * element_ion_fractions(i,j) * elements(i)%atomic_mass)
+               n_hat = n_hat + element_number_densities(i) * element_ion_fractions(i,j)
+            end do
+         end if
+      end do
+
+      ! Include electrons
+      n_hat = n_hat + ne
+
+      ! Include contribution from H2
+      if (include_H2) then
+         m_bar = m_bar + (element_number_densities(1) * element_ion_fractions(1,3) * elements(1)%atomic_mass)
+         n_hat = n_hat + (0.5d0 * element_number_densities(1) * element_ion_fractions(1,3))
+      end if
+
+#ifdef CO
+      ! Include contribution from CO
+      m_bar = m_bar + nCO * (elements(6)%atomic_mass + elements(8)%atomic_mass)
+      n_hat = n_hat + nCO
+#endif
+
+      if (n_hat > 1d-30) then
+         mu = m_bar / n_hat
+      else
+         mu = 1.0d0
+      end if
+
+   END FUNCTION getMu_RTZ
+
+   FUNCTION get_rho_rtz(element_number_densities) result(rho)
+      use constants, only: amu2g
+      implicit none
+      real(dp), intent(in):: element_number_densities(27)
+      real(dp):: rho
+
+      integer:: i
+
+      rho = 0.d0
+
+      do i=1,n_elements
+         if (elements(i)%atomic_number.lt.1) then
+            cycle
+         end if
+         rho = rho + (element_number_densities(i) * elements(i)%atomic_mass) ! gives amu/cm^3
+      end do
+
+      rho = amu2g * rho ! gives g/cm^3
+   END FUNCTION get_rho_rtz
+
+   FUNCTION get_n_rtz(element_number_densities, ne) result(rho_n)
+      implicit none
+      real(dp), intent(in):: element_number_densities(27)
+      real(dp), intent(in):: ne
+      real(dp):: rho_n
+
+      integer:: i
+
+      rho_n = 0.d0
+
+      do i=1,n_elements
+         if (elements(i)%atomic_number.lt.1) then
+            cycle
+         end if
+         rho_n = rho_n + element_number_densities(i)  ! gives 1/cm^3
+      end do
+
+      rho_n = rho_n + ne
+   END FUNCTION get_n_rtz
 
 end module rtz_module
