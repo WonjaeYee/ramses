@@ -39,16 +39,21 @@ module hydro_parameters
   integer, parameter :: n_elements = 27
 #ifdef CALIMA
 #ifndef NDUST
-#error CALIMA requires NDUST to be defined and > 0
+#error CALIMA requires NDUST to be defined and >= 0
 #endif
 #ifndef NPAH
-#error CALIMA requires NPAH to be defined and > 0
+#error CALIMA requires NPAH to be defined and >= 0
+#endif
+#if NDUST < 0
+#error CALIMA requires NDUST to be defined and >= 0
+#endif
+#if NPAH < 0
+#error CALIMA requires NPAH to be defined and >= 0
 #endif
 #if NDUST <= 0
-#error CALIMA requires NDUST to be defined and > 0
-#endif
 #if NPAH <= 0
-#error CALIMA requires NPAH to be defined and > 0
+#error CALIMA requires at least one of NDUST or NPAH to be > 0
+#endif
 #endif
 #ifdef NDCHEMTYPE
   integer, parameter :: ndchemtype = NDCHEMTYPE

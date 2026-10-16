@@ -733,12 +733,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                               ,dx_SS_H2, err_idx &
 #ifdef CALIMA
                               ,sigma=sigma &
-#if NDUST>0
                               ,rho_dust=rho_dust &
-#endif
-#if NPAH>0
                               ,rho_pah=rho_pah &
-#endif
 #endif
                               )
         end if
