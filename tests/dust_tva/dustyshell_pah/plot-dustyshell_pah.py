@@ -4,16 +4,18 @@ Every species starts as the same Gaussian shell and is pushed by the uniform flu
 tva_test_mode = TVA_TEST_SPRESS (dust_radpressure.f90; no force on the gas, static gas). Each
 then drifts at
     w_k = t_s,k D_k - sum_l eps_l t_s,l D_l,   D_k = grad P_g / rho + a_k - sum_l eps_l a_l,
-    a_k = sigma_rp,k F / (m_k c),   P_g = (1 - eps) P,
-with Epstein t_s,k = sqrt(pi gamma / 8) rho_gr,k a_k / (rho_g c_s). The pressure term matters:
-once the 0.1 um shells run ahead, the gradient of eps across the slower shells moves those by up
-to ~10% of their radiation drift. The prediction is w_k in every cell of every output (centred
+    a_k = sigma_rp,k F / (m_k c),   P_g = P (the Godunov, and output, pressure),
+with Epstein t_s,k = sqrt(pi gamma / 8) rho_gr,k a_k / (rho_g c_s). P is uniform here, so the
+pressure term only checks that the code takes no spurious one (with P_g = (1 - eps) P it moved the
+slower shells by up to ~10% of their radiation drift). The prediction is w_k in every cell of every output (centred
 gradient, as the code), weighted by the shell's excess over the floor and integrated over the
 outputs (trapezoid). Nothing is calibrated:
 - sigma_rp,k is the group average of the CALIMA tables (averaged_cross_section_*Bin_NN.txt) with
   the code's weighting (initialize_cross_sections_from_blackbody_dust_pah: int f lam sigma dlam /
   int f lam dlam, f a 1e5 K Planck function, on 1000 points linear in lambda, with the table
   interpolated in log sigma - log lambda as DustTable%interpolate does);
+  the grain tables in cm^2 per gram of dust (their `# Columns:` header) are taken per grain, times
+  the grain mass, as dust_photophysics does;
 - the PAH radius and mass follow dust_utils (Nc_to_a, Nc_to_mass), with rho_gr = spah;
 - F = rt_n_source group_egy (the SPRESS flux), with the group energy RTZ computes from the source
   spectrum (info_rt; 7.644 eV for 5-10 eV, not the 8 eV of the namelist: the 0.9556 factor of
@@ -91,6 +93,19 @@ def band_cs(path, cols):
     return np.trapezoid(f * lam * sig, lam) / np.trapezoid(f * lam, lam)
 
 
+def per_gram(path):
+    """True if the table's cross sections are cm^2 per gram of dust, False if per grain (older tables)."""
+    for ln in io.open(path):
+        if not ln.startswith("#"):
+            break
+        if "Columns:" in ln and "C_abs" in ln:
+            if "cm^2/g_dust" in ln:
+                return True
+            if "C_abs[cm^2]" in ln:
+                return False
+    raise SystemExit(f"{path}: no cross-section units in its '# Columns:' header")
+
+
 def nc_to_nh(nc):
     return int(0.5 * nc + 0.5) if nc <= 25 else int(2.5 * np.sqrt(nc) + 0.5) if nc <= 100 else int(0.25 * nc + 0.5)
 
@@ -109,7 +124,8 @@ for k, nc in enumerate(nml_arr("pah_nc", [])):
 for k, (asz, sg) in enumerate(zip(nml_arr("asize"), nml_arr("sgrain"))):
     a = asz * 1e-4
     path = os.path.join(tables, f"averaged_cross_section_DustBin_{k + 1:02d}.txt")
-    species.append((f"DustBin_{k + 1:02d}", a, sg, 4 / 3 * np.pi * a ** 3 * sg, band_cs(path, (0, 3))))
+    m = 4 / 3 * np.pi * a ** 3 * sg
+    species.append((f"DustBin_{k + 1:02d}", a, sg, m, band_cs(path, (0, 3)) * (m if per_gram(path) else 1.0)))
 
 
 def snap(i):
@@ -141,7 +157,7 @@ def drift(S):
     et = eps.sum(axis=0)
     rho = S["density"] * scale_d
     P = S["pressure"] * scale_d * scale_v ** 2
-    Pg = (1 - et) * P
+    Pg = P                       # the gas pressure is the Godunov one, as dust_dynamics now takes it
     c_s = np.sqrt(gamma * Pg / ((1 - et) * rho))
     ts = geo[:, None] / ((1 - et) * rho * c_s)
     D = np.gradient(Pg, S["x"] * scale_l) / rho + acc[:, None] - (eps * acc[:, None]).sum(axis=0)

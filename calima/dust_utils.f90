@@ -1,7 +1,7 @@
 module dust_utils
     use amr_parameters, only:dp
     use constants
-    use safe_math, only: safe_exp, safe_erf
+    use safe_math, only: safe_exp
     contains
 
     subroutine cmp_sigma_turb(icell,sigma2,ilevel)
@@ -9,16 +9,22 @@ module dust_utils
         use hydro_commons
         implicit none
         integer::ilevel,icell,ncell
-        real(dp)::d,d1,d2,d3,d4,d5,d6,ul,ur
+        real(dp)::d,ul,ur
         real(dp)::sigma2,sigma2_comp,sigma2_sole
         integer ,dimension(1:nvector)::ind_cell2
         integer ,dimension(1:nvector,0:twondim)::ind_nbor
-      
+        real(dp),dimension(1:twondim)::dn
+        integer::idim,jdim,k
+        ! the curl terms (direction of the difference, velocity component), in the 3D order
+        integer,parameter,dimension(6)::cdir=(/3,2,3,1,2,1/), ccmp=(/2,3,1,3,1,2/)
+
         ! We need to estimate the norm of the gradient of the velocity field in the cell (tensor of 2nd rank)
         ! i.e. || A ||^2 = trace( A A^T) where A = grad vec(v) is the tensor.
-        ! So construct values of velocity field on the 6 faces of the cell using simple linear interpolation
-        ! from neighbouring cell values and differentiate.
-        ! Get neighbor cells if they exist, otherwise use straight injection from local cell
+        ! So construct values of velocity field on the 2*ndim faces of the cell using simple linear
+        ! interpolation from neighbouring cell values and differentiate.
+        ! Get neighbor cells if they exist, otherwise use straight injection from local cell.
+        ! Only the ndim resolved directions and velocity components (uold(:,2:ndim+1)) enter: in 1D
+        ! and 2D, ind_nbor has 2*ndim neighbours and uold(:,ndim+2) is the energy.
         ncell = 1 ! we just want the neighbors of that cell
         ind_cell2(1)=icell
         d=uold(icell,1)
@@ -29,42 +35,28 @@ module dust_utils
         call getnbor(ind_cell2,ind_nbor,ncell,ilevel)
 #endif
 
-        d1           = uold(ind_nbor(1,1),1) ; d2 = uold(ind_nbor(1,2),1) ; d3 = uold(ind_nbor(1,3),1)
-        d4           = uold(ind_nbor(1,4),1) ; d5 = uold(ind_nbor(1,5),1) ; d6 = uold(ind_nbor(1,6),1)
+        do k = 1, twondim
+            dn(k) = uold(ind_nbor(1,k),1)
+        end do
         sigma2       = 0d0 ; sigma2_comp = 0d0 ; sigma2_sole = 0d0
         !!!!!!!!!!!!!!!!!!
         ! Divergence terms
         !!!!!!!!!!!!!!!!!!
-        ul        = (uold(ind_nbor(1,2),2) + uold(icell,2))/(d2+d)
-        ur        = (uold(ind_nbor(1,1),2) + uold(icell,2))/(d1+d)
-        sigma2_comp = sigma2_comp + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,4),3) + uold(icell,3))/(d4+d)
-        ur        = (uold(ind_nbor(1,3),3) + uold(icell,3))/(d3+d)
-        sigma2_comp = sigma2_comp + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,6),4) + uold(icell,4))/(d6+d)
-        ur        = (uold(ind_nbor(1,5),4) + uold(icell,4))/(d5+d)
-        sigma2_comp = sigma2_comp + (ur-ul)**2
+        do idim = 1, ndim
+            ul        = (uold(ind_nbor(1,2*idim),1+idim) + uold(icell,1+idim))/(dn(2*idim)+d)
+            ur        = (uold(ind_nbor(1,2*idim-1),1+idim) + uold(icell,1+idim))/(dn(2*idim-1)+d)
+            sigma2_comp = sigma2_comp + (ur-ul)**2
+        end do
         !!!!!!!!!!!!
         ! Curl terms
         !!!!!!!!!!!!
-        ul        = (uold(ind_nbor(1,6),3) + uold(icell,3))/(d6+d)
-        ur        = (uold(ind_nbor(1,5),3) + uold(icell,3))/(d5+d)
-        sigma2_sole = sigma2_sole + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,4),4) + uold(icell,4))/(d4+d)
-        ur        = (uold(ind_nbor(1,3),4) + uold(icell,4))/(d3+d)
-        sigma2_sole = sigma2_sole + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,6),2) + uold(icell,2))/(d6+d)
-        ur        = (uold(ind_nbor(1,5),2) + uold(icell,2))/(d5+d)
-        sigma2_sole = sigma2_sole + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,2),4) + uold(icell,4))/(d2+d)
-        ur        = (uold(ind_nbor(1,1),4) + uold(icell,4))/(d1+d)
-        sigma2_sole = sigma2_sole + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,4),2) + uold(icell,2))/(d4+d)
-        ur        = (uold(ind_nbor(1,3),2) + uold(icell,2))/(d3+d)
-        sigma2_sole = sigma2_sole + (ur-ul)**2
-        ul        = (uold(ind_nbor(1,2),3) + uold(icell,3))/(d2+d)
-        ur        = (uold(ind_nbor(1,1),3) + uold(icell,3))/(d1+d)
-        sigma2_sole = sigma2_sole + (ur-ul)**2
+        do k = 1, 6
+            idim = cdir(k); jdim = ccmp(k)
+            if (idim > ndim .or. jdim > ndim) cycle
+            ul        = (uold(ind_nbor(1,2*idim),1+jdim) + uold(icell,1+jdim))/(dn(2*idim)+d)
+            ur        = (uold(ind_nbor(1,2*idim-1),1+jdim) + uold(icell,1+jdim))/(dn(2*idim-1)+d)
+            sigma2_sole = sigma2_sole + (ur-ul)**2
+        end do
         sigma2    = sigma2_comp+sigma2_sole
         
     end subroutine cmp_sigma_turb
@@ -593,45 +585,6 @@ module dust_utils
         normx = x / x0
         sigmoid_function = 1d0 / (1d0 + exp(-k*(normx-1d0)))
     end function sigmoid_function
-
-    pure elemental function sticking_probability_from_velocity(v_rel, v_thresh, width_frac) result(p_stick)
-        ! Smooth sticking probability using a Maxwellian relative-speed distribution.
-        ! The sticking probability is P(v < v_thresh), i.e. the Maxwell CDF.
-        ! v_rel      => deterministic relative speed [cm s-1]
-        ! v_thresh   => coagulation threshold speed [cm s-1]
-        ! width_frac => fractional transition width around v_thresh (optional)
-        implicit none
-        real(dp), intent(in) :: v_rel, v_thresh
-        real(dp), intent(in), optional :: width_frac
-        real(dp) :: p_stick
-        real(dp) :: sigma_v, frac_loc
-        real(dp) :: ratio, ratio2, arg
-        real(dp), parameter :: frac_default = 1d-1
-        real(dp), parameter :: frac_min = 1d-4
-        real(dp), parameter :: frac_max = 5d-1
-        real(dp), parameter :: arg_hi = 12d0
-        real(dp), parameter :: tiny_v = 1d-40
-        real(dp), parameter :: inv_sqrt2 = 7.071067811865475d-1
-        real(dp), parameter :: sqrt_2_over_pi = 7.978845608028654d-1
-
-        frac_loc = frac_default
-        if (present(width_frac)) frac_loc = width_frac
-        frac_loc = min(max(frac_loc, frac_min), frac_max)
-
-        sigma_v = max(v_rel, v_thresh, tiny_v) * frac_loc
-        ratio = v_thresh / sigma_v
-        arg = ratio * inv_sqrt2
-        ratio2 = ratio * ratio
-
-        if (arg <= 0d0) then
-            p_stick = 0d0
-        else if (arg >= arg_hi) then
-            p_stick = 1d0
-        else
-            p_stick = safe_erf(arg) - sqrt_2_over_pi * ratio * safe_exp(-5d-1 * ratio2)
-            p_stick = min(max(p_stick, 0d0), 1d0)
-        end if
-    end function sticking_probability_from_velocity
 
     function planck_function(wavelength, T) result(emittance)
         use constants, only: hplanck, c_cgs, kB

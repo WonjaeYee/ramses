@@ -293,10 +293,9 @@ subroutine dustyslab_condinit(x,q,dx,nn)
   ! which needs ~5 decades more column to make the CELL-crossing IR optical
   ! depth of order unity.
   !
-  ! The gas pressure is pre-divided by (1-eps) so that the pressure the TVA
-  ! solver actually sees, Pg = (1-eps_tot)*q(neul), is uniform. Without this
-  ! the 1% jump in eps at the slab faces would put a spurious grad(P_gas)
-  ! exactly where the radiation-driven drift is being measured.
+  ! The gas pressure q(neul) is uniform: it is the pressure both the Godunov
+  ! solver and the TVA drift see, so the 1% jump in eps at the slab faces puts
+  ! no spurious grad(P_gas) where the radiation-driven drift is being measured.
   !================================================================
   integer::i,ivar
   real(dp),parameter::x_slab_lo = 3.0d0   ! slab inner edge [code length]
@@ -346,7 +345,6 @@ subroutine dustyslab_condinit(x,q,dx,nn)
         end do
      end if
 #endif
-     q(i,neul) = q(i,neul) / (1.0d0 - eps_val)
   end do
 
 end subroutine dustyslab_condinit
@@ -407,12 +405,10 @@ subroutine dustyirtrap_condinit(x,q,dx,nn)
         q(i,idust+ivar-1) = eps_val/dble(ndust)
      end do
 #endif
-     ! The TVA solver's gas pressure is Pg = (1-eps_tot)*q(neul) (it removes the
-     ! NENER energy, then scales by the gas fraction). Pre-divide by (1-eps) so
-     ! Pg comes out UNIFORM despite the dust ramp: that kills the ordinary
-     ! grad(P_gas) term, leaving the trapped-IR gradient as the only driver of
-     ! the drift and making the first-step check a clean test of it alone.
-     q(i,neul) = q(i,neul) / (1.0d0 - eps_val)
+     ! The gas pressure q(neul) (the TVA solver's Pg, as the Godunov solver's) stays
+     ! UNIFORM despite the dust ramp: that kills the ordinary grad(P_gas) term,
+     ! leaving the trapped-IR gradient as the only driver of the drift and making
+     ! the first-step check a clean test of it alone.
 #if NENER>0
      ! P_trap(x) = Ptrap_0 * (1 - Ptrap_dl*(x/boxlen - 1/2))
      ! => grad(P_trap) = -Ptrap_0*Ptrap_dl/boxlen, constant and negative,
@@ -476,8 +472,7 @@ subroutine dustytrapclump_condinit(x,q,dx,nn)
         q(i,idust+ivar-1) = eps_val/dble(ndust)
      end do
 #endif
-     ! Uniform gas pressure despite the clump (Pg = (1-eps_tot)*q(neul)): no grad(P_gas) drift
-     q(i,neul) = q(i,neul) / (1.0d0 - eps_val)
+     ! Uniform gas pressure despite the clump (Pg = q(neul)): no grad(P_gas) drift
 #if NENER>0
      ! P_trap = Ptrap_0 - G_0 int_0^x g: (delta/2) [ln cosh((x-x1)/delta) - ln cosh((x-x2)/delta)]
      q(i,inener) = Ptrap_0 - G_0 * 0.5d0 * dl * (log(cosh((x(i,1)-x1)/dl)) - log(cosh(x1/dl)) &
@@ -579,9 +574,8 @@ subroutine dustylev_condinit(x,q,dx,nn)
         q(i,idust+ivar-1) = eps_loc/dble(ndust)
      end do
 #endif
-     ! Same (1-eps) pre-division as the slab tests, so the gas pressure the
-     ! TVA solver reconstructs matches the isothermal profile above.
-     q(i,neul) = q(i,neul) / (1.0d0 - eps_loc)
+     ! q(neul) is the gas pressure the TVA solver reconstructs (the Godunov one):
+     ! the isothermal profile above.
   end do
 
 end subroutine dustylev_condinit
@@ -680,9 +674,8 @@ subroutine dustylevatm_condinit(x,q,dx,nn)
      do ivar=1,ndust
         q(i,idust+ivar-1) = eps_lev/dble(ndust)
      end do
-     ! Same (1-eps) pre-division as the other dusty tests, so the gas pressure
-     ! the TVA solver reconstructs is the isothermal profile above.
-     q(i,neul) = q(i,neul) / (1.0d0 - eps_lev)
+     ! q(neul) is the gas pressure the TVA solver reconstructs (the Godunov one):
+     ! the isothermal profile above.
 #endif
   end do
 
