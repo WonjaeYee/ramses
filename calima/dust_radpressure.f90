@@ -3,6 +3,9 @@
 ! This module computes the radiation pressure force vectors for the gas
 ! and individual dust/PAH bins directly in code units for the RTZ network.
 !=======================================================================
+#ifdef RT
+! Radiation pressure needs the RT photon groups: the module (and its only callers, in
+! dust_dynamics) is compiled with RT only, so CALIMA also builds without RT.
 module dust_radpressure_module
     use amr_parameters, only: dp, ndim
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS, ntva
@@ -215,12 +218,16 @@ contains
 #endif
 
         ! 5. Temperature
-        P_gas = (gamma - 1) * (cell_state(neul) - 0.5_dp * sum(cell_state(2:ndim+1)**2) / cell_state(1))
+        ! (gamma-1)(E - E_kin - E_rad), as ctoprim: the non-thermal energies are part of E, so they
+        ! come off before the gas's (gamma-1), not with their own (gamma_rad-1), which left
+        ! (gamma-gamma_rad) E_rad in the gas pressure (P_trap/P_gas too hot in trapped-IR cells)
+        P_gas = cell_state(neul) - 0.5_dp * sum(cell_state(2:ndim+1)**2) / cell_state(1)
 #if NENER > 0
         do counter = 1, nener
-           P_gas = P_gas - (gamma_rad(counter) - 1.0_dp) * cell_state(nhydro+counter)
+           P_gas = P_gas - cell_state(nhydro+counter)
         end do
 #endif
+        P_gas = (gamma - 1) * P_gas
         P_gas = max(P_gas, rho_gas * (smallc**2/gamma))
 
 #ifdef RTZ
@@ -674,3 +681,4 @@ contains
     end subroutine compute_gas_dust_radpressure_force
 
 end module dust_radpressure_module
+#endif
