@@ -125,7 +125,8 @@ rt_src_group(1) = 2
 &RT_GROUPS
 ! group 1 = IR (far-IR, where ~30 K dust re-emits); group 2 = UV, 5-7 eV,
 ! deliberately below all tracked ionisation thresholds so the gas is transparent.
-group_egy     = 0.01, 6.0
+! group_egy is not set: rt_init fills it from a blackbody at rtz_source_temperature
+! (1e5 K) over groupL0..groupL1. A value given here would be used as is.
 groupL0       = 0.001, 5.0
 groupL1       = 0.1,   7.0
 /

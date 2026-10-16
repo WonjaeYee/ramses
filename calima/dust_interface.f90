@@ -255,6 +255,12 @@ contains
         use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, &
                                           rtgroups_predict, rtgroups_coulomb_ratio
         use amr_commons, only: myid
+#ifdef RT
+        use rt_parameters, only: rt_isIR
+#ifdef RTZ
+        use rt_parameters, only: rtz_equilibrium_test, rtz_single_cell_test
+#endif
+#endif
 
         implicit none
 
@@ -272,6 +278,8 @@ contains
         real(dp) :: nHI
         integer :: n_charge
         logical :: use_rtg, no_local, use_isrf, predict, ok, skip_coulomb
+        logical :: need_T, need_Z   ! the grain temperature, the grain charge, are used
+        logical, save :: cm_known = .false., cm_rt = .false., cm_isrf = .false.
         real(dp), dimension(1:ndust) :: isrf_G, isrf_L         ! WDB06isrf: PE heating, recombination cooling
         real(dp), dimension(ISRF_ND, 1:ndust) :: isrf_D        ! WDB06isrf: Coulomb factors over the exact P(Z)
         ! WDB06rt Coulomb factors of the low impactor charges: 1 the Gaussian ones times rtg_D (the
@@ -294,10 +302,31 @@ contains
         real(kind=8) :: wallclock
 
         if (dinfo%ndust > 0) then
+            ! The grain temperature and charge only where something uses them: T_dust in the gas-grain
+            ! collisional heating, H2 formation, the dust and PAH processes, the dust IR emission and
+            ! the equilibrium-test output; the charge in those (through the T_dust balance), the PE
+            ! heating and recombination cooling, the Coulomb factors, the grain-assisted recombination
+            ! and charged sputtering. Otherwise both were solved in every RTZ substep and discarded
+            ! (the TVA Draine drag solves its own charge, dust_radpressure).
+            need_T = dust_coll_cooling .or. H2ondust .or. ndust_processes > 0 .or. npah_processes > 0
+#ifdef RT
+            need_T = need_T .or. rt_isIR
+#ifdef RTZ
+            need_T = need_T .or. rtz_equilibrium_test > 0 .or. rtz_single_cell_test
+#endif
+#endif
+            need_Z = need_T .or. dust_pe_heating .or. Coulomb_precompute .or. dust_ion_recombination &
+                     .or. dust_sputtering_charge
             ! 1. Compute the equilibrium dust charge
             if (dust_charging_timer) t0 = wallclock()
-            use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
-            use_isrf = trim(charging_model) == 'WDB06isrf'
+            if (.not. cm_known) then
+                ! charging_model is fixed for the run: compare the strings once, not per cell and substep
+                cm_rt = trim(charging_model) == 'WDB06rt'
+                cm_isrf = trim(charging_model) == 'WDB06isrf'
+                cm_known = .true.
+            end if
+            use_rtg = cm_rt .and. present(Np) .and. need_Z
+            use_isrf = cm_isrf .and. need_Z
             alpha_bins = 0d0
             if (use_rtg) then
                 ! Local-field charge balance on the RT photon groups (WDB06 yields),
@@ -453,7 +482,7 @@ contains
                     end if
                 end do
                 if (dust_charging_timer) nchg(3) = nchg(3) + dinfo%ndust
-            else
+            else if (need_Z) then
                 idx_g = -1
                 idx_T = -1
                 do ii = 1, dinfo%ndust
@@ -549,7 +578,9 @@ contains
             if (dust_charging_timer) tchg = tchg + (wallclock() - t0)
 
             ! 4. Compute the internal energy of the dust grain considering all heating and cooling processes
-            if (td_served()) then
+            if (.not. need_T) then
+                ! nothing uses T_dust, P_rad or the collisional heating (0 without dust_coll_cooling)
+            else if (td_served()) then
                 ! the cooling solver's T(1 +- 1e-5) call: first order from the last update_T_dust
                 call serve_T_dust(td_lin,Tk,dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Z_dust(:),dinfo%Pcoll_dust(:),&
                                   dinfo%Prad_dust(:),dinfo%T_dust(:))
@@ -802,6 +833,7 @@ contains
         use dust_rhs_mod, only: dust_rhs
         use dust_rates, only: compute_rate_caches
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 #ifdef RTZ
         use rtz_module, only:elements
 #endif
@@ -912,6 +944,16 @@ contains
                                 y_gas_out,y_dust_out,h_init_val,0d0,dt,&
                                 debug_flag=dust_debug,step_ok=step_ok,h_last=last_h_ode)
 
+        ! 3b. A NaN/Inf result is never a valid state, and it passes every later check of the caller
+        ! (comparisons with NaN are false): the RTZ step then rejected each retry on the ions, halved
+        ! ddt to zero and froze the cell. Reject it here, before it reaches nElement and the dust,
+        ! and stop if the rates are already non-finite at the starting state (a bug in a rate).
+        if (.not. (all(ieee_is_finite(y_dust_out(1:ndust_total))) .and. all(ieee_is_finite(y_gas_out)))) then
+            call check_dust_rates_finite(dinfo, dt, y_gas, y_dust(1:ndust_total))
+            step_ok = .false.
+            return
+        end if
+
         ! 4. Update the dinfo with the new values after the ODE step
         if (carry_gas_ions) then
             do ii = 1, n_elements
@@ -971,6 +1013,56 @@ contains
 #endif
 
     end subroutine compute_dust_update
+
+    subroutine check_dust_rates_finite(dinfo, dt, y_gas, y_dust)
+        ! Called when a dust update came out NaN/Inf. Finite rates at the starting state mean the step
+        ! blew up: return, and the caller retries with a smaller dt. Non-finite rates there are a bug in
+        ! a rate (a smaller dt cannot help): print the cell and stop. With dust_debug, also name the
+        ! process(es) that produced it.
+        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
+        use dust_rhs_mod, only: dust_rhs
+        implicit none
+        class(DustChemistryInfo), intent(in) :: dinfo
+        real(dp), intent(in) :: dt, y_gas(:,:), y_dust(:)
+        real(dp), allocatable :: dydt_gas(:,:), dydt_dust(:,:)
+        integer :: i
+
+        allocate(dydt_gas(size(y_gas,1), size(y_gas,2)), dydt_dust(size(y_dust), 2))
+        call dust_rhs(dinfo, y_gas, y_dust, dydt_gas, dydt_dust, write_cache=.false.)
+        if (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust))) then
+            if (dust_debug) write(*,'(A,ES10.3,A)') ' CALIMA: dust update NaN/Inf over dt = ', dt, &
+                                                   ' s with finite rates at its start; step rejected'
+            return
+        end if
+
+        write(*,'(A)') ' CALIMA ERROR: NaN/Inf dust rates at the start of a dust update'
+        write(*,'(A,4ES12.4)') '   T [K], nH, ne [cm-3], rho [g cm-3] = ', dinfo%local_Tk, dinfo%local_nH, &
+                                dinfo%local_ne, dinfo%local_rho
+        write(*,'(A,3ES12.4)') '   mu, sigma [cm s-1], dx [cm]       = ', dinfo%local_mu, dinfo%local_sigma, dinfo%local_dx
+        if (dust_eq_test) write(*,'(A)') '   (dust_eq_test: the grain-grain rates use sigma and L set from nH, not these)'
+        write(*,'(A,*(ES12.4))') '   rho bins (PAH first) [g cm-3]     = ', y_dust
+        write(*,'(A,*(ES12.4))') '   d/dt, production                  = ', dydt_dust(:,1)
+        write(*,'(A,*(ES12.4))') '   d/dt, destruction                 = ', dydt_dust(:,2)
+        if (dust_debug) then
+            ! each process on its own (the running sum would carry one process's NaN into the rest)
+            do i = 1, ndust_processes
+                dydt_gas = 0d0; dydt_dust = 0d0
+                call dust_processes_list(i)%comp_rate(dinfo, y_gas, y_dust, dydt_gas, dydt_dust)
+                if (.not. (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust)))) &
+                    write(*,'(A,A)') '   NaN/Inf from dust process: ', trim(dust_processes_list(i)%name)
+            end do
+            do i = 1, npah_processes
+                dydt_gas = 0d0; dydt_dust = 0d0
+                call pah_processes_list(i)%comp_rate(dinfo, y_gas, y_dust, dydt_gas, dydt_dust)
+                if (.not. (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust)))) &
+                    write(*,'(A,A)') '   NaN/Inf from PAH process: ', trim(pah_processes_list(i)%name)
+            end do
+        else
+            write(*,'(A)') '   rerun with dust_debug=.true. to see which process'
+        end if
+        flush(6)   ! clean_stop aborts MPI, which can drop unflushed output
+        call clean_stop
+    end subroutine check_dust_rates_finite
 
     subroutine ensure_update_cache(n1, n2, ndust_total)
         integer, intent(in) :: n1, n2, ndust_total

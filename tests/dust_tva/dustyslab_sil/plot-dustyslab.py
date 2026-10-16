@@ -22,6 +22,7 @@ Usage:  python3 plot-dustyslab.py [dustyslab.nml|dustyslab_dense.nml]
 """
 import glob
 import io
+import re
 import os
 import shutil
 import subprocess
@@ -115,6 +116,13 @@ def planck_lam(lam_cm, T):
 
 rows = [l.split() for l in io.open(_tbl_path()) if not l.startswith("#") and len(l.split()) == 4]
 wav_A, c_abs, c_sca, c_rp = np.array(rows, dtype=float).T
+# cm^2 per gram of dust (the current tables, per their "# Columns:" header) -> per grain, as
+# dust_photophysics converts them; older tables are already per grain
+_cols = [l for l in io.open(_tbl_path()) if l.startswith("#") and "Columns:" in l and "C_abs" in l]
+if not _cols or ("cm^2/g_dust" not in _cols[0] and "C_abs[cm^2]" not in _cols[0]):
+    raise SystemExit("%s: no cross-section units in its '# Columns:' header" % _tbl_path())
+if "cm^2/g_dust" in _cols[0]:
+    c_abs, c_sca, c_rp = c_abs * m_grain, c_sca * m_grain, c_rp * m_grain
 wav_cm = wav_A * 1e-8
 
 def band_cs(E0, E1, cs, T=1.0e5):
@@ -275,7 +283,17 @@ if len(snaps) < 2:
 # rt_output_hydro writes photon_flux_NN = rt_c*Np (flux magnitude) and
 # photon_flux_NN_x = Fp_x, both in code units; *scale_v gives photons/cm2/s.
 # Verified by recovering rt_n_source exactly at the injection edge.
-E_UV, E_IR = 6.0 * eV, 0.01 * eV
+# Group energies as RAMSES uses them: rt_init recomputes egy from each band (info_rt), so the nominal values
+# are not what the code uses (IR: 0.067 eV, not 0.01 eV, for 0.001-0.1 eV). Group 1 is the IR, group 2 the UV.
+def _group_egy():
+    for f in sorted(glob.glob("output_*/info_rt_*.txt")):
+        e = re.findall(r"egy\s+\[eV\]\s*=\s*([0-9.Ee+-]+)", io.open(f).read())
+        if len(e) >= 2:
+            return float(e[1]), float(e[0])
+    raise SystemExit("no group energies in output_*/info_rt_*.txt")
+
+
+E_UV, E_IR = (g * eV for g in _group_egy())
 acc_code_to_cgs = scale_v / scale_t
 
 
