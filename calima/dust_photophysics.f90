@@ -28,6 +28,8 @@ module dust_optics
         character(len=512) :: line
         real(dp) :: wav_ref
         real(dp) :: wav_read,cabs_read,csca_read,crp_read
+        real(dp) :: cs_to_grain   ! factor from the table's cross-sections to cm^2 per grain
+        logical  :: per_gram
         real(dp) :: wav_neu,cabs_neu,csca_neu,crp_neu
         real(dp) :: wav_ion,cabs_ion,csca_ion,crp_ion
 
@@ -88,6 +90,14 @@ module dust_optics
                 call clean_stop
             end if
 
+            ! Units of the cross-sections, from the header: cm^2 per gram of dust (the pyCALIMA
+            ! convention, "C_abs[cm^2/g_dust]"); older tables give cm^2 per grain ("C_abs[cm^2]").
+            ! Internally CALIMA keeps cm^2 per grain (rates use rho_dust/mgrain), so per-gram tables
+            ! are multiplied by the grain mass of the bin.
+            call dust_table_units_per_gram(20, fDust(i), per_gram)
+            cs_to_grain = 1d0
+            if (per_gram) cs_to_grain = dustbins_props(i)%mgrain
+
             call read_next_data_line(20,line,ios)
             if (ios /= 0) then
                 if (myid.eq.1) write(*,*) 'ERROR reading NWAV in file ', trim(fDust(i))
@@ -135,9 +145,9 @@ module dust_optics
                 call clean_stop
             end if
 
-            dustbins_props(i)%Pabs_isrf = dustbins_props(i)%Pabs_isrf * c_cgs * u_Mathis1983
-            dustbins_props(i)%Psc_isrf  = dustbins_props(i)%Psc_isrf  * c_cgs * u_Mathis1983
-            dustbins_props(i)%Prp_isrf  = dustbins_props(i)%Prp_isrf  * c_cgs * u_Mathis1983
+            dustbins_props(i)%Pabs_isrf = dustbins_props(i)%Pabs_isrf * cs_to_grain * c_cgs * u_Mathis1983
+            dustbins_props(i)%Psc_isrf  = dustbins_props(i)%Psc_isrf  * cs_to_grain * c_cgs * u_Mathis1983
+            dustbins_props(i)%Prp_isrf  = dustbins_props(i)%Prp_isrf  * cs_to_grain * c_cgs * u_Mathis1983
 
             do k = 1, nwav
                 call read_next_data_line(20,line,ios)
@@ -154,9 +164,9 @@ module dust_optics
                 dustbins_props(i)%cs_scat_tab%tab1d(k,1) = log10(wav_read)
                 dustbins_props(i)%cs_ext_tab%tab1d(k,1) = log10(wav_read)
 
-                dustbins_props(i)%cs_abs_tab%tab1d(k,2) = log10(cabs_read)
-                dustbins_props(i)%cs_scat_tab%tab1d(k,2) = log10(csca_read)
-                dustbins_props(i)%cs_ext_tab%tab1d(k,2) = log10(crp_read)
+                dustbins_props(i)%cs_abs_tab%tab1d(k,2) = log10(cabs_read * cs_to_grain)
+                dustbins_props(i)%cs_scat_tab%tab1d(k,2) = log10(csca_read * cs_to_grain)
+                dustbins_props(i)%cs_ext_tab%tab1d(k,2) = log10(crp_read * cs_to_grain)
             end do
             close(20)
             call dustbins_props(i)%cs_abs_tab%init()
@@ -353,6 +363,45 @@ module dust_optics
         end if
 
     end subroutine init_dust_efficiency_tables
+
+    subroutine dust_table_units_per_gram(iunit, fname, per_gram)
+        ! Units of a grain cross-section table, from its "# Columns:" header line: .true. for cm^2
+        ! per gram of dust ("[cm^2/g_dust]"), .false. for cm^2 per grain ("[cm^2]", older tables).
+        ! Anything else stops the run. Leaves the file rewound.
+        use amr_commons, only: myid
+        implicit none
+        integer, intent(in) :: iunit
+        character(len=*), intent(in) :: fname
+        logical, intent(out) :: per_gram
+        character(len=512) :: hline
+        integer :: ios
+        logical :: found
+        found = .false.; per_gram = .false.
+        do
+            read(iunit,'(A)',iostat=ios) hline
+            if (ios /= 0) exit
+            hline = adjustl(hline)
+            if (len_trim(hline) > 0 .and. hline(1:1) /= '#') exit
+            if (index(hline, 'Columns:') > 0 .and. index(hline, 'C_abs') > 0) then
+                found = .true.
+                if (index(hline, 'cm^2/g_dust') > 0) then
+                    per_gram = .true.
+                else if (index(hline, 'C_abs[cm^2]') > 0) then
+                    per_gram = .false.
+                    if (myid == 1) write(*,*) 'CALIMA: ', trim(fname), &
+                         ': cross-sections per grain (an older table); per gram of dust is the convention'
+                else
+                    found = .false.
+                end if
+                exit
+            end if
+        end do
+        rewind(iunit)
+        if (.not. found) then
+            if (myid == 1) write(*,*) 'CALIMA: no cross-section units ("# Columns: ... C_abs[cm^2/g_dust] ...") in ', trim(fname)
+            call clean_stop
+        end if
+    end subroutine dust_table_units_per_gram
 
     subroutine init_dust_dielectric_tables
         use amr_commons,only:myid
@@ -1881,7 +1930,9 @@ module dust_radiation
             call dust_emission_power(j,c,P_rad)
             fc = P_abs + H0 + dH_dT*(c-T0) + recomb_heat - P_rad - pe_heat
 
-            if (abs(fc) < 1d-6) then
+            ! converged in T (the Newton test, 1e-3), or on the root; an absolute |fc| < 1e-6 erg/s
+            ! accepted any midpoint, as a grain radiates 1e-15-1e-10 erg/s
+            if (fc == 0d0 .or. (b - a) < 1d-3*c) then
                 T = c
                 return
             end if
@@ -2471,7 +2522,7 @@ module dust_photoelectric_heating
         real(dp) :: U_aip
 
         U_aip = autoionisation_potential(a,use_separate_refractive_index)
-        Zmin = floor(U_aip / 14.4d-8 * a) + 1d0
+        Zmin = aint(-U_aip / 14.4d-8 * a) + 1d0
     end function most_negative_allowed_charge
 
     function DS87_lambda(Z,q,a,T) result(ltilde)
@@ -2572,7 +2623,7 @@ module dust_photoelectric_heating
             Nc = 468d0 * (a/1d-7)**3d0
             s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
         else if (Z < 0d0) then
-            Zmin = most_negative_allowed_charge(a*10d0,use_separate_refractive_index)
+            Zmin = most_negative_allowed_charge(a,use_separate_refractive_index)
             if (Z > Zmin) then
                 Nc = 468d0 * (a/1d-7)**3d0
                 s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
@@ -2771,7 +2822,7 @@ module dust_photoelectric_heating
                 sigma_pdt = photodetachment_cross_section(E(i),E_pdt,Zcharge)
                 pinj_charge = pinj_charge + sigma_pdt * (E(i) - E_pdt + Emin) * pdt_pref(i)
             end do
-            Pinj = Pinj + wmix(iq) * pinj_charge
+            Pinj = Pinj + wmix(iq) * pinj_charge * eV2erg
 
             ! 4. Compute the recombination cooling rate contribution of this charge
             prec_charge = 0.0d0
@@ -2789,7 +2840,7 @@ module dust_photoelectric_heating
             if (Zcharge .eq. zmin_mix) then
                 EA = electron_afinity(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
                 Jtilde = DS87_J(dble(zmin_mix),-1d0,asize_cm,Tgas)
-                Pinj = Pinj + wmix(iq) * rec_pref * Jtilde * EA * eV2erg
+                Pinj = Pinj + wmix(iq) * rec_pref / (kB * Tgas) * Jtilde * EA * eV2erg
             end if
         end do
     end subroutine compute_dust_peh_rate
@@ -2839,8 +2890,10 @@ module dust_photoelectric_heating
         call dustbins_props(i_dust)%peh_tab%interpolate(log_gamma, log_T, peh_rate, idx_g, idx_T)
         Pinj = exp(peh_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
 
+        ! The tables are at G0 = 1 (Mathis) with n_e = sqrt(T)/gamma, so at fixed (gamma, T) the
+        ! recombination cooling scales with n_e, i.e. with G0, as the heating does
         call dustbins_props(i_dust)%rec_tab%interpolate(log_gamma, log_T, cool_rate, idx_g, idx_T)
-        Prec = exp(cool_rate * ln10) ! [erg/s]
+        Prec = exp(cool_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
     end subroutine interpolate_dust_peh_rate
     
 
@@ -3167,7 +3220,7 @@ module pah_photoelectric_heating
                     k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
 
         f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_0))
+                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
 
         f_total = f_anion + f_neutral + f_1 + f_2
         nstates = pahbins_props(i_pah)%ncharge_states
@@ -3302,7 +3355,7 @@ module pah_photoelectric_heating
                     k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
         
         f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_0))
+                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
 
         ! 9. Normalise the fractions
         f_total = f_anion + f_neutral + f_1 + f_2
