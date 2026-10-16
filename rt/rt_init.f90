@@ -489,7 +489,11 @@ SUBROUTINE read_rt_groups()
      print*,'========================================================='
   endif
 
+#ifdef RTZ
+  if(isH2 .or. isH2_rtz) then
+#else
   if(isH2) then
+#endif
      do i=1,nGroups
         if((groupL0(i) .ge. 11.2) .and. (groupL1(i) .le. 13.6)          &
            .and. (groupL0(i) .le. 13.6) .and. (groupL1(i) .ge. 11.2))then
