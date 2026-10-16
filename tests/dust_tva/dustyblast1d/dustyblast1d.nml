@@ -57,6 +57,7 @@ err_grad_var(1)=0.05
 /
 
 &CALIMA_PARAMS
+charging_model='Ibanez2019' ! no charge-dependent process here; the WDB06isrf tables (the default without RT) are for the 0.01 um DustBin_01
 dust_tva=.true.
 drag_coefficient=100
 dust_composition(1,6) = 1d0
