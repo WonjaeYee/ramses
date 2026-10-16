@@ -28,6 +28,7 @@ module pm_commons
   real(dp),allocatable,dimension(:,:,:)::vsnew,vsold
   real(dp),allocatable,dimension(:,:,:)::fsink_partial,sink_jump
   real(dp),allocatable,dimension(:,:)  ::lsink,lsink_new,lsink_all
+  real(dp),allocatable,dimension(:)    ::acc_budget ! per cell: mass the sinks ask for, then the fraction granted
   real(dp),allocatable,dimension(:,:)  ::xsink,xsink_new,xsink_all
   real(dp),allocatable,dimension(:)    ::graddescent_over_dt
   real(dp),allocatable,dimension(:,:)  ::xsink_graddescent

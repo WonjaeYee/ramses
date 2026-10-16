@@ -23,6 +23,9 @@ subroutine unsplit(uin,gravin,pin,flux,tmp,dx,dy,dz,dt,ngrid)
   use amr_parameters
   use const
   use hydro_parameters
+#ifdef RTZ
+  use hydro_commons, only: ps_active
+#endif
   implicit none
 
   integer ::ngrid
@@ -92,6 +95,11 @@ subroutine unsplit(uin,gravin,pin,flux,tmp,dx,dy,dz,dt,ngrid)
      call tracexyz(qin,dq,cin,qm,qp,dx,dy,dz,dt,ngrid)
 #endif
   endif
+
+#ifdef RTZ
+  ! Consistent multi-fluid advection: the targets of the cells (CMA in cmpflxm)
+  if(ps_active)call ps_cma_cell_targets(qin,ngrid)
+#endif
 
   ! Solve for 1D flux in X direction
   call cmpflxm(qm,iu1+1,iu2+1,ju1  ,ju2  ,ku1  ,ku2  , &
@@ -718,6 +726,9 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
   use amr_parameters
   use hydro_parameters
   use const
+#ifdef RTZ
+  use hydro_commons, only: ps_active,ps_ttop,ps_rch
+#endif
   implicit none
 
   integer ::ngrid
@@ -731,7 +742,7 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
   real(dp),dimension(1:nvector,ip1:ip2,jp1:jp2,kp1:kp2,1:2)::tmp
 
   ! local variables
-  integer ::i, j, k, l, xdim
+  integer ::i, j, k, l, xdim, i0, j0, k0
   real(dp)::entho
   real(dp),dimension(1:nvector,1:nvar),save::qleft,qright
   real(dp),dimension(1:nvector,1:nvar+1),save::fgdnv
@@ -741,6 +752,10 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
 
   entho=one/(gamma-one)
   xdim=ln-1
+  i0=0; j0=0; k0=0                ! the cell of qleft is (i,j,k) minus this
+  if(xdim==1)i0=1
+  if(xdim==2)j0=1
+  if(xdim==3)k0=1
 
   do k = klo, khi
      do j = jlo, jhi
@@ -786,6 +801,16 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
                  qright(l,n) = qp(l,i,j,k,n,xdim)
               end do
            end do
+#endif
+#ifdef RTZ
+           ! Consistent multi-fluid advection: the species fractions of both face states
+           ! sum to their parent's (to their cell's own sums: qleft is the face of cell
+           ! (i,j,k) - e_xdim, qright of cell (i,j,k)), so the species fluxes sum to the
+           ! mass flux
+           if(ps_active)then
+              call ps_cma_target(qleft ,nvector,ngrid,ps_ttop(1,i-i0,j-j0,k-k0),ps_rch(1,1,i-i0,j-j0,k-k0))
+              call ps_cma_target(qright,nvector,ngrid,ps_ttop(1,i,j,k),ps_rch(1,1,i,j,k))
+           end if
 #endif
            ! Solve Riemann problem
            if(riemann.eq.'acoustic')then
