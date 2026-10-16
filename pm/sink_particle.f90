@@ -1054,10 +1054,10 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max
   real(sp)::t_pre,t_now
-  real(dp),dimension(1:ndim)::pwind, ijp
+  real(dp),dimension(1:ndim)::ijp
   real(dp),dimension(1:NMETALS)::loc_metal_yield
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
-  real(dp)::ijm, ije, sn_e_code_units
+  real(dp)::ijm, pwind, ije, sn_e_code_units
   logical::is_hn, is_sn, is_central_cloud_particle
   integer::counter, iElement, pre_accretion_evolution_flag, elem_k
   real(dp)::star_met_fe
@@ -1323,6 +1323,17 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 
 
 #ifdef INDIVIDUAL_SINK_STARS
+           ! strict initialization 
+           injected_mass = 0d0
+           loc_metal_yield = 0d0
+           sn_e_code_units = 0d0
+           pwind = 0d0
+
+           ! switch r_rel from sink->cell to sink->cloud
+           ! hoping this can give a bit more accurate vector direction for ejecta...
+           r_rel(1:ndim) = xpart(j,1:ndim) - xsink(isink,1:ndim)
+           r_len = sqrt(sum(r_rel**2))
+
            ! SN feedback
            if(.not.on_creation)then
               ! Initialize SN feedback to false
@@ -1436,8 +1447,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        ! energy is calculated later
                        sn_e = 0d0
 
-                       ! get vector from radial momentum of stellar wind
-                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m) * (r_rel / max(r_len, tiny(0.0_dp)))
+                       ! get radial momentum of stellar wind
+                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m)
                     end if
                  end if
               end if 
@@ -1480,18 +1491,36 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  ! Update hydro variables in the relevant cells
                  sn_e_code_units = sn_e/scale_d/scale_l/scale_l/scale_l/scale_v/scale_v
 
-                 ijm = injected_mass * (weight/volume) / vol_loc ! injected mass density
+                 ! injected mass density
+                 ijm = injected_mass * (weight/volume) / vol_loc
 
-                 ijp = pwind(1:ndim) * (weight/volume) / vol_loc ! injected momentum density
+                 ! injected momentum density
+                 ! far-field approximation
+                 if (r_len > dx_loc) then
+                    ijp = pwind * (weight/volume) / vol_loc * (r_rel/r_len)
+                 ! near-field approximation
+                 else
+                    ijp = pwind * (weight/volume) / vol_loc * (r_rel/dx_loc)
+                 end if
                  ijp = ijp + ijm*vsink(isink,1:ndim) ! also consider motion of the sink
+               
+                 ! injected energy density
+                 ! notice that this assumes the energy is purely kinetic
+                 ! thermal energy from the stellar wind is neglected
+                 ije = 0.5d0 * pwind**2/injected_mass * (weight/volume) / vol_loc
 
-                 ije = 0.5d0 * sum(ijp**2) / (ijm+tiny(0.0d0))
-
-#ifdef NO_FEEDBACK_KIN
+#ifdef NO_FEEDBACK_ALL
                  ! test purpose: temporarily set no feedback
                  sn_e_code_units = 0.0d0
                  loc_metal_yield = 0.0d0
                  ijm = 0.0d0
+                 ijp = 0.0d0
+                 ije = 0.0d0
+#endif
+
+#ifdef NO_FEEDBACK_KIN
+                 ! test purpose: temporarily set no kinetic feedback
+                 ! mass is still dumped on gas
                  ijp = 0.0d0
                  ije = 0.0d0
 #endif
