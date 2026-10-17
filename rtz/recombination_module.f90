@@ -88,6 +88,22 @@ module recombination_module
   ! He I two-photon continuum (2^1S -> 1^1S, 20.616 eV; Cloudy atmdat_2photon.cpp He I shape):
   ! per decay 0.555 photons above 13.6 eV (mean 16.10 eV) and 1.445 below (mean 8.08 eV)
   real(dp), parameter :: heI_2ph_ion = 0.555d0, heI_2ph_E_ion = 16.10d0, heI_2ph_E_low = 8.08d0
+  ! He+ -> He0 radiative recombination of Cloudy's He-like atom (data/he_iso_recomb.dat, master e6555102):
+  ! log10 alpha [cm^3 s^-1], total and to 1^1S, at log10 T = 1.00, 1.25, ..., 8.00
+  integer, parameter :: nT_heIrr = 29
+  real(dp), parameter :: lgT_heIrr_min = 1.00d0, dlgT_heIrr = 0.25d0
+  real(dp), parameter :: lga_heI_tot(nT_heIrr) = [ &
+       -10.462977d0, -10.610883d0, -10.760360d0, -10.911435d0, -11.064214d0, -11.218843d0, &
+       -11.375473d0, -11.534244d0, -11.695270d0, -11.858611d0, -12.024203d0, -12.191766d0, &
+       -12.360679d0, -12.529877d0, -12.697904d0, -12.863031d0, -13.021297d0, -13.169630d0, &
+       -13.324735d0, -13.503876d0, -13.712768d0, -13.948962d0, -14.207705d0, -14.484447d0, &
+       -14.775458d0, -15.077813d0, -15.389257d0, -15.708047d0, -16.032836d0 ]
+  real(dp), parameter :: lga_heI_gnd(nT_heIrr) = [ &
+       -11.302263d0, -11.427257d0, -11.552247d0, -11.677228d0, -11.802192d0, -11.927128d0, &
+       -12.052015d0, -12.176816d0, -12.301466d0, -12.425854d0, -12.549792d0, -12.672984d0, &
+       -12.795013d0, -12.915397d0, -13.033827d0, -13.150612d0, -13.267577d0, -13.391328d0, &
+       -13.534288d0, -13.706044d0, -13.908470d0, -14.138512d0, -14.391614d0, -14.663407d0, &
+       -14.950198d0, -15.249018d0, -15.557521d0, -15.873870d0, -16.196626d0 ]
 
   ! Cloudy radiative recombination tables
   real(dp), dimension(30,30,2) :: rrec = 0.d0
@@ -794,8 +810,14 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
   real(dp) :: rate
   real(dp) :: aA, aB
 
-  ! Radiative recombination rate from Cloudy database (Verner & Ferland 1996, i.e. case A)
-  rate = cloudy_rad_rec(element_idx, element_idx - ion + 2, T)
+  ! Radiative recombination rate from Cloudy database (Verner & Ferland 1996, i.e. case A). For He I,
+  ! Cloudy itself does not use that fit (helium is in its iso-sequence atom), and the fit is 8-13%
+  ! above the atom's total over 5e3-2e4 K: He+ -> He0 takes the atom's total instead.
+  if (element_idx == 2 .and. ion == 2) then
+     rate = heI_alpha_cloudy(T, .true.)
+  else
+     rate = cloudy_rad_rec(element_idx, element_idx - ion + 2, T)
+  end if
 
   ! On-the-spot approximation: with rt_otsa the photons of recombinations straight to the ground
   ! state of H I, He I and He II are not emitted into the groups (rtz_cool_step builds recRad only
@@ -808,8 +830,7 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
         call ab_HII(T, aA, aB)
         rate = rate * (aB / aA)
      else if (element_idx == 2 .and. ion == 2) then
-        call ab_HeII(T, aA, aB)
-        rate = rate * (aB / aA)
+        rate = rate - heI_alpha_cloudy(T, .false.)      ! the atom's case B: total minus 1^1S
      else if (element_idx == 2 .and. ion == 3) then
         call ab_HeIII(T, aA, aB)
         rate = rate * (aB / aA)
@@ -934,8 +955,8 @@ SUBROUTINE init_recrad_table(L0, L1, n)
       if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + 0.45d0*fB   ! Balmer-alpha
 
       ! ---- He II -> He I (NOT hydrogenic; the cascade is in heI_recrad_cell) --
-      call ab_HeII(T, aA, aB)
-      f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
+      ! ground-state share from Cloudy's He I atom, as the chemistry rate
+      f1 = heI_alpha_cloudy(T, .false.)/heI_alpha_cloudy(T, .true.) ; fB = 1.d0 - f1
       g = group_at_edge(24.587d0, L0, L1, n)
       if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + f1      ! ground-state continuum
       g = group_at_edge(4.0d0, L0, L1, n)
@@ -988,14 +1009,13 @@ SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac)
    real(dp), intent(out) :: frac(n)
    real(dp), parameter :: kB = 1.380649d-16, amu = 1.66054d-24, mHe = 4.0026d0
    real(dp), parameter :: pie2_mc = 0.026540d0      ! pi e^2 / (m_e c) [cm^2 s^-1]
-   real(dp) :: aA, aB, fB, fM1, f2ph, f1P, b, sig0, kline, kc, beta, d, pdest, s, n584, n2ph
+   real(dp) :: fB, fM1, f2ph, f1P, b, sig0, kline, kc, beta, d, pdest, s, n584, n2ph
    real(dp) :: x, y, wx, wy
    integer :: i, j, g
 
    frac = 0.d0
    if (T <= 0.d0) return
-   call ab_HeII(T, aA, aB)
-   fB = aB/aA
+   fB = 1.d0 - heI_alpha_cloudy(T, .false.)/heI_alpha_cloudy(T, .true.)   ! case-B share, Cloudy's atom
 
    ! bilinear in (log T, log n_e) on the Cloudy grid, clamped at its edges
    x = min(max(log10(T), lgT_heI(1)), lgT_heI(nT_heI))
@@ -1034,6 +1054,25 @@ SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac)
    g = group_of(heI_2ph_E_low, L0, L1, n)
    if (g > 0) frac(g) = frac(g) + fB*n2ph*(2.d0 - heI_2ph_ion)
 END SUBROUTINE heI_recrad_cell
+
+!************************************************************************
+REAL(dp) FUNCTION heI_alpha_cloudy(T, total)
+   ! He+ -> He0 radiative recombination coefficient [cm^3 s^-1] of Cloudy's He-like
+   ! atom: the total (.true.) or the part to 1^1S (.false.); log-log interpolation
+   implicit none
+   real(dp), intent(in) :: T
+   logical, intent(in) :: total
+   real(dp) :: x, w
+   integer :: i
+   x = (log10(max(T, 10.d0)) - lgT_heIrr_min)/dlgT_heIrr + 1.d0
+   i = min(max(int(x), 1), nT_heIrr - 1)
+   w = min(max(x - real(i, dp), 0.d0), 1.d0)
+   if (total) then
+      heI_alpha_cloudy = 10.d0**((1.d0 - w)*lga_heI_tot(i) + w*lga_heI_tot(i+1))
+   else
+      heI_alpha_cloudy = 10.d0**((1.d0 - w)*lga_heI_gnd(i) + w*lga_heI_gnd(i+1))
+   end if
+END FUNCTION heI_alpha_cloudy
 
 !************************************************************************
 REAL(dp) FUNCTION sigma_HI_verner(E)
