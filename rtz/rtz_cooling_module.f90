@@ -971,7 +971,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       logical::calima_ion_rec                ! grain recombination from the CALIMA charge balance (dinfo%rec_ion_rate)
       !-----------------------------------------------------------------------
       real(dp)::alpha
-      real(dp),dimension(nGroups)::recrad_f
+      real(dp),dimension(nGroups)::recrad_f, recrad_g, recrad_fe, recrad_ge, recE
+      real(dp)::rec_charge, aN_g, aE_g
+      real(dp)::kd584
+      integer::g584
 
       ! RTZ variable initialization
       if (rtz_equilibrium_test.gt.0) then
@@ -1240,6 +1243,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
 
       ! UPDATE PHOTON DENSITY AND FLUX *************************************
+      rec_charge = 0d0     ! set below when recombination photons are emitted
       if(rt_advect) then
          recRad(1:nGroups)=0. ; phAbs(1:nGroups)=0.
          ! Scattering rate; reduce the photon flux, but not photon density:
@@ -1261,22 +1265,40 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          !
          ! The rate is the case-A total, the same alpha the chemistry uses, so
          ! emission and destruction are consistent by construction.
+         recE(1:nGroups) = 0d0    ! the physical energy of the emitted photons [eV cm-3 s-1]
          if (.not.rt_OTSA .and. rt_advect) then
-            call recrad_fractions(TK, 1, nGroups, recrad_f)
+            call recrad_fractions(TK, 1, nGroups, recrad_f, recrad_fe)
             alpha = recombination(TK, 2, 1)                     ! H II -> H I
             recRad(1:nGroups) = recRad(1:nGroups) &
                  + alpha * nElement_dep(1)*dXion(1,2) * ne * recrad_f(1:nGroups)
+            recE(1:nGroups) = recE(1:nGroups) &
+                 + alpha * nElement_dep(1)*dXion(1,2) * ne * recrad_fe(1:nGroups)
 
             if (elements(2)%atomic_number > 0) then
-               call recrad_fractions(TK, 2, nGroups, recrad_f)
+               call recrad_fractions(TK, 2, nGroups, recrad_f, recrad_fe)
+               ! the He I case-B cascade: 19.8 eV, 584 A and two-photon photons, from the
+               ! cell's T, n_e and its H0 and He0 (the 584 A photons survive the resonance
+               ! scattering on He0 only if H0 or dust destroys them first)
+               kd584 = 0d0
+               g584 = 0
+               do igroup = 1, nGroups
+                  if (groupL0(igroup) <= 21.22d0 .and. (21.22d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) g584 = igroup
+               end do
+               if (g584 > 0) kd584 = dustAbs(g584)/rt_c_cgs(ilevel)
+               call heI_recrad_cell(TK, ne, nElement_dep(1)*dXion(1,1), nElement_dep(2)*dXion(2,1), kd584, &
+                    groupL0, groupL1, nGroups, recrad_g, recrad_ge)
                alpha = recombination(TK, 2, 2)                  ! He II -> He I
                recRad(1:nGroups) = recRad(1:nGroups) &
-                    + alpha * nElement_dep(2)*dXion(2,2) * ne * recrad_f(1:nGroups)
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * (recrad_f(1:nGroups) + recrad_g(1:nGroups))
+               recE(1:nGroups) = recE(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * (recrad_fe(1:nGroups) + recrad_ge(1:nGroups))
 
-               call recrad_fractions(TK, 3, nGroups, recrad_f)
+               call recrad_fractions(TK, 3, nGroups, recrad_f, recrad_fe)
                alpha = recombination(TK, 3, 2)                  ! He III -> He II
                recRad(1:nGroups) = recRad(1:nGroups) &
                     + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_f(1:nGroups)
+               recE(1:nGroups) = recE(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_fe(1:nGroups)
             end if
          end if
 
@@ -1299,6 +1321,36 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
                   end if
                end if
+            end do
+         end if
+
+         ! The recombination photons heat, where they are absorbed, with their group's mean energy
+         ! (group_egy sigec/signc - the absorber's edge, PHrate) instead of their own (the edge, a line,
+         ! or the edge + kT; recrad_efrac). The difference is charged to the gas here, for the cell's own
+         ! absorbers (gas by n signc, dust by its absorption, which does not heat the gas): a reabsorbed
+         ! photon then deposits its physical energy, and the electron's kinetic energy of a ground-state
+         ! recombination, absent from the case-B recombination cooling, is returned exactly. Without it,
+         ! the H ground-state photons heat 0.73 eV each and the He I ones 3.8 eV (He0) or 3.4 eV (H0) too
+         ! much: 11-13% of the heating of a self-T H+He H II region (RAMSES_dev/studies/heI_heating).
+         rec_charge = 0d0
+         if (.not.rt_OTSA .and. rt_advect) then
+            do igroup=1,nGroups
+               ! the H-ionizing groups only: there H0, He0 and He+ absorb the photons in the nebula. Below
+               ! 13.6 eV the only gas absorbers are trace metals, and most photons leave the region.
+               if (recRad(igroup) <= 0d0 .or. groupL0(igroup) < 13.55d0) cycle
+               aN_g = 0d0 ; aE_g = 0d0
+               do i_current_Element=1,n_elements
+                  if (elements(i_current_Element)%atomic_number.gt.0) then
+                     do i_current_Ion=1,elements(i_current_Element)%n_ions-1
+                        aN_g = aN_g + nElement_dep(i_current_Element)*dXion(i_current_Element,i_current_Ion) &
+                                      * signc(igroup,i_current_Element,i_current_Ion)
+                        aE_g = aE_g + nElement_dep(i_current_Element)*dXion(i_current_Element,i_current_Ion) &
+                                      * sigec(igroup,i_current_Element,i_current_Ion)
+                     end do
+                  end if
+               end do
+               if (aN_g > 0d0) rec_charge = rec_charge + eV2erg &
+                    * (recRad(igroup)*group_egy(igroup)*aE_g - recE(igroup)*aN_g) / (aN_g + dustAbs(igroup))
             end do
          end if
 #ifndef CALIMA
@@ -1535,6 +1587,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names, &
                            reuse_T_independent=.true.)
+         ! the heat the recombination photons deposit beyond their physical energy (above)
+         Crate = Crate - rec_charge
+         Crate_prime_a = Crate_prime_a - rec_charge
          Crate_prime = (Crate_prime_a - Crate) / (1.d-5*TK)
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
