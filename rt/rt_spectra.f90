@@ -33,7 +33,13 @@ MODULE spectrum_integrator_module
 
 #ifdef RTZ
   logical :: bare_gr_s_dust_loaded = .false.
-  integer, parameter :: bare_gr_s_nwav = 400
+  ! The zubko2004_bare_gr_s_cross_sections.dat shipped in data_dir has 1000
+  ! wavelengths (its header says so, and 1046 lines - 46 of header = 1000).
+  ! At 400 the table was truncated at 2491 A, so getCrosssection_BARE_GR_S_DUST
+  ! clamped every redder query to the 2491 A value -- ~25x too much absorption
+  ! at 2 um.  Ionizing groups were unaffected; IR/optical dust heating and
+  ! radiation pressure were not.
+  integer, parameter :: bare_gr_s_nwav = 1000
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_wav
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_cabs
   real(kind=8), dimension(bare_gr_s_nwav) :: bare_gr_s_csca

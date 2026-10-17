@@ -191,6 +191,21 @@ module rt_parameters
   real(dp)::rtz_primary_cosmic_ray_ionization_rate=0.d0
   real(dp)::rtz_max_cool_timestep=1.d11
   integer::rtz_eqm_min_its=50
+  ! Diagnostic: set .false. to run with metals but no dust at all -- removes the
+  ! grain opacity AND, consistently, the depletion of metals onto grains.  In
+  ! this model both derive from dust_to_gas_scale_RR14, so they go together.
+  logical::rtz_include_dust=.true.
+  ! Temperature of the blackbody that group_csn, group_cse, group_egy and
+  ! group_csn_dust are integrated over in rt_init.  Defaults to the value that
+  ! used to be hardcoded there.  Set it to the source temperature so that the
+  ! group properties describe the spectrum the run is actually driven by.
+  real(dp)::rtz_source_temperature=1.d5
+  ! Substep acceptance of rtz_solve_cooling: a substep is rejected (and halved) when T2, an ion or
+  ! electron fraction, or a photon density / flux changes by more than this fraction. The defaults
+  ! are the values that were compile-time constants in rtz_cooling_module (single-precision literals,
+  ! kept so for bit-identical results). They bias an H II front by ~10% (0.01/0.01/0.02 is within
+  ! 1% of converged): see notebooks/matched/README.md, "The substep tolerance".
+  real(dp)::rtz_T_frac=0.1, rtz_x_frac=0.1, rtz_Np_frac=0.2, rtz_Fp_frac=0.5
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
