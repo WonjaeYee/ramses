@@ -151,12 +151,21 @@ module dust_charging_rtgroups
 
     type(RTGroupTable), allocatable, save :: rtg(:)
     integer, save :: debug_count = 0, debug_unit = 0
+    real(dp), save :: ri_hlnm(RTG_NRI) = 0d0          ! 0.5 ln(RI_MASS), set at init
 
-    ! per-call cell state (set_cell)
+    ! per-call cell state (set_cell); ions 1 (H+) and 2 (He+) both have z = 1, hence the
+    ! same tau and the same J~(Z, 1, tau)
     real(dp) :: c_T, c_ne, c_ve, c_nion(3), c_zion(3), c_vion(3), c_G0
     real(dp) :: c_tau_e, c_tau_ion(3), c_arr_e, c_arr_ion(3), c_vh, c_dhot
+    real(dp) :: c_geoA, c_lngeoA      ! pi a^2 (8kT / pi m_u)^1/2 and its ln (ion capture per J~ at z = 1)
     real(dp), allocatable :: c_cN(:)
     integer :: c_bin, c_kh
+    ! T-independent part of g of the last GM_N charges of the cell (gfun; set_cell empties it):
+    ! U index and weight of Z and Z + 1, photoemission at Z. GM_N covers the pair and up to
+    ! SIGMA_CHORD_ITER chords of a wide P(Z), re-evaluated at T(1 + dlnT)
+    integer, parameter :: GM_N = 2 + 2*SIGMA_CHORD_ITER
+    real(dp) :: gm_Z(GM_N), gm_w(GM_N), gm_w1(GM_N), gm_photo(GM_N)
+    integer :: gm_i(GM_N), gm_i1(GM_N), gm_used = 0, gm_next = 1
 
     ! discrete window: per-integer quantities, indexed by charge - b_base
     integer :: b_base
@@ -317,6 +326,7 @@ module dust_charging_rtgroups
                 ', a = ', rtg(ii)%a, ' cm, Zmin = ', rtg(ii)%Zmin, ', Zmax = ', rtg(ii)%Zmax, ', format ', ver
         end do
         allocate(c_cN(1:nGroups))
+        ri_hlnm = 0.5d0*log(RI_MASS)
         allocate(f_Zn(nzmax + 2), f_lnP(nzmax + 2), f_lnA(nzmax + 2), f_v(nzmax + 2), f_ps(0:nzmax + 2))
         allocate(f_row(maxval(rtg(:)%nU)))
     end subroutine init_dust_charging_rtgroups
@@ -496,19 +506,21 @@ module dust_charging_rtgroups
               + c_vh*((1d0 - w)*tab(i,c_kh+1) + w*tab(i+1,c_kh+1))
     end function hot
 
-    real(dp) function hot_dlnT(tab, i, w)
-        ! d/d ln T of hot: its slope in log10 T, zero where log T is clamped
+    subroutine hot_and_dlnT(tab, i, w, v, dv)
+        ! hot and its d/d ln T (the slope in log10 T, zero where log T is clamped) from one
+        ! pair of U interpolations
         implicit none
         real(dp), intent(in) :: tab(:,:)
         integer, intent(in) :: i
         real(dp), intent(in) :: w
+        real(dp), intent(out) :: v, dv
         real(dp) :: a0, a1
-        hot_dlnT = 0d0
-        if (c_dhot <= 0d0) return
         a0 = (1d0 - w)*tab(i,c_kh) + w*tab(i+1,c_kh)
         a1 = (1d0 - w)*tab(i,c_kh+1) + w*tab(i+1,c_kh+1)
-        hot_dlnT = (a1 - a0) / c_dhot / log(10d0)
-    end function hot_dlnT
+        v = (1d0 - c_vh)*a0 + c_vh*a1
+        dv = 0d0
+        if (c_dhot > 0d0) dv = (a1 - a0) / c_dhot / log(10d0)
+    end subroutine hot_and_dlnT
 
     subroutine kernels(i, w, photo, heat, want_heat)
         ! PCHIP photoemission (and heating) kernels summed over the groups and the background
@@ -649,41 +661,54 @@ module dust_charging_rtgroups
     end function sticking
 
     real(dp) function ion_capture(Z)
+        ! H+, He+ (one J~ for z = 1) and He++, summed in that order
         implicit none
         real(dp), intent(in) :: Z
-        integer :: k
+        real(dp) :: j1
         ion_capture = 0d0
-        do k = 1, 3
-            if (c_nion(k) > 0d0) ion_capture = ion_capture + c_arr_ion(k)*jtilde(Z, c_zion(k), c_tau_ion(k))
-        end do
+        if (c_nion(1) > 0d0 .or. c_nion(2) > 0d0) then
+            j1 = jtilde(Z, 1d0, c_tau_ion(1))
+            if (c_nion(1) > 0d0) ion_capture = ion_capture + c_arr_ion(1)*j1
+            if (c_nion(2) > 0d0) ion_capture = ion_capture + c_arr_ion(2)*j1
+        end if
+        if (c_nion(3) > 0d0) ion_capture = ion_capture + c_arr_ion(3)*jtilde(Z, c_zion(3), c_tau_ion(3))
     end function ion_capture
 
-    real(dp) function up_rate(Z)
-        ! photoemission + ion capture + gas-electron secondaries at Z
-        implicit none
-        real(dp), intent(in) :: Z
-        real(dp) :: w, photo, heat
-        integer :: i
-        call u_of(Z, i, w)
-        call kernels(i, w, photo, heat, .false.)
-        up_rate = photo + ion_capture(Z) + c_arr_e*jtilde(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
-    end function up_rate
-
-    real(dp) function down_rate(Z)
-        ! electron capture at Z
-        implicit none
-        real(dp), intent(in) :: Z
-        real(dp) :: w
-        integer :: i
-        call u_of(Z, i, w)
-        down_rate = c_arr_e*jtilde(Z, -1d0, c_tau_e)*sticking(Z)*(1d0 - hot(rtg(c_bin)%Ptr, i, w))
-    end function down_rate
-
     real(dp) function gfun(Z)
-        ! ln Up(Z) - ln Down(Z+1)
+        ! ln Up(Z) - ln Down(Z+1): Up = photoemission + ion capture + gas-electron secondaries at Z,
+        ! Down = electron capture at Z + 1. The U indices of Z and Z + 1 and the photoemission at
+        ! Z do not depend on T; those of the last GM_N charges of the cell are kept, so g at the
+        ! same charges at T(1 + dlnT) (the d/d ln T of a wide P(Z)) costs only its T-dependent part
         implicit none
         real(dp), intent(in) :: Z
-        gfun = log(max(up_rate(Z), RTG_TINY)) - log(max(down_rate(Z + 1d0), RTG_TINY))
+        real(dp) :: w, w1, photo, heat, up, down
+        integer :: i, i1, m
+        do m = 1, gm_used
+            if (gm_Z(m) == Z) exit
+        end do
+        if (m <= gm_used) then
+            i = gm_i(m)
+            w = gm_w(m)
+            i1 = gm_i1(m)
+            w1 = gm_w1(m)
+            photo = gm_photo(m)
+        else
+            call u_of(Z, i, w)
+            call kernels(i, w, photo, heat, .false.)
+            call u_of(Z + 1d0, i1, w1)
+            m = gm_next
+            gm_Z(m) = Z
+            gm_i(m) = i
+            gm_w(m) = w
+            gm_i1(m) = i1
+            gm_w1(m) = w1
+            gm_photo(m) = photo
+            gm_next = mod(m, GM_N) + 1
+            gm_used = max(gm_used, m)
+        end if
+        up = photo + ion_capture(Z) + c_arr_e*jtilde(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
+        down = c_arr_e*jtilde(Z + 1d0, -1d0, c_tau_e)*sticking(Z + 1d0)*(1d0 - hot(rtg(c_bin)%Ptr, i1, w1))
+        gfun = log(max(up, RTG_TINY)) - log(max(down, RTG_TINY))
     end function gfun
 
     subroutine heating_cooling(Z, gam, lam)
@@ -704,9 +729,8 @@ module dust_charging_rtgroups
         ! ln of pi a^2 (8kT / pi m_u)^1/2 J~(Z, z=1), log form (no underflow)
         implicit none
         real(dp), intent(in) :: Z
-        real(dp) :: tau, lnJ, a
-        a = rtg(c_bin)%a
-        tau = a*RTG_KB*c_T/RTG_ESTATC**2
+        real(dp) :: tau, lnJ
+        tau = c_tau_ion(1)
         if (Z > 0d0) then
             lnJ = 2d0*log(1d0 + 1d0/sqrt(4d0*tau + 3d0*Z)) - Z/(1d0 + 1d0/sqrt(Z))/tau
         else if (Z < 0d0) then
@@ -714,7 +738,8 @@ module dust_charging_rtgroups
         else
             lnJ = log(1d0 + sqrt(RTG_PI/(2d0*tau)))
         end if
-        ln_capture_z1 = log(RTG_PI*a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RTG_MU))) + lnJ
+        if (c_lngeoA == NONE) c_lngeoA = log(c_geoA)
+        ln_capture_z1 = c_lngeoA + lnJ
     end function ln_capture_z1
 
     ! ------------------------------------------------------------- cell state
@@ -724,6 +749,8 @@ module dust_charging_rtgroups
         real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg
         c_bin = ii
         c_cN(1:rtg(ii)%nG) = c_red*Np(1:rtg(ii)%nG)
+        gm_used = 0
+        gm_next = 1
         c_ne = ne
         c_G0 = G0_bg
         c_nion = (/ n_Hp, n_Hep, n_Hepp /)
@@ -749,6 +776,8 @@ module dust_charging_rtgroups
         do k = 1, 3
             c_arr_ion(k) = RTG_PI*rtg(c_bin)%a*rtg(c_bin)%a*c_nion(k)*c_vion(k)
         end do
+        c_geoA = RTG_PI*rtg(c_bin)%a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RTG_MU))
+        c_lngeoA = NONE                    ! ln c_geoA, at the first ln_capture_z1 of this T
         call hot_index(T)
     end subroutine set_cell_T
 
@@ -934,46 +963,62 @@ module dust_charging_rtgroups
 
     ! --------------------------------------------------------- discrete P(Z)
     subroutine eval_int(Z, want_d)
-        ! rates, heating, cooling (and their d/d ln T) of integer charge Z into the window buffers
+        ! rates, heating, cooling (and their d/d ln T) of integer charge Z into the window buffers.
+        ! Each J~ / Lambda~ and hot-gas row is evaluated once, with its d/d ln T when want_d: the
+        ! electrons, z = 1 (H+, He+ and b_A share it) and He++ (only if present); the sums keep the
+        ! order of the separate evaluations, so the buffers are the same to the bit
         implicit none
         real(dp), intent(in) :: Z
         logical, intent(in) :: want_d
-        real(dp) :: w, photo, heat, je, dlt, ptr, fc, eb, st, lt, kT, jd, dje, ld, dld, ji, dji, dion
+        real(dp) :: w, photo, heat, je, dlt, ptr, fc, eb, st, lt, kT, dje, dld, j1, dj1, j3, dj3, ion, dion
         real(dp) :: dde, dpt, dfc, deb
-        integer :: i, k, m
+        integer :: i, k
         k = nint(Z) - b_base
         call u_of(Z, i, w)
         call kernels(i, w, photo, heat, .true.)
-        je = jtilde(Z, -1d0, c_tau_e)
-        dlt = hot(rtg(c_bin)%delta, i, w)
-        ptr = hot(rtg(c_bin)%Ptr, i, w)
-        fc = hot(rtg(c_bin)%fcool, i, w)
-        eb = hot(rtg(c_bin)%Ebar, i, w)
+        j3 = 0d0
+        dj3 = 0d0
+        if (want_d) then
+            call jtilde_dlnT(Z, -1d0, c_tau_e, je, dje)
+            call lambdatilde_dlnT(Z, c_tau_e, lt, dld)
+            call jtilde_dlnT(Z, 1d0, c_tau_ion(1), j1, dj1)
+            if (c_arr_ion(3) /= 0d0 .or. c_nion(3) > 0d0) call jtilde_dlnT(Z, c_zion(3), c_tau_ion(3), j3, dj3)
+            call hot_and_dlnT(rtg(c_bin)%delta, i, w, dlt, dde)
+            call hot_and_dlnT(rtg(c_bin)%Ptr, i, w, ptr, dpt)
+            call hot_and_dlnT(rtg(c_bin)%fcool, i, w, fc, dfc)
+            call hot_and_dlnT(rtg(c_bin)%Ebar, i, w, eb, deb)
+        else
+            je = jtilde(Z, -1d0, c_tau_e)
+            lt = lambdatilde(Z)
+            j1 = jtilde(Z, 1d0, c_tau_ion(1))
+            if (c_nion(3) > 0d0) j3 = jtilde(Z, c_zion(3), c_tau_ion(3))
+            dlt = hot(rtg(c_bin)%delta, i, w)
+            ptr = hot(rtg(c_bin)%Ptr, i, w)
+            fc = hot(rtg(c_bin)%fcool, i, w)
+            eb = hot(rtg(c_bin)%Ebar, i, w)
+        end if
+        ion = 0d0                                   ! ion_capture(Z)
+        if (c_nion(1) > 0d0) ion = ion + c_arr_ion(1)*j1
+        if (c_nion(2) > 0d0) ion = ion + c_arr_ion(2)*j1
+        if (c_nion(3) > 0d0) ion = ion + c_arr_ion(3)*j3
         st = sticking(Z)
-        lt = lambdatilde(Z)
         kT = RTG_KB*c_T
-        b_up(k) = photo + ion_capture(Z) + c_arr_e*je*dlt
+        b_up(k) = photo + ion + c_arr_e*je*dlt
         b_dn(k) = c_arr_e*je*st*(1d0 - ptr)
         b_gam(k) = RTG_EV2ERG*heat
         b_lam(k) = c_arr_e*st*lt*kT*fc - c_arr_e*je*dlt*eb*RTG_EV2ERG
-        b_A(k) = RTG_PI*rtg(c_bin)%a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RTG_MU))*jtilde(Z, 1d0, c_tau_ion(1))
+        b_A(k) = c_geoA*j1
         if (.not. want_d) return
-        call jtilde_dlnT(Z, -1d0, c_tau_e, jd, dje)
-        call lambdatilde_dlnT(Z, c_tau_e, ld, dld)
+        ! an ion with no density adds an exact zero: skipped
         dion = 0d0
-        do m = 1, 3
-            call jtilde_dlnT(Z, c_zion(m), c_tau_ion(m), ji, dji)
-            dion = dion + c_arr_ion(m)*ji*(0.5d0 + dji)
-        end do
-        dde = hot_dlnT(rtg(c_bin)%delta, i, w)
-        dpt = hot_dlnT(rtg(c_bin)%Ptr, i, w)
-        dfc = hot_dlnT(rtg(c_bin)%fcool, i, w)
-        deb = hot_dlnT(rtg(c_bin)%Ebar, i, w)
-        b_dup(k) = dion + c_arr_e*jd*(dlt*(0.5d0 + dje) + dde)
-        b_ddn(k) = c_arr_e*jd*st*((1d0 - ptr)*(0.5d0 + dje) - dpt)
-        b_lamd(k) = c_arr_e*(st*ld*kT*fc - jd*dlt*eb*RTG_EV2ERG)
-        b_dlam(k) = c_arr_e*(st*ld*kT*(fc*(1.5d0 + dld) + dfc) &
-                    - jd*RTG_EV2ERG*(dlt*eb*(0.5d0 + dje) + dde*eb + dlt*deb))
+        if (c_arr_ion(1) /= 0d0) dion = dion + c_arr_ion(1)*j1*(0.5d0 + dj1)
+        if (c_arr_ion(2) /= 0d0) dion = dion + c_arr_ion(2)*j1*(0.5d0 + dj1)
+        if (c_arr_ion(3) /= 0d0) dion = dion + c_arr_ion(3)*j3*(0.5d0 + dj3)
+        b_dup(k) = dion + c_arr_e*je*(dlt*(0.5d0 + dje) + dde)
+        b_ddn(k) = c_arr_e*je*st*((1d0 - ptr)*(0.5d0 + dje) - dpt)
+        b_lamd(k) = c_arr_e*(st*lt*kT*fc - je*dlt*eb*RTG_EV2ERG)
+        b_dlam(k) = c_arr_e*(st*lt*kT*(fc*(1.5d0 + dld) + dfc) &
+                    - je*RTG_EV2ERG*(dlt*eb*(0.5d0 + dje) + dde*eb + dlt*deb))
     end subroutine eval_int
 
     subroutine window_P(lo, hi, pmax)
@@ -1529,7 +1574,7 @@ module dust_charging_rtgroups
         mup = mu + sl*sigma**2
         base = ln_capture_z1(zp) + sl*(mu - zp) + 0.5d0*sl*sl*sigma*sigma
         do j = 1, RTG_NRI
-            lg(j) = base + log_ndtr((rtg(c_bin)%Zth(j) + 0.5d0 - mup)/sigma) - 0.5d0*log(RI_MASS(j))
+            lg(j) = base + log_ndtr((rtg(c_bin)%Zth(j) + 0.5d0 - mup)/sigma) - ri_hlnm(j)
         end do
     end subroutine recomb_gauss
 
