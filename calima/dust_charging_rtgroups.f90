@@ -51,7 +51,7 @@ module dust_charging_rtgroups
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup, psitab_dump
     public :: dust_charge_moments
-    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, &
+    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
               RTG_RECOMB_IMPORTANT
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the (reused) fit
     integer, parameter :: RTG_ALPHA_NONE = 0, RTG_ALPHA_GAUSS = 1, RTG_ALPHA_FIT = 2
@@ -128,6 +128,8 @@ module dust_charging_rtgroups
 
     ! charging_model = 'WDB06tab': per-bin tables on (log T, log psi_F, h, psi_E), pyCALIMA charging_psi_tables
     integer, parameter :: PSI_NQ = 5 + RTG_NRI      ! Zmean, Zsigma, ln gamma_F, ln gamma_E, lambda, ln alpha_i
+    integer, parameter :: PSI_NQ_CHARGE = 5         ! the quantities before ln alpha_i: all that is loaded without dust_ion_recombination
+    integer, parameter :: RI_ATOMIC(RTG_NRI) = (/1, 2, 6, 7, 8, 10, 12, 14, 16, 26/)   ! atomic numbers of the RI_* ions
     integer, parameter :: PSI_SOFT = 1, PSI_HARD = 2, PSI_EUV = 3, PSI_EUV_HE = 4, PSI_EUV_HEP = 5
     integer, parameter :: PSI_NIN = 5                ! cell inputs: G_F, h, G_E, h_E1, h_E2
     ! along psi_E the lookup is cubic for Zmean, Zsigma and lambda (q 1, 2, 5), and for the
@@ -1941,7 +1943,8 @@ module dust_charging_rtgroups
                 end if
                 allocate(tb%roles(tb%nG), tb%w(tb%nG), tb%L0(tb%nG), tb%L1(tb%nG), tb%egy(tb%nG), tb%lT(tb%nT), &
                          tb%lpsiF(tb%nPF), tb%h(tb%nH), tb%hE1(tb%nHE1), tb%hE2(tb%nHE2), tb%psiE(tb%nPE), &
-                         tb%lpsiE(tb%nPE - 1), tb%q(tb%nPE, tb%nHE2, tb%nHE1, tb%nH, tb%nPF, tb%nT, PSI_NQ))
+                         tb%lpsiE(tb%nPE - 1), &
+                         tb%q(tb%nPE, tb%nHE2, tb%nHE1, tb%nH, tb%nPF, tb%nT, merge(PSI_NQ, PSI_NQ_CHARGE, dust_ion_recombination)))
                 read(iu, *) tb%roles
                 read(iu, *) tb%w
                 read(iu, *) tb%L0
@@ -1963,7 +1966,7 @@ module dust_charging_rtgroups
                     if (myid == 1) write(*,*) 'WDB06tab: cannot open ', trim(fname)
                     call clean_stop
                 end if
-                read(iu) tb%q
+                read(iu) tb%q        ! the quantities are stored one after the other: the first size(q, 7) of them
                 close(iu)
                 do g = 1, nGroups
                     if (abs(tb%L0(g) - groupL0(g)) > 1d-6*max(1d0,groupL0(g)) .or. &
@@ -1977,8 +1980,9 @@ module dust_charging_rtgroups
                         ' has asize = ', dustbins_props(ii)%asize_cm, ' cm'
                     call clean_stop
                 end if
-                if (myid == 1) write(*,'(A,A,A,ES12.5,A,6I4)') ' WDB06tab: read ', trim(dustlabel), ', a = ', tb%a, &
-                    ' cm, grid (T, psi_F, sqrt h, h_E1, h_E2, psi_E) ', tb%nT, tb%nPF, tb%nH, tb%nHE1, tb%nHE2, tb%nPE
+                if (myid == 1) write(*,'(A,A,A,ES12.5,A,6I4,A,I2,A,I2,A,F8.1,A)') ' WDB06tab: read ', trim(dustlabel), &
+                    ', a = ', tb%a, ' cm, grid (T, psi_F, sqrt h, h_E1, h_E2, psi_E) ', tb%nT, tb%nPF, tb%nH, tb%nHE1, &
+                    tb%nHE2, tb%nPE, ', quantities ', size(tb%q, 7), ' of ', PSI_NQ, ', ', 4d0*size(tb%q)/1048576d0, ' MB'
             end associate
         end do
     end subroutine init_dust_charging_psitab
@@ -2041,9 +2045,10 @@ module dust_charging_rtgroups
         real(dp), intent(out) :: Zmean, Zsigma, Gamma, Lambda, alpha(RTG_NRI)
         real(dp) :: sq, u, v, x, s, pE, c(PSI_NQ), wi, wj, wm, wk, y1, y2, w1, w2, wijm
         real(dp) :: cub(PSI_NQ), low(PSI_NQ), wc(-1:2), node, lin(PSI_NQ), gam(2)
-        integer :: i, j, m, k, di, dj, dm, dk, iq, e1, e2, d1, d2, k0, k1
+        integer :: i, j, m, k, di, dj, dm, dk, iq, e1, e2, d1, d2, k0, k1, nq
         logical :: cubic
         associate(tb => pst(ii), G_F => pin(1), h => pin(2), G_E => pin(3))
+            nq = size(tb%q, 7)       ! PSI_NQ_CHARGE without dust_ion_recombination
             sq = sqrt(T)
             call grid_index(log10(T), tb%lT, tb%nT, i, u)
             call grid_index(log10(max(G_F*sq/max(ne, RTG_TINY), RTG_TINY)), tb%lpsiF, tb%nPF, j, v)
@@ -2091,13 +2096,13 @@ module dust_charging_rtgroups
                                 wijm = wi*wj*wm
                                 do dk = 0, 1
                                     wk = wijm*merge(1d0 - s, s, dk == 0)
-                                    do iq = 1, PSI_NQ
+                                    do iq = 1, nq
                                         lin(iq) = lin(iq) + wk*dble(tb%q(k + dk, e2 + d2, e1 + d1, m + dm, j + dj, i + di, iq))
                                     end do
                                 end do
                                 do dk = k0, k1
                                     wk = wijm*wc(dk)
-                                    do iq = 1, PSI_NQ
+                                    do iq = 1, nq
                                         node = dble(tb%q(k + dk, e2 + d2, e1 + d1, m + dm, j + dj, i + di, iq))
                                         cub(iq) = cub(iq) + wk*node
                                         low(iq) = min(low(iq), node)
@@ -2106,7 +2111,7 @@ module dust_charging_rtgroups
                             end do
                         end do
                     end do
-                    do iq = 1, PSI_NQ
+                    do iq = 1, nq
                         if (iq == 1 .or. iq == 2 .or. iq == 5 .or. low(iq) > PSI_LN_FLOOR_CUBIC) lin(iq) = cub(iq)
                     end do
                     c = c + w1*w2*lin
@@ -2117,7 +2122,11 @@ module dust_charging_rtgroups
             Zsigma = c(2)
             Gamma = G_F*gam(1) + G_E*gam(2)
             Lambda = ne*sq*c(5)
-            alpha = exp(c(6:PSI_NQ))
+            if (nq == PSI_NQ) then
+                alpha = exp(c(6:PSI_NQ))
+            else
+                alpha = 0d0
+            end if
         end associate
     contains
         subroutine he_index(xx, nodes, n, i0, f0)

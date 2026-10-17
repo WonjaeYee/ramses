@@ -39,6 +39,7 @@ module dustbin_types
         integer :: icell = 0 ! Index of the cell in the RTZ cell vector (WDB06rt warm states; 0: none)
         integer :: ncharge_pah_max = 0 ! Maximum number of charge states for PAHs
         real(dp) :: H2_formation_rate = 0d0 ! H2 formation rate on dust
+        real(dp),dimension(1:n_elements)  :: rec_ion_rate = 0d0 ! dust_ion_recombination: grain-assisted X+ -> X rate per X+ ion [s^-1], by atomic number
         real(dp) :: G0_background = 0d0 ! Background radiation field in units of Habing field
         real(dp) :: local_c = 0d0 ! Local reduced speed of light (cm/s)
         real(dp) :: local_mu = 0d0 ! Local mean molecular weight (in units of H mass)
