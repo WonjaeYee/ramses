@@ -963,7 +963,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       !-----------------------------------------------------------------------
       real(dp)::alpha
-      real(dp),dimension(nGroups)::recrad_f
+      real(dp),dimension(nGroups)::recrad_f, recrad_g
+      real(dp)::kd584
+      integer::g584
 
       ! RTZ variable initialization
       if (rtz_equilibrium_test.gt.0) then
@@ -1234,9 +1236,20 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
             if (elements(2)%atomic_number > 0) then
                call recrad_fractions(TK, 2, nGroups, recrad_f)
+               ! the He I case-B cascade: 19.8 eV, 584 A and two-photon photons, from the
+               ! cell's T, n_e and its H0 and He0 (the 584 A photons survive the resonance
+               ! scattering on He0 only if H0 or dust destroys them first)
+               kd584 = 0d0
+               g584 = 0
+               do igroup = 1, nGroups
+                  if (groupL0(igroup) <= 21.22d0 .and. (21.22d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) g584 = igroup
+               end do
+               if (g584 > 0) kd584 = dustAbs(g584)/rt_c_cgs(ilevel)
+               call heI_recrad_cell(TK, ne, nElement_dep(1)*dXion(1,1), nElement_dep(2)*dXion(2,1), kd584, &
+                    groupL0, groupL1, nGroups, recrad_g)
                alpha = recombination(TK, 2, 2)                  ! He II -> He I
                recRad(1:nGroups) = recRad(1:nGroups) &
-                    + alpha * nElement_dep(2)*dXion(2,2) * ne * recrad_f(1:nGroups)
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * (recrad_f(1:nGroups) + recrad_g(1:nGroups))
 
                call recrad_fractions(TK, 3, nGroups, recrad_f)
                alpha = recombination(TK, 3, 2)                  ! He III -> He II

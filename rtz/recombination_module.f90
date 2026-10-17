@@ -6,7 +6,7 @@ module recombination_module
 
   private  ! everything is private by default
   public :: recombination, load_recombination_data, old_recombination_HII, old_recombination_HeII, old_recombination_HeIII
-  public :: init_recrad_table, recrad_fractions
+  public :: init_recrad_table, recrad_fractions, heI_recrad_cell
 
   !---------------------------------------------------------------------------
   ! Spectral redistribution of recombination emission.
@@ -27,11 +27,67 @@ module recombination_module
   real(dp), parameter :: lgT_recrad_min = 2.0d0, lgT_recrad_max = 6.0d0
   real(dp), allocatable :: recrad_frac(:,:,:)      ! (nGroups, nT_recrad, 3)
   logical :: recrad_ready = .false.
-  ! Fraction of case-B He I recombinations whose cascade yields one
-  ! hydrogen-ionizing photon (584 A at 21.2 eV, plus the 2^3S 19.8 eV channel).
-  ! PARAMETERISED -- He I is not hydrogenic and its 584 A photons are resonantly
-  ! scattered, so their fate depends on optical depth.  Cloudy solves a
-  ! multi-level atom here; this is a single effective yield.
+  ! He I case-B recombination, from Cloudy's He-like atom (master e6555102): per case-B
+  ! He+ -> He0 recombination, the 2^3S -> 1^1S decays (19.82 eV), the 2^1S -> 1^1S two-photon
+  ! decays (with every 2^1P arrival converted, i.e. 584 A fully trapped), and the arrivals in
+  ! 2^1P, on (log T, log n_e). One-zone models 'case B 10 no photoionization no pdest', each
+  ! channel = level population x its decay rate / (alpha_B n_e n(He+)), alpha_B from Cloudy's
+  ! he_iso_recomb.dat; collisional transfer between the n=2 levels is included (it moves 2^3S to
+  ! the singlets above n_e ~ 1e3). RAMSES_dev/studies/heI_yield (cloudy_branching.py,
+  ! branching_grid.txt). Which 2^1P arrivals escape as 584 A photons depends on the cell, and is
+  ! computed in heI_recrad_cell.
+  integer, parameter :: nT_heI = 7, nN_heI = 13
+  real(dp), parameter :: lgT_heI(nT_heI) = [ 3.60206d0, 3.69897d0, 3.84510d0, 4.00000d0, 4.14613d0, 4.30103d0, 4.44716d0 ]
+  real(dp), parameter :: lgne_heI(nN_heI) = [ 0.0484d0, 0.5484d0, 1.0484d0, 1.5484d0, 2.0484d0, 2.5484d0, 3.0484d0, 3.5484d0, 4.0484d0, 4.5484d0, 5.0484d0, 5.5484d0, 6.0485d0 ]
+  real(dp), parameter :: heI_fM1(nT_heI, nN_heI) = reshape( [ &
+       0.7729d0, 0.7739d0, 0.7762d0, 0.7748d0, 0.7785d0, 0.7814d0, 0.7883d0, &
+       0.7729d0, 0.7737d0, 0.7755d0, 0.7745d0, 0.7778d0, 0.7808d0, 0.7879d0, &
+       0.7720d0, 0.7728d0, 0.7746d0, 0.7726d0, 0.7759d0, 0.7787d0, 0.7855d0, &
+       0.7702d0, 0.7700d0, 0.7703d0, 0.7676d0, 0.7699d0, 0.7723d0, 0.7766d0, &
+       0.7634d0, 0.7613d0, 0.7582d0, 0.7512d0, 0.7516d0, 0.7490d0, 0.7513d0, &
+       0.7439d0, 0.7351d0, 0.7212d0, 0.7045d0, 0.6976d0, 0.6882d0, 0.6807d0, &
+       0.6872d0, 0.6629d0, 0.6257d0, 0.5881d0, 0.5682d0, 0.5461d0, 0.5250d0, &
+       0.5545d0, 0.5059d0, 0.4406d0, 0.3866d0, 0.3579d0, 0.3305d0, 0.3041d0, &
+       0.3459d0, 0.2892d0, 0.2278d0, 0.1850d0, 0.1648d0, 0.1467d0, 0.1304d0, &
+       0.1564d0, 0.1229d0, 0.0901d0, 0.0697d0, 0.0608d0, 0.0531d0, 0.0463d0, &
+       0.0571d0, 0.0433d0, 0.0307d0, 0.0234d0, 0.0202d0, 0.0176d0, 0.0153d0, &
+       0.0188d0, 0.0142d0, 0.0099d0, 0.0075d0, 0.0065d0, 0.0056d0, 0.0049d0, &
+       0.0061d0, 0.0045d0, 0.0032d0, 0.0024d0, 0.0021d0, 0.0018d0, 0.0015d0 ], [nT_heI, nN_heI])
+  real(dp), parameter :: heI_f2ph(nT_heI, nN_heI) = reshape( [ &
+       0.2315d0, 0.2307d0, 0.2293d0, 0.2261d0, 0.2239d0, 0.2206d0, 0.2195d0, &
+       0.2317d0, 0.2309d0, 0.2295d0, 0.2266d0, 0.2245d0, 0.2213d0, 0.2202d0, &
+       0.2322d0, 0.2317d0, 0.2308d0, 0.2282d0, 0.2263d0, 0.2233d0, 0.2222d0, &
+       0.2339d0, 0.2341d0, 0.2344d0, 0.2332d0, 0.2320d0, 0.2295d0, 0.2279d0, &
+       0.2390d0, 0.2416d0, 0.2459d0, 0.2484d0, 0.2497d0, 0.2474d0, 0.2457d0, &
+       0.2549d0, 0.2643d0, 0.2794d0, 0.2929d0, 0.2997d0, 0.2994d0, 0.2950d0, &
+       0.3000d0, 0.3268d0, 0.3675d0, 0.4026d0, 0.4190d0, 0.4184d0, 0.4039d0, &
+       0.4064d0, 0.4628d0, 0.5371d0, 0.5935d0, 0.6125d0, 0.5995d0, 0.5569d0, &
+       0.5778d0, 0.6503d0, 0.7328d0, 0.7814d0, 0.7896d0, 0.7519d0, 0.6768d0, &
+       0.7248d0, 0.7943d0, 0.8589d0, 0.8872d0, 0.8828d0, 0.8288d0, 0.7327d0, &
+       0.7990d0, 0.8569d0, 0.9053d0, 0.9248d0, 0.9152d0, 0.8562d0, 0.7531d0, &
+       0.8199d0, 0.8758d0, 0.9154d0, 0.9352d0, 0.9234d0, 0.8610d0, 0.7536d0, &
+       0.8289d0, 0.8783d0, 0.9208d0, 0.9348d0, 0.9227d0, 0.8576d0, 0.7535d0 ], [nT_heI, nN_heI])
+  real(dp), parameter :: heI_f1P(nT_heI, nN_heI) = reshape( [ &
+       0.1592d0, 0.1575d0, 0.1545d0, 0.1499d0, 0.1459d0, 0.1406d0, 0.1359d0, &
+       0.1592d0, 0.1575d0, 0.1545d0, 0.1501d0, 0.1460d0, 0.1408d0, 0.1362d0, &
+       0.1592d0, 0.1575d0, 0.1547d0, 0.1503d0, 0.1464d0, 0.1414d0, 0.1369d0, &
+       0.1593d0, 0.1577d0, 0.1551d0, 0.1512d0, 0.1478d0, 0.1433d0, 0.1389d0, &
+       0.1596d0, 0.1583d0, 0.1565d0, 0.1539d0, 0.1519d0, 0.1483d0, 0.1450d0, &
+       0.1605d0, 0.1601d0, 0.1605d0, 0.1617d0, 0.1635d0, 0.1635d0, 0.1618d0, &
+       0.1630d0, 0.1649d0, 0.1712d0, 0.1810d0, 0.1912d0, 0.1980d0, 0.1992d0, &
+       0.1691d0, 0.1755d0, 0.1916d0, 0.2147d0, 0.2359d0, 0.2506d0, 0.2516d0, &
+       0.1795d0, 0.1902d0, 0.2153d0, 0.2475d0, 0.2770d0, 0.2948d0, 0.2928d0, &
+       0.1871d0, 0.2015d0, 0.2307d0, 0.2661d0, 0.2988d0, 0.3176d0, 0.3124d0, &
+       0.1906d0, 0.2058d0, 0.2359d0, 0.2731d0, 0.3074d0, 0.3273d0, 0.3213d0, &
+       0.1912d0, 0.2077d0, 0.2383d0, 0.2783d0, 0.3142d0, 0.3346d0, 0.3276d0, &
+       0.1951d0, 0.2117d0, 0.2468d0, 0.2900d0, 0.3306d0, 0.3533d0, 0.3487d0 ], [nT_heI, nN_heI])
+
+  real(dp), parameter :: heI_A584 = 1.79892d9   ! 2^1P -> 1^1S [s^-1] (Cloudy he_transprob.dat, Drake)
+  real(dp), parameter :: heI_A2058 = 1.976d6    ! 2^1P -> 2^1S, 2.058 um [s^-1]
+  real(dp), parameter :: heI_f584 = 0.2762d0, heI_lam584 = 584.334d-8   ! oscillator strength, wavelength [cm]
+  ! He I two-photon continuum (2^1S -> 1^1S, 20.616 eV; Cloudy atmdat_2photon.cpp He I shape):
+  ! per decay 0.555 photons above 13.6 eV (mean 16.10 eV) and 1.445 below (mean 8.08 eV)
+  real(dp), parameter :: heI_2ph_ion = 0.555d0, heI_2ph_E_ion = 16.10d0, heI_2ph_E_low = 8.08d0
 
   ! Cloudy radiative recombination tables
   real(dp), dimension(30,30,2) :: rrec = 0.d0
@@ -839,17 +895,18 @@ SUBROUTINE init_recrad_table(L0, L1, n)
    ! each group per recombination (case A total rate as the normalisation, so
    ! the chemistry and the emission use the same alpha by construction).
    !
-   ! Principled: H I and He II are hydrogenic -- ground-state continuum at the
-   ! edge, case-B continuum at the n=2 edge, and the cascade's Lyman-alpha with
-   ! the standard ~0.68 yield per case-B recombination.
-   ! Parameterised: the He I cascade, via rtz_He_fluor_yield (namelist).
+   ! H I and He II are hydrogenic -- ground-state continuum at the edge, case-B
+   ! continuum at the n=2 edge, and the cascade's Lyman-alpha with the standard
+   ! ~0.68 yield per case-B recombination. For He I this table holds only the
+   ! ground-state continuum and the n=2 continua: its cascade depends on n_e and on
+   ! the cell's H0 and He0 (the fate of the 584 A photons), and is added per cell by
+   ! heI_recrad_cell.
    !
    ! Note photon NUMBER is what recRad carries, and a recombination can emit
    ! more than one photon (a continuum photon plus cascade lines), so these
    ! fractions may sum above 1.  Energy is only approximately conserved,
    ! because each group absorbs at its own mean group_egy.
    use amr_commons, only: myid
-   use rt_parameters, only: helium_fluor_yield => rtz_He_fluor_yield
    implicit none
    real(dp), intent(in) :: L0(n), L1(n)
    integer, intent(in) :: n
@@ -876,18 +933,13 @@ SUBROUTINE init_recrad_table(L0, L1, n)
       g = group_of(1.89d0, L0, L1, n)
       if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + 0.45d0*fB   ! Balmer-alpha
 
-      ! ---- He II -> He I (NOT hydrogenic; cascade parameterised) ----------
+      ! ---- He II -> He I (NOT hydrogenic; the cascade is in heI_recrad_cell) --
       call ab_HeII(T, aA, aB)
       f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
       g = group_at_edge(24.587d0, L0, L1, n)
       if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + f1      ! ground-state continuum
       g = group_at_edge(4.0d0, L0, L1, n)
       if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + fB      ! n=2 continua
-      g = group_of(21.218d0, L0, L1, n)                              ! 584 A -- ionizes H
-      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + helium_fluor_yield*fB
-      g = group_of(10.0d0, L0, L1, n)                                ! 2-photon, non-ionizing
-      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) &
-                                     + 2.d0*(1.d0-helium_fluor_yield)*fB
 
       ! ---- He III -> He II (hydrogenic, Z=2, edge 54.418 eV) --------------
       call ab_HeIII(T, aA, aB)
@@ -907,10 +959,95 @@ SUBROUTINE init_recrad_table(L0, L1, n)
       write(*,*) 'Recombination emission redistribution table built'
       write(*,'(A,I4,A,F5.1,A,F5.1)') '   nT = ', nT_recrad, '  over log10 T = ', &
            lgT_recrad_min, ' to ', lgT_recrad_max
-      write(*,'(A,F5.2)') '   He I cascade H-ionizing yield (rtz_He_fluor_yield) = ', &
-           helium_fluor_yield
+      write(*,*) '  He I case-B cascade per cell (Cloudy He I atom; 584 A fate from the local H0, He0)'
    end if
 END SUBROUTINE init_recrad_table
+
+!************************************************************************
+SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac)
+   ! Photons emitted into each group per He+ -> He0 recombination (case-A total
+   ! normalisation, as recrad_fractions) by the He I case-B cascade, which the
+   ! T-only table leaves out:
+   !  - 2^3S -> 1^1S, 19.82 eV (the triplets; it ionizes H);
+   !  - 584 A (21.22 eV), for the 2^1P arrivals whose photon is destroyed by the
+   !    background opacity (H0 photoionization, dust) before the resonance
+   !    scattering on He0 converts it to 2^1S through the 2.058 um branch:
+   !      s = A584 Pdest / (A584 Pdest + A2058),  Pdest = d/(1+d),  d = min(1e-3, 8.5 beta),
+   !      beta = k_c / (sqrt(pi) k_line + k_c),  k_line = n(He0) sigma_0(584 A),
+   !    Cloudy's RT_DestProb (Hummer & Kunasz 1980 fit), escape neglected (thick);
+   !  - the 2^1S two-photon decays, plus the converted 2^1P arrivals: 0.555
+   !    photons above 13.6 eV each, and 1.445 below.
+   ! Checked against Cloudy's own atom zone by zone in its matched H+He ladder slab:
+   ! 0.893 H-ionizing photons per case-B recombination here, 0.891 in Cloudy.
+   ! Not included: photoionization of 2^3S (threshold 4.77 eV), which competes
+   ! with its 19.82 eV decay only in strong optical/UV fields.
+   implicit none
+   real(dp), intent(in) :: T, ne, nH0, nHe0, kdust
+   real(dp), intent(in) :: L0(n), L1(n)
+   integer, intent(in) :: n
+   real(dp), intent(out) :: frac(n)
+   real(dp), parameter :: kB = 1.380649d-16, amu = 1.66054d-24, mHe = 4.0026d0
+   real(dp), parameter :: pie2_mc = 0.026540d0      ! pi e^2 / (m_e c) [cm^2 s^-1]
+   real(dp) :: aA, aB, fB, fM1, f2ph, f1P, b, sig0, kline, kc, beta, d, pdest, s, n584, n2ph
+   real(dp) :: x, y, wx, wy
+   integer :: i, j, g
+
+   frac = 0.d0
+   if (T <= 0.d0) return
+   call ab_HeII(T, aA, aB)
+   fB = aB/aA
+
+   ! bilinear in (log T, log n_e) on the Cloudy grid, clamped at its edges
+   x = min(max(log10(T), lgT_heI(1)), lgT_heI(nT_heI))
+   y = min(max(log10(max(ne, 1d-30)), lgne_heI(1)), lgne_heI(nN_heI))
+   i = 1
+   do while (i < nT_heI-1 .and. x > lgT_heI(i+1)) ; i = i + 1 ; end do
+   j = 1
+   do while (j < nN_heI-1 .and. y > lgne_heI(j+1)) ; j = j + 1 ; end do
+   wx = (x - lgT_heI(i))/(lgT_heI(i+1) - lgT_heI(i))
+   wy = (y - lgne_heI(j))/(lgne_heI(j+1) - lgne_heI(j))
+   fM1  = (1-wx)*(1-wy)*heI_fM1(i,j)  + wx*(1-wy)*heI_fM1(i+1,j)  + (1-wx)*wy*heI_fM1(i,j+1)  + wx*wy*heI_fM1(i+1,j+1)
+   f2ph = (1-wx)*(1-wy)*heI_f2ph(i,j) + wx*(1-wy)*heI_f2ph(i+1,j) + (1-wx)*wy*heI_f2ph(i,j+1) + wx*wy*heI_f2ph(i+1,j+1)
+   f1P  = (1-wx)*(1-wy)*heI_f1P(i,j)  + wx*(1-wy)*heI_f1P(i+1,j)  + (1-wx)*wy*heI_f1P(i,j+1)  + wx*wy*heI_f1P(i+1,j+1)
+
+   ! fate of the 584 A photons: destruction by the background opacity at 21.22 eV
+   b = sqrt(2.d0*kB*T/(mHe*amu))                     ! thermal Doppler width [cm/s]
+   sig0 = pie2_mc*heI_f584*heI_lam584/(sqrt(acos(-1.d0))*b)   ! line-centre cross section [cm^2]
+   kline = max(nHe0, 0.d0)*sig0
+   kc = max(nH0, 0.d0)*sigma_HI_verner(21.22d0) + max(kdust, 0.d0)
+   s = 0.d0
+   if (kc > 0.d0) then
+      beta = kc/(sqrt(acos(-1.d0))*kline + kc)
+      d = min(1.d-3, 8.5d0*beta)
+      pdest = d/(1.d0 + d)
+      s = heI_A584*pdest/(heI_A584*pdest + heI_A2058)
+   end if
+   n584 = f1P*s
+   n2ph = max(f2ph - n584, 0.d0)
+
+   g = group_of(19.82d0, L0, L1, n)
+   if (g > 0) frac(g) = frac(g) + fB*fM1
+   g = group_of(21.22d0, L0, L1, n)
+   if (g > 0) frac(g) = frac(g) + fB*n584
+   g = group_of(heI_2ph_E_ion, L0, L1, n)
+   if (g > 0) frac(g) = frac(g) + fB*n2ph*heI_2ph_ion
+   g = group_of(heI_2ph_E_low, L0, L1, n)
+   if (g > 0) frac(g) = frac(g) + fB*n2ph*(2.d0 - heI_2ph_ion)
+END SUBROUTINE heI_recrad_cell
+
+!************************************************************************
+REAL(dp) FUNCTION sigma_HI_verner(E)
+   ! H I photoionization cross section [cm^2] at E [eV] (Verner et al. 1996, as in
+   ! rt/cross_sections_module.f90)
+   implicit none
+   real(dp), intent(in) :: E
+   real(dp), parameter :: E0 = 0.4298d0, s0 = 5.475d4, ya = 32.88d0, P = 2.963d0
+   real(dp) :: xx
+   sigma_HI_verner = 0.d0
+   if (E < 13.598d0) return
+   xx = E/E0
+   sigma_HI_verner = s0*1.d-18*(xx - 1.d0)**2 * xx**(0.5d0*P - 5.5d0) * (1.d0 + sqrt(xx/ya))**(-P)
+END FUNCTION sigma_HI_verner
 
 !************************************************************************
 SUBROUTINE recrad_fractions(T, ion, n, frac)
