@@ -195,7 +195,7 @@ module dust_charging_rtgroups
         integer, intent(in) :: nGroups
         real(dp), intent(in) :: groupL0(nGroups), groupL1(nGroups)
         integer :: ii, g, it, istat, ver, iu, k, nzmax
-        character(len=20) :: dustlabel
+        character(len=40) :: dustlabel
         character(len=256) :: fname
         character(len=512) :: line
         type(RTGroupTable) :: t
@@ -205,6 +205,7 @@ module dust_charging_rtgroups
         nzmax = 0
         do ii = 1, ndust
             write(dustlabel, '(A,I2.2)') 'DustBin_', ii
+            if (len_trim(charging_table_label(ii)) > 0) dustlabel = charging_table_label(ii)
             fname = trim(dust_tables_dir)//'dust_charging_rtgroups_'//trim(dustlabel)//'.dat'
             iu = 27
             open(iu, file=trim(fname), status='old', action='read', iostat=istat)

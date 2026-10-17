@@ -195,8 +195,7 @@ contains
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
                                 compute_dust_charge_dist, compute_Coulomb_focusing_ions,&
                                 isrf_lookup, ISRF_ND, ISRF_DCHARGE
-        use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
-                                            compute_dust_peh_rate
+        use dust_photoelectric_heating, only: interpolate_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
                                             compute_pah_peh_equilibrium,&
                                             interpolate_pah_peh_equilibrium,&
@@ -463,29 +462,6 @@ contains
             elseif (dust_pe_heating .and. use_isrf) then
                 dinfo%Pinj_dust(1:dinfo%ndust) = isrf_G
                 dinfo%Prec_dust(1:dinfo%ndust) = isrf_L
-            elseif (dust_pe_heating .and. present(Np)) then
-                do ii = 1, dinfo%ndust
-                    if (dust_pe_heating_isrf .or. all(Np.le.dinfo%smallNp)) then
-                        call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
-                                                        &dinfo%Pinj_dust(ii),&
-                                                        &dinfo%Prec_dust(ii))
-                    else
-                        call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii))
-                        ! Consider the contribution from the UV background
-                        call interpolate_dust_peh_rate(ii,dinfo%G0_background,ne,Tk,&
-                                                        &dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
-                        ! Recombination cooling depends on the charge distribution and n_e, not on
-                        ! the field: keep only the one compute_dust_peh_rate adds below, at the
-                        ! charge of the total field (the table's is at the background's charge)
-                        dinfo%Prec_dust(ii) = 0d0
-                        ! Now consider the contribution from the local radiation field
-                        call compute_dust_peh_rate(ii,dinfo%csa_dust(ii,:),&
-                                                    dinfo%l_a(ii,:),dinfo%nGroups,dinfo%local_c,&
-                                                    dinfo%local_solid_angle,Np(:),dinfo%group_eV(:),&
-                                                    dinfo%Z_dust(ii),dinfo%Z_sigma(ii),Tk,ne,&
-                                                    dinfo%Pinj_dust(ii),dinfo%Prec_dust(ii))
-                    end if
-                end do
             elseif (dust_pe_heating) then
                 do ii = 1, dinfo%ndust
                     call interpolate_dust_peh_rate(ii,G0_total,ne,Tk,&
