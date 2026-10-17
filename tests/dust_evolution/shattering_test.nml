@@ -112,7 +112,7 @@ dust_sputtering=.false.
 dust_coagulation=.false.
 dust_shattering=.true.      ! Enable grain shattering
 shattering_model='Hirashita2015'
-charging_model='RM2026'
+charging_model='WDB06isrf'
 nZmix=3
 
 !----------- Efficiency parameters -----------!

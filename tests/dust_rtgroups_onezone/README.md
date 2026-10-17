@@ -13,11 +13,13 @@ pyCALIMA reference solver that reads the same tables.
    writes, per source SED and dust bin (one non-zero at a time), a 2^3-cell
    periodic box at fixed n_H and T lit by one 'square' source per group
    (Np = rt_n_source / c_red everywhere), for this branch (`new`, debug dump
-   on) and a reference build (`ref`, original tables). Each run gets an empty
+   on) and a reference (`ref`, `charging_model='WDB06isrf'`: the uniform-ISRF
+   tables at the G0 of the groups, which `--calima-tables` must hold; any build
+   with WDB06isrf, e.g. the same as `new`). Each run gets an empty
    local `SEDtables/`, which RAMSES fills. `dust_tables_dir` is relative
    because CALIMA builds some table names in `character(len=128)`.
 4. Run each `run.sh`, then compare with pyCALIMA:
-   `python diagnostics/dust_charge/compare_ramses_rtgroups.py RUNS/new/* --tables ... [--original-tables ...]`
+   `python diagnostics/dust_charge/compare_ramses_rtgroups.py RUNS/new/* --tables ...`
 
 Results (2026-09-29, 4 SEDs x 4 bins): RAMSES and the reference solver agree
 to <= 2e-14 in Z, Gamma and Lambda (2e-13 in sigma_Z). `--free-T` runs crash

@@ -110,7 +110,7 @@ dust_solver_type=3          ! RK54 solver
 dust_sputtering=.true.      ! Enable thermal sputtering
 sputtering_model='RM2026'
 dust_sputtering_charge=.true.
-charging_model='RM2026'
+charging_model='WDB06isrf'
 nZmix=3
 
 !----------- Efficiency parameters -----------!

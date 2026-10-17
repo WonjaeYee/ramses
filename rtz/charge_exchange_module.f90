@@ -8,6 +8,10 @@ module charge_exchange_module
 
   real(dp):: CTRecomb(6,4,30)
   real(dp):: CTIon(7,4,30)
+  ! the rate of each (stage, element) at the last temperature it was asked for: the chemistry and
+  ! the cooling ask for the same pairs at the same T several times per cooling step
+  real(dp), save :: ctr_T(4,30) = -1d0, ctr_rate(4,30) = 0d0
+  real(dp), save :: cti_T(4,30) = -1d0, cti_rate(4,30) = 0d0
 
 CONTAINS
 
@@ -93,6 +97,11 @@ FUNCTION charge_transfer_recombination(ion, nelem, T) result(rate)
      return
   end if
 
+  if (ctr_T(ipIon,nelem) == T) then
+     rate = ctr_rate(ipIon,nelem)
+     return
+  end if
+
   !Make sure T is between temp. boundaries
   tused = max(min(T,CTRecomb(6,ipIon,nelem)),CTRecomb(5,ipIon,nelem))
   tused = tused * 1d-4
@@ -102,6 +111,8 @@ FUNCTION charge_transfer_recombination(ion, nelem, T) result(rate)
   rate = CTRecomb(1,ipIon,nelem) * 1d-9 * (tused**CTRecomb(2,ipIon,nelem)) * (1.d0 + CTRecomb(3,ipIon,nelem) * safe_exp(CTRecomb(4,ipIon,nelem)*tused) )
 
   rate = MAX(rate,1.d-100)
+  ctr_T(ipIon,nelem) = T
+  ctr_rate(ipIon,nelem) = rate
 
 END FUNCTION charge_transfer_recombination
 
@@ -129,6 +140,11 @@ FUNCTION charge_transfer_ionization(ion, nelem, T) result(rate)
      return
   end if
 
+  if (cti_T(ipIon,nelem) == T) then
+     rate = cti_rate(ipIon,nelem)
+     return
+  end if
+
   ! Make sure T is between temp. boundaries
   tused = max(min(T,CTIon(6,ipIon,nelem)),CTIon(5,ipIon,nelem))
   tused = tused * 1d-4
@@ -138,6 +154,8 @@ FUNCTION charge_transfer_ionization(ion, nelem, T) result(rate)
   rate = CTIon(1,ipIon,nelem) * 1d-9 * (tused**CTIon(2,ipIon,nelem)) * (1.d0 + CTIon(3,ipIon,nelem) * safe_exp(CTIon(4,ipIon,nelem)*tused) ) * safe_exp(-1.d0 * CTIon(7,ipIon,nelem)/tused)
 
   rate = MAX(rate,1.d-100)
+  cti_T(ipIon,nelem) = T
+  cti_rate(ipIon,nelem) = rate
 
 END FUNCTION charge_transfer_ionization
 

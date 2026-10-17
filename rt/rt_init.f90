@@ -419,7 +419,7 @@ SUBROUTINE read_rt_groups()
 #ifdef CALIMA
   use dust_optics
   use dust_commons, only: charging_model
-  use dust_charging_rtgroups, only: init_dust_charging_rtgroups, init_dust_charging_psitab
+  use dust_charging_rtgroups, only: init_dust_charging_rtgroups
 #endif
   use SED_module
   implicit none
@@ -600,8 +600,6 @@ SUBROUTINE read_rt_groups()
   call init_dust_mean_cross_sections(sed_dir)
   ! Local-field grain charging tables (charging_model='WDB06rt')
   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)
-  ! EUV-extended charging tables (charging_model='WDB06tab')
-  if (trim(charging_model) == 'WDB06tab') call init_dust_charging_psitab(groupL0, groupL1, nGroups)
 #endif
 
   if(minval(group_egy) .le. 0d0 .and. myid==1) then
