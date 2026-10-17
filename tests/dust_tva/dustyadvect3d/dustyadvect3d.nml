@@ -1,0 +1,79 @@
+This is the RAMSES parameter file for the DustyAdvect3D test.
+
+Three-dimensional counterpart of the 1D dustyadvect test. A dust-enriched cube is
+advected by an imposed *diagonal* drift velocity, so that all three flux directions of
+the TVA solver are exercised at once -- the 1D tests only ever exercise idim=1, which
+is how the transverse c_s_face indexing bug in get_dust_courant_dt survived.
+
+The gas is static, so the dust moves only because of the drift. With periodic
+boundaries and a constant w, the exact solution is the initial cube translated by w*t,
+and the total dust mass is invariant.
+
+&RUN_PARAMS
+hydro=.true.
+static=.true.
+/
+
+&AMR_PARAMS
+levelmin=5
+levelmax=5
+ngridmax=40000
+nparttot=1
+nexpand=1
+boxlen=1.0
+/
+
+&BOUNDARY_PARAMS
+nboundary=0
+/
+
+&INIT_PARAMS
+nregion=2
+region_type(1)='square'
+region_type(2)='square'
+x_center=0.5,0.25
+y_center=0.5,0.25
+z_center=0.5,0.25
+length_x=1.0,0.25
+length_y=1.0,0.25
+length_z=1.0,0.25
+exp_region=10,10
+d_region=1.0,1.0
+u_region=0.0,0.0
+v_region=0.0,0.0
+w_region=0.0,0.0
+p_region=1.0,1.0
+var_region(1,1)=0.01d0
+var_region(2,1)=0.1d0
+/
+
+&OUTPUT_PARAMS
+noutput=1
+tout=0.1
+/
+
+&HYDRO_PARAMS
+gamma=1.4
+courant_factor=0.8
+slope_type=1
+riemann='hllc'
+/
+
+&REFINE_PARAMS
+interpol_var=0
+interpol_type=2
+/
+
+&CALIMA_PARAMS
+dust_tva=.true.
+use_w_drift_test=.true.
+w_drift_test=1.0,0.5,0.25
+tva_wmax_cs=-1.0
+dust_composition(1,6) = 1d0
+dustbins_per_chemtype=1
+asize=0.1d0
+sgrain=2.2d0
+amin = 3d-2
+amax = 1d0
+dust_tables_dir='/data80/currodri/test_chicago/rtzdata_for_public_ramses/calima_data/'
+/

@@ -1,0 +1,195 @@
+RAMSES parameter file -- LEVITATING GAS, REFERENCE (plain RAMSES-RT) -- RT15 RESOLUTION
+
+The Krumholz & Thompson (2013) / Davis et al. (2014) dusty atmosphere as run by
+Rosdahl & Teyssier 2015 (RT15) sec. 3.7, modelled on patch/rt/davis/davis.nml.
+
+RT15's dimensional setup is matched EXACTLY in both folders:
+
+                          RT15         here
+    F_*                1.03e4       1.03e4        erg/cm2/s
+    T_*                82           82            K
+    g                  1.46e-6      1.46e-6       cm/s2
+    rho_*              7.1e-16      7.1e-16       g/cm3
+    kappa_R,*          2.13         2.1248        cm2/g_gas
+    c_*                0.54         0.5390        km/s     (derived)
+    h_* = c_iso^2/g    2e15         1.9897e15     cm       (derived)
+    t_* = h_*/c_*      3.67e10      3.6916e10     s        (derived)
+    Sigma = rho_* h_*  1.4          1.4127        g/cm2    (derived)
+    tau_* = kappa Sigma  3          3.0017                 (derived)
+    f_E,* = kappa F/(cg) 0.5        0.5000                 (derived)
+
+Units are units_length = h_*, units_time = t_*, units_density = rho_*, so
+g = 1, d_region = 1, p_region = 1 and Sigma = 1 in code units -- the same
+normalisation as davis.nml (gravity_params = 0,-1).
+
+THIS FOLDER: plain RAMSES-RT (RT = 1, RTZ = 0, CALIMA = 0), i.e. the reference.
+The IR opacity is RAMSES-RT's own is_kIR_T branch with the KT13 power law RT15
+used, kappa_P = 0.1(T/10K)^2 and kappa_R = 0.0316(T/10K)^2 (their eq. 79), and
+there is no dust as a separate fluid. This is the run to compare against the
+published figures.
+
+rt_kIR_RT15 selects RT15's EXACT form of eq. 79: the gas temperature, and no
+exp(-T_R/1000K) sublimation cutoff. Both the T_rad choice and the cutoff were
+added to RAMSES-RT after RT15; with the cutoff on, kappa_R(82 K) is 1.9575
+instead of 2.1248, putting tau_* at 2.76 and f_E,* at 0.4617.
+
+group_csn/group_cse MUST stay zero. With nGroups=1, rt_init.f90:392-408 hands
+the single group the hardcoded HI-IONISING defaults (csn = 3.007e-18 cm2,
+egy = 18.85 eV) and the band-based re-initialisation at :483 is inside the RTZ
+branch, so only the namelist can clear them. Left at the default this "IR" beam
+photoionises the gas: xHII relaxes to 2.2e-3 and the hydrogen limiter pins the
+cooling substep at 1.4 s against a 3e6 s hydro step, and the run cannot
+advance.
+
+This namelist is RT15's resolution: 2048^2 over L_box = 1024 h_*, 200 t_*,
+and the light-speed ramp from full c over 3e4 RHD steps. It is a CLUSTER run --
+the ramp alone is ~400x more expensive per unit physical time than running at
+c_red (measured: 2.8 steps/min at 256^2 on 12 cores), which is exactly why RT15
+needed 3e4 steps to cover 'the initial few t_*'. Use the _quick namelist locally.
+
+Diagnostics (plot-levgas.py) reproduce RT15 figs. 9-11 and 13:
+  f_E,V = <f_y,rad>/<g rho>                                     (eq. 84, 0.5 at t=0)
+  tau_V = L_box <kappa_R rho>                                   (eq. 85, 3   at t=0)
+  tau_F = L_box <kappa_R rho F_y>/<F_y>, plotted as tau_F/tau_V (eq. 86, 1   at t=0)
+  f_y,rad = kappa_R rho F_y/c - (1/3) dE_t/dy                   (eq. 81)
+plus rho/rho_* and T_rad/T_* projections at 25, 50, 75 and 150 t_* (fig. 10).
+
+BOUNDARIES -- matched to patch/rt/davis
+  x            periodic, matter and radiation
+  bottom       reflective for matter; EMITS F_* for radiation via RT15 eq. 83,
+               c~E_0 = F_* - F_y,1 + c~E_1, implemented in the local
+               patch/rt_hydro_boundary.f90 (PATCH = patch in the Makefile).
+               An rt_nsource region was tried and rejected: it imposes Np every
+               RT subcycle and so also destroys returning radiation, collapsing
+               the net injection to 18% of F_* once photons pile up.
+  top          Dirichlet, rho = 1e-13 rho_*, v = 0, T = 1e3 T_*, zero radiation.
+               NOTE RT15's text says T = 1e-3 T_*, but their
+               hydro_boundary.f90 uses 1e3 T_*, and only that satisfies the
+               "in pressure balance with the initial conditions" they also
+               state: 1e-13 x 1e3 = 1e-10 = the initial density floor at T_*.
+
+&RUN_PARAMS
+hydro=.true.
+rt=.true.
+poisson=.true.
+pic=.false.
+static=.false.
+nrestart=0
+nremap=20
+verbose=.false.
+/
+
+&AMR_PARAMS
+levelmin=11
+levelmax=11
+ngridmax=2000000
+nparttot=1
+nexpand=1
+boxlen=1024.0                ! = 1024 h_*, 2048^2 cells -> dy = 0.5 h_*
+/
+
+&POISSON_PARAMS
+gravity_type=1
+gravity_params=0.0,-1.0      ! g = c_iso^2/h_* = 1, along -y
+/
+
+&BOUNDARY_PARAMS
+nboundary=2
+jbound_min=-1,+1
+jbound_max=-1,+1
+bound_type= 1, 3             ! bottom mirror (+ emitting via the patch), top Dirichlet
+d_bound  = 0.0, 1.0d-13
+p_bound  = 0.0, 1.0d-10
+u_bound  = 0.0, 0.0
+v_bound  = 0.0, 0.0
+/
+
+&INIT_PARAMS
+condinit_kind='dustylevatm'
+nregion=1
+region_type(1)='square'
+exp_region(1)=10.0           ! max norm. With the DEFAULT exponent a "square"
+                             ! region is an ELLIPSE and misses the corners in 2D.
+x_center=512
+y_center=512
+length_x=2048
+length_y=2048
+d_region=1.0                 ! = rho_*
+u_region=0.0
+p_region=1.0                 ! p/d = c_iso^2 = 1
+var_region(1,:)=0.0
+/
+
+&OUTPUT_PARAMS
+noutput=9
+tout = 0.0,1.0,5.0,25.0,50.0,75.0,100.0,150.0,200.0
+tend = 200.0
+/
+
+&HYDRO_PARAMS
+gamma=1.4
+courant_factor=0.8
+slope_type=1                 ! davis.nml
+pressure_fix=.true.          ! davis.nml
+beta_fix=0.5                 ! davis.nml
+riemann='hllc'
+/
+
+&COOLING_PARAMS
+metal = .false.
+cooling = .false.
+z_ave = 1.0d0                ! RT15's kappa carries no metallicity scaling
+/
+
+&REFINE_PARAMS
+interpol_var=0
+interpol_type=2
+/
+
+&UNITS_PARAMS
+units_length  = 1.9897137d15      ! h_* = c_iso^2/g with RT15's g = 1.46e-6
+units_time    = 3.6916359d10      ! t_* = h_*/c_*   (RT15 quote 3.67e10)
+units_density = 7.1d-16           ! rho_*
+/
+
+&RT_PARAMS
+rt_flux_scheme='glf'         ! mandatory for IR trapping (RT15 footnote 3)
+rt_courant_factor=0.8
+rt_c_fraction=3d-3           ! TARGET reduced light speed, as RT15
+rt_c_ramp_start=1.0d0        ! start at the FULL c, as RT15
+rt_c_ramp_nstep=30000        ! RHD steps to converge over, as RT15
+rt_otsa=.true.
+rt_smooth=.true.             ! these four follow davis.nml
+rt_vc=.true.
+rt_T_rad=.false.
+rt_pressBoost=1d0
+rt_is_init_xion=.true.
+rt_nsubcycle=4000
+rt_isIR=.true.
+rt_isIRtrap=.true.
+is_kIR_T=.true.              ! kappa_IR = kappa*(T/10)^2, RT15 eq. 79
+rt_kIR_RT15=.true.           ! RT15's EXACT eq. 79: gas T, no cutoff
+!----------- F_* : emitting bottom boundary + RT15's initial field ----------!
+rt_n_bound = 1.030000e+04, 1.0d-50
+rt_nregion = 1
+rt_region_type(1) = 'square'
+rt_exp_region(1) = 10.0
+rt_reg_x_center(1) = 512
+rt_reg_y_center(1) = 512
+rt_reg_length_x(1) = 2048
+rt_reg_length_y(1) = 2048
+rt_n_region(1) = 3.435710e-07
+rt_v_region(1) = 3.435710e-07      ! = rt_n_region gives a fully directed beam, f = 1
+rt_reg_group(1) = 1
+X=1d0                        ! pure hydrogen, as davis.nml
+Y=0d0
+/
+
+&RT_GROUPS
+! EXACTLY as davis.nml. Zeroing csn/cse is mandatory -- see above.
+group_csn(1,:)= 0.
+group_cse(1,:)= 0.
+group_egy(1)= 6.2415d11      ! 1 erg per photon
+kappaSc(1)=0.0316            ! RT15 eq. 79, Rosseland
+kappaAbs(1)=0.1              ! RT15 eq. 79, Planck
+/
