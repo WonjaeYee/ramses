@@ -250,12 +250,6 @@ module rt_parameters
   ! used to be hardcoded there.  Set it to the source temperature so that the
   ! group properties describe the spectrum the run is actually driven by.
   real(dp)::rtz_source_temperature=1.d5
-  ! Fraction of He I case-B recombinations whose cascade ends in a photon able
-  ! to ionize H (the 584 A resonance line converting on H0 rather than being
-  ! degraded to the 2-photon continuum).  Osterbrock & Ferland (2006) give
-  ! ~2/3 for an optically thick, H-rich nebula; the true value depends on the
-  ! 584 A optical depth and on n(H0)/n(He0), so it is exposed here.
-  real(dp)::rtz_He_fluor_yield=0.66d0
   ! Substep acceptance of rtz_solve_cooling: a substep is rejected (and halved) when T2, an ion or
   ! electron fraction, or a photon density / flux changes by more than this fraction. The defaults
   ! are the values that were compile-time constants in rtz_cooling_module (single-precision literals,
