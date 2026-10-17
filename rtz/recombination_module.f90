@@ -33,83 +33,27 @@ module recombination_module
   ! mean energies, beyond the physical one.
   real(dp), allocatable :: recrad_efrac(:,:,:)     ! (nGroups, nT_recrad, 3)
   logical :: recrad_ready = .false.
-  ! He I case-B recombination, from Cloudy's He-like atom (master e6555102): per case-B
-  ! He+ -> He0 recombination, the 2^3S -> 1^1S decays (19.82 eV), the 2^1S -> 1^1S two-photon
-  ! decays (with every 2^1P arrival converted, i.e. 584 A fully trapped), and the arrivals in
-  ! 2^1P, on (log T, log n_e). One-zone models 'case B 10 no photoionization no pdest', each
-  ! channel = level population x its decay rate / (alpha_B n_e n(He+)), alpha_B from Cloudy's
-  ! he_iso_recomb.dat; collisional transfer between the n=2 levels is included (it moves 2^3S to
-  ! the singlets above n_e ~ 1e3). RAMSES_dev/studies/heI_yield (cloudy_branching.py,
-  ! branching_grid.txt). Which 2^1P arrivals escape as 584 A photons depends on the cell, and is
-  ! computed in heI_recrad_cell.
-  integer, parameter :: nT_heI = 7, nN_heI = 13
-  real(dp), parameter :: lgT_heI(nT_heI) = [ 3.60206d0, 3.69897d0, 3.84510d0, 4.00000d0, 4.14613d0, 4.30103d0, 4.44716d0 ]
-  real(dp), parameter :: lgne_heI(nN_heI) = [ 0.0484d0, 0.5484d0, 1.0484d0, 1.5484d0, 2.0484d0, 2.5484d0, 3.0484d0, 3.5484d0, 4.0484d0, 4.5484d0, 5.0484d0, 5.5484d0, 6.0485d0 ]
-  real(dp), parameter :: heI_fM1(nT_heI, nN_heI) = reshape( [ &
-       0.7729d0, 0.7739d0, 0.7762d0, 0.7748d0, 0.7785d0, 0.7814d0, 0.7883d0, &
-       0.7729d0, 0.7737d0, 0.7755d0, 0.7745d0, 0.7778d0, 0.7808d0, 0.7879d0, &
-       0.7720d0, 0.7728d0, 0.7746d0, 0.7726d0, 0.7759d0, 0.7787d0, 0.7855d0, &
-       0.7702d0, 0.7700d0, 0.7703d0, 0.7676d0, 0.7699d0, 0.7723d0, 0.7766d0, &
-       0.7634d0, 0.7613d0, 0.7582d0, 0.7512d0, 0.7516d0, 0.7490d0, 0.7513d0, &
-       0.7439d0, 0.7351d0, 0.7212d0, 0.7045d0, 0.6976d0, 0.6882d0, 0.6807d0, &
-       0.6872d0, 0.6629d0, 0.6257d0, 0.5881d0, 0.5682d0, 0.5461d0, 0.5250d0, &
-       0.5545d0, 0.5059d0, 0.4406d0, 0.3866d0, 0.3579d0, 0.3305d0, 0.3041d0, &
-       0.3459d0, 0.2892d0, 0.2278d0, 0.1850d0, 0.1648d0, 0.1467d0, 0.1304d0, &
-       0.1564d0, 0.1229d0, 0.0901d0, 0.0697d0, 0.0608d0, 0.0531d0, 0.0463d0, &
-       0.0571d0, 0.0433d0, 0.0307d0, 0.0234d0, 0.0202d0, 0.0176d0, 0.0153d0, &
-       0.0188d0, 0.0142d0, 0.0099d0, 0.0075d0, 0.0065d0, 0.0056d0, 0.0049d0, &
-       0.0061d0, 0.0045d0, 0.0032d0, 0.0024d0, 0.0021d0, 0.0018d0, 0.0015d0 ], [nT_heI, nN_heI])
-  real(dp), parameter :: heI_f2ph(nT_heI, nN_heI) = reshape( [ &
-       0.2315d0, 0.2307d0, 0.2293d0, 0.2261d0, 0.2239d0, 0.2206d0, 0.2195d0, &
-       0.2317d0, 0.2309d0, 0.2295d0, 0.2266d0, 0.2245d0, 0.2213d0, 0.2202d0, &
-       0.2322d0, 0.2317d0, 0.2308d0, 0.2282d0, 0.2263d0, 0.2233d0, 0.2222d0, &
-       0.2339d0, 0.2341d0, 0.2344d0, 0.2332d0, 0.2320d0, 0.2295d0, 0.2279d0, &
-       0.2390d0, 0.2416d0, 0.2459d0, 0.2484d0, 0.2497d0, 0.2474d0, 0.2457d0, &
-       0.2549d0, 0.2643d0, 0.2794d0, 0.2929d0, 0.2997d0, 0.2994d0, 0.2950d0, &
-       0.3000d0, 0.3268d0, 0.3675d0, 0.4026d0, 0.4190d0, 0.4184d0, 0.4039d0, &
-       0.4064d0, 0.4628d0, 0.5371d0, 0.5935d0, 0.6125d0, 0.5995d0, 0.5569d0, &
-       0.5778d0, 0.6503d0, 0.7328d0, 0.7814d0, 0.7896d0, 0.7519d0, 0.6768d0, &
-       0.7248d0, 0.7943d0, 0.8589d0, 0.8872d0, 0.8828d0, 0.8288d0, 0.7327d0, &
-       0.7990d0, 0.8569d0, 0.9053d0, 0.9248d0, 0.9152d0, 0.8562d0, 0.7531d0, &
-       0.8199d0, 0.8758d0, 0.9154d0, 0.9352d0, 0.9234d0, 0.8610d0, 0.7536d0, &
-       0.8289d0, 0.8783d0, 0.9208d0, 0.9348d0, 0.9227d0, 0.8576d0, 0.7535d0 ], [nT_heI, nN_heI])
-  real(dp), parameter :: heI_f1P(nT_heI, nN_heI) = reshape( [ &
-       0.1592d0, 0.1575d0, 0.1545d0, 0.1499d0, 0.1459d0, 0.1406d0, 0.1359d0, &
-       0.1592d0, 0.1575d0, 0.1545d0, 0.1501d0, 0.1460d0, 0.1408d0, 0.1362d0, &
-       0.1592d0, 0.1575d0, 0.1547d0, 0.1503d0, 0.1464d0, 0.1414d0, 0.1369d0, &
-       0.1593d0, 0.1577d0, 0.1551d0, 0.1512d0, 0.1478d0, 0.1433d0, 0.1389d0, &
-       0.1596d0, 0.1583d0, 0.1565d0, 0.1539d0, 0.1519d0, 0.1483d0, 0.1450d0, &
-       0.1605d0, 0.1601d0, 0.1605d0, 0.1617d0, 0.1635d0, 0.1635d0, 0.1618d0, &
-       0.1630d0, 0.1649d0, 0.1712d0, 0.1810d0, 0.1912d0, 0.1980d0, 0.1992d0, &
-       0.1691d0, 0.1755d0, 0.1916d0, 0.2147d0, 0.2359d0, 0.2506d0, 0.2516d0, &
-       0.1795d0, 0.1902d0, 0.2153d0, 0.2475d0, 0.2770d0, 0.2948d0, 0.2928d0, &
-       0.1871d0, 0.2015d0, 0.2307d0, 0.2661d0, 0.2988d0, 0.3176d0, 0.3124d0, &
-       0.1906d0, 0.2058d0, 0.2359d0, 0.2731d0, 0.3074d0, 0.3273d0, 0.3213d0, &
-       0.1912d0, 0.2077d0, 0.2383d0, 0.2783d0, 0.3142d0, 0.3346d0, 0.3276d0, &
-       0.1951d0, 0.2117d0, 0.2468d0, 0.2900d0, 0.3306d0, 0.3533d0, 0.3487d0 ], [nT_heI, nN_heI])
+  ! He I case-B recombination, from Cloudy's He-like atom, read from data_dir/heI_recombination_cloudy.dat
+  ! by load_heI_recombination_data (made by utils/py/rtz/make_heI_recombination_table.py):
+  !  - per case-B He+ -> He0 recombination, the 2^3S -> 1^1S decays (19.82 eV), the 2^1S -> 1^1S
+  !    two-photon decays (with every 2^1P arrival converted, i.e. 584 A fully trapped), and the
+  !    arrivals in 2^1P, on (log T, log n_e): one-zone models 'case B 10 no photoionization no pdest',
+  !    with collisional transfer between the n=2 levels (it moves 2^3S to the singlets above n_e ~ 1e3).
+  !    Which 2^1P arrivals escape as 584 A photons depends on the cell (heI_recrad_cell);
+  !  - the radiative recombination coefficient to He0, total and to 1^1S (Cloudy he_iso_recomb.dat),
+  !    on log10 T = lgT_heIrr_min + (i-1) dlgT_heIrr;
+  !  - the He I two-photon split (Cloudy atmdat_2photon.cpp): photons above 13.6 eV per decay, their
+  !    mean energy, and the mean energy of the others.
+  integer :: nT_heI = 0, nN_heI = 0, nT_heIrr = 0
+  real(dp), allocatable :: lgT_heI(:), lgne_heI(:), heI_fM1(:,:), heI_f2ph(:,:), heI_f1P(:,:)
+  real(dp), allocatable :: lga_heI_tot(:), lga_heI_gnd(:)
+  real(dp) :: lgT_heIrr_min, dlgT_heIrr
+  real(dp) :: heI_2ph_ion, heI_2ph_E_ion, heI_2ph_E_low
+  logical :: heI_data_ready = .false.
 
   real(dp), parameter :: heI_A584 = 1.79892d9   ! 2^1P -> 1^1S [s^-1] (Cloudy he_transprob.dat, Drake)
   real(dp), parameter :: heI_A2058 = 1.976d6    ! 2^1P -> 2^1S, 2.058 um [s^-1]
   real(dp), parameter :: heI_f584 = 0.2762d0, heI_lam584 = 584.334d-8   ! oscillator strength, wavelength [cm]
-  ! He I two-photon continuum (2^1S -> 1^1S, 20.616 eV; Cloudy atmdat_2photon.cpp He I shape):
-  ! per decay 0.555 photons above 13.6 eV (mean 16.10 eV) and 1.445 below (mean 8.08 eV)
-  real(dp), parameter :: heI_2ph_ion = 0.555d0, heI_2ph_E_ion = 16.10d0, heI_2ph_E_low = 8.08d0
-  ! He+ -> He0 radiative recombination of Cloudy's He-like atom (data/he_iso_recomb.dat, master e6555102):
-  ! log10 alpha [cm^3 s^-1], total and to 1^1S, at log10 T = 1.00, 1.25, ..., 8.00
-  integer, parameter :: nT_heIrr = 29
-  real(dp), parameter :: lgT_heIrr_min = 1.00d0, dlgT_heIrr = 0.25d0
-  real(dp), parameter :: lga_heI_tot(nT_heIrr) = [ &
-       -10.462977d0, -10.610883d0, -10.760360d0, -10.911435d0, -11.064214d0, -11.218843d0, &
-       -11.375473d0, -11.534244d0, -11.695270d0, -11.858611d0, -12.024203d0, -12.191766d0, &
-       -12.360679d0, -12.529877d0, -12.697904d0, -12.863031d0, -13.021297d0, -13.169630d0, &
-       -13.324735d0, -13.503876d0, -13.712768d0, -13.948962d0, -14.207705d0, -14.484447d0, &
-       -14.775458d0, -15.077813d0, -15.389257d0, -15.708047d0, -16.032836d0 ]
-  real(dp), parameter :: lga_heI_gnd(nT_heIrr) = [ &
-       -11.302263d0, -11.427257d0, -11.552247d0, -11.677228d0, -11.802192d0, -11.927128d0, &
-       -12.052015d0, -12.176816d0, -12.301466d0, -12.425854d0, -12.549792d0, -12.672984d0, &
-       -12.795013d0, -12.915397d0, -13.033827d0, -13.150612d0, -13.267577d0, -13.391328d0, &
-       -13.534288d0, -13.706044d0, -13.908470d0, -14.138512d0, -14.391614d0, -14.663407d0, &
-       -14.950198d0, -15.249018d0, -15.557521d0, -15.873870d0, -16.196626d0 ]
 
   ! Cloudy radiative recombination tables
   real(dp), dimension(30,30,2) :: rrec = 0.d0
@@ -645,6 +589,8 @@ subroutine load_recombination_data()
   real(dp) :: help(9)
   
   if (myid == 1) write(*,*) 'Initializing Cloudy radiative recombination tables'
+
+  call load_heI_recombination_data()     ! if init_recrad_table has not read them already
   
   open(newunit=unit_num, file=trim(data_dir)//'/rad_rec.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
@@ -729,6 +675,54 @@ subroutine load_recombination_data()
   close(unit_num)
   
 end subroutine load_recombination_data
+
+subroutine load_heI_recombination_data()
+  ! The He I recombination data from Cloudy's He-like atom (see the module header). RTZ needs them for
+  ! every run with helium: the He+ -> He0 recombination rate itself comes from this file. Read once, by
+  ! the first of init_recrad_table (read_rt_groups, before init_time) and load_recombination_data.
+  use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
+  implicit none
+  integer :: u, ios
+  character(len=512) :: fname, line
+
+  if (heI_data_ready) return
+  fname = trim(data_dir)//'/heI_recombination_cloudy.dat'
+  open(newunit=u, file=trim(fname), status='old', action='read', iostat=ios)
+  if (ios /= 0) then
+     if (myid == 1) write(*,*) 'Error: cannot open '//trim(fname)//' (He I recombination data, made by '// &
+          'utils/py/rtz/make_heI_recombination_table.py; it belongs in the RTZ data directory)'
+     call clean_stop
+  end if
+  do                                   ! the header: comment lines starting with '#'
+     read(u, '(A)', iostat=ios) line
+     if (ios /= 0) exit
+     if (line(1:1) /= '#') then
+        backspace(u)
+        exit
+     end if
+  end do
+  if (ios == 0) read(u, *, iostat=ios) nT_heI, nN_heI
+  if (ios == 0) then
+     allocate(lgT_heI(nT_heI), lgne_heI(nN_heI), heI_fM1(nT_heI,nN_heI), heI_f2ph(nT_heI,nN_heI), &
+          heI_f1P(nT_heI,nN_heI))
+     read(u, *, iostat=ios) lgT_heI, lgne_heI, heI_fM1, heI_f2ph, heI_f1P
+  end if
+  if (ios == 0) read(u, *, iostat=ios) nT_heIrr, lgT_heIrr_min, dlgT_heIrr
+  if (ios == 0) then
+     allocate(lga_heI_tot(nT_heIrr), lga_heI_gnd(nT_heIrr))
+     read(u, *, iostat=ios) lga_heI_tot, lga_heI_gnd
+  end if
+  if (ios == 0) read(u, *, iostat=ios) heI_2ph_ion, heI_2ph_E_ion, heI_2ph_E_low
+  close(u)
+  if (ios /= 0) then
+     if (myid == 1) write(*,*) 'Error: cannot read '//trim(fname)
+     call clean_stop
+  end if
+  heI_data_ready = .true.
+  if (myid == 1) write(*,'(A,I3,A,I3,A,I3,A)') ' He I recombination data (Cloudy He-like atom): branching on ', &
+       nT_heI, ' T x ', nN_heI, ' n_e, alpha on ', nT_heIrr, ' T'
+end subroutine load_heI_recombination_data
 
 FUNCTION cloudy_rad_rec(iz, in, t) result(rate)
   implicit none
@@ -941,6 +935,7 @@ SUBROUTINE init_recrad_table(L0, L1, n)
    integer :: iT, g
    real(dp) :: T, aA, aB, f1, fB, dlg, kTeV
 
+   call load_heI_recombination_data()
    if (allocated(recrad_frac)) deallocate(recrad_frac)
    if (allocated(recrad_efrac)) deallocate(recrad_efrac)
    allocate(recrad_frac(n, nT_recrad, 3), recrad_efrac(n, nT_recrad, 3))
