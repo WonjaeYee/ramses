@@ -319,6 +319,8 @@ SUBROUTINE read_rt_groups()
 #endif
 #ifdef CALIMA
   use dust_optics
+  use dust_commons, only: charging_model
+  use dust_charging_rtgroups, only: init_dust_charging_rtgroups, init_dust_charging_psitab
 #endif
   use SED_module
   implicit none
@@ -468,6 +470,10 @@ SUBROUTINE read_rt_groups()
    ! Initialize per-group dust/PAH cross-sections after dust tables exist.
    call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
    call init_dust_mean_cross_sections(sed_dir)
+   ! Local-field grain charging tables (charging_model='WDB06rt')
+   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)
+   ! EUV-extended charging tables (charging_model='WDB06tab')
+   if (trim(charging_model) == 'WDB06tab') call init_dust_charging_psitab(groupL0, groupL1, nGroups)
 #endif
 
   ! Tabulate how recombination emission is distributed over the groups.  The

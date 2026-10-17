@@ -36,6 +36,7 @@ module dustbin_types
         integer :: npah = 0 ! Number of PAH bins
         integer :: nGroups = 0 ! Number of radiation groups
         integer :: nion_charges = 0 ! Number of charge states for Coulomb effects
+        integer :: icell = 0 ! Index of the cell in the RTZ cell vector (WDB06rt warm states; 0: none)
         integer :: ncharge_pah_max = 0 ! Maximum number of charge states for PAHs
         real(dp) :: H2_formation_rate = 0d0 ! H2 formation rate on dust
         real(dp) :: G0_background = 0d0 ! Background radiation field in units of Habing field
