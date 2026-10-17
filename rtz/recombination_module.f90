@@ -26,6 +26,12 @@ module recombination_module
   integer, parameter :: nT_recrad = 200
   real(dp), parameter :: lgT_recrad_min = 2.0d0, lgT_recrad_max = 6.0d0
   real(dp), allocatable :: recrad_frac(:,:,:)      ! (nGroups, nT_recrad, 3)
+  ! the physical energy of those photons [eV per recombination]: the edge for the ground-state continua
+  ! (the electron's kinetic energy is not in the case-B recombination cooling, and the photon returns it),
+  ! the edge + kT for the continua to excited levels (whose kinetic energy that cooling does remove), the
+  ! line energy for lines. rtz_cool_step charges the gas the heat these photons deposit, at their groups'
+  ! mean energies, beyond the physical one.
+  real(dp), allocatable :: recrad_efrac(:,:,:)     ! (nGroups, nT_recrad, 3)
   logical :: recrad_ready = .false.
   ! He I case-B recombination, from Cloudy's He-like atom (master e6555102): per case-B
   ! He+ -> He0 recombination, the 2^3S -> 1^1S decays (19.82 eV), the 2^1S -> 1^1S two-photon
@@ -925,54 +931,48 @@ SUBROUTINE init_recrad_table(L0, L1, n)
    !
    ! Note photon NUMBER is what recRad carries, and a recombination can emit
    ! more than one photon (a continuum photon plus cascade lines), so these
-   ! fractions may sum above 1.  Energy is only approximately conserved,
-   ! because each group absorbs at its own mean group_egy.
+   ! fractions may sum above 1.  Each group absorbs at its own mean group_egy;
+   ! recrad_efrac holds the photons' physical energy, and rtz_cool_step charges
+   ! the gas the difference, so a reabsorbed photon deposits its own energy.
    use amr_commons, only: myid
    implicit none
    real(dp), intent(in) :: L0(n), L1(n)
    integer, intent(in) :: n
    integer :: iT, g
-   real(dp) :: T, aA, aB, f1, fB, dlg
+   real(dp) :: T, aA, aB, f1, fB, dlg, kTeV
 
    if (allocated(recrad_frac)) deallocate(recrad_frac)
-   allocate(recrad_frac(n, nT_recrad, 3))
+   if (allocated(recrad_efrac)) deallocate(recrad_efrac)
+   allocate(recrad_frac(n, nT_recrad, 3), recrad_efrac(n, nT_recrad, 3))
    recrad_frac = 0.d0
+   recrad_efrac = 0.d0
    dlg = (lgT_recrad_max - lgT_recrad_min)/real(nT_recrad-1, dp)
 
    do iT = 1, nT_recrad
       T  = 10.d0**(lgT_recrad_min + dlg*real(iT-1, dp))
+      kTeV = 8.617333d-5*T
 
       ! ---- H II -> H I (hydrogenic, Z=1, edge 13.598 eV) ------------------
       call ab_HII(T, aA, aB)
       f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
-      g = group_at_edge(13.598d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + f1      ! ground-state continuum
-      g = group_at_edge(3.40d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + fB      ! n>=2 continuum (at n=2 edge)
-      g = group_of(10.199d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + 0.68d0*fB   ! Ly-alpha
-      g = group_of(1.89d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,1) = recrad_frac(g,iT,1) + 0.45d0*fB   ! Balmer-alpha
+      call add(group_at_edge(13.598d0, L0, L1, n), 1, f1, 13.598d0)            ! ground-state continuum
+      call add(group_at_edge(3.40d0, L0, L1, n), 1, fB, 3.40d0 + kTeV)         ! n>=2 continuum (at n=2 edge)
+      call add(group_of(10.199d0, L0, L1, n), 1, 0.68d0*fB, 10.199d0)          ! Ly-alpha
+      call add(group_of(1.89d0, L0, L1, n), 1, 0.45d0*fB, 1.89d0)              ! Balmer-alpha
 
       ! ---- He II -> He I (NOT hydrogenic; the cascade is in heI_recrad_cell) --
       ! ground-state share from Cloudy's He I atom, as the chemistry rate
       f1 = heI_alpha_cloudy(T, .false.)/heI_alpha_cloudy(T, .true.) ; fB = 1.d0 - f1
-      g = group_at_edge(24.587d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + f1      ! ground-state continuum
-      g = group_at_edge(4.0d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,2) = recrad_frac(g,iT,2) + fB      ! n=2 continua
+      call add(group_at_edge(24.587d0, L0, L1, n), 2, f1, 24.587d0)            ! ground-state continuum
+      call add(group_at_edge(4.0d0, L0, L1, n), 2, fB, 4.0d0 + kTeV)           ! n=2 continua
 
       ! ---- He III -> He II (hydrogenic, Z=2, edge 54.418 eV) --------------
       call ab_HeIII(T, aA, aB)
       f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
-      g = group_at_edge(54.418d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + f1      ! ground-state continuum
-      g = group_at_edge(13.598d0, L0, L1, n)                          ! n=2 edge -- ionizes H
-      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + fB
-      g = group_of(40.813d0, L0, L1, n)                              ! He II Ly-alpha -- ionizes H
-      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + 0.68d0*fB
-      g = group_of(6.4d0, L0, L1, n)
-      if (g > 0) recrad_frac(g,iT,3) = recrad_frac(g,iT,3) + 0.45d0*fB
+      call add(group_at_edge(54.418d0, L0, L1, n), 3, f1, 54.418d0)            ! ground-state continuum
+      call add(group_at_edge(13.598d0, L0, L1, n), 3, fB, 13.598d0 + kTeV)     ! n=2 edge -- ionizes H
+      call add(group_of(40.813d0, L0, L1, n), 3, 0.68d0*fB, 40.813d0)          ! He II Ly-alpha -- ionizes H
+      call add(group_of(6.4d0, L0, L1, n), 3, 0.45d0*fB, 6.4d0)
    end do
 
    recrad_ready = .true.
@@ -982,10 +982,18 @@ SUBROUTINE init_recrad_table(L0, L1, n)
            lgT_recrad_min, ' to ', lgT_recrad_max
       write(*,*) '  He I case-B cascade per cell (Cloudy He I atom; 584 A fate from the local H0, He0)'
    end if
+contains
+   subroutine add(g, k, f, E)
+      integer, intent(in) :: g, k
+      real(dp), intent(in) :: f, E
+      if (g <= 0) return
+      recrad_frac(g,iT,k) = recrad_frac(g,iT,k) + f
+      recrad_efrac(g,iT,k) = recrad_efrac(g,iT,k) + f*E
+   end subroutine add
 END SUBROUTINE init_recrad_table
 
 !************************************************************************
-SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac)
+SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac, efrac)
    ! Photons emitted into each group per He+ -> He0 recombination (case-A total
    ! normalisation, as recrad_fractions) by the He I case-B cascade, which the
    ! T-only table leaves out:
@@ -1006,14 +1014,15 @@ SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac)
    real(dp), intent(in) :: T, ne, nH0, nHe0, kdust
    real(dp), intent(in) :: L0(n), L1(n)
    integer, intent(in) :: n
-   real(dp), intent(out) :: frac(n)
+   real(dp), intent(out) :: frac(n), efrac(n)   ! photons, and their physical energy [eV], per recombination
    real(dp), parameter :: kB = 1.380649d-16, amu = 1.66054d-24, mHe = 4.0026d0
    real(dp), parameter :: pie2_mc = 0.026540d0      ! pi e^2 / (m_e c) [cm^2 s^-1]
    real(dp) :: fB, fM1, f2ph, f1P, b, sig0, kline, kc, beta, d, pdest, s, n584, n2ph
    real(dp) :: x, y, wx, wy
-   integer :: i, j, g
+   integer :: i, j
 
    frac = 0.d0
+   efrac = 0.d0
    if (T <= 0.d0) return
    fB = 1.d0 - heI_alpha_cloudy(T, .false.)/heI_alpha_cloudy(T, .true.)   ! case-B share, Cloudy's atom
 
@@ -1045,14 +1054,18 @@ SUBROUTINE heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac)
    n584 = f1P*s
    n2ph = max(f2ph - n584, 0.d0)
 
-   g = group_of(19.82d0, L0, L1, n)
-   if (g > 0) frac(g) = frac(g) + fB*fM1
-   g = group_of(21.22d0, L0, L1, n)
-   if (g > 0) frac(g) = frac(g) + fB*n584
-   g = group_of(heI_2ph_E_ion, L0, L1, n)
-   if (g > 0) frac(g) = frac(g) + fB*n2ph*heI_2ph_ion
-   g = group_of(heI_2ph_E_low, L0, L1, n)
-   if (g > 0) frac(g) = frac(g) + fB*n2ph*(2.d0 - heI_2ph_ion)
+   call put(group_of(19.82d0, L0, L1, n), fB*fM1, 19.82d0)
+   call put(group_of(21.22d0, L0, L1, n), fB*n584, 21.22d0)
+   call put(group_of(heI_2ph_E_ion, L0, L1, n), fB*n2ph*heI_2ph_ion, heI_2ph_E_ion)
+   call put(group_of(heI_2ph_E_low, L0, L1, n), fB*n2ph*(2.d0 - heI_2ph_ion), heI_2ph_E_low)
+contains
+   subroutine put(gg, f, E)
+      integer, intent(in) :: gg
+      real(dp), intent(in) :: f, E
+      if (gg <= 0) return
+      frac(gg) = frac(gg) + f
+      efrac(gg) = efrac(gg) + f*E
+   end subroutine put
 END SUBROUTINE heI_recrad_cell
 
 !************************************************************************
@@ -1089,23 +1102,26 @@ REAL(dp) FUNCTION sigma_HI_verner(E)
 END FUNCTION sigma_HI_verner
 
 !************************************************************************
-SUBROUTINE recrad_fractions(T, ion, n, frac)
+SUBROUTINE recrad_fractions(T, ion, n, frac, efrac)
    ! Photons emitted into each group per recombination of `ion`
-   ! (1 = H II->H I, 2 = He II->He I, 3 = He III->He II) at temperature T.
+   ! (1 = H II->H I, 2 = He II->He I, 3 = He III->He II) at temperature T,
+   ! and their physical energy [eV per recombination] (recrad_efrac).
    implicit none
    real(dp), intent(in) :: T
    integer, intent(in) :: ion, n
-   real(dp), intent(out) :: frac(n)
+   real(dp), intent(out) :: frac(n), efrac(n)
    integer :: iT
    real(dp) :: x, dlg, w
 
    frac = 0.d0
+   efrac = 0.d0
    if (.not. recrad_ready) return
    dlg = (lgT_recrad_max - lgT_recrad_min)/real(nT_recrad-1, dp)
    x = (log10(max(T, 1.d0)) - lgT_recrad_min)/dlg + 1.d0
    iT = min(max(int(x), 1), nT_recrad-1)
    w = min(max(x - real(iT, dp), 0.d0), 1.d0)
    frac(1:n) = (1.d0-w)*recrad_frac(1:n,iT,ion) + w*recrad_frac(1:n,iT+1,ion)
+   efrac(1:n) = (1.d0-w)*recrad_efrac(1:n,iT,ion) + w*recrad_efrac(1:n,iT+1,ion)
 END SUBROUTINE recrad_fractions
 
 !************************************************************************
