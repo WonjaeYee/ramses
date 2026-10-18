@@ -112,6 +112,9 @@ module rt_parameters
   real(dp),dimension(1:MAXBOUND)::rt_u_bound=0.0d0
   real(dp),dimension(1:MAXBOUND)::rt_v_bound=0.0d0
   real(dp),dimension(1:MAXBOUND)::rt_w_bound=0.0d0
+  ! photon flux [# cm-2 s-1] of each group through an imposed boundary (bound_type=3), along rt_u_bound:
+  ! sets every group's photon density and flux there (rt_n_bound sets group 1's only)
+  real(dp),dimension(1:MAXBOUND,1:nGroups)::rt_flux_bound=0.0d0
 
   ! Initial condition RT regions parameters----------------------------------------------
   integer                           ::rt_nregion=0
