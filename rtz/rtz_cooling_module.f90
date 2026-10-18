@@ -980,6 +980,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp)::alpha
       real(dp),dimension(nGroups)::recrad_f, recrad_g, recrad_fe, recrad_ge, recE
       real(dp)::rec_charge, aN_g, aE_g
+      real(dp)::ots_PH, ots_heat, ots_dHe, ots_Hrate   ! rt_otsa: the He photons that ionize H, on the spot
+      real(dp)::x_low                                   ! the less ionized state in the ion update's creation terms
+      real(dp)::crl
       real(dp)::kd584
       integer::g584
 
@@ -1225,6 +1228,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! UPDATE PHOTON DENSITY AND FLUX *************************************
       rec_charge = 0d0     ! set below when recombination photons are emitted
+      ots_heat = 0d0 ; ots_dHe = 0d0 ; ots_Hrate = 0d0
       if(rt_advect) then
          recRad(1:nGroups)=0. ; phAbs(1:nGroups)=0.
          ! Scattering rate; reduce the photon flux, but not photon density:
@@ -1281,6 +1285,21 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                recE(1:nGroups) = recE(1:nGroups) &
                     + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_fe(1:nGroups)
             end if
+         end if
+
+         ! Under OTSA the helium recombination photons that ionize hydrogen (the He I case-B cascade, the
+         ! H0 share of the He I ground-state photons, the He II case-B ones) are absorbed where they are made
+         ! (recombination_module::otsa_he_photons), as the ground-state photons are by recombination()
+         if (rt_OTSA .and. elements(2)%atomic_number > 0) then
+            kd584 = 0d0
+            do igroup = 1, nGroups
+               if (groupL0(igroup) <= 21.22d0 .and. (21.22d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) &
+                    kd584 = dustAbs(igroup)/rt_c_cgs(ilevel)
+            end do
+            call otsa_he_photons(TK, ne, nElement_dep(1)*dXion(1,1), nElement_dep(2)*dXion(2,1), &
+                 nElement_dep(2)*dXion(2,2), nElement_dep(2)*dXion(2,3), kd584, groupL0, groupL1, nGroups, &
+                 ots_PH, ots_heat, ots_dHe)
+            if (nElement_dep(1)*dXion(1,1) > 0d0) ots_Hrate = ots_PH / (nElement_dep(1)*dXion(1,1))
          end if
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS
@@ -1563,9 +1582,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
-         ! the heat the recombination photons deposit beyond their physical energy (above); it does not
-         ! depend on T, so the central difference below is unchanged
-         Crate = Crate - rec_charge
+         ! the heat the recombination photons deposit beyond their physical energy (above), and under OTSA the
+         ! photoheating of the helium photons that ionize hydrogen on the spot (otsa_he_photons); neither
+         ! depends on T, so the central difference below is unchanged
+         Crate = Crate - rec_charge + ots_heat
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
@@ -2218,6 +2238,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! previous ions are already computed
                if (iIon.lt.n_ions) then
                   saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
+                  ! OTSA: the He I ground-state photons H0 (or dust) takes do not re-ionize He0
+                  if (iElement == 2 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dHe
                   if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
                   ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
                   ! (at the background alone every grain is as in the dark, with its largest rate)
@@ -2227,11 +2249,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Initialize the change to zero
                dUU = 0.d0
 
+               ! The less ionized state of the creation terms (H and He: see the implicit form before the update)
+               x_low = 0d0
+               if (iIon > 1) then
+                  x_low = dXion(iElement,iIon-1)
+               end if
                !/////////////////////////
                !//       Creation      //
                !/////////////////////////
                cr = 0.d0
-
+               crl = 0.d0     ! the creation rate coefficients of the less ionized state (times x_low below)
                ! Account for molecular hydrogen
                if (iElement.eq.1 .and. iIon.eq.1 .and. isH2_rtz) then
                   ! Note: no factor of 2 needed since is 2*xH2
@@ -2248,35 +2275,35 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (rtz_include_collisional_ionization) then
                   if (iIon.gt.1) then 
                      ! cr = cr + (collisional_ionization(TK, iIon-1, iElement) * ne * dXion(iElement,iIon-1))
-                     cr = cr + (saved_rates(iIon-1,2) * ne * dXion(iElement,iIon-1))
+                     crl = crl + (saved_rates(iIon-1,2) * ne)
                   end if
                end if
 
                ! UVB Photoionization of the less excited state
                if (rtz_include_HM12_UVB) then 
                   if (iIon.gt.1) then 
-                     cr = cr + (HM12_UVB_z(iElement,iIon-1,1) * ss_factor * dXion(iElement,iIon-1))
+                     crl = crl + (HM12_UVB_z(iElement,iIon-1,1) * ss_factor)
                   end if
                end if
 
                ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
                if (rtz_include_photoionization) then 
                   if (iIon.eq.2) then 
-                     cr = cr + (UV_background_G0 * elements(iElement)%G0_photo_rate * dXion(iElement,iIon-1))
+                     crl = crl + (UV_background_G0 * elements(iElement)%G0_photo_rate)
                   end if
                end if
 
                ! Cosmic ray ionization of the less excited state
                if (rtz_include_cosmic_ray_ionization) then 
                   if (iIon > 1) then 
-                     cr = cr + (cosmic_ray_ionization_rates(iElement,iIon-1) * total_cosmic_ray_ionization_rate * dXion(iElement,iIon-1))
+                     crl = crl + (cosmic_ray_ionization_rates(iElement,iIon-1) * total_cosmic_ray_ionization_rate)
                   end if
                end if
 
                ! Cosmic ray ionization of the less excited state from induced UV
                if (rtz_include_cosmic_ray_ionization) then 
                   if (iIon.eq.2) then 
-                     cr = cr + (cosmic_ray_ionization_rates_induced_UV(iElement) * cosmic_ray_scale_factor * dXion(iElement,iIon-1))
+                     crl = crl + (cosmic_ray_ionization_rates_induced_UV(iElement) * cosmic_ray_scale_factor)
                   end if
                end if
 
@@ -2302,7 +2329,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      !        end do ! End loop over lesser ions
                      !    end do ! End loop over groups
                      !  else
-                        cr = cr + (dXion(iElement,iIon-1) * SUM(signc(:,iElement,iIon-1)*dNp))
+                        crl = crl + (SUM(signc(:,iElement,iIon-1)*dNp))
+                        ! OTSA: H0 photoionized on the spot by helium recombination photons
+                        if (iElement == 1 .and. iIon == 2) crl = crl + ots_Hrate
                      !end if
                   end if
                end if
@@ -2373,6 +2402,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (rtz_include_photoionization.and.rt_advect) then
                   if (iIon .lt. n_ions) then 
                      de = de + SUM(signc(:,iElement,iIon)*dNp)
+                     if (iElement == 1 .and. iIon == 1) de = de + ots_Hrate
                   end if
                end if
 #endif
@@ -2428,6 +2458,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                !/////////////////////////
                !//       Update        //
                !/////////////////////////
+               ! The creation from the less ionized state. For H and He the first ion is solved implicitly against
+               ! the neutral fraction 1 - x(ion) - x(others) (the value the fractions are reset to after this loop,
+               ! and the one the photon absorption uses): the ionizations booked equal the photons absorbed, and the
+               ! fraction stays in [0, 1]. This loop's own neutral update gave an intermediate value that booked ~0.7%
+               ! fewer ionizations than photons absorbed (1D H+He slab, T = 1e4 K).
+               if (iElement <= 2 .and. iIon == 2) then
+                  cr = cr + crl * max(0d0, 1d0 - sum(dXion(iElement,3:elements(iElement)%n_ions + elements(iElement)%n_mol)))
+                  de = de + crl
+               else
+                  cr = cr + crl * x_low
+               end if
                if (de * ddt(icell) < 1.d-6) then
                   dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
                else
