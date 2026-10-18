@@ -1530,17 +1530,10 @@ FUNCTION getSEDcsn(X, Y, N, e0, e1, species, ion)
   use spectrum_integrator_module
   use rt_parameters,only:ionEVs
   real(kind=8):: getSEDcsn, X(N), Y(N), e0, e1, norm
-#ifdef RTZ
-  real(kind=8):: e_cut
-#endif
   integer :: N, species, ion
 !-------------------------------------------------------------------------
 #ifdef RTZ
-  ! The H2 slot holds LW photodissociation (11.2-13.6 eV) as well as photoionisation (from
-  ! ionEvs(1,3)), so its groups are cut below the dissociation threshold instead
-  e_cut = ionEvs(species, ion)
-  if (species .eq. 1 .and. ion .eq. 3) e_cut = 11.2d0
-  if(e1 .gt. 0. .and. e1 .le. e_cut) then
+  if(e1 .gt. 0. .and. e1 .le. ionEvs(species, ion)) then
 #else
   if(e1 .gt. 0. .and. e1 .le. ionEvs(species)) then
 #endif
@@ -1562,17 +1555,10 @@ FUNCTION getSEDcse(X, Y, N, e0, e1, species, ion)
   use spectrum_integrator_module
   use rt_parameters,only:ionEVs
   real(dp):: getSEDcse, X(N), Y(N), e0, e1, norm
-#ifdef RTZ
-  real(kind=8):: e_cut
-#endif
   integer :: N, species, ion
 !-------------------------------------------------------------------------
 #ifdef RTZ
-  ! The H2 slot holds LW photodissociation (11.2-13.6 eV) as well as photoionisation (from
-  ! ionEvs(1,3)), so its groups are cut below the dissociation threshold instead
-  e_cut = ionEvs(species, ion)
-  if (species .eq. 1 .and. ion .eq. 3) e_cut = 11.2d0
-  if(e1 .gt. 0. .and. e1 .le. e_cut) then
+  if(e1 .gt. 0. .and. e1 .le. ionEvs(species, ion)) then
 #else
   if(e1 .gt. 0. .and. e1 .le. ionEvs(species)) then
 #endif
