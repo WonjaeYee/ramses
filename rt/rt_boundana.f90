@@ -4,7 +4,8 @@
 !############################################################
 subroutine rt_boundana(x,u,dx,ibound,ncell)
   use amr_parameters, ONLY: dp,ndim,nvector
-  use rt_parameters, ONLY: nrtvar, rt_boundary_var
+  use rt_parameters, ONLY: nrtvar, rt_boundary_var, rt_flux_bound, rt_u_bound, nGroups, rt_c_cgs
+  use amr_commons, ONLY: levelmin
   implicit none
   integer ::ibound                          ! Index of boundary region
   integer ::ncell                           ! Number of active cells
@@ -20,11 +21,26 @@ subroutine rt_boundana(x,u,dx,ibound,ncell)
   ! U is in user units.
   ! ibound is the index of the boundary region defined in the namelist.
   !================================================================
-  integer::ivar,i
+  integer::ivar,i,ig,iN
+  real(dp)::scale_Np,scale_Fp
 
   do ivar=1,nrtvar
      do i=1,ncell
         u(i,ivar)=rt_boundary_var(ibound,ivar)
+     end do
+  end do
+
+  ! rt_flux_bound: each group's photon flux through this boundary, a beam along rt_u_bound, as a region
+  ! source sets it (rt_init): N = F/c, F_x = u F. The reduced speed of light of levelmin (uniform grids)
+  call rt_units(scale_Np, scale_Fp)
+  do ig=1,nGroups
+     if (rt_flux_bound(ibound,ig) <= 0d0) cycle
+     iN = (ig-1)*(ndim+1) + 1
+     do i=1,ncell
+        u(i,iN) = rt_flux_bound(ibound,ig) / rt_c_cgs(levelmin) / scale_Np
+#if NDIM>0
+        u(i,iN+1) = rt_u_bound(ibound) * rt_flux_bound(ibound,ig) / scale_Fp
+#endif
      end do
   end do
 

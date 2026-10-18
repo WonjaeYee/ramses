@@ -69,6 +69,8 @@ SUBROUTINE rt_init
   if(rt .and. rt_nsource .gt. 0) rt_advect=.true.
   if(rt .and. rt_nregion .gt. 0) rt_advect=.true.
   if(rt .and. rt_AGN ) rt_advect=.true.
+  ! radiation through an imposed boundary (rt_flux_bound, or group 1's rt_n_bound)
+  if(rt .and. (any(rt_flux_bound > 0d0) .or. any(rt_n_bound > 0d0))) rt_advect=.true.
   ! UV propagation is checked in set_model
   ! Star feedback is checked in amr_step
 
@@ -216,7 +218,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rt_exp_source, rt_src_group                                    &
        & ,rt_n_source, rt_u_source, rt_v_source, rt_w_source             &
        ! RT boundary (for boundary conditions)                           &
-       & ,rt_n_bound,rt_u_bound,rt_v_bound,rt_w_bound                    &
+       & ,rt_n_bound,rt_u_bound,rt_v_bound,rt_w_bound,rt_flux_bound      &
        ! Sink RT parameters
        & ,rt_AGN, rt_sink, rt_sink_central_cloud                                                
 
