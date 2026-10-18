@@ -6,7 +6,7 @@ module recombination_module
 
   private  ! everything is private by default
   public :: recombination, load_recombination_data, old_recombination_HII, old_recombination_HeII, old_recombination_HeIII
-  public :: init_recrad_table, recrad_fractions, heI_recrad_cell
+  public :: init_recrad_table, recrad_fractions, heI_recrad_cell, otsa_he_photons
 
   !---------------------------------------------------------------------------
   ! Spectral redistribution of recombination emission.
@@ -50,6 +50,13 @@ module recombination_module
   real(dp) :: lgT_heIrr_min, dlgT_heIrr
   real(dp) :: heI_2ph_ion, heI_2ph_E_ion, heI_2ph_E_low
   logical :: heI_data_ready = .false.
+  ! H I and He II (H-like) recombination of Cloudy's atoms, total and to 1s, read from
+  ! data_dir/hlike_recombination_cloudy.dat (load_hlike_recombination_data): the ground-state share of the
+  ! emission (init_recrad_table) and the case-B rate under OTSA. log10 alpha on lgT_hl_min + (i-1) dlgT_hl.
+  integer :: nT_hl = 0
+  real(dp) :: lgT_hl_min, dlgT_hl
+  real(dp), allocatable :: lga_hl(:,:)        ! (nT_hl, 4): H I total, H I 1s, He II total, He II 1s
+  logical :: hl_data_ready = .false.
 
   real(dp), parameter :: heI_A584 = 1.79892d9   ! 2^1P -> 1^1S [s^-1] (Cloudy he_transprob.dat, Drake)
   real(dp), parameter :: heI_A2058 = 1.976d6    ! 2^1P -> 2^1S, 2.058 um [s^-1]
@@ -591,6 +598,7 @@ subroutine load_recombination_data()
   if (myid == 1) write(*,*) 'Initializing Cloudy radiative recombination tables'
 
   call load_heI_recombination_data()     ! if init_recrad_table has not read them already
+  call load_hlike_recombination_data()
   
   open(newunit=unit_num, file=trim(data_dir)//'/rad_rec.dat', status='old', action='read', iostat=ios)
   if (ios /= 0) then
@@ -724,6 +732,46 @@ subroutine load_heI_recombination_data()
        nT_heI, ' T x ', nN_heI, ' n_e, alpha on ', nT_heIrr, ' T'
 end subroutine load_heI_recombination_data
 
+subroutine load_hlike_recombination_data()
+  ! The H I and He II recombination of Cloudy's H-like atoms (see the module header), read once, by the first of
+  ! init_recrad_table and load_recombination_data.
+  use amr_commons, only: myid
+  use hydro_parameters, only: data_dir
+  implicit none
+  integer :: u, ios, k
+  character(len=512) :: fname, line
+
+  if (hl_data_ready) return
+  fname = trim(data_dir)//'/hlike_recombination_cloudy.dat'
+  open(newunit=u, file=trim(fname), status='old', action='read', iostat=ios)
+  if (ios /= 0) then
+     if (myid == 1) write(*,*) 'Error: cannot open '//trim(fname)//' (H-like recombination data, made by '// &
+          'utils/py/rtz/make_heI_recombination_table.py; it belongs in the RTZ data directory)'
+     call clean_stop
+  end if
+  do
+     read(u, '(A)', iostat=ios) line
+     if (ios /= 0) exit
+     if (line(1:1) /= '#') then
+        backspace(u)
+        exit
+     end if
+  end do
+  if (ios == 0) read(u, *, iostat=ios) nT_hl, lgT_hl_min, dlgT_hl
+  if (ios == 0) then
+     allocate(lga_hl(nT_hl, 4))
+     do k = 1, 4
+        if (ios == 0) read(u, *, iostat=ios) lga_hl(:, k)
+     end do
+  end if
+  close(u)
+  if (ios /= 0) then
+     if (myid == 1) write(*,*) 'Error: cannot read '//trim(fname)
+     call clean_stop
+  end if
+  hl_data_ready = .true.
+end subroutine load_hlike_recombination_data
+
 FUNCTION cloudy_rad_rec(iz, in, t) result(rate)
   implicit none
   integer, intent(in) :: iz, in
@@ -808,13 +856,15 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
   real(dp), intent(in) :: T
   integer, intent(in) :: ion, element_idx
   real(dp) :: rate
-  real(dp) :: aA, aB
 
-  ! Radiative recombination rate from Cloudy database (Verner & Ferland 1996, i.e. case A). For He I,
-  ! Cloudy itself does not use that fit (helium is in its iso-sequence atom), and the fit is 8-13%
-  ! above the atom's total over 5e3-2e4 K: He+ -> He0 takes the atom's total instead.
+  ! Radiative recombination rate from Cloudy database (Verner & Ferland 1996, i.e. case A). For H I, He I
+  ! and He II, Cloudy itself does not use that fit (they are in its iso-sequence atoms), and the fit is off
+  ! the atoms' totals (He I: 8-13% above over 5e3-2e4 K; H I: 0.7% above at 1e4 K, which put the H+ front
+  ! of the fixed-T ladder 0.7% short of Cloudy): these take the atoms' totals instead.
   if (element_idx == 2 .and. ion == 2) then
      rate = heI_alpha_cloudy(T, .true.)
+  else if (element_idx <= 2 .and. ion == element_idx + 1) then
+     rate = hlike_alpha_total(T, element_idx)           ! H II -> H I, He III -> He II
   else
      rate = cloudy_rad_rec(element_idx, element_idx - ion + 2, T)
   end if
@@ -823,17 +873,15 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
   ! state of H I, He I and He II are not emitted into the groups (rtz_cool_step builds recRad only
   ! without OTSA), so they must be taken as absorbed where they are made, and the net rate is the
   ! case-B one (as rt_cooling_module does for plain RT, and as all_cooling's case-B recombination
-  ! cooling already assumes). The case A/B fit pairs are used for their ratio only, as in
-  ! init_recrad_table.
+  ! cooling already assumes). The ground-state share is that of Cloudy's atoms, as in init_recrad_table (the
+  ! Hui & Gnedin case A/B pair overstated it: its alpha_A is 3% above Cloudy's, its alpha_B within 0.5%).
   if (rt_otsa) then
      if (element_idx == 1 .and. ion == 2) then
-        call ab_HII(T, aA, aB)
-        rate = rate * (aB / aA)
+        rate = rate * (1.d0 - hlike_ground_fraction(T, 1))  ! Cloudy's H-like atom: total minus 1s
      else if (element_idx == 2 .and. ion == 2) then
         rate = rate - heI_alpha_cloudy(T, .false.)      ! the atom's case B: total minus 1^1S
      else if (element_idx == 2 .and. ion == 3) then
-        call ab_HeIII(T, aA, aB)
-        rate = rate * (aB / aA)
+        rate = rate * (1.d0 - hlike_ground_fraction(T, 2))
      end if
   end if
 
@@ -933,9 +981,10 @@ SUBROUTINE init_recrad_table(L0, L1, n)
    real(dp), intent(in) :: L0(n), L1(n)
    integer, intent(in) :: n
    integer :: iT, g
-   real(dp) :: T, aA, aB, f1, fB, dlg, kTeV
+   real(dp) :: T, f1, fB, dlg, kTeV
 
    call load_heI_recombination_data()
+   call load_hlike_recombination_data()
    if (allocated(recrad_frac)) deallocate(recrad_frac)
    if (allocated(recrad_efrac)) deallocate(recrad_efrac)
    allocate(recrad_frac(n, nT_recrad, 3), recrad_efrac(n, nT_recrad, 3))
@@ -948,8 +997,7 @@ SUBROUTINE init_recrad_table(L0, L1, n)
       kTeV = 8.617333d-5*T
 
       ! ---- H II -> H I (hydrogenic, Z=1, edge 13.598 eV) ------------------
-      call ab_HII(T, aA, aB)
-      f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
+      f1 = hlike_ground_fraction(T, 1) ; fB = 1.d0 - f1       ! Cloudy's H-like atom
       call add(group_at_edge(13.598d0, L0, L1, n), 1, f1, 13.598d0)            ! ground-state continuum
       call add(group_at_edge(3.40d0, L0, L1, n), 1, fB, 3.40d0 + kTeV)         ! n>=2 continuum (at n=2 edge)
       call add(group_of(10.199d0, L0, L1, n), 1, 0.68d0*fB, 10.199d0)          ! Ly-alpha
@@ -962,8 +1010,7 @@ SUBROUTINE init_recrad_table(L0, L1, n)
       call add(group_at_edge(4.0d0, L0, L1, n), 2, fB, 4.0d0 + kTeV)           ! n=2 continua
 
       ! ---- He III -> He II (hydrogenic, Z=2, edge 54.418 eV) --------------
-      call ab_HeIII(T, aA, aB)
-      f1 = max(1.d0 - aB/aA, 0.d0) ; fB = aB/aA
+      f1 = hlike_ground_fraction(T, 2) ; fB = 1.d0 - f1       ! Cloudy's H-like atom
       call add(group_at_edge(54.418d0, L0, L1, n), 3, f1, 54.418d0)            ! ground-state continuum
       call add(group_at_edge(13.598d0, L0, L1, n), 3, fB, 13.598d0 + kTeV)     ! n=2 edge -- ionizes H
       call add(group_of(40.813d0, L0, L1, n), 3, 0.68d0*fB, 40.813d0)          ! He II Ly-alpha -- ionizes H
@@ -1064,6 +1111,39 @@ contains
 END SUBROUTINE heI_recrad_cell
 
 !************************************************************************
+REAL(dp) FUNCTION hlike_alpha_total(T, iz)
+   ! total radiative recombination coefficient [cm^3 s^-1] of Cloudy's H-like atom, H I (iz = 1) or He II
+   ! (iz = 2) (log-log interpolation)
+   implicit none
+   real(dp), intent(in) :: T
+   integer, intent(in) :: iz
+   real(dp) :: x, w
+   integer :: i, k
+   k = 2*iz - 1
+   x = (log10(max(T, 10.d0)) - lgT_hl_min)/dlgT_hl + 1.d0
+   i = min(max(int(x), 1), nT_hl - 1)
+   w = min(max(x - real(i, dp), 0.d0), 1.d0)
+   hlike_alpha_total = 10.d0**((1.d0 - w)*lga_hl(i, k) + w*lga_hl(i+1, k))
+END FUNCTION hlike_alpha_total
+
+!************************************************************************
+REAL(dp) FUNCTION hlike_ground_fraction(T, iz)
+   ! alpha(1s)/alpha(total) of Cloudy's H-like atom, H I (iz = 1) or He II (iz = 2): the share of the recombinations
+   ! straight to the ground state (log-linear interpolation in log T of the two coefficients)
+   implicit none
+   real(dp), intent(in) :: T
+   integer, intent(in) :: iz
+   real(dp) :: x, w
+   integer :: i, k
+   k = 2*iz - 1
+   x = (log10(max(T, 10.d0)) - lgT_hl_min)/dlgT_hl + 1.d0
+   i = min(max(int(x), 1), nT_hl - 1)
+   w = min(max(x - real(i, dp), 0.d0), 1.d0)
+   hlike_ground_fraction = 10.d0**(((1.d0 - w)*lga_hl(i, k+1) + w*lga_hl(i+1, k+1)) &
+                                 - ((1.d0 - w)*lga_hl(i, k)   + w*lga_hl(i+1, k)))
+END FUNCTION hlike_ground_fraction
+
+!************************************************************************
 REAL(dp) FUNCTION heI_alpha_cloudy(T, total)
    ! He+ -> He0 radiative recombination coefficient [cm^3 s^-1] of Cloudy's He-like
    ! atom: the total (.true.) or the part to 1^1S (.false.); log-log interpolation
@@ -1081,6 +1161,95 @@ REAL(dp) FUNCTION heI_alpha_cloudy(T, total)
       heI_alpha_cloudy = 10.d0**((1.d0 - w)*lga_heI_gnd(i) + w*lga_heI_gnd(i+1))
    end if
 END FUNCTION heI_alpha_cloudy
+
+!************************************************************************
+REAL(dp) FUNCTION sigma_HeI_verner(E)
+   ! He I photoionization cross section [cm^2] at E [eV] (Verner et al. 1996, as in
+   ! rt/cross_sections_module.f90)
+   implicit none
+   real(dp), intent(in) :: E
+   real(dp), parameter :: E0 = 13.61d0, s0 = 949.2d0, ya = 1.469d0, P = 3.188d0, yw = 2.039d0, &
+                          y0 = 0.4434d0, y1 = 2.136d0
+   real(dp) :: xx, yy
+   sigma_HeI_verner = 0.d0
+   if (E < 24.587d0) return
+   xx = E/E0 - y0
+   yy = sqrt(xx*xx + y1*y1)
+   sigma_HeI_verner = s0*1.d-18*((xx - 1.d0)**2 + yw*yw) * yy**(0.5d0*P - 5.5d0) * (1.d0 + sqrt(yy/ya))**(-P)
+END FUNCTION sigma_HeI_verner
+
+!************************************************************************
+SUBROUTINE otsa_he_photons(T, ne, nH0, nHe0, nHep, nHepp, kdust, L0, L1, n, PH, heat, dalpha_HeI)
+   ! Under rt_otsa no recombination photon enters the groups (rtz_cool_step builds recRad only without
+   ! OTSA), and recombination() returns case-B rates: the ground-state photons are taken as absorbed where
+   ! they are made, by the ion that emitted them. The helium photons that ionize hydrogen would then be lost.
+   ! This returns them, absorbed on the spot:
+   !  - the He I case-B cascade above 13.6 eV (heI_recrad_cell: 19.82 eV, 584 A, the two-photon part),
+   !    taken by H0 against dust;
+   !  - the He I ground-state photons (24.59 eV): the share n(H0) sigma_H / (n(H0) sigma_H + n(He0) sigma_He
+   !    + kdust) goes to H0 instead of He0, so He I recombines that much more (dalpha_HeI);
+   !  - the He II case-B photons: the n=2 continuum at 13.6 eV and Ly-alpha at 40.8 eV, H0's share (the He0
+   !    share of Ly-alpha is not followed: 1e-4 of the photons of a 4e4 K star).
+   ! PH: H0 ionizations by these photons [cm^-3 s^-1]; heat: their photoheating at their own energy
+   ! [erg cm^-3 s^-1]; dalpha_HeI: the increase of the He+ -> He0 rate coefficient [cm^3 s^-1].
+   implicit none
+   real(dp), intent(in) :: T, ne, nH0, nHe0, nHep, nHepp, kdust
+   integer, intent(in) :: n
+   real(dp), intent(in) :: L0(n), L1(n)
+   real(dp), intent(out) :: PH, heat, dalpha_HeI
+   real(dp), parameter :: eV2erg = 1.602176634d-12, kB_eV = 8.617333262d-5
+   real(dp) :: frac(n), efrac(n), Nion, Eion, fH, aTot, a1s, R, sH, sHe, yH, yHe, fB, aIII
+   integer :: g
+
+   PH = 0.d0 ; heat = 0.d0 ; dalpha_HeI = 0.d0
+   if (T <= 0.d0 .or. ne <= 0.d0) return
+   ! He I case-B cascade (per case-A total recombination, as heI_recrad_cell normalises)
+   aTot = heI_alpha_cloudy(T, .true.)
+   a1s = heI_alpha_cloudy(T, .false.)
+   R = ne * nHep
+   if (R > 0.d0) then
+      call heI_recrad_cell(T, ne, nH0, nHe0, kdust, L0, L1, n, frac, efrac)
+      Nion = 0.d0 ; Eion = 0.d0
+      do g = 1, n
+         if (L0(g) >= 13.55d0) then
+            Nion = Nion + frac(g)
+            Eion = Eion + efrac(g)
+         end if
+      end do
+      sH = nH0 * sigma_HI_verner(20.0d0)
+      fH = 1.d0
+      if (sH + kdust > 0.d0) fH = sH / (sH + kdust)
+      PH = PH + aTot * R * Nion * fH
+      heat = heat + aTot * R * (Eion - 13.598d0 * Nion) * fH * eV2erg
+      ! He I ground-state photons
+      sH = nH0 * sigma_HI_verner(24.6d0)
+      sHe = nHe0 * sigma_HeI_verner(24.6d0)
+      if (sH + sHe + kdust > 0.d0) then
+         yH = sH / (sH + sHe + kdust)
+         yHe = sHe / (sH + sHe + kdust)
+         PH = PH + a1s * R * yH
+         heat = heat + a1s * R * yH * (24.587d0 - 13.598d0) * eV2erg
+         dalpha_HeI = a1s * (1.d0 - yHe)
+      end if
+   end if
+   ! He II case B: the n=2 continuum (13.6 eV + kT) and Ly-alpha (40.81 eV)
+   if (nHepp > 0.d0 .and. hl_data_ready) then
+      aIII = hlike_alpha_total(T, 2)
+      fB = 1.d0 - hlike_ground_fraction(T, 2)
+      sH = nH0 * sigma_HI_verner(13.7d0)
+      fH = 1.d0
+      if (sH + kdust > 0.d0) fH = sH / (sH + kdust)
+      PH = PH + aIII * ne * nHepp * fB * fH
+      heat = heat + aIII * ne * nHepp * fB * fH * kB_eV * T * eV2erg
+      sH = nH0 * sigma_HI_verner(40.81d0)
+      sHe = nHe0 * sigma_HeI_verner(40.81d0)
+      if (sH + sHe + kdust > 0.d0) then
+         yH = sH / (sH + sHe + kdust)
+         PH = PH + aIII * ne * nHepp * fB * 0.68d0 * yH
+         heat = heat + aIII * ne * nHepp * fB * 0.68d0 * yH * (40.813d0 - 13.598d0) * eV2erg
+      end if
+   end if
+END SUBROUTINE otsa_he_photons
 
 !************************************************************************
 REAL(dp) FUNCTION sigma_HI_verner(E)
@@ -1120,16 +1289,6 @@ SUBROUTINE recrad_fractions(T, ion, n, frac, efrac)
 END SUBROUTINE recrad_fractions
 
 !************************************************************************
-SUBROUTINE ab_HII(T, aA, aB)
-   implicit none
-   real(dp), intent(in) :: T
-   real(dp), intent(out) :: aA, aB
-   real(dp) :: lam, f
-   lam = 315614.d0/T
-   f = 1d0+(lam/0.522d0)**0.47d0 ; aA = 1.269d-13 * lam**1.503d0 / f**1.923d0
-   f = 1d0+(lam/2.74d0)**0.407d0 ; aB = 2.753d-14 * lam**1.5d0  / f**2.242d0
-END SUBROUTINE ab_HII
-
 SUBROUTINE ab_HeII(T, aA, aB)
    implicit none
    real(dp), intent(in) :: T
@@ -1140,15 +1299,6 @@ SUBROUTINE ab_HeII(T, aA, aB)
    aB = 1.26d-14 * lam**0.75d0
 END SUBROUTINE ab_HeII
 
-SUBROUTINE ab_HeIII(T, aA, aB)
-   implicit none
-   real(dp), intent(in) :: T
-   real(dp), intent(out) :: aA, aB
-   real(dp) :: lam, f
-   lam = 1263030.d0/T
-   f = 1d0+(lam/0.522d0)**0.47d0 ; aA = 2.538d-13 * lam**1.503d0 / f**1.923d0
-   f = 1d0+(lam/2.74d0)**0.407d0 ; aB = 5.506d-14 * lam**1.5d0  / f**2.242d0
-END SUBROUTINE ab_HeIII
 
 ! The three functions below return the rate of recombinations DIRECTLY TO THE
 ! GROUND STATE, i.e. the ones that emit an ionizing photon.  Under rt_OTSA =
