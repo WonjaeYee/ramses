@@ -948,7 +948,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: tau_dust_LW
       integer :: nlw, ig_lw
       real(dp), dimension(nGroups) :: tau_lw_g, f_lw_g
-      real(dp) :: trans_lw, trans_lw_co
+      real(dp) :: trans_lw, trans_lw_co, trans_dust
       logical :: h2_derived
       integer :: ilw_g, nlw_h2, ik
       integer, dimension(nGroups) :: lw_rank
@@ -1118,7 +1118,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Bertoldi 1996; per bin under CALIMA); H2: Wolcott-Green et al. (2011) at the gas temperature;
       ! CO: Visser et al. (2009). The field is taken as isotropic here (lw_transmission with f = 0);
       ! with LW RT groups the transmission is recomputed below with their anisotropy.
-      f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0
+      f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0 ; trans_dust = 1d0
       if (isH2_rtz .or. isCO_rtz) then
 #ifdef CALIMA
          ! rtz_shielding_config 0: MW dust; 1,2,3: per-bin CALIMA (MW when there is no LW group)
@@ -1137,7 +1137,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       sh2_loc = 1d0
       if (isH2_rtz .and. rtz_h2_lw_sigma_abs .le. 0d0) &
          sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK)
-      if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
+      ! the same dust transmission for the grains' FUV field (grain recombination, PE heating, dust cooling)
+      trans_dust = lw_transmission(tau_dust_LW, 0d0)
+      if (isH2_rtz) f_shd = sh2_loc * trans_dust
       ! Derived grey scheme (rtz_h2_band_file): the dissociation is sigma_d c N_LW with the line-by-line
       ! sigma_d, and nothing local multiplies it: the H2 and the dust inside the cell are in the RT
       ! (N_LW is the cell average). chi: the local LW photon flux in Draine units (2.06e7 cm^-2 s^-1)
@@ -1162,6 +1164,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call h2_band_lookup(TK, nElement_dep(1), chi_lw, 1.9d-21, nlw_h2, hb_k(1:nlw_h2), hb_sd)
          sh2_loc = hb_sd * rt_c_cgs(ilevel) / signc(ilw_g,1,3)   ! every LW group dissociates with sigma_d
          f_shd = sh2_loc
+         trans_dust = 1d0   ! the dust inside the cell is in the RT too
       end if
 #endif
       if (isCO_rtz) then
@@ -1591,6 +1594,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                trans_lw_co = trans_lw_co + lw_transmission(co_dust_to_lw * tau_lw_g(ig_lw), f_lw_g(ig_lw))
             end do
             trans_lw = trans_lw / nlw; trans_lw_co = trans_lw_co / nlw
+            if (.not. h2_derived) trans_dust = trans_lw
             if (isH2_rtz) f_shd = sh2_loc * trans_lw
             if (h2_derived) f_shd = sh2_loc
             if (isCO_rtz .and. rtz_shielding_config .ge. 3) &
@@ -1601,7 +1605,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_start)
       end if
-      call compute_dust_precool(dust_helper, advected_G0+UV_background_G0, TK, ne, nElement_dep, &
+      call compute_dust_precool(dust_helper, advected_G0*trans_dust+UV_background_G0, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
                                  ,dNp)
@@ -1643,11 +1647,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
          prime_cooling_rates = 0.d0
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names, &
                            reuse_T_independent=.true.)
@@ -2016,9 +2020,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! Photodissociation (mode 3: apply H2 shielding so equilibrium is self-consistent)
          if (rtz_include_photoionization) then
             if (rtz_equilibrium_test .eq. 3) then
-               de_H2 = de_H2 + (UV_background_G0 * 5.68d-11 * f_shd)
+               de_H2 = de_H2 + (UV_background_G0 / G0_draine * 5.68d-11 * f_shd)
             else
-               de_H2 = de_H2 + (UV_background_G0 * 5.68d-11)
+               de_H2 = de_H2 + (UV_background_G0 / G0_draine * 5.68d-11)
             end if
          end if
 
@@ -2349,8 +2353,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      saved_rates(iIon+1,2) = cion_rate(iIon+1,iElement)
                   end if
                   ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
-                  ! (at the background alone every grain is as in the dark, with its largest rate)
-                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0 + UV_background_G0, ne)
+                  ! (at the background alone every grain is as in the dark, with its largest rate);
+                  ! the local field through the dust inside the cell, as for the H2
+                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0*trans_dust + UV_background_G0, ne)
                end if
 
                ! Initialize the change to zero
