@@ -135,6 +135,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   integer:: counter, e_counter, jj
   real(dp),dimension(1:nvector):: rho_total_check
   logical,save:: density_check_warned=.false.
+  logical,dimension(1:n_elements),save:: el_writeback
+  logical,save:: el_writeback_set=.false., el_change_warned=.false.
+  integer:: k
 #endif
 #ifdef CALIMA
   real(dp) :: sigma2
@@ -1046,15 +1049,49 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            uold(ind_leaf(i),iCO) = nCO(i) * mCO / scale_d
         end do
 #endif
-        ! Write back the gas-phase element abundances, as read above: CO formation moves C and O
-        ! into nCO, and CALIMA's dust processes deplete or return metals (rtz_solve_cooling
-        ! returns them in nElement). Without either the values are unchanged.
+        ! Write back the gas-phase abundances of the elements the step can change (rtz_solve_cooling
+        ! returns them in nElement): C and O, which CO formation moves into nCO, and the elements of
+        ! CALIMA's grains and PAHs, which dust processes deplete or return. Every other element must
+        ! come back unchanged; a change is reported (once per rank) as a bug, and not written back.
+        ! The equilibrium tests set all the elements themselves, so all are written back there.
+        if (.not. el_writeback_set) then
+           el_writeback(:) = .false.
+#ifdef CO
+           if (isCO_rtz) then
+              el_writeback(6) = .true.
+              el_writeback(8) = .true.
+           end if
+#endif
+#ifdef CALIMA
+           do k=1,ndust
+              el_writeback(dustbins_props(k)%el_index(1:dustbins_props(k)%nelements)) = .true.
+           end do
+           do k=1,npah
+              el_writeback(pahbins_props(k)%C_index) = .true.
+           end do
+#endif
+           el_writeback_set = .true.
+        end if
         e_counter = 0
         do ii=1,n_elements ! loop over elements
            if (elements(ii)%atomic_number.gt.0) then
-              do i=1,nleaf !loop over leaf cells
-                 uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
-              end do ! end loop over leaf cells
+              if (el_writeback(ii) .or. rtz_equilibrium_test.gt.0) then
+                 do i=1,nleaf !loop over leaf cells
+                    uold(ind_leaf(i),imetal+e_counter) = nElement(ii,i) / elements(ii)%scale_n
+                 end do ! end loop over leaf cells
+              else if (.not. el_change_warned) then
+                 do i=1,nleaf !loop over leaf cells
+                    if (abs(nElement(ii,i) / elements(ii)%scale_n - uold(ind_leaf(i),imetal+e_counter)) &
+                        .gt. 1d-10 * abs(uold(ind_leaf(i),imetal+e_counter))) then
+                       el_change_warned = .true.
+                       write(*,*) 'WARNING: rtz_solve_cooling changed ', trim(elements(ii)%element_name), &
+                                  ', which no process should change, in cell ', ind_leaf(i), ' on rank ', myid
+                       write(*,*) '   before: ', uold(ind_leaf(i),imetal+e_counter) * elements(ii)%scale_n, &
+                                  ', after: ', nElement(ii,i), ' [cm-3] (not written back; reported once per rank)'
+                       exit
+                    end if
+                 end do ! end loop over leaf cells
+              end if
               e_counter = e_counter + 1 ! increment element counter
            end if
         end do ! end loop over elements
