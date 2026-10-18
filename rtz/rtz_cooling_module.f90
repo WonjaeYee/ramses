@@ -1982,9 +1982,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! Photodissociation (mode 3: apply H2 shielding so equilibrium is self-consistent)
          if (rtz_include_photoionization) then
             if (rtz_equilibrium_test .eq. 3) then
-               de_H2 = de_H2 + (UV_background_G0 * 5.68d-11 * f_shd)
+               de_H2 = de_H2 + (UV_background_G0 / G0_draine * 5.68d-11 * f_shd)
             else
-               de_H2 = de_H2 + (UV_background_G0 * 5.68d-11)
+               de_H2 = de_H2 + (UV_background_G0 / G0_draine * 5.68d-11)
             end if
          end if
 

@@ -2,6 +2,7 @@
 module molecules_module
   use amr_parameters, only: dp
   use safe_math, only: safe_exp
+  use rtz_module, only: G0_draine
   implicit none
 
   private  ! everything is private by default
@@ -255,7 +256,7 @@ FUNCTION alpha_CO(G0, xi_cr_H2, nCII, nH2, nOI) result(rate)
 
   ! Assuming CO formation is modulated by CH2+, https://home.strw.leidenuniv.nl/~ewine/photo/display_ch2+_65e31a07e69e64dbd64d37801983018f.html
   gammaCHx_cr = 8.88d-15 * (xi_cr_H2 / 1d-16) ! Cosmic rays
-  gammaCHx = (1.41d-10 * G0) + gammaCHx_cr
+  gammaCHx = (1.41d-10 * G0 / G0_draine) + gammaCHx_cr ! 1.41e-10 per Draine field
 
   beta = k1 * nOI/(k1*nOI + gammaCHx)
   rate = k0 * nCII * nH2 * beta
@@ -272,7 +273,7 @@ FUNCTION beta_CO(G0, xi_cr_H2) result(rate)
   real(dp):: rate
   real(dp):: gammaCO, gammaCO_cr
 
-  gammaCO = 2.43d-10 * G0
+  gammaCO = 2.43d-10 * G0 / G0_draine ! per Draine field (Heays+17)
   gammaCO_cr = 4.62d-15 * (xi_cr_H2 / 1d-16)
 
   rate = gammaCO + gammaCO_cr
