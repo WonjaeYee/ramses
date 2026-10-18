@@ -4,8 +4,14 @@ module rtz_module
   implicit none
 
   private
-  public:: elements, n_elements, initialize_elements
+  public:: elements, n_elements, initialize_elements, G0_draine
   public:: getNe, dust_to_gas_scale_RR14, getMu_RTZ, get_rho_rtz, get_n_rtz
+
+  ! G0 is in Habing units throughout RTZ and CALIMA (advected_G0 = c u(5.6-13.6 eV) / 1.6e-3, the
+  ! UV background G0, the PE and grain-recombination fits). A Draine (1978) field is G0 = 1.7 in
+  ! these units (Bialy & Sternberg 2019, fn. 8; Draine & Bertoldi 1996: 1.71), so photo-rates quoted
+  ! per Draine field (Heays et al. 2017: H2, CO, CH2+, C, Mg, Si, S, Fe) are divided by G0_draine.
+  real(dp), parameter :: G0_draine = 1.7d0
 
   type Element
       integer(KIND=4) :: atomic_number
@@ -87,7 +93,7 @@ SUBROUTINE initialize_elements()
    elements(6)%atomic_mass = mC_amu
    elements(6)%atomic_mass_g = mC_amu * amu2g
    elements(6)%z_solar = 2.69E-04
-   elements(6)%G0_photo_rate = 3.39E-10
+   elements(6)%G0_photo_rate = 3.39E-10 / G0_draine ! per Draine field (Heays+17)
    elements(6)%n_ions = N_CARBON_IONS
    elements(6)%depletion = 0.5
    elements(6)%element_name = "CARBON"
@@ -139,7 +145,7 @@ SUBROUTINE initialize_elements()
    elements(12)%atomic_mass = mMg_amu
    elements(12)%atomic_mass_g = mMg_amu * amu2g
    elements(12)%z_solar = 3.98E-05
-   elements(12)%G0_photo_rate = 6.59E-11 
+   elements(12)%G0_photo_rate = 6.59E-11 / G0_draine ! per Draine field (Heays+17)
    elements(12)%n_ions = N_MAGNESIUM_IONS
    elements(12)%depletion = 0.16
    elements(12)%element_name = "MAGNESIUM"
@@ -152,7 +158,7 @@ SUBROUTINE initialize_elements()
    elements(14)%atomic_mass = mSi_amu
    elements(14)%atomic_mass_g = mSi_amu * amu2g
    elements(14)%z_solar = 3.24E-05
-   elements(14)%G0_photo_rate = 4.47E-09
+   elements(14)%G0_photo_rate = 4.47E-09 / G0_draine ! per Draine field (Heays+17)
    elements(14)%n_ions = N_SILICON_IONS
    elements(14)%depletion = 0.1
    elements(14)%element_name = "SILICON"
@@ -165,7 +171,7 @@ SUBROUTINE initialize_elements()
    elements(16)%atomic_mass = mS_amu
    elements(16)%atomic_mass_g = mS_amu * amu2g
    elements(16)%z_solar = 1.32E-05
-   elements(16)%G0_photo_rate = 1.13E-09
+   elements(16)%G0_photo_rate = 1.13E-09 / G0_draine ! per Draine field (Heays+17)
    elements(16)%n_ions = N_SULFUR_IONS
    elements(16)%depletion = 1.0
    elements(16)%element_name = "SULFUR"
@@ -178,7 +184,7 @@ SUBROUTINE initialize_elements()
    elements(26)%atomic_mass = mFe_amu
    elements(26)%atomic_mass_g = mFe_amu * amu2g
    elements(26)%z_solar = 3.16E-05
-   elements(26)%G0_photo_rate = 4.71E-10
+   elements(26)%G0_photo_rate = 4.71E-10 / G0_draine ! per Draine field (Heays+17)
    elements(26)%n_ions = N_IRON_IONS
    elements(26)%depletion = 0.01
    elements(26)%element_name = "IRON"
