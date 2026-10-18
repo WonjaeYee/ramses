@@ -59,6 +59,36 @@ def he_alpha_rows(root):
     return lgT, rows[nlev], rows[0]
 
 
+def hlike_rows(root):
+    """log10 alpha [cm^3 s^-1] of the H-like sequence (data/h_iso_recomb.dat): (H I total, H I to 1s, He II total,
+    He II to 1s) on Cloudy's log T = 0, 0.25, ..., 10 grid."""
+    lines = open(os.path.join(root, "data", "h_iso_recomb.dat")).read().split("\n")
+    nlev, ntemp = int(lines[0].split()[1]), int(lines[0].split()[3])
+    rows = {}
+    for line in lines[1:]:
+        p = line.split()
+        if len(p) > 3 and p[0] in ("0", "1"):              # element 0 = H, 1 = He (He II)
+            rows[int(p[0]), int(p[1])] = np.array([float(x) for x in p[2:2 + ntemp]])
+    return rows[0, nlev], rows[0, 0], rows[1, nlev], rows[1, 0]
+
+
+def write_hlike(root, out):
+    """hlike_recombination_cloudy.dat: the H I and He II recombination of Cloudy's H-like atoms, total and to 1s,
+    which split RTZ's recombination emission (ground state / case B) and give its OTSA case-B rates."""
+    tot_H, gnd_H, tot_He, gnd_He = hlike_rows(root)
+    i0 = int(round(LGT_ALPHA[0] / 0.25))
+    n_a = int(round((LGT_ALPHA[1] - LGT_ALPHA[0]) / LGT_ALPHA[2])) + 1
+    f = lambda v: " ".join("%.6f" % x for x in v[i0:i0 + n_a])  # noqa: E731
+    with open(out, "w") as o:
+        o.write("# H-like recombination data for RAMSES-RTZ, from Cloudy's H-like atoms (data/h_iso_recomb.dat,\n"
+                "# Cloudy master e6555102). Made by utils/py/rtz/make_heI_recombination_table.py; read by\n"
+                "# recombination_module (data_dir). n, log10 T of the first point, step; then log10 alpha [cm^3 s^-1]:\n"
+                "# H I total, H I to 1s, He II total, He II to 1s.\n")
+        o.write(f"{n_a} {LGT_ALPHA[0]:.2f} {LGT_ALPHA[2]:.2f}\n")
+        for v in (tot_H, gnd_H, tot_He, gnd_He):
+            o.write(f(v) + "\n")
+
+
 def two_photon(root):
     """He I two-photon split: photons above E_H per decay, their mean energy, mean energy of the others."""
     src = open(os.path.join(root, "source", "atmdat_2photon.cpp")).read()
@@ -105,11 +135,16 @@ def main():
     ap.add_argument("--cloudy-root", help="the Cloudy tree (data/, source/); default: from the executable's path")
     ap.add_argument("--out", default="heI_recombination_cloudy.dat")
     ap.add_argument("-j", type=int, default=6, help="Cloudy models run at a time")
+    ap.add_argument("--hlike-only", metavar="FILE", help="write only hlike_recombination_cloudy.dat (no Cloudy runs)")
     a = ap.parse_args()
     exe = os.path.abspath(a.cloudy)
     root = a.cloudy_root or os.path.dirname(os.path.dirname(os.path.dirname(exe)))   # <root>/source/<sys>/cloudy.exe
     if not os.path.isdir(os.path.join(root, "data")):
         root = os.path.dirname(os.path.dirname(exe))                                   # <root>/source/cloudy.exe
+    if a.hlike_only:
+        write_hlike(root, a.hlike_only)
+        print(f"wrote {a.hlike_only}")
+        return
     lgT_a, lga_tot, lga_gnd = he_alpha_rows(root)
     n_tot, n_ion, e_ion, e_low = two_photon(root)
 
