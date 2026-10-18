@@ -670,11 +670,12 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      ! Check that the total density is consistent with the sum of the species densities (elements,
      ! CO, dust, PAHs). Reported once per rank: it never fired before (the divisor was in code
      ! units), and setups whose mass fractions do not sum to one would otherwise stop at once.
+     ! The tolerance is passive_tol, as in ps_check_cells: with CMA the sum holds to roundoff.
      do i=1,nleaf
-        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / (uold(ind_leaf(i),1)*scale_d) .gt. 1d-3 &
+        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / (uold(ind_leaf(i),1)*scale_d) .gt. passive_tol &
             .and. .not. density_check_warned) then
            density_check_warned = .true.
-           write(*,*) 'WARNING: total density check failed in cell ', ind_leaf(i), ' on rank ', myid
+           write(*,*) 'WARNING: total density check (passive_tol) failed in cell ', ind_leaf(i), ' on rank ', myid
            write(*,*) '   total density: ', uold(ind_leaf(i),1)*scale_d, ', sum of species: ', rho_total_check(i), &
                       ' (reported once per rank)'
         end if
