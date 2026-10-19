@@ -839,7 +839,7 @@ module dust_dynamics
                 ! this CFL bound applies to the drift actually taken.
                 do_irtrap = .false.
 #if defined(RT) && NENER>0
-                do_irtrap = rt_isIR .and. rt_isIRtrap .and. ntva > 0
+                do_irtrap = rt_isIR .and. rt_isIRtrap
 #endif
                 Ptrap = 0.0_dp
 #ifndef RT
@@ -2257,7 +2257,7 @@ module dust_dynamics
         ! ========================================================================
         do_irtrap = .false.
 #if NENER>0
-        do_irtrap = rt_isIR .and. rt_isIRtrap .and. ntva > 0
+        do_irtrap = rt_isIR .and. rt_isIRtrap
 #endif
         Ptrap = 0.0_dp
 #if NENER>0

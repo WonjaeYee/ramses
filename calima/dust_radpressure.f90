@@ -324,7 +324,7 @@ contains
         ! gradient that species k feels. The dust and the PAHs carry all of chi_tot.
         if (present(irtrap_share)) then
            irtrap_share = 0d0
-           if (rt_isIR .and. ntva > 0) then
+           if (rt_isIR) then
               chi_R_tot = 0d0
               do jbin = 1, ndust
                  chi_R_dust(jbin) = sig_R_dust(jbin) * rho_dust(jbin) * scale_d &

@@ -182,8 +182,9 @@ module dust_init
             check_params_dust=.false.
         end if
 #endif
-        if (dust_tva .and. ndust <= 0) then
-            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust bin (NDUST>0)'
+        if (dust_tva .and. ntva <= 0) then
+            ! with this check dust_tva implies ntva > 0: the TVA code tests dust_tva alone
+            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust or PAH bin (NDUST+NPAH>0)'
             check_params_dust=.false.
         end if
         if (dust_radpressure .and. .not.dust_tva) then

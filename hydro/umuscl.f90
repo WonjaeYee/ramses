@@ -935,7 +935,7 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
               eint = MAX(uin(l,i,j,k,neul)*oneoverrho-eken-erad,smalle)
               q(l,i,j,k,neul) = (gamma-one)*q(l,i,j,k,1)*eint
 #else
-              if (dust_tva .and. ntva>0) then
+              if (dust_tva) then
                  eps_total = 0.0d0
                  do id = 1, ntva
                     eps_total = eps_total + uin(l,i,j,k,ipah+id-1)/q(l,i,j,k,1)
@@ -960,7 +960,7 @@ subroutine ctoprim(uin,q,c,gravin,dt,ngrid)
 #ifndef CALIMA
               c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
 #else
-              if (dust_tva .and. ntva>0) then
+              if (dust_tva) then
                  c(l,i,j,k)=sqrt(c(l,i,j,k)/max(rho_gas,smallr))
               else
                  c(l,i,j,k)=sqrt(c(l,i,j,k)*oneoverrho)
