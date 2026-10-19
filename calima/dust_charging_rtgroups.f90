@@ -49,7 +49,7 @@ module dust_charging_rtgroups
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup
-    public :: dust_charge_moments
+    public :: dust_charge_moments, rtgroups_table_bytes
     public :: RTGState, RTGResult, RTG_NRI, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
               RTG_RECOMB_IMPORTANT
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the fit
@@ -2046,6 +2046,42 @@ module dust_charging_rtgroups
 
 
     ! ------------------------------------------------- charge outside the cooling step
+    integer(kind=8) function rtgroups_table_bytes()
+        ! bytes of this rank's WDB06rt and WDB06tab tables and work arrays (the memory report);
+        ! the uniform-background table of a bin is built on first use and counted as if it were
+        use dust_utils, only: alloc_bytes
+        implicit none
+        integer :: ii
+        integer(kind=8) :: b
+        b = alloc_bytes(c_cN) + alloc_bytes(f_Zn) + alloc_bytes(f_lnP) + alloc_bytes(f_lnA) + alloc_bytes(f_v) &
+          + alloc_bytes(f_ps) + alloc_bytes(f_row)
+        if (allocated(rtg)) then
+            do ii = 1, size(rtg)
+                associate (t => rtg(ii))
+                    b = b + alloc_bytes(t%L0) + alloc_bytes(t%L1) + alloc_bytes(t%U) + alloc_bytes(t%lTs) &
+                          + alloc_bytes(t%egy) + alloc_bytes(t%K) + alloc_bytes(t%H) + alloc_bytes(t%lTh) &
+                          + alloc_bytes(t%delta) + alloc_bytes(t%Ptr) + alloc_bytes(t%fcool) + alloc_bytes(t%Ebar) &
+                          + alloc_bytes(t%KgT) + alloc_bytes(t%HgT) + alloc_bytes(t%mKT) + alloc_bytes(t%mHT) &
+                          + alloc_bytes(t%egy_used) + alloc_bytes(t%Kbg) + alloc_bytes(t%Hbg) + alloc_bytes(t%mKb) &
+                          + alloc_bytes(t%mHb) + alloc_bytes(t%edge0) + alloc_bytes(t%edge1) + alloc_bytes(t%iuz) &
+                          + alloc_bytes(t%wuz)
+                    if (t%nU > 0) b = b + 8_8 * 4 * NUNI_T * NUNI_NE   ! uni(4, NUNI_T, NUNI_NE)
+                end associate
+            end do
+        end if
+        if (allocated(pst)) then
+            do ii = 1, size(pst)
+                associate (t => pst(ii))
+                    b = b + alloc_bytes(t%roles) + alloc_bytes(t%w) + alloc_bytes(t%L0) + alloc_bytes(t%L1) &
+                          + alloc_bytes(t%egy) + alloc_bytes(t%lT) + alloc_bytes(t%lpsiF) + alloc_bytes(t%h) &
+                          + alloc_bytes(t%psiE) + alloc_bytes(t%lpsiE) + alloc_bytes(t%hE1) + alloc_bytes(t%hE2) &
+                          + alloc_bytes(t%q)
+                end associate
+            end do
+        end if
+        rtgroups_table_bytes = b
+    end function rtgroups_table_bytes
+
     subroutine dust_charge_moments(ii, Np, egy, c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp, Zmean, Zsigma, &
                                    lnL1, coul)
         ! <Z> and sigma_Z of dust bin ii from charging_model, for callers outside the RTZ

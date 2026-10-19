@@ -1354,12 +1354,34 @@ module dust_init
         if (myid == 1) then
             call print_dust_parameters
         end if
+#ifndef RT
+        ! with RT, the last tables are built in read_rt_groups, which reports
+        call report_calima_memory()
+#endif
 
         ! if (dust_test) then
         !     call run_dust_solver_test()
         ! end if
 
     end subroutine init_CALIMA_dust
+
+    subroutine report_calima_memory()
+        ! The memory of this rank's CALIMA tables, once they are all built: every DustTable (the
+        ! interpolation tables of the grain processes and optics) and the WDB06 charging tables; and
+        ! the per-cell TVA array allocated later, which scales with ngridmax
+        use amr_commons, only: myid, ncoarse
+        use amr_parameters, only: ndim, twotondim, ngridmax
+        use dust_charging_rtgroups, only: rtgroups_table_bytes
+        integer(kind=8) :: b_rtg
+        if (myid /= 1) return
+        b_rtg = rtgroups_table_bytes()
+        write(*,'(A,F9.2,A,F9.2,A,F9.2,A)') ' CALIMA tables: ', (dust_table_bytes + b_rtg)/1048576d0, &
+            ' MB per rank (interpolation tables ', dust_table_bytes/1048576d0, ' MB, WDB06 charging ', &
+            b_rtg/1048576d0, ' MB)'
+        if (dust_tva) write(*,'(A,F10.1,A,I10,A)') ' CALIMA per-cell arrays: tva_wdrift ', &
+            8d0*(ncoarse + twotondim*dble(ngridmax))*ntva*ndim/1048576d0, ' MB per rank at ngridmax = ', &
+            ngridmax, ' (allocated at the first TVA step)'
+    end subroutine report_calima_memory
 
     subroutine read_CALIMA_params(nml_ok,nGroups)
         use amr_commons, only:myid
