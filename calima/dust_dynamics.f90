@@ -298,7 +298,7 @@ module dust_dynamics
         real(dp), intent(in)  :: dV, mu, V
         real(dp), intent(out) :: v_stick, v_mean, v_rms
         real(dp), parameter :: sqrt_8_3pi = 0.9213177319235613d0, sqrt_pi = 1.7724538509055159d0
-        real(dp) :: a, xi, chi, h, ex
+        real(dp) :: a, xi, chi, h, ex, e_xi
 
         v_rms = sqrt(dV**2 + mu**2)
         if (v_rms <= 0d0) then
@@ -321,7 +321,13 @@ module dust_dynamics
             v_stick = v_mean * (1d0 - (1d0 + chi**2) * exp(-chi**2))
             return
         end if
-        v_mean = (exp(-xi**2) / sqrt_pi + (xi + 0.5d0 / xi) * erf(xi)) / a
+        e_xi = exp(-xi**2)
+        v_mean = (e_xi / sqrt_pi + (xi + 0.5d0 / xi) * erf(xi)) / a
+        if (chi <= 0d0) then
+            ! no threshold (V <= 0): h and ex below vanish exactly, so no collision sticks
+            v_stick = 0d0
+            return
+        end if
         if (chi - xi > 27d0) then
             ! threshold far above the distribution: every collision counts
             v_stick = v_mean
@@ -334,7 +340,7 @@ module dust_dynamics
         else
             h = -erfc(xi) + 0.5d0 * erfc(chi + xi) + 0.5d0 * erfc(xi - chi)
         end if
-        ex = exp(-xi**2) - 0.5d0 * (exp(-(chi - xi)**2) * (1d0 + chi / xi) &
+        ex = e_xi - 0.5d0 * (exp(-(chi - xi)**2) * (1d0 + chi / xi) &
                                    + exp(-(chi + xi)**2) * (1d0 - chi / xi))
         v_stick = (ex / sqrt_pi + (xi + 0.5d0 / xi) * h) / a
         v_stick = min(max(v_stick, 0d0), v_mean)
