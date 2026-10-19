@@ -18,7 +18,7 @@ module rt_cooling_module
                            sigca_pah, sigcs_pah, sigcr_pah,                   &
                            group_csa_dust, group_css_dust, group_csr_dust,    &
                            group_csa_pah, group_css_pah, group_csr_pah
-  use dust_interface, only: compute_dust_rad_rates, compute_dust_precool,     &
+  use dust_interface, only: compute_dust_rad_rates, compute_dust_precool, store_pah_ion_fraction, &
                             compute_local_anisotropy_factor
   use dust_optics,    only: get_IR_mean_cross_sections
 #endif
@@ -529,6 +529,7 @@ contains
           pahAbs  = 0d0 ; pahSc  = 0d0 ; pahRp  = 0d0
           call compute_dust_rad_rates(dust_helper, G0_dust, TK, ne,         &
                     dustAbs, dustSc, dustRp, pahAbs, pahSc, pahRp)
+          if(npah .gt. 0) call store_pah_ion_fraction(dust_helper, icell)
        else
           ! RT15 mode: the reference treatment, but with the REAL dust-to-gas
           ! ratio in place of the Zsolar*(1-xHII) proxy.

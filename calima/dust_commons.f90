@@ -6,7 +6,7 @@
 !                           module: 21 Feb 2022)
 
 module dust_commons
-    use amr_parameters, only:dp,metal
+    use amr_parameters, only:dp,metal,nvector
     use hydro_parameters, only:n_elements,ndust,ndchemtype,npah,idust,ipah
     use constants, only: amu2g
     use dust_utils
@@ -102,6 +102,10 @@ module dust_commons
     ! Radius [cm] and material density [g cm^-3] of the species that drift in the TVA, in their uold
     ! order: the PAH bins, then the dust bins (uold(:,ipah:ipah+ntva-1)). Set once in init_CALIMA_dust.
     real(dp), dimension(1:ntva) :: tva_a_cm = 0d0, tva_s_cgs = 0d0
+    ! PAH ion fraction (the charge states > 0) of each bin in each cell of the current cooling vector, from
+    ! the chemistry's last sub-step of that cell (store_pah_ion_fraction); -1 where it was not computed.
+    ! The IR trapping optical depth of cooling_fine weights the two PAH charge states with it.
+    real(dp), dimension(1:nvector, 1:max(npah,1)) :: pah_fion_vec = -1d0
     ! condinit_kind resolved to an integer once in init_CALIMA_dust, so the innermost
     ! solver loops carry an integer compare instead of a character(60) one -- and so an
     ! innocently named IC cannot silently switch the physics to a test branch.
