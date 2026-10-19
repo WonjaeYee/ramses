@@ -109,7 +109,11 @@ subroutine newdt_fine(ilevel)
      dtnew(ilevel) = 0.99999d0 * MIN(dtnew(ilevel), dt_rt * rt_nsubcycle)
 #ifdef CALIMA
      if(static)then
+        ! The dust still drifts with static gas (dust_push_fine/dust_diffusion_fine run unless
+        ! static_gas), so it needs the gas CFL and its own: the gas CFL bounds the drift only
+        ! while the cap tva_wmax_cs*c_s is at most c_s
         if(hydro)call courant_fine(ilevel)
+        if(dust_tva)call get_dust_courant_dt(ilevel)
         RETURN
      endif
 #else
