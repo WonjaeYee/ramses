@@ -155,7 +155,7 @@ module dust_charging
     ! same tau and the same J~(Z, 1, tau)
     real(dp) :: c_T, c_ne, c_ve, c_nion(3), c_zion(3), c_vion(3), c_G0
     real(dp) :: c_tau_e, c_tau_ion(3), c_arr_e, c_arr_ion(3), c_vh, c_dhot
-    real(dp) :: c_geoA, c_lngeoA      ! pi a^2 (8kT / pi m_u)^1/2 and its ln (ion capture per J~ at z = 1)
+    real(dp) :: c_geoA                ! pi a^2 (8kT / pi m_u)^1/2 (ion capture per J~ at z = 1)
     real(dp), allocatable :: c_cN(:)
     integer :: c_bin, c_kh
     ! T-independent part of g of the last GM_N charges of the cell (gfun; set_cell empties it):
@@ -1026,90 +1026,75 @@ module dust_charging
         ds87_tau = max(rtg(c_bin)%a*RTG_KB*c_T / max(q*q*RTG_ESTATC*RTG_ESTATC, RTG_TINY), RTG_TINY)
     end function ds87_tau
 
-    real(dp) function jtilde(Z, q, tau)
-        ! Draine & Sutin (1987) J-tilde, theta_nu = nu/(1+nu^-1/2) (their eq. 3.6);
-        ! tau = ds87_tau(q) of the cell
+    real(dp) function ds87_J(Z, q, tau, dlnJ)
+        ! Draine & Sutin (1987) J-tilde of grain charge Z for an impactor of charge q, theta_nu =
+        ! nu/(1+nu^-1/2) (their eq. 3.6); tau = ds87_tau(q) of the cell; dlnJ: d ln J / d ln tau
+        ! (pyCALIMA _ds87_J_dlnT)
         implicit none
         real(dp), intent(in) :: Z, q, tau
-        real(dp) :: nu, tn, th
-        nu = Z / q
-        if (nu == 0d0) then
-            jtilde = 1d0 + sqrt(RTG_PI/(2d0*tau))
-        else if (nu < 0d0) then
-            tn = tau
-            jtilde = (1d0 - nu/tn)*(1d0 + sqrt(2d0/max(tn - 2d0*nu, RTG_TINY)))
-        else
-            th = max(nu, RTG_TINY) / (1d0 + 1d0/sqrt(max(nu, RTG_TINY)))
-            jtilde = (1d0 + 1d0/sqrt(4d0*tau + 3d0*max(nu, RTG_TINY)))**2 * exp(-th/tau)
-        end if
-    end function jtilde
-
-    subroutine jtilde_dlnT(Z, q, tau, J, dlnJ)
-        ! J-tilde and d ln J / d ln tau (pyCALIMA _ds87_J_dlnT)
-        implicit none
-        real(dp), intent(in) :: Z, q, tau
-        real(dp), intent(out) :: J, dlnJ
-        real(dp) :: nu, r, A, s, th
+        real(dp), intent(out), optional :: dlnJ
+        real(dp) :: nu, r, A, d, s, th, nup
         nu = Z / q
         if (nu == 0d0) then
             r = sqrt(RTG_PI/(2d0*tau))
-            J = 1d0 + r
-            dlnJ = -0.5d0*r/(1d0 + r)
+            ds87_J = 1d0 + r
+            if (present(dlnJ)) dlnJ = -0.5d0*r/(1d0 + r)
         else if (nu < 0d0) then
             A = 1d0 - nu/tau
-            s = sqrt(2d0/(tau - 2d0*nu))
-            J = A*(1d0 + s)
-            dlnJ = (nu/tau)/A - 0.5d0*s*tau/(tau - 2d0*nu)/(1d0 + s)
-        else
-            th = nu/(1d0 + 1d0/sqrt(nu))
-            s = 1d0/sqrt(4d0*tau + 3d0*nu)
-            J = (1d0 + s)**2*exp(-th/tau)
-            dlnJ = -4d0*tau*s**3/(1d0 + s) + th/tau
-        end if
-    end subroutine jtilde_dlnT
-
-    real(dp) function lambdatilde(Z)
-        ! Draine & Sutin (1987) Lambda-tilde for electrons (q = -1)
-        implicit none
-        real(dp), intent(in) :: Z
-        real(dp) :: nu, tau, th, nup
-        nu = -Z
-        tau = c_tau_e
-        if (nu == 0d0) then
-            lambdatilde = 2d0 + 1.5d0*sqrt(RTG_PI/(2d0*tau))
-        else if (nu < 0d0) then
-            lambdatilde = (2d0 - nu/tau)*(1d0 + 1d0/sqrt(max(tau - nu, RTG_TINY)))
+            d = max(tau - 2d0*nu, RTG_TINY)
+            s = sqrt(2d0/d)
+            ds87_J = A*(1d0 + s)
+            if (present(dlnJ)) dlnJ = (nu/tau)/A - 0.5d0*s*tau/d/(1d0 + s)
         else
             nup = max(nu, RTG_TINY)
             th = nup / (1d0 + 1d0/sqrt(nup))
-            lambdatilde = (2d0 + nup/tau)*(1d0 + 1d0/sqrt(1.5d0/tau + 3d0*nup))*exp(-th/tau)
+            s = 1d0/sqrt(4d0*tau + 3d0*nup)
+            ds87_J = (1d0 + s)**2 * exp(-th/tau)
+            if (present(dlnJ)) dlnJ = -4d0*tau*s**3/(1d0 + s) + th/tau
         end if
-    end function lambdatilde
+    end function ds87_J
 
-    subroutine lambdatilde_dlnT(Z, tau, L, dlnL)
-        ! electron Lambda-tilde and d ln L / d ln tau (pyCALIMA _ds87_lambda_dlnT)
+    real(dp) function ds87_lnJ(Z, q, tau)
+        ! ln of ds87_J, in log form (no underflow of exp(-theta/tau) at large positive nu)
+        implicit none
+        real(dp), intent(in) :: Z, q, tau
+        real(dp) :: nu
+        nu = Z / q
+        if (nu > 0d0) then
+            ds87_lnJ = 2d0*log(1d0 + 1d0/sqrt(4d0*tau + 3d0*nu)) - nu/(1d0 + 1d0/sqrt(nu))/tau
+        else if (nu < 0d0) then
+            ds87_lnJ = log((1d0 - nu/tau)*(1d0 + sqrt(2d0/(tau - 2d0*nu))))
+        else
+            ds87_lnJ = log(1d0 + sqrt(RTG_PI/(2d0*tau)))
+        end if
+    end function ds87_lnJ
+
+    real(dp) function ds87_L(Z, tau, dlnL)
+        ! Draine & Sutin (1987) Lambda-tilde of grain charge Z for electrons (q = -1), tau = ds87_tau(-1)
+        ! of the cell; dlnL: d ln L / d ln tau (pyCALIMA _ds87_lambda_dlnT)
         implicit none
         real(dp), intent(in) :: Z, tau
-        real(dp), intent(out) :: L, dlnL
-        real(dp) :: nu, r, A, s, th
+        real(dp), intent(out), optional :: dlnL
+        real(dp) :: nu, r, A, s, th, nup
         nu = -Z
         if (nu == 0d0) then
             r = sqrt(RTG_PI/(2d0*tau))
-            L = 2d0 + 1.5d0*r
-            dlnL = -0.75d0*r/L
+            ds87_L = 2d0 + 1.5d0*r
+            if (present(dlnL)) dlnL = -0.75d0*r/ds87_L
         else if (nu < 0d0) then
             A = 2d0 - nu/tau
-            s = 1d0/sqrt(tau - nu)
-            L = A*(1d0 + s)
-            dlnL = (nu/tau)/A - 0.5d0*tau*s**3/(1d0 + s)
+            s = 1d0/sqrt(max(tau - nu, RTG_TINY))
+            ds87_L = A*(1d0 + s)
+            if (present(dlnL)) dlnL = (nu/tau)/A - 0.5d0*tau*s**3/(1d0 + s)
         else
-            th = nu/(1d0 + 1d0/sqrt(nu))
-            A = 2d0 + nu/tau
-            s = 1d0/sqrt(1.5d0/tau + 3d0*nu)
-            L = A*(1d0 + s)*exp(-th/tau)
-            dlnL = (-nu/tau)/A + 0.75d0*s**3/tau/(1d0 + s) + th/tau
+            nup = max(nu, RTG_TINY)
+            th = nup / (1d0 + 1d0/sqrt(nup))
+            A = 2d0 + nup/tau
+            s = 1d0/sqrt(1.5d0/tau + 3d0*nup)
+            ds87_L = A*(1d0 + s)*exp(-th/tau)
+            if (present(dlnL)) dlnL = (-nup/tau)/A + 0.75d0*s**3/tau/(1d0 + s) + th/tau
         end if
-    end subroutine lambdatilde_dlnT
+    end function ds87_L
 
     real(dp) function sticking(Z)
         ! WD01 eqs. 27-30 with the continuous extension used by the solver
@@ -1131,11 +1116,11 @@ module dust_charging
         real(dp) :: j1
         ion_capture = 0d0
         if (c_nion(1) > 0d0 .or. c_nion(2) > 0d0) then
-            j1 = jtilde(Z, 1d0, c_tau_ion(1))
+            j1 = ds87_J(Z, 1d0, c_tau_ion(1))
             if (c_nion(1) > 0d0) ion_capture = ion_capture + c_arr_ion(1)*j1
             if (c_nion(2) > 0d0) ion_capture = ion_capture + c_arr_ion(2)*j1
         end if
-        if (c_nion(3) > 0d0) ion_capture = ion_capture + c_arr_ion(3)*jtilde(Z, c_zion(3), c_tau_ion(3))
+        if (c_nion(3) > 0d0) ion_capture = ion_capture + c_arr_ion(3)*ds87_J(Z, c_zion(3), c_tau_ion(3))
     end function ion_capture
 
     real(dp) function gfun(Z)
@@ -1170,8 +1155,8 @@ module dust_charging
             gm_next = mod(m, GM_N) + 1
             gm_used = max(gm_used, m)
         end if
-        up = photo + ion_capture(Z) + c_arr_e*jtilde(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
-        down = c_arr_e*jtilde(Z + 1d0, -1d0, c_tau_e)*sticking(Z + 1d0)*(1d0 - hot(rtg(c_bin)%Ptr, i1, w1))
+        up = photo + ion_capture(Z) + c_arr_e*ds87_J(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
+        down = c_arr_e*ds87_J(Z + 1d0, -1d0, c_tau_e)*sticking(Z + 1d0)*(1d0 - hot(rtg(c_bin)%Ptr, i1, w1))
         gfun = log(max(up, RTG_TINY)) - log(max(down, RTG_TINY))
     end function gfun
 
@@ -1185,25 +1170,15 @@ module dust_charging
         call kernels(i, w, photo, heat, .true.)
         gam = RTG_EV2ERG*heat
         kT = RTG_KB*c_T
-        lam = c_arr_e*sticking(Z)*lambdatilde(Z)*kT*hot(rtg(c_bin)%fcool, i, w)
-        lam = lam - c_arr_e*jtilde(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)*hot(rtg(c_bin)%Ebar, i, w)*RTG_EV2ERG
+        lam = c_arr_e*sticking(Z)*ds87_L(Z, c_tau_e)*kT*hot(rtg(c_bin)%fcool, i, w)
+        lam = lam - c_arr_e*ds87_J(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)*hot(rtg(c_bin)%Ebar, i, w)*RTG_EV2ERG
     end subroutine heating_cooling
 
     real(dp) function ln_capture_z1(Z)
         ! ln of pi a^2 (8kT / pi m_u)^1/2 J~(Z, z=1), log form (no underflow)
         implicit none
         real(dp), intent(in) :: Z
-        real(dp) :: tau, lnJ
-        tau = c_tau_ion(1)
-        if (Z > 0d0) then
-            lnJ = 2d0*log(1d0 + 1d0/sqrt(4d0*tau + 3d0*Z)) - Z/(1d0 + 1d0/sqrt(Z))/tau
-        else if (Z < 0d0) then
-            lnJ = log((1d0 - Z/tau)*(1d0 + sqrt(2d0/(tau - 2d0*Z))))
-        else
-            lnJ = log(1d0 + sqrt(RTG_PI/(2d0*tau)))
-        end if
-        if (c_lngeoA == NONE) c_lngeoA = log(c_geoA)
-        ln_capture_z1 = c_lngeoA + lnJ
+        ln_capture_z1 = log(c_geoA) + ds87_lnJ(Z, 1d0, c_tau_ion(1))
     end function ln_capture_z1
 
     ! ------------------------------------------------------------- cell state
@@ -1241,7 +1216,6 @@ module dust_charging
             c_arr_ion(k) = RTG_PI*rtg(c_bin)%a*rtg(c_bin)%a*c_nion(k)*c_vion(k)
         end do
         c_geoA = RTG_PI*rtg(c_bin)%a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RTG_MU))
-        c_lngeoA = NONE                    ! ln c_geoA, at the first ln_capture_z1 of this T
         call hot_index(T)
     end subroutine set_cell_T
 
@@ -1449,10 +1423,10 @@ module dust_charging
         j3 = 0d0
         dj3 = 0d0
         if (want_d) then
-            call jtilde_dlnT(Z, -1d0, c_tau_e, je, dje)
-            if (full) call lambdatilde_dlnT(Z, c_tau_e, lt, dld)
-            call jtilde_dlnT(Z, 1d0, c_tau_ion(1), j1, dj1)
-            if (c_arr_ion(3) /= 0d0 .or. c_nion(3) > 0d0) call jtilde_dlnT(Z, c_zion(3), c_tau_ion(3), j3, dj3)
+            je = ds87_J(Z, -1d0, c_tau_e, dje)
+            if (full) lt = ds87_L(Z, c_tau_e, dld)
+            j1 = ds87_J(Z, 1d0, c_tau_ion(1), dj1)
+            if (c_arr_ion(3) /= 0d0 .or. c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3), dj3)
             call hot_and_dlnT(rtg(c_bin)%delta, i, w, dlt, dde)
             call hot_and_dlnT(rtg(c_bin)%Ptr, i, w, ptr, dpt)
             if (full) then
@@ -1460,10 +1434,10 @@ module dust_charging
                 call hot_and_dlnT(rtg(c_bin)%Ebar, i, w, eb, deb)
             end if
         else
-            je = jtilde(Z, -1d0, c_tau_e)
-            if (full) lt = lambdatilde(Z)
-            j1 = jtilde(Z, 1d0, c_tau_ion(1))
-            if (c_nion(3) > 0d0) j3 = jtilde(Z, c_zion(3), c_tau_ion(3))
+            je = ds87_J(Z, -1d0, c_tau_e)
+            if (full) lt = ds87_L(Z, c_tau_e)
+            j1 = ds87_J(Z, 1d0, c_tau_ion(1))
+            if (c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3))
             dlt = hot(rtg(c_bin)%delta, i, w)
             ptr = hot(rtg(c_bin)%Ptr, i, w)
             if (full) then
@@ -2156,7 +2130,7 @@ module dust_charging
             if (dble(lo) == rtg(ii)%Zmin) then
                 EA = electron_affinity(ii, rtg(ii)%Zmin)
                 arrive2 = RTG_PI*rtg(ii)%a**2*c_ne*c_ve
-                r%Lambda_auto = b_P(lo - b_base)*arrive2*jtilde(rtg(ii)%Zmin, -1d0, c_tau_e)*EA*RTG_EV2ERG
+                r%Lambda_auto = b_P(lo - b_base)*arrive2*ds87_J(rtg(ii)%Zmin, -1d0, c_tau_e)*EA*RTG_EV2ERG
             end if
             lt = lo
             if (alpha_mode /= RTG_ALPHA_NONE) then
@@ -2172,7 +2146,7 @@ module dust_charging
                 ! below each ion's sum (at least 1e-300). No floor on the geometric rate: below it a
                 ! stopped sum misses the charges that set it, and jumps wherever the stop moves
                 lnP = log(b_P(lo - b_base))
-                lnAlo = log(c_geoA*jtilde(rtg(ii)%Zmin, 1d0, c_tau_ion(1)))
+                lnAlo = log(c_geoA*ds87_J(rtg(ii)%Zmin, 1d0, c_tau_ion(1)))
                 do k = lo - 1, max(lo - MAX_DISCRETE_STATES, nint(rtg(ii)%Zmin), b_base + 1), -1
                     call eval_int(dble(k), want_d, rates_only=.true.)
                     lnP = lnP - gwin(k)
@@ -2215,7 +2189,7 @@ module dust_charging
                 end do
                 r%dLambda = r%dLambda + zr
                 if (dble(lo) == rtg(ii)%Zmin) then
-                    call jtilde_dlnT(dble(lo), -1d0, c_tau_e, je, dje)
+                    je = ds87_J(dble(lo), -1d0, c_tau_e, dje)
                     r%dLambda = r%dLambda + r%Lambda_auto*(c(1) + 0.5d0 + dje)
                 end if
                 dvar = dvar - 2d0*r%Zmean*r%dZmean
@@ -2384,7 +2358,7 @@ module dust_charging
             integer :: iz
             call u_of(z, iz, ww)
             call kernels(iz, ww, ph, ht, .false.)
-            upz = max(ph + ion_capture(z) + c_arr_e*jtilde(z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, iz, ww), RTG_TINY)
+            upz = max(ph + ion_capture(z) + c_arr_e*ds87_J(z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, iz, ww), RTG_TINY)
             d(1) = ph/upz
             d(2) = (upz - ph)/upz - 1d0
         end subroutine dg_dtheta
