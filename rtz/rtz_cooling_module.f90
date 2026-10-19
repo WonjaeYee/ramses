@@ -1122,9 +1122,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0
       trans_dust = lw_transmission(tau_dust_FUV, 0d0)
-      ! local H2 line self-shielding
+      ! local H2 line self-shielding; none when the RT carries it (rtz_h2_lw_sigma_abs > 0)
       sh2_loc = 1d0
-      if (isH2_rtz) &
+      if (isH2_rtz .and. rtz_h2_lw_sigma_abs .le. 0d0) &
          sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK)
       if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
       sco_loc = 1d0
@@ -1354,7 +1354,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Deal with molecules separately
                if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-                  if (isLW(igroup).eq.1) then
+                  if (isLW(igroup).eq.1 .and. rtz_h2_lw_sigma_abs .gt. 0d0) then
+                     ! Nickerson+18: H2 removes many more LW photons than it dissociates (line overlap)
+                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * rtz_h2_lw_sigma_abs * rt_c_cgs(ilevel)
+                  else if (isLW(igroup).eq.1) then
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
                   else
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
