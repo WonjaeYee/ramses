@@ -68,8 +68,8 @@ module dust_interface
 contains
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
-        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~1.9 kB
-        ! (RTGState: 232 reals with the prediction anchor), (nvector + 1) x ndust of them per rank.
+        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~1.2 kB
+        ! (RTGState: 148 reals, most of them the prediction anchor), (nvector + 1) x ndust of them per rank.
         implicit none
         integer, intent(in) :: ncell
         if (allocated(rtg_warm)) then
@@ -629,7 +629,7 @@ contains
                 if (maxval(rate(:, ii)/merge(tot, 1d0, tot > 0d0), mask=tot > 0d0) <= RTG_RECOMB_IMPORTANT) cycle
                 st => rtg_warm(ic, ii)
                 call rtgroups_refine_alpha(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
-                                           dinfo%G0_background, st, rtg_last(ii)%r)
+                                           dinfo%G0_background, rtg_last(ii)%r)
                 if (st%anchored) st%ar%alpha = rtg_last(ii)%r%alpha      ! predictions scale the fitted alpha
             end do
         end if
