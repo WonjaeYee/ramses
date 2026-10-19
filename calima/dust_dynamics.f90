@@ -22,9 +22,10 @@ module dust_dynamics
     ! patterns of its six arguments: a cell's stopping times are evaluated once in each of the
     ! overlapping stencils that hold it (3^ndim of them in the flux routine), and a hit returns
     ! what the root search would return, bit for bit.
-    integer, parameter :: TS_MEMO_N = 16384   ! 0.9 MB
-    integer(kind=8), save :: ts_memo_key(6, 0:TS_MEMO_N-1) = 0_8
-    real(dp), save :: ts_memo_val(0:TS_MEMO_N-1) = -1d0
+    ! 0.9 MB, allocated on the first call (Draine drag runs only)
+    integer, parameter :: TS_MEMO_N = 16384
+    integer(kind=8), allocatable, save :: ts_memo_key(:,:)
+    real(dp), allocatable, save :: ts_memo_val(:)
 
     contains
 
@@ -103,6 +104,11 @@ module dust_dynamics
         ! the root search below, unless these arguments were the last ones in their slot
         k = (/ transfer(a, 0_8), transfer(rho_s, 0_8), transfer(D, 0_8), &
                transfer(nH, 0_8), transfer(T, 0_8), transfer(coul, 0_8) /)
+        if (.not. allocated(ts_memo_key)) then
+            allocate(ts_memo_key(6, 0:TS_MEMO_N-1), ts_memo_val(0:TS_MEMO_N-1))
+            ts_memo_key = 0_8
+            ts_memo_val = -1d0
+        end if
         h = ts_memo_slot(k)
         if (all(ts_memo_key(:, h) == k) .and. ts_memo_val(h) >= 0d0) then
             t_s = ts_memo_val(h)
