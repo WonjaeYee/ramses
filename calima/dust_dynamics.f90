@@ -859,7 +859,7 @@ module dust_dynamics
 #endif
 
                 ! Draine drag in 2D/3D: the cells' stopping times of their full |D|, as the fluxes
-                draine_cells = ndim > 1 .and. draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                draine_cells = ndim > 1 .and. draine_on .and. (tva_test_mode == TVA_TEST_NONE &
                                .or. tva_test_mode >= TVA_TEST_SPRESS)
 #ifdef RT
                 if (draine_cells) call draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps_arr, eps_tot_arr, &
@@ -1016,7 +1016,7 @@ module dust_dynamics
                                     else
                                         t_s_face_arr(jbin) = half * (ts_draine(l,i,j,k-1,jbin) + ts_draine(l,i,j,k,jbin))
                                     end if
-                                else if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                                else if (draine_on .and. (tva_test_mode == TVA_TEST_NONE &
                                     .or. tva_test_mode >= TVA_TEST_SPRESS)) then
                                     if (idim == 1) then
                                         drag_state_face = half * (drag_state(l,i-1,j,k,:) + drag_state(l,i,j,k,:))
@@ -2274,7 +2274,7 @@ module dust_dynamics
 #endif
 
         ! Draine drag in 2D/3D: the stopping time of the full |D| of each cell, once, for every sweep
-        draine_cells = ndim > 1 .and. draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+        draine_cells = ndim > 1 .and. draine_on .and. (tva_test_mode == TVA_TEST_NONE &
                        .or. tva_test_mode >= TVA_TEST_SPRESS) .and. .not. use_w_drift_test
         if (draine_cells) call draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps, eps_tot, a_rad_g, a_rad_d, &
                                                s_IRtrap, drag_state, do_irtrap, tva_a_cm, tva_s_cgs, &
@@ -2404,7 +2404,7 @@ module dust_dynamics
                         ! stopping time needs the driving acceleration D first.
                         if (draine_cells) then
                             t_s_intrinsic(jbin) = ts_draine(l,i,j,k,jbin)
-                        else if (draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                        else if (draine_on .and. (tva_test_mode == TVA_TEST_NONE &
                             .or. tva_test_mode >= TVA_TEST_SPRESS)) then
                             t_s_intrinsic(jbin) = draine2011_stopping_time(tva_a_cm(jbin), &
                                 tva_s_cgs(jbin), D_bin(jbin) * scale_v / scale_t,          &
