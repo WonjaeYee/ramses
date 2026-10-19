@@ -600,8 +600,15 @@ SUBROUTINE read_rt_groups()
   ! RTZ ordering unchanged.
   call init_dust_efficiency_tables(nGroups)
   if (dust_pe_heating) call init_dust_dielectric_tables
-  ! Initialize per-group dust/PAH cross-sections after dust tables exist.
+  ! Initialize per-group dust/PAH cross-sections after dust tables exist: averaged over the
+  ! blackbody of the gas cross sections and group energies (rtz_source_temperature); plain RT
+  ! has no source temperature and takes RTZ's default. Stars replace them with their SEDs
+  ! (updateSEDgroups).
+#ifdef RTZ
+  call initialize_cross_sections_from_blackbody_dust_pah(rtz_source_temperature, groupL0, groupL1, nGroups)
+#else
   call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
+#endif
   call init_dust_mean_cross_sections(sed_dir)
   ! Local-field grain charging tables (charging_model='WDB06rt')
   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)

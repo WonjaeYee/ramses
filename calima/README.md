@@ -160,8 +160,8 @@ using `P_trap = (gamma_rad-1)*E_trap`, deliberately the same expression the Riem
 the barycentric part cancels exactly. Things to be aware of:
 
 - **IR opacities are the T_rad-dependent means, not the band-weighted ones.** For the IR group,
-  `group_cs*_dust/pah` are the wrong spectral weight (they are averaged over the group band with a
-  1e5 K blackbody or the stellar SED). The IR column of `csr_dust`/`csa_dust` is therefore
+  `group_cs*_dust/pah` are the wrong spectral weight (they are averaged over the group band with the
+  source blackbody, `rtz_source_temperature` (1e5 K without RTZ), or the stellar SED). The IR column of `csr_dust`/`csa_dust` is therefore
   overridden per substep in `cool_step` with the Rosseland (flux) and Planck (absorption) means at
   the local radiation temperature, from `dustbins_props(k)%Rosseland_tab`/`%Planck_tab` and the new
   per-charge-state PAH equivalents. This is CALIMA's analogue of RAMSES-RT's `is_kIR_T`, taken from
