@@ -158,8 +158,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !-------------------------------------------------------------------------
 #ifdef CALIMA
    use dust_commons, only: dust_log, dust_log_tdust_solver_print_reset
-   use dust_interface, only: rtgroups_reset_warm, trtz, nrtz
-   use dust_commons, only: dust_charging_timer
+   use dust_interface, only: rtgroups_reset_warm
 #endif
    implicit none
    real(dp):: aexp
@@ -179,7 +178,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp)::dt
    integer::ncell
 #ifdef CALIMA
-   real(kind=8) :: wallclock, t_step0          ! RTZ step timer (dust_charging_timer)
    real(dp),dimension(1:nvector),intent(in) :: sigma
    real(dp),dimension(1:nvector,1:ndust),intent(inout) :: rho_dust
    real(dp),dimension(1:nvector,1:npah),intent(inout) :: rho_pah
@@ -560,7 +558,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    ! Otherwise perform the normal loop
    else
 #ifdef CALIMA
-      call rtgroups_reset_warm()         ! WDB06rt: a new vector of cells
+      call rtgroups_reset_warm(ncell)    ! WDB06rt: a new vector of cells
 #endif
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
@@ -745,16 +743,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,"(A10, X, I6, A10, X, E22.15)") "loopcnt:", loopcnt, "ddt:", ddt(i)
 #endif
 
-#ifdef CALIMA
-            if (dust_charging_timer) t_step0 = wallclock()
-#endif
             call rtz_cool_step(i)
-#ifdef CALIMA
-            if (dust_charging_timer) then
-               trtz = trtz + (wallclock() - t_step0)
-               nrtz = nrtz + 1
-            end if
-#endif
 
 #ifdef RTZ_ONE_CELL_TEST
             write(*,"(A10, X, I6, A10, X, E22.15)") "code:", code, "dt_rec:", dt_rec
@@ -817,6 +806,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end do ! end loop over active cells
          nAct=nAct_next
       end do ! end iterative loop
+#ifdef CALIMA
+      dust_helper%icell = 0              ! WDB06rt: past this vector, no cell's warm state applies
+#endif
 
       ! loop statistics
       max_cool_loopcnt=max(max_cool_loopcnt,loopcnt)
