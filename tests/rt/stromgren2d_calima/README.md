@@ -15,7 +15,7 @@ default. Two namelists, identical apart from the dust:
 | `stromgren2d_dust.nml`   | `var_region(1,1)=1d-2`, a 1% dust-to-gas ratio | the grains absorb ionising photons, feel radiation pressure and drift |
 
 Without dust the RT+CALIMA run reproduces plain RAMSES-RT to round-off (part 09 of the stack,
-every cell of every output): |dx_HII| <= 9e-15, density and pressure within 7e-14.
+every cell of every output): |dx_HII| <= 1.4e-13, density within 2.2e-14, temperature within 7.5e-13.
 
 `condinit` sets `u = rho*q` for passive scalars, so `var_region(1,1)` is a mass fraction.
 Slot 1 is `DustBin_01` (`idust=5`); the outputs name the ion fractions `H_01` and `H_02`
@@ -28,7 +28,9 @@ Slot 1 is `DustBin_01` (`idust=5`); the outputs name the ion fractions `H_01` an
 Note this test has `rt_isIR=.false.`, so it does NOT exercise the IR/dust-temperature path
 (`compute_dust_precool`, `Prad_dust`) -- `tests/dust_tva/levgas_rt15_dust_nortz` covers that.
 What it does exercise, and the levitation test cannot, is the gas photoionisation opacity in
-`dust_radpressure.f90`, because `group_csn` is non-zero here.
+`dust_radpressure.f90`, because `group_csn` is non-zero here, and the grain absorption of the
+UV groups in the RT: without an IR group the grains take their rates from the same cross
+sections as their radiation pressure (`calima_optics` in `rt_cooling_module`).
 
 The plain-RT reference for the comparison lives in the sibling folder
 `tests/rt/stromgren2d_plainrt` (same Makefile with `CALIMA=0`), and
@@ -55,7 +57,7 @@ Snapshots at t = 1.02, 3.06, 7.01, 15.04 Myr (`noutput=4`; `output_00001` is t=0
 | --- | --- |
 | `stromgren2d_maps_rt.png` | plain RT: n_H, x_HII, T |
 | `stromgren2d_maps_calima.png` | RT+CALIMA: n_H, x_HII, T, dust eps/eps_0 on a diverging norm centred on the
-  initial value (`TwoSlopeNorm(0, 1, 1.15)`), so the total evacuation and the few-per-cent
+  initial value (`TwoSlopeNorm(0, 1, 1.15)`), so the total evacuation and the 8-15%
   shell are both visible. A log or linear scale shows one or the other, not both. |
 | `stromgren2d_maps_diff.png` | x_HII(CALIMA) - x_HII(RT) |
 | `stromgren2d_profiles.png` | radial profiles: x_HII, x_HI, T, n_H, v_r, dust (full range),
@@ -63,39 +65,42 @@ Snapshots at t = 1.02, 3.06, 7.01, 15.04 Myr (`noutput=4`; `output_00001` is t=0
 
 What the runs show:
 
-| t [Myr] | R_ion RT | R_ion CALIMA | <T>_ion RT | <T>_ion CALIMA | max abs dx_HII | min eps |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1.02 | 0.2109 | 0.2109 | 17384 | 17412 | 1.0e-04 | 1.3e-04 |
-| 3.06 | 0.4453 | 0.4453 | 16158 | 16166 | 2.2e-03 | 1.6e-07 |
-| 7.01 | 0.5859 | 0.5859 | 15109 | 15112 | 2.0e-03 | 5.1e-11 |
-| 15.04 | 0.7109 | 0.7109 | 15109 | 15111 | 9.4e-04 | 2.0e-15 |
+| t [Myr] | R_ion RT | R_ion CALIMA | <T>_ion RT | <T>_ion CALIMA | min eps |
+| --- | --- | --- | --- | --- | --- |
+| 1.02 | 0.1484 | 0.1328 | 18900 | 19130 | 1.2e-04 |
+| 3.06 | 0.3047 | 0.2734 | 17412 | 17818 | 7.4e-08 |
+| 7.01 | 0.5078 | 0.4141 | 15879 | 16716 | 4.9e-12 |
+| 15.04 | 0.6641 | 0.5859 | 15440 | 16220 | 7.1e-18 |
 
-These are the numbers of the stack's part 09 (2026-10-16). The first version of this test
-(2026-09-18, with the executables built then) had the fronts at 0.148-0.664. The plain-RT
-fronts of the original part 09, without the folded review fixes, are the same as here, so the
-difference predates those fixes; it is the same in both runs.
+These are the numbers of the stack's part 09 after the review of #23 (2026-10-19). Two changes
+of that review moved them:
+- The gas starts in chemical equilibrium, i.e. molecular at 100 K without UV. An earlier special case
+  in `rt_init_xion` started it atomic, and both fronts were then further out (0.211-0.711).
+- The grains absorb the UV in the RT. Before, without an IR group the RT used `kappaAbs`, which is 0
+  here, so the dust felt radiation pressure but absorbed nothing, and the two runs had the same front.
 
-The ionisation front and the mean ionised-gas temperature are unchanged by the dust at this
-column: 1% of 0.01 um graphite over 1 kpc at n_H = 0.1 cm^-3 is optically thin to the ionising
-photons compared with hydrogen. What the dust does do is drift: radiation pressure evacuates it
-from the inner region (eps falls by 13 orders of magnitude by 15 Myr) and piles some of it up
-inside the front, leaving the gas perturbed only at the 1e-3 level, localised at the front and
-at the centre (Delta T reaches +380 K at r -> 0 at 1 Myr, where the dust is gone).
-
-The plain-RT dashed curves in the profile figure lie underneath the solid CALIMA ones; that is
-the result, and the two residual panels show the actual difference.
+The dust takes a large share of the ionising photons inside the H II region. With 1% of 0.01 um
+graphite, its cross section per H (~6e-21 cm^2) exceeds that of the residual H I there. Across the
+H II region tau_dust ~ 1.
+- **The front:** 10-18% smaller in radius than in plain RT.
+- **The temperature:** the ionised gas is 230-840 K hotter, since the dust removes the softer
+  ionising photons and hardens the spectrum.
+- **The drift:** radiation pressure evacuates the dust from the inner region (eps falls by 15
+  orders of magnitude by 15 Myr), and piles some of it up behind the front.
 
 ### The dust shell
 
-The pile-up is only a few per cent above the initial 1%, so it needs its own scale in both
-figures. Radially binned peak (64 bins):
+The pile-up is 8-15% above the initial 1%, so it needs its own scale in both figures. Radially
+binned peak (64 bins):
 
 | t [Myr] | peak <eps/eps_0> | at r | cell max | ionisation front |
 | --- | --- | --- | --- | --- |
-| 1.02 | 1.021 | 0.086 | 1.035 | 0.211 |
-| 3.06 | 1.016 | 0.477 | 1.041 | 0.445 |
-| 7.01 | 1.013 | 0.586 | 1.098 | 0.586 |
-| 15.04 | 1.010 | 0.758 | 1.068 | 0.711 |
+| 1.02 | 1.083 | 0.070 | 1.098 | 0.133 |
+| 3.06 | 1.087 | 0.117 | 1.091 | 0.273 |
+| 7.01 | 1.118 | 0.180 | 1.123 | 0.414 |
+| 15.05 | 1.150 | 0.273 | 1.152 | 0.586 |
 
-The binned enhancement is 1-2%, with single cells up to 10% above the initial value; it sits
-inside the ionisation front and tracks it outward. `plot-stromgren-calima.py` prints both tables.
+The shell sits well inside the ionisation front, at about half its radius, and grows as it moves
+out. `plot-stromgren-calima.py` prints both tables. Once the dust changes the step sequence, the
+CALIMA snapshots are at slightly different times from the plain-RT ones (0.07% at 15 Myr), since
+both runs write at the first step past each `tout`.
