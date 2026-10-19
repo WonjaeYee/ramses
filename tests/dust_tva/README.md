@@ -281,8 +281,8 @@ of trapped photons". Two namelist parameters in `&RT_PARAMS`:
 
 `rt_init.f90` saves the namelist `rt_c_fraction` as the target and
 `rt_ramp_lightspeed` (called once per RHD step from `rt_step`, at `levelmin`)
-walks it down as `f(n) = f_tgt (f_start/f_tgt)^(1-n/N)`, exactly `f_start` at
-`n=0` and `f_tgt` at `n=N`. Everything downstream follows automatically:
+walks it down as `f(n) = f_tgt (f_start/f_tgt)^(1-n/N)`, with `n = nstep_coarse`, exactly
+`f_start` at `n=0` and `f_tgt` at `n=N`; a restart continues the ramp. Everything downstream follows automatically:
 `rt_c`/`rt_c2` through `update_rt_c`, the group cooling constants through
 `updateRTGroups_CoolConstants` (already called at the top of
 `rt_solve_cooling`), and `Np2Ep` because `cooling_fine` rebuilds it per call
