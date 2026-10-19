@@ -260,6 +260,14 @@ module dust_commons
     real(dp),dimension(:,:),allocatable ::sigca_dust,sigcs_dust,sigcr_dust,sigcrat_dust
     real(dp),dimension(:,:),allocatable ::sigca_pah,sigcs_pah,sigcr_pah
     real(dp),dimension(:,:),allocatable ::att_len_dust
+    ! The bands of the in-cell dust shielding [eV]: FUV, the band of G0 (advected_G0: 5.6-13.6 eV), for
+    ! the grains' processes; LW, for the H2; CO, its photodissociation band (912-1118 A, Visser et al.
+    ! 2009). Per bin, the effective attenuation cross-section averaged over each band (band_csr_*,
+    ! init_dust_band_cross_sections; PAHs neutral and ion interlaced, as group_cs*_pah)
+    integer,parameter :: nshield_band=3, SHB_FUV=1, SHB_LW=2, SHB_CO=3
+    real(dp),dimension(nshield_band),parameter :: shield_band_E0=(/5.6d0,11.2d0,11.09d0/)
+    real(dp),dimension(nshield_band),parameter :: shield_band_E1=(/13.6d0,13.6d0,13.6d0/)
+    real(dp),dimension(:,:),allocatable ::band_csr_dust,band_csr_pah
 
 
     ! ==== Coefficients of the polynomial fit from Hu+19 ====
