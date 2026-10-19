@@ -47,6 +47,18 @@ module rt_cooling_module
   real(dp)::Np_min, Np_frac, Fp_min, Fp_frac
 
   integer::iPEH_group=0                ! Photoelectric heating group index
+  ! calima_IR selects the CALIMA grain-optics closure for the IR band (set once in rt_set_model):
+  !   .false. -> RAMSES-RT's own treatment: kappaAbs/kappaSc (x (T/10)^2 when
+  !              is_kIR_T), dust rates folded into phAbs/phSc, and the
+  !              one-temperature IR-dust equilibrium block of cool_step. In a
+  !              CALIMA build the only change is that the REAL dust-to-gas
+  !              ratio replaces the Zsolar*(1-xHII) proxy.
+  !   .true.  -> per-bin Rosseland/Planck means from the grain tables, dust
+  !              rates kept separate (dustRp drives the momentum transfer),
+  !              and an explicit per-bin dust temperature whose thermal
+  !              emission Prad_dust sources the IR band.
+  ! Selected by rt_kIR_RT15 so the opacity law and the closure always agree.
+  logical::calima_IR=.false.
   ! Namelist parameters:
   logical::is_mu_H2=.false.
   real(dp)::Tmu_dissoc=1d3             ! Dissociation temperature [K]
@@ -91,6 +103,9 @@ SUBROUTINE rt_set_model(h,omegab, omega0, omegaL, astart_sim, T2_sim)
        '=========IR trapping is turned ON=============='
   ! do initialization
   if(Y .le. 0.) isHe=.false.
+#ifdef CALIMA
+  calima_IR = rt_isIR .and. (.not. rt_kIR_RT15)   ! fixed for the run (see its declaration)
+#endif
   T_MIN           = 0.1                  !                      Minimum T2
   T_FRAC          = 0.1
 
@@ -357,18 +372,6 @@ contains
     real(dp),save:: rho, TR, one_over_C_v, E_rad, dE_T, fluxMag, mom_fact
     real(dp),save:: G0, eff_peh, cdex, ncr
     logical::newAtomicCons=.true.
-    ! calima_IR selects the CALIMA grain-optics closure for the IR band:
-    !   .false. -> RAMSES-RT's own treatment: kappaAbs/kappaSc (x (T/10)^2 when
-    !              is_kIR_T), dust rates folded into phAbs/phSc, and the
-    !              one-temperature IR-dust equilibrium block further down. In a
-    !              CALIMA build the only change is that the REAL dust-to-gas
-    !              ratio replaces the Zsolar*(1-xHII) proxy.
-    !   .true.  -> per-bin Rosseland/Planck means from the grain tables, dust
-    !              rates kept separate (dustRp drives the momentum transfer),
-    !              and an explicit per-bin dust temperature whose thermal
-    !              emission Prad_dust sources the IR band.
-    ! Selected by rt_kIR_RT15 so the opacity law and the closure always agree.
-    logical:: calima_IR
 #ifdef CALIMA
     real(dp),dimension(nGroups),save:: dustRp, dustAbs_den, dustSc_den
     real(dp),dimension(max(1,ndust)),save  :: sigR_IR_dust, sigP_IR_dust
@@ -420,7 +423,6 @@ contains
     ss_factor=1d0                    ! UV background self_shielding factor
     if(self_shielding) ss_factor = exp(-nH(icell)/1d-2)
     rho = nH(icell) / X * mH
-    calima_IR = .false.
 #ifdef CALIMA
     ! Include the dust mass in rho, as rtz_cool_step does: rho is what the
     ! opacity per gram and the heat capacity are referred to.
@@ -429,7 +431,6 @@ contains
        rho_dust_tot = rho_dust_tot + rho_dust(icell,idb)
     end do
     rho = rho + rho_dust_tot
-    calima_IR = rt_isIR .and. (.not. rt_kIR_RT15)
 #endif
 #if NGROUPS>0
     ! Set dust opacities--------------------------------------------------
