@@ -1110,18 +1110,52 @@ module dust_charging
     end function sticking
 
     real(dp) function ion_capture(Z)
-        ! H+, He+ (one J~ for z = 1) and He++, summed in that order
+        ! H+, He+ (one J~ for z = 1) and He++ captured at charge Z [s^-1]
         implicit none
         real(dp), intent(in) :: Z
-        real(dp) :: j1
-        ion_capture = 0d0
-        if (c_nion(1) > 0d0 .or. c_nion(2) > 0d0) then
-            j1 = ds87_J(Z, 1d0, c_tau_ion(1))
-            if (c_nion(1) > 0d0) ion_capture = ion_capture + c_arr_ion(1)*j1
-            if (c_nion(2) > 0d0) ion_capture = ion_capture + c_arr_ion(2)*j1
-        end if
-        if (c_nion(3) > 0d0) ion_capture = ion_capture + c_arr_ion(3)*ds87_J(Z, c_zion(3), c_tau_ion(3))
+        real(dp) :: j1, j3
+        j1 = 0d0
+        j3 = 0d0
+        if (c_nion(1) > 0d0 .or. c_nion(2) > 0d0) j1 = ds87_J(Z, 1d0, c_tau_ion(1))
+        if (c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3))
+        ion_capture = ion_sum(j1, j3)
     end function ion_capture
+
+    real(dp) function ion_sum(j1, j3)
+        ! the ion capture rate from the J~ of z = 1 (H+, He+) and of He++, summed in that order; an ion
+        ! with no density is skipped
+        implicit none
+        real(dp), intent(in) :: j1, j3
+        ion_sum = 0d0
+        if (c_nion(1) > 0d0) ion_sum = ion_sum + c_arr_ion(1)*j1
+        if (c_nion(2) > 0d0) ion_sum = ion_sum + c_arr_ion(2)*j1
+        if (c_nion(3) > 0d0) ion_sum = ion_sum + c_arr_ion(3)*j3
+    end function ion_sum
+
+    real(dp) function rate_up(photo, ion, je, dlt)
+        ! Up(Z): photoemission + ion capture + gas-electron secondaries (J~ of the electrons je, the
+        ! secondary yield dlt of the hot-gas table)
+        implicit none
+        real(dp), intent(in) :: photo, ion, je, dlt
+        rate_up = photo + ion + c_arr_e*je*dlt
+    end function rate_up
+
+    real(dp) function rate_down(je, st, ptr)
+        ! Down(Z): electron capture (J~ je, sticking st, minus the pass-through fraction ptr)
+        implicit none
+        real(dp), intent(in) :: je, st, ptr
+        rate_down = c_arr_e*je*st*(1d0 - ptr)
+    end function rate_down
+
+    real(dp) function rate_lam(st, lt, fc, je, dlt, eb)
+        ! the recombination cooling [erg/s per grain]: captured electrons (sticking st, Lambda~ lt,
+        ! hot-gas factor fc) minus the energy of the secondaries (je, dlt, their mean energy eb)
+        implicit none
+        real(dp), intent(in) :: st, lt, fc, je, dlt, eb
+        real(dp) :: kT
+        kT = RTG_KB*c_T
+        rate_lam = c_arr_e*st*lt*kT*fc - c_arr_e*je*dlt*eb*RTG_EV2ERG
+    end function rate_lam
 
     real(dp) function gfun(Z)
         ! ln Up(Z) - ln Down(Z+1): Up = photoemission + ion capture + gas-electron secondaries at Z,
@@ -1155,8 +1189,8 @@ module dust_charging
             gm_next = mod(m, GM_N) + 1
             gm_used = max(gm_used, m)
         end if
-        up = photo + ion_capture(Z) + c_arr_e*ds87_J(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)
-        down = c_arr_e*ds87_J(Z + 1d0, -1d0, c_tau_e)*sticking(Z + 1d0)*(1d0 - hot(rtg(c_bin)%Ptr, i1, w1))
+        up = rate_up(photo, ion_capture(Z), ds87_J(Z, -1d0, c_tau_e), hot(rtg(c_bin)%delta, i, w))
+        down = rate_down(ds87_J(Z + 1d0, -1d0, c_tau_e), sticking(Z + 1d0), hot(rtg(c_bin)%Ptr, i1, w1))
         gfun = log(max(up, RTG_TINY)) - log(max(down, RTG_TINY))
     end function gfun
 
@@ -1164,14 +1198,13 @@ module dust_charging
         implicit none
         real(dp), intent(in) :: Z
         real(dp), intent(out) :: gam, lam
-        real(dp) :: w, photo, heat, kT
+        real(dp) :: w, photo, heat
         integer :: i
         call u_of(Z, i, w)
         call kernels(i, w, photo, heat, .true.)
         gam = RTG_EV2ERG*heat
-        kT = RTG_KB*c_T
-        lam = c_arr_e*sticking(Z)*ds87_L(Z, c_tau_e)*kT*hot(rtg(c_bin)%fcool, i, w)
-        lam = lam - c_arr_e*ds87_J(Z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, i, w)*hot(rtg(c_bin)%Ebar, i, w)*RTG_EV2ERG
+        lam = rate_lam(sticking(Z), ds87_L(Z, c_tau_e), hot(rtg(c_bin)%fcool, i, w), ds87_J(Z, -1d0, c_tau_e), &
+                       hot(rtg(c_bin)%delta, i, w), hot(rtg(c_bin)%Ebar, i, w))
     end subroutine heating_cooling
 
     real(dp) function ln_capture_z1(Z)
@@ -1445,18 +1478,15 @@ module dust_charging
                 eb = hot(rtg(c_bin)%Ebar, i, w)
             end if
         end if
-        ion = 0d0                                   ! ion_capture(Z)
-        if (c_nion(1) > 0d0) ion = ion + c_arr_ion(1)*j1
-        if (c_nion(2) > 0d0) ion = ion + c_arr_ion(2)*j1
-        if (c_nion(3) > 0d0) ion = ion + c_arr_ion(3)*j3
+        ion = ion_sum(j1, j3)
         st = sticking(Z)
         kT = RTG_KB*c_T
-        b_up(k) = photo + ion + c_arr_e*je*dlt
+        b_up(k) = rate_up(photo, ion, je, dlt)
         b_ph(k) = photo                             ! the photoemission part (rtgroups_solve_bin sens)
-        b_dn(k) = c_arr_e*je*st*(1d0 - ptr)
+        b_dn(k) = rate_down(je, st, ptr)
         if (full) then
             b_gam(k) = RTG_EV2ERG*heat
-            b_lam(k) = c_arr_e*st*lt*kT*fc - c_arr_e*je*dlt*eb*RTG_EV2ERG
+            b_lam(k) = rate_lam(st, lt, fc, je, dlt, eb)
         end if
         b_A(k) = c_geoA*j1
         if (.not. want_d) return
@@ -2358,7 +2388,7 @@ module dust_charging
             integer :: iz
             call u_of(z, iz, ww)
             call kernels(iz, ww, ph, ht, .false.)
-            upz = max(ph + ion_capture(z) + c_arr_e*ds87_J(z, -1d0, c_tau_e)*hot(rtg(c_bin)%delta, iz, ww), RTG_TINY)
+            upz = max(rate_up(ph, ion_capture(z), ds87_J(z, -1d0, c_tau_e), hot(rtg(c_bin)%delta, iz, ww)), RTG_TINY)
             d(1) = ph/upz
             d(2) = (upz - ph)/upz - 1d0
         end subroutine dg_dtheta
