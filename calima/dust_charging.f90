@@ -33,8 +33,8 @@ module dust_charging
     ! gas-electron secondaries and Down(Z) = electron capture, the charge is found
     ! from detailed balance, g(Z) = ln Up(Z) - ln Down(Z+1):
     !  - root Z* of g and sigma^2 = -1/g'(Z*); if sigma < 3, P(Z) exactly on the
-    !    integers around Z* (window trimmed to P > 1e-10 of its maximum), else a
-    !    Gaussian of mean Z*+1/2 averaged on 3 Gauss-Hermite nodes;
+    !    integers around Z* (window trimmed to P > DISCRETE_TAIL = 1e-5 of its maximum), else
+    !    a Gaussian of mean Z*+1/2, whose heating and cooling are those at Z*+1/2;
     !  - d/d ln T of <Z>, sigma, Gamma, Lambda (dlnT > 0), which serve the cooling
     !    solver's T(1 +- 1e-5) calls: analytic on a discrete window, from the pair
     !    g(Z* +- 1/2) re-evaluated at T(1 + dlnT) for a Gaussian;
@@ -948,7 +948,7 @@ module dust_charging
                     r%Zstar = zs
                     r%Zmean = z1
                 end if
-                ! alpha (fitted or not) times the change of its Gaussian estimate (as a reused fit)
+                ! alpha (fitted or not) times the change of its Gaussian estimate
                 if (any(a%alpha > 0d0)) then
                     call recomb_gauss(r%Zstar, r%Zsigma, lg)
                     do j = 1, RTG_NRI
