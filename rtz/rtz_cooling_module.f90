@@ -981,6 +981,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp),dimension(nGroups)::recrad_f, recrad_g, recrad_fe, recrad_ge, recE
       real(dp)::rec_charge, aN_g, aE_g
       real(dp)::ots_PH, ots_heat, ots_dHe, ots_Hrate   ! rt_otsa: the He photons that ionize H, on the spot
+      real(dp)::ots_dH, kd136, capH                    ! rt_otsa: H's own ground-state photons the dust takes; the H cap
       real(dp)::x_low                                   ! the less ionized state in the ion update's creation terms
       real(dp)::crl
       real(dp)::kd584
@@ -1228,7 +1229,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! UPDATE PHOTON DENSITY AND FLUX *************************************
       rec_charge = 0d0     ! set below when recombination photons are emitted
-      ots_heat = 0d0 ; ots_dHe = 0d0 ; ots_Hrate = 0d0
+      ots_heat = 0d0 ; ots_dHe = 0d0 ; ots_Hrate = 0d0 ; ots_dH = 0d0
       if(rt_advect) then
          recRad(1:nGroups)=0. ; phAbs(1:nGroups)=0.
          ! Scattering rate; reduce the photon flux, but not photon density:
@@ -1290,6 +1291,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! Under OTSA the helium recombination photons that ionize hydrogen (the He I case-B cascade, the
          ! H0 share of the He I ground-state photons, the He II case-B ones) are absorbed where they are made
          ! (recombination_module::otsa_he_photons), as the ground-state photons are by recombination()
+         ! and H's own ground-state photons go to the dust by its share of the opacity at 13.6 eV
+         ! (recombination_module::otsa_h_dust_alpha)
+         if (rt_OTSA) then
+            kd136 = 0d0
+            do igroup = 1, nGroups
+               if (groupL0(igroup) <= 13.598d0 .and. (13.598d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) &
+                    kd136 = dustAbs(igroup)/rt_c_cgs(ilevel)
+            end do
+            ots_dH = otsa_h_dust_alpha(TK, nElement_dep(1)*dXion(1,1), kd136)
+         end if
          if (rt_OTSA .and. elements(2)%atomic_number > 0) then
             kd584 = 0d0
             do igroup = 1, nGroups
@@ -1299,6 +1310,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             call otsa_he_photons(TK, ne, nElement_dep(1)*dXion(1,1), nElement_dep(2)*dXion(2,1), &
                  nElement_dep(2)*dXion(2,2), nElement_dep(2)*dXion(2,3), kd584, groupL0, groupL1, nGroups, &
                  ots_PH, ots_heat, ots_dHe)
+            ! On the spot, H can take at most what it can absorb in the step: its recombinations plus its neutral
+            ! atoms. In gas where hydrogen is only a trace (a pure-He slab) the helium photons are ~1e4 times that,
+            ! and giving them all to the trace H0 broke the ion update; the excess escapes. Never reached where H
+            ! dominates (there the helium photons are ~10% of H's recombinations).
+            capH = recombination(TK, 2, 1) * ne * nElement_dep(1)*dXion(1,2) + nElement_dep(1)*dXion(1,1)/ddt(icell)
+            if (ots_PH > capH) then
+               ots_heat = ots_heat * capH/ots_PH
+               ots_PH = capH
+            end if
             if (nElement_dep(1)*dXion(1,1) > 0d0) ots_Hrate = ots_PH / (nElement_dep(1)*dXion(1,1))
          end if
 
@@ -2240,6 +2260,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
                   ! OTSA: the He I ground-state photons H0 (or dust) takes do not re-ionize He0
                   if (iElement == 2 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dHe
+                  ! OTSA with dust: the share of H's own ground-state photons the grains take
+                  if (iElement == 1 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dH
                   if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
                   ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
                   ! (at the background alone every grain is as in the dark, with its largest rate)
