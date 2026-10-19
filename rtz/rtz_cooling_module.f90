@@ -555,7 +555,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    ! Otherwise perform the normal loop
    else
 #ifdef CALIMA
-      call rtgroups_reset_warm()         ! WDB06rt: a new vector of cells
+      call rtgroups_reset_warm(ncell)    ! WDB06rt: a new vector of cells
 #endif
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
@@ -822,6 +822,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end do ! end loop over active cells
          nAct=nAct_next
       end do ! end iterative loop
+#ifdef CALIMA
+      dust_helper%icell = 0              ! WDB06rt: past this vector, no cell's warm state applies
+#endif
 
       ! loop statistics
       max_cool_loopcnt=max(max_cool_loopcnt,loopcnt)

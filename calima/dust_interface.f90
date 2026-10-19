@@ -31,10 +31,16 @@ module dust_interface
     real(dp), parameter :: RTG_DLNT = 1d-5, RTG_SERVE = 1.5d-5
 
 contains
-    subroutine rtgroups_reset_warm()
-        ! A new vector of cells (rtz_solve_cooling): their warm states start cold.
+    subroutine rtgroups_reset_warm(ncell)
+        ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
+        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~0.7 kB
+        ! (RTGState: 88 reals), (nvector + 1) x ndust of them per rank.
         implicit none
-        if (allocated(rtg_warm)) rtg_warm(:,:)%valid = .false.
+        integer, intent(in) :: ncell
+        if (allocated(rtg_warm)) then
+            rtg_warm(1:min(ncell, nvector), :)%valid = .false.
+            rtg_warm(nvector + 1, :)%valid = .false.
+        end if
         if (allocated(rtg_last)) rtg_last(:)%valid = .false.
     end subroutine rtgroups_reset_warm
 
