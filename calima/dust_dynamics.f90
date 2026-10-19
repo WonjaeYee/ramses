@@ -12,6 +12,8 @@ module dust_dynamics
     ! the cell's uold and rtuold, which a sweep does not change, yet every cell is in
     ! the 6^ndim stencil of 3^ndim grids. Direct-mapped on (grid, son), at most
     ! RP_NMAX entries; an entry is valid for the sweep that wrote it (rp_stamp).
+    ! Allocated for a sweep and freed after it (rp_new_sweep, rp_end_sweep): with
+    ! ntva = 6, 22-37 MB per rank (1-3D) while the dust is swept, none otherwise.
     integer, parameter :: RP_NMAX = 131072
     integer, save :: rp_n = 0, rp_sweep = 0
     integer, allocatable, save :: rp_key(:), rp_stamp(:)
@@ -567,6 +569,12 @@ module dust_dynamics
         end if
         rp_sweep = rp_sweep + 1
     end subroutine rp_new_sweep
+
+    subroutine rp_end_sweep()
+        ! end a sweep: the cache is freed until the next one
+        implicit none
+        if (allocated(rp_key)) deallocate(rp_key, rp_stamp, rp_val)
+    end subroutine rp_end_sweep
 
     subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
                                     irtrap_share, drag_state)
@@ -1161,6 +1169,9 @@ module dust_dynamics
                     end do; end do; end do
                 end do
             end do
+#ifdef RT
+            call rp_end_sweep()
+#endif
         end if
         dt_all = dt_loc
         nclip_all = tva_nclip
@@ -1871,6 +1882,7 @@ module dust_dynamics
             end do
             call dust_upwind_correct2(ind_grid,ngrid,ilevel)
         end do
+        call rp_end_sweep()
 222 format('   Entering dust push for level ',i2)
 
     end subroutine dust_push_fine
