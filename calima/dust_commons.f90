@@ -99,6 +99,9 @@ module dust_commons
                                                  ! TVA assumes Stokes << 1, which fails once the drift
                                                  ! approaches c_s (typically in hot/diffuse cells, where
                                                  ! t_s ~ 1/rho_gas blows up). <=0 disables the cap.
+    ! Radius [cm] and material density [g cm^-3] of the species that drift in the TVA, in their uold
+    ! order: the PAH bins, then the dust bins (uold(:,ipah:ipah+ntva-1)). Set once in init_CALIMA_dust.
+    real(dp), dimension(1:ntva) :: tva_a_cm = 0d0, tva_s_cgs = 0d0
     ! condinit_kind resolved to an integer once in init_CALIMA_dust, so the innermost
     ! solver loops carry an integer compare instead of a character(60) one -- and so an
     ! innocently named IC cannot silently switch the physics to a test branch.

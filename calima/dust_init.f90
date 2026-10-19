@@ -1071,6 +1071,16 @@ module dust_init
             end do
         end if
 
+        ! The TVA species, in uold order: the PAH bins, then the dust bins
+        do ii = 1, npah
+            tva_a_cm(ii) = pahbins_props(ii)%apah_cm
+            tva_s_cgs(ii) = pahbins_props(ii)%spah
+        end do
+        do ii = 1, ndust
+            tva_a_cm(npah+ii) = dustbins_props(ii)%asize_cm
+            tva_s_cgs(npah+ii) = dustbins_props(ii)%sgrain
+        end do
+
         ! Allocate the reusable dust chemistry workspace once per rank.
         call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)
         do jj = 1, n_elements
