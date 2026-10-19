@@ -62,9 +62,6 @@ module rtz_cooling_module
    ! same rates at every substep and in every cell (as charge_exchange_module does for its rates)
    real(dp), dimension(27,27), save :: rec_T = -1d0, rec_rate = 0d0
    real(dp), dimension(27,27), save :: cion_T = -1d0, cion_rate = 0d0
-   ! Number of ion slots in use, max over the tracked elements of n_ions + n_mol: the state
-   ! copies of the substep loop run over xion(:, 1:nslot) instead of all 27 x 27
-   integer, save :: nslot = 0
 
   
   ! temporal brutal force trial
@@ -249,13 +246,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
    integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
    
-   if (nslot == 0) then
-      do iElement = 1, n_elements
-         if (elements(iElement)%atomic_number > 0) &
-            nslot = max(nslot, elements(iElement)%n_ions + elements(iElement)%n_mol)
-      end do
-      nslot = max(nslot, 3)          ! the H2 slot (1,3) is read whenever isH2_rtz
-   end if
    ! the slots above nslot are never read; keep them defined for the whole-array updates of the
    ! equilibrium mode
    dXion(:,nslot+1:n_elements) = 0d0
@@ -273,9 +263,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    loopCodes01 = 0
    loopCodes02 = 0
-   loopCodes08 = 0
-   loopCodes09 = 0
-   loopCodes10 = 0
+   ! only the ion slots in use are counted and printed (3 x 27 x 27 int8, 17.7 KB, zeroed in full at
+   ! every call before)
+   loopCodes08(:,1:nslot) = 0
+   loopCodes09(:,1:nslot) = 0
+   loopCodes10(:,0:nslot) = 0
 
 #ifdef RT
    call rtz_updateRTGroups_CoolConstants(ilevel)
@@ -888,7 +880,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       use cosmic_ray_ionization_module
       use molecules_module
       ! use auger_ionization_module
-      use rtz_coolrates_module, only: all_cooling
+      use rtz_coolrates_module, only: all_cooling, TIndepHeat
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
                              &ndust_processes,npah_processes
@@ -904,6 +896,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: Crate, Crate_prime, Crate_prime_a, Crate_prime_b, dCdT2, X_nHkb, rate, dRate, cr, de=0d0
       real(dp), dimension(1:50):: prime_cooling_rates            ! the rates of the T(1 +- 1e-5) calls (unsaved)
       character(len=20), dimension(1:50):: prime_cooling_rates_names
+      type(TIndepHeat):: t_indep                                 ! all_cooling's T-independent terms at T, for the dC/dT calls
       real(dp):: ss_factor, f_dust
 #ifdef RT
       integer::igroup,idim
@@ -1663,7 +1656,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
+                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names, &
+                           t_indep_out=t_indep)
          prime_cooling_rates = 0.d0
 #ifdef CALIMA
          call rtgroups_derivative_calls(.true.)    ! WDB06rt: served from the precool solve
@@ -1671,13 +1665,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names, &
-                           reuse_T_independent=.true.)
+                           t_indep_in=t_indep)
          if (rtz_dCdT_central) then
             prime_cooling_rates = 0.d0
             call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                               primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                               ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names, &
-                              reuse_T_independent=.true.)
+                              t_indep_in=t_indep)
          end if
 #ifdef CALIMA
          call rtgroups_derivative_calls(.false.)
