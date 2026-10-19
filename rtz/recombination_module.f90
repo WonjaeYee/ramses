@@ -6,7 +6,7 @@ module recombination_module
 
   private  ! everything is private by default
   public :: recombination, load_recombination_data, old_recombination_HII, old_recombination_HeII, old_recombination_HeIII
-  public :: init_recrad_table, recrad_fractions, heI_recrad_cell, otsa_he_photons
+  public :: init_recrad_table, recrad_fractions, heI_recrad_cell, otsa_he_photons, otsa_h_dust_alpha
 
   !---------------------------------------------------------------------------
   ! Spectral redistribution of recombination emission.
@@ -1250,6 +1250,23 @@ SUBROUTINE otsa_he_photons(T, ne, nH0, nHe0, nHep, nHepp, kdust, L0, L1, n, PH, 
       end if
    end if
 END SUBROUTINE otsa_he_photons
+
+!************************************************************************
+REAL(dp) FUNCTION otsa_h_dust_alpha(T, nH0, kdust)
+   ! Under rt_otsa recombination() gives H the case-B rate: its ground-state (Lyman-continuum) photons are taken as
+   ! reabsorbed on the spot by H0. With dust, the grains take the share kdust / (n(H0) sigma_H + kdust) of them
+   ! (as otsa_he_photons shares the helium photons), and those recombinations are a net loss of H+: this returns
+   ! the increase of the H+ -> H0 rate coefficient, alpha(1s) times that share [cm^3 s^-1]. kdust: the dust
+   ! absorption coefficient of the group from 13.6 eV [cm^-1]; sigma_H at the photons' mean energy, 13.6 eV + kT.
+   implicit none
+   real(dp), intent(in) :: T, nH0, kdust
+   real(dp), parameter :: kB_eV = 8.617333262d-5
+   real(dp) :: sH
+   otsa_h_dust_alpha = 0.d0
+   if (kdust <= 0.d0 .or. T <= 0.d0 .or. .not. hl_data_ready) return
+   sH = max(nH0, 0.d0) * sigma_HI_verner(13.598d0 + kB_eV*T)
+   otsa_h_dust_alpha = hlike_alpha_total(T, 1) * hlike_ground_fraction(T, 1) * kdust / (sH + kdust)
+END FUNCTION otsa_h_dust_alpha
 
 !************************************************************************
 REAL(dp) FUNCTION sigma_HI_verner(E)
