@@ -182,8 +182,9 @@ module dust_init
             check_params_dust=.false.
         end if
 #endif
-        if (dust_tva .and. ndust <= 0) then
-            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust bin (NDUST>0)'
+        if (dust_tva .and. ntva <= 0) then
+            ! with this check dust_tva implies ntva > 0: the TVA code tests dust_tva alone
+            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust or PAH bin (NDUST+NPAH>0)'
             check_params_dust=.false.
         end if
         if (dust_radpressure .and. .not.dust_tva) then
@@ -231,8 +232,9 @@ module dust_init
             write(*,*)'           opacities, dust radiation pressure, dust drift.'
             write(*,*)'  MISSING: dust->gas thermal coupling. Dust recombination'
             write(*,*)'           cooling, photoelectric heating and dust-gas'
-            write(*,*)'           collisional cooling are computed but NOT applied'
-            write(*,*)'           to the gas temperature.'
+            write(*,*)'           collisional cooling set the grain temperature'
+            write(*,*)'           (its energy balance) but are NOT applied to the'
+            write(*,*)'           gas temperature.'
             write(*,*)'  MISSING: metal abundances. The gas state handed to the'
             write(*,*)'           grain physics carries H and He only, so T_dust is'
             write(*,*)'           biased LOW (no heavy-species collisional heating)'
@@ -1073,6 +1075,16 @@ module dust_init
                 end if
             end do
         end if
+
+        ! The TVA species, in uold order: the PAH bins, then the dust bins
+        do ii = 1, npah
+            tva_a_cm(ii) = pahbins_props(ii)%apah_cm
+            tva_s_cgs(ii) = pahbins_props(ii)%spah
+        end do
+        do ii = 1, ndust
+            tva_a_cm(npah+ii) = dustbins_props(ii)%asize_cm
+            tva_s_cgs(npah+ii) = dustbins_props(ii)%sgrain
+        end do
 
         ! Allocate the reusable dust chemistry workspace once per rank.
         call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)

@@ -6,7 +6,7 @@
 !                           module: 21 Feb 2022)
 
 module dust_commons
-    use amr_parameters, only:dp,metal
+    use amr_parameters, only:dp,metal,nvector
     use hydro_parameters, only:n_elements,ndust,ndchemtype,npah,idust,ipah
     use constants, only: amu2g
     use dust_utils
@@ -20,7 +20,8 @@ module dust_commons
 
     ! ==== Flags and logicals (read from nml) ====
     logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
-    logical ::dust_debug=.false.                 ! Activate detailed dust mass-budget logging (per-process dM/dt; heavier overhead)
+    logical ::dust_debug=.false.                 ! Debug diagnostics: the per-process dust mass budget (dM/dt; heavier), the
+                                                 ! TVA drift-clipping report, the test diagnostics (IRTRAP_DIAG)
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
     logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
@@ -101,6 +102,13 @@ module dust_commons
                                                  ! TVA assumes Stokes << 1, which fails once the drift
                                                  ! approaches c_s (typically in hot/diffuse cells, where
                                                  ! t_s ~ 1/rho_gas blows up). <=0 disables the cap.
+    ! Radius [cm] and material density [g cm^-3] of the species that drift in the TVA, in their uold
+    ! order: the PAH bins, then the dust bins (uold(:,ipah:ipah+ntva-1)). Set once in init_CALIMA_dust.
+    real(dp), dimension(1:ntva) :: tva_a_cm = 0d0, tva_s_cgs = 0d0
+    ! PAH ion fraction (the charge states > 0) of each bin in each cell of the current cooling vector, from
+    ! the chemistry's last sub-step of that cell (store_pah_ion_fraction); -1 where it was not computed.
+    ! The IR trapping optical depth of cooling_fine weights the two PAH charge states with it.
+    real(dp), dimension(1:nvector, 1:max(npah,1)) :: pah_fion_vec = -1d0
     ! condinit_kind resolved to an integer once in init_CALIMA_dust, so the innermost
     ! solver loops carry an integer compare instead of a character(60) one -- and so an
     ! innocently named IC cannot silently switch the physics to a test branch.

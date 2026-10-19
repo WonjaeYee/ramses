@@ -11,7 +11,7 @@ module dust_interface
 
     public :: compute_dust_rad_rates,compute_dust_precool,&
             compute_dust_coolrates,compute_local_anisotropy_factor,&
-            compute_dust_update,rtgroups_reset_warm
+            compute_dust_update,rtgroups_reset_warm,store_pah_ion_fraction
 
     ! Cache to avoid automatic array allocations in compute_dust_update
     real(dp), allocatable, save, target :: y_gas_cache(:,:), y_gas_out_cache(:,:)
@@ -32,6 +32,22 @@ module dust_interface
     real(dp), parameter :: RTG_DLNT = 1d-5, RTG_SERVE = 1.5d-5
 
 contains
+    subroutine store_pah_ion_fraction(dinfo, icell)
+        ! Keep the ion fraction of each PAH bin of cell icell of the cooling vector (pah_fion_vec), from the
+        ! charge distribution compute_dust_rad_rates has just set in dinfo
+        implicit none
+        class(DustChemistryInfo), intent(in) :: dinfo
+        integer, intent(in) :: icell
+        integer :: ii
+        if (icell < 1 .or. icell > nvector) return
+        do ii = 1, dinfo%npah
+            pah_fion_vec(icell, ii) = 0d0
+            if (pahbins_props(ii)%cation_start_idx <= pahbins_props(ii)%ncharge_states) &
+                pah_fion_vec(icell, ii) = sum(dinfo%fcharge_pah(pahbins_props(ii)%cation_start_idx: &
+                                                                pahbins_props(ii)%ncharge_states, ii))
+        end do
+    end subroutine store_pah_ion_fraction
+
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
         ! those cells' states and the no-cell slot (nvector + 1) are touched; a state (RTGState) is

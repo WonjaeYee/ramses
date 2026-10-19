@@ -122,6 +122,7 @@ groupL1       = 1.0
 /
 
 &CALIMA_PARAMS
+dust_debug=.true.   ! the IRTRAP_DIAG lines plot-dustyirtrap.py checks
 dust_tva=.true.
 dust_radpressure=.true.
 use_w_drift_test=.false.
