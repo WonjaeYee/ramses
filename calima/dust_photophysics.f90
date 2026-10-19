@@ -875,7 +875,7 @@ module dust_optics
 
         ! 2.f Same mean cross sections for the PAH bins, per charge state.
         ! Needed for the IR photon group: group_cs*_pah are weighted over the
-        ! group band by a hot (1e5 K) blackbody or the stellar SED, which is the
+        ! group band by the source blackbody (rtz_source_temperature) or the stellar SED, the
         ! wrong spectral weight for IR radiation in near-LTE with the grains.
         do i = 1, npah
             write(pahlabel, '(A,I2.2)') 'PAHBin_', i

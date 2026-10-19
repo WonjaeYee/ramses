@@ -94,8 +94,10 @@ X_rt  = nml_val(os.path.join(RT_DIR,  RT_NML),  "X", 1.0)
 X_cal = nml_val(os.path.join(CAL_DIR, CAL_NML), "X", 1.0)
 RT  = [derived(load(RT_DIR,  n), X_rt,  False) for n in SNAPS]
 CAL = [derived(load(CAL_DIR, n), X_cal, True)  for n in SNAPS]
+# Snapshots are written at the first step past each tout, so once the dust changes the step sequence
+# the two runs' snapshots differ by a fraction of a step (0.07% at 15 Myr)
 for a, b in zip(RT, CAL):
-    assert abs(a["t"] - b["t"]) < 1e-9, "snapshot times differ: %g vs %g" % (a["t"], b["t"])
+    assert abs(a["t"] - b["t"]) < 1e-2 * a["t"], "snapshot times differ: %g vs %g" % (a["t"], b["t"])
 times = [a["t"] for a in RT]
 print("snapshot times [Myr]:", ", ".join("%.2f" % t for t in times))
 
