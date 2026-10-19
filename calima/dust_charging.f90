@@ -151,13 +151,25 @@ module dust_charging
     type(RTGroupTable), allocatable, save :: rtg(:)
     real(dp), save :: ri_hlnm(RTG_NRI) = 0d0          ! 0.5 ln(RI_MASS), set at init
 
-    ! per-call cell state (set_cell); ions 1 (H+) and 2 (He+) both have z = 1, hence the
-    ! same tau and the same J~(Z, 1, tau)
-    real(dp) :: c_T, c_ne, c_ve, c_nion(3), c_zion(3), c_vion(3), c_G0
-    real(dp) :: c_tau_e, c_tau_ion(3), c_arr_e, c_arr_ion(3), c_vh, c_dhot
-    real(dp) :: c_geoA                ! pi a^2 (8kT / pi m_u)^1/2 (ion capture per J~ at z = 1)
-    real(dp), allocatable :: c_cN(:)
-    integer :: c_bin, c_kh
+    ! The state of one bin in one cell (set_cell; set_cell_T for another temperature), passed to every
+    ! function of the rates, so that each depends on its arguments only. Ions 1 (H+) and 2 (He+) both
+    ! have z = 1, hence the same tau and the same J~(Z, 1, tau)
+    type CellState
+        integer :: bin = 0                        ! the dust bin (rtg)
+        real(dp) :: T = 0d0, ne = 0d0, G0 = 0d0   ! gas temperature [K], n_e [cm^-3], UV background [Habing]
+#ifdef RT
+        real(dp) :: cN(NGROUPS) = 0d0             ! c_red N_g of the groups [cm^-2 s^-1]
+#else
+        real(dp) :: cN(1) = 0d0
+#endif
+        real(dp), dimension(3) :: nion = 0d0, zion = (/1d0, 1d0, 2d0/)   ! H+, He+, He++: n [cm^-3], z
+        ! at T: thermal speeds, DS87 tau, arrival rates per unit J~ (pi a^2 n v) of the electrons and ions
+        real(dp) :: ve = 0d0, tau_e = 0d0, arr_e = 0d0
+        real(dp), dimension(3) :: vion = 0d0, tau_ion = 0d0, arr_ion = 0d0
+        real(dp) :: geoA = 0d0                    ! pi a^2 (8kT / pi m_u)^1/2 (ion capture per J~ at z = 1)
+        integer :: kh = 1                         ! the hot-gas tables at log T: index, weight, d/d ln T step
+        real(dp) :: vh = 0d0, dhot = 0d0
+    end type CellState
     ! T-independent part of g of the last GM_N charges of the cell (gfun; set_cell empties it):
     ! U index and weight of Z and Z + 1, photoemission at Z. GM_N covers the pair and up to
     ! SIGMA_CHORD_ITER chords of a wide P(Z), re-evaluated at T(1 + dlnT)
@@ -516,6 +528,7 @@ module dust_charging
         ! photon groups and grain sizes. Called from rt_init once groups exist.
         use amr_commons, only: myid
         implicit none
+        type(CellState) :: cell
         integer, intent(in) :: nGroups
         real(dp), intent(in) :: groupL0(nGroups), groupL1(nGroups)
         integer :: ii, g, it, istat, ver, iu, k, nzmax
@@ -627,7 +640,7 @@ module dust_charging
             ! charges where IP(a, Z) crosses the group edges / Mathis breaks (kinks of g), the
             ! recombination thresholds (when the table predates them), and the U index of each
             ! integer charge
-            c_bin = ii
+            cell%bin = ii
             do g = 1, rtg(ii)%nG
                 rtg(ii)%edge0(g) = ip_edge(ii, rtg(ii)%L0(g))
                 rtg(ii)%edge1(g) = ip_edge(ii, rtg(ii)%L1(g))
@@ -642,12 +655,11 @@ module dust_charging
                 if (rtg(ii)%U(k) > 0d0) rtg(ii)%jpos = k
             end do
             do k = 1, rtg(ii)%nZ
-                call u_index((rtg(ii)%Zmin + dble(k - 1))*RTG_E2EVCM/rtg(ii)%a, rtg(ii)%iuz(k), rtg(ii)%wuz(k))
+                call u_index(cell, (rtg(ii)%Zmin + dble(k - 1))*RTG_E2EVCM/rtg(ii)%a, rtg(ii)%iuz(k), rtg(ii)%wuz(k))
             end do
             if (myid == 1) write(*,'(A,A,A,ES12.5,A,F9.1,A,F9.1,A,I2)') ' WDB06rt: read ', trim(dustlabel), &
                 ', a = ', rtg(ii)%a, ' cm, Zmin = ', rtg(ii)%Zmin, ', Zmax = ', rtg(ii)%Zmax, ', format ', ver
         end do
-        allocate(c_cN(1:nGroups))
         ri_hlnm = 0.5d0*log(RI_MASS)
         allocate(f_Zn(nzmax + 2), f_lnP(nzmax + 2), f_lnA(nzmax + 2), f_v(nzmax + 2), f_ps(0:nzmax + 2))
         allocate(f_row(maxval(rtg(:)%nU)))
@@ -772,34 +784,36 @@ module dust_charging
     end subroutine rtgroups_set_group_energies
 
     ! ------------------------------------------------------------ interpolation
-    subroutine u_index(U, i, w)
+    subroutine u_index(cell, U, i, w)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: U
         integer, intent(out) :: i
         real(dp), intent(out) :: w
         real(dp) :: f
-        f = (asinh(U/U_SCALE) - rtg(c_bin)%x0) / rtg(c_bin)%dx
-        f = min(max(f, 0d0), dble(rtg(c_bin)%nU - 1))
-        i = min(int(f), rtg(c_bin)%nU - 2)
+        f = (asinh(U/U_SCALE) - rtg(cell%bin)%x0) / rtg(cell%bin)%dx
+        f = min(max(f, 0d0), dble(rtg(cell%bin)%nU - 1))
+        i = min(int(f), rtg(cell%bin)%nU - 2)
         w = f - dble(i)
         i = i + 1        ! 1-based
     end subroutine u_index
 
-    subroutine anchor_kernels(Z, st)
+    subroutine anchor_kernels(cell, Z, st)
         ! the per-group photoemission kernels at charge Z (and the background's), unweighted: the
         ! photoemission rate at the anchor's Z* for any photon densities (rtgroups_predict)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
         type(RTGState), intent(inout) :: st
         real(dp) :: w, h(4)
         integer :: i, g
-        call u_of(Z, i, w)
+        call u_of(cell, Z, i, w)
         call hermite4(w, h)
         st%akstar = 0d0
-        do g = 1, rtg(c_bin)%nG
-            st%akstar(g) = pchip(h, rtg(c_bin)%KgT(g,i), rtg(c_bin)%mKT(g,i), rtg(c_bin)%KgT(g,i+1), rtg(c_bin)%mKT(g,i+1))
+        do g = 1, rtg(cell%bin)%nG
+            st%akstar(g) = pchip(h, rtg(cell%bin)%KgT(g,i), rtg(cell%bin)%mKT(g,i), rtg(cell%bin)%KgT(g,i+1), rtg(cell%bin)%mKT(g,i+1))
         end do
-        st%akbg = pchip(h, rtg(c_bin)%Kbg(i), rtg(c_bin)%mKb(i), rtg(c_bin)%Kbg(i+1), rtg(c_bin)%mKb(i+1))
+        st%akbg = pchip(h, rtg(cell%bin)%Kbg(i), rtg(cell%bin)%mKb(i), rtg(cell%bin)%Kbg(i+1), rtg(cell%bin)%mKb(i+1))
     end subroutine anchor_kernels
 
     subroutine rtgroups_predict(ii, st, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, tol, tol_shape, r, ok)
@@ -817,6 +831,7 @@ module dust_charging
         ! Z* + 1/2); its alpha is scaled by the change of its Gaussian estimate. r: Lambda includes
         ! the autoionisation; d/d ln T is the anchor's.
         implicit none
+        type(CellState) :: cell
         integer, intent(in) :: ii
         type(RTGState), intent(in) :: st
         real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, tol, tol_shape
@@ -892,21 +907,21 @@ module dust_charging
                 linear = max(abs(dS), abs(dN), abs(dT)) <= PREDICT_LIN_TOL .and. z0*z1 > 0d0 .and. &
                          min(abs(z0), abs(z1)) >= PREDICT_LIN_ZERO + 0.5d0 .and. &
                          abs(z1 - z0) <= max(1d0, PREDICT_LIN_DZ*a%Zsigma)
-                if (.not. linear .or. any(a%alpha > 0d0)) call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+                if (.not. linear .or. any(a%alpha > 0d0)) call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
                 if (.not. linear) then
                     ! corrected at the new inputs: a Newton step of g from the linear Z* (g' = -1/sigma^2,
                     ! sigma linear), then Gamma and Lambda at Z* + 1/2 (the wide closure of the solve)
-                    zs = min(max(r%Zstar + r%Zsigma*r%Zsigma*gfun(r%Zstar), rtg(ii)%Zmin), rtg(ii)%Zmax - 1d0)
+                    zs = min(max(r%Zstar + r%Zsigma*r%Zsigma*gfun(cell, r%Zstar), rtg(ii)%Zmin), rtg(ii)%Zmax - 1d0)
                     z1 = zs + 0.5d0
                     if (z0*z1 <= 0d0 .or. min(abs(z0), abs(z1)) < PREDICT_WIDE_ZERO + 0.5d0) return
                     if (abs(z1 - z0) > max(1d0, PREDICT_WIDE_DZ*a%Zsigma)) return
-                    call heating_cooling(z1, r%Gamma, r%Lambda)
+                    call heating_cooling(cell, z1, r%Gamma, r%Lambda)
                     r%Zstar = zs
                     r%Zmean = z1
                 end if
                 ! alpha (fitted or not) times the change of its Gaussian estimate
                 if (any(a%alpha > 0d0)) then
-                    call recomb_gauss(r%Zstar, r%Zsigma, lg)
+                    call recomb_gauss(cell, r%Zstar, r%Zsigma, lg)
                     do j = 1, RTG_NRI
                         if (a%alpha(j) > 0d0) r%alpha(j) = a%alpha(j)*exp(lg(j) - st%alg(j))
                     end do
@@ -921,55 +936,58 @@ module dust_charging
         ok = .true.
     end subroutine rtgroups_predict
 
-    subroutine u_of(Z, i, w)
+    subroutine u_of(cell, Z, i, w)
         ! U index of charge Z: cached for the integers
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
         integer, intent(out) :: i
         real(dp), intent(out) :: w
         integer :: k
-        if (Z == aint(Z) .and. Z >= rtg(c_bin)%Zmin .and. Z <= rtg(c_bin)%Zmax) then
-            k = nint(Z - rtg(c_bin)%Zmin) + 1
-            i = rtg(c_bin)%iuz(k)
-            w = rtg(c_bin)%wuz(k)
+        if (Z == aint(Z) .and. Z >= rtg(cell%bin)%Zmin .and. Z <= rtg(cell%bin)%Zmax) then
+            k = nint(Z - rtg(cell%bin)%Zmin) + 1
+            i = rtg(cell%bin)%iuz(k)
+            w = rtg(cell%bin)%wuz(k)
         else
-            call u_index(Z*RTG_E2EVCM/rtg(c_bin)%a, i, w)
+            call u_index(cell, Z*RTG_E2EVCM/rtg(cell%bin)%a, i, w)
         end if
     end subroutine u_of
 
-    subroutine hot_index(T)
+    subroutine hot_index(cell, T)
         ! log T index and weight of the hot-gas tables, and d/d ln T factor, once per cell
         implicit none
+        type(CellState), intent(inout) :: cell
         real(dp), intent(in) :: T
         real(dp) :: y, dl, fT, lT
         integer :: n
-        n = rtg(c_bin)%nTh
+        n = rtg(cell%bin)%nTh
         lT = log10(T)
-        y = min(max(lT, rtg(c_bin)%lTh(1)), rtg(c_bin)%lTh(n))
-        dl = (rtg(c_bin)%lTh(n) - rtg(c_bin)%lTh(1)) / dble(n - 1)
-        fT = (y - rtg(c_bin)%lTh(1)) / dl
-        c_kh = min(int(fT), n - 2)
-        c_vh = fT - dble(c_kh)
-        c_kh = c_kh + 1
-        c_dhot = 0d0
-        if (rtg(c_bin)%lTh(1) < lT .and. lT < rtg(c_bin)%lTh(n)) c_dhot = dl
+        y = min(max(lT, rtg(cell%bin)%lTh(1)), rtg(cell%bin)%lTh(n))
+        dl = (rtg(cell%bin)%lTh(n) - rtg(cell%bin)%lTh(1)) / dble(n - 1)
+        fT = (y - rtg(cell%bin)%lTh(1)) / dl
+        cell%kh = min(int(fT), n - 2)
+        cell%vh = fT - dble(cell%kh)
+        cell%kh = cell%kh + 1
+        cell%dhot = 0d0
+        if (rtg(cell%bin)%lTh(1) < lT .and. lT < rtg(cell%bin)%lTh(n)) cell%dhot = dl
     end subroutine hot_index
 
-    real(dp) function hot(tab, i, w, dv)
+    real(dp) function hot(cell, tab, i, w, dv)
         ! a hot-gas table (U, log T) at U index i, weight w and the cell's log T; dv: its d/d ln T (the
         ! slope in log10 T, zero where log T is clamped), from the same pair of U interpolations
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: tab(:,:)
         integer, intent(in) :: i
         real(dp), intent(in) :: w
         real(dp), intent(out), optional :: dv
         real(dp) :: a0, a1
-        a0 = (1d0 - w)*tab(i,c_kh) + w*tab(i+1,c_kh)
-        a1 = (1d0 - w)*tab(i,c_kh+1) + w*tab(i+1,c_kh+1)
-        hot = (1d0 - c_vh)*a0 + c_vh*a1
+        a0 = (1d0 - w)*tab(i,cell%kh) + w*tab(i+1,cell%kh)
+        a1 = (1d0 - w)*tab(i,cell%kh+1) + w*tab(i+1,cell%kh+1)
+        hot = (1d0 - cell%vh)*a0 + cell%vh*a1
         if (present(dv)) then
             dv = 0d0
-            if (c_dhot > 0d0) dv = (a1 - a0) / c_dhot / log(10d0)
+            if (cell%dhot > 0d0) dv = (a1 - a0) / cell%dhot / log(10d0)
         end if
     end function hot
 
@@ -1001,9 +1019,10 @@ module dust_charging
         bilinear = (1d0 - u)*(1d0 - v)*q00 + u*(1d0 - v)*q10 + (1d0 - u)*v*q01 + u*v*q11
     end function bilinear
 
-    subroutine kernels(i, w, photo, heat, want_heat)
+    subroutine kernels(cell, i, w, photo, heat, want_heat)
         ! PCHIP photoemission (and heating) kernels summed over the groups and the background
         implicit none
+        type(CellState), intent(in) :: cell
         integer, intent(in) :: i
         real(dp), intent(in) :: w
         real(dp), intent(out) :: photo, heat
@@ -1012,24 +1031,25 @@ module dust_charging
         integer :: g
         call hermite4(w, h)
         s = 0d0
-        do g = 1, rtg(c_bin)%nG
-            s = s + c_cN(g)*pchip(h, rtg(c_bin)%KgT(g,i), rtg(c_bin)%mKT(g,i), rtg(c_bin)%KgT(g,i+1), rtg(c_bin)%mKT(g,i+1))
+        do g = 1, rtg(cell%bin)%nG
+            s = s + cell%cN(g)*pchip(h, rtg(cell%bin)%KgT(g,i), rtg(cell%bin)%mKT(g,i), rtg(cell%bin)%KgT(g,i+1), rtg(cell%bin)%mKT(g,i+1))
         end do
-        photo = max(s + c_G0*pchip(h, rtg(c_bin)%Kbg(i), rtg(c_bin)%mKb(i), rtg(c_bin)%Kbg(i+1), rtg(c_bin)%mKb(i+1)), 0d0)
+        photo = max(s + cell%G0*pchip(h, rtg(cell%bin)%Kbg(i), rtg(cell%bin)%mKb(i), rtg(cell%bin)%Kbg(i+1), rtg(cell%bin)%mKb(i+1)), 0d0)
         heat = 0d0
         if (.not. want_heat) return
         s = 0d0
-        do g = 1, rtg(c_bin)%nG
-            s = s + c_cN(g)*pchip(h, rtg(c_bin)%HgT(g,i), rtg(c_bin)%mHT(g,i), rtg(c_bin)%HgT(g,i+1), rtg(c_bin)%mHT(g,i+1))
+        do g = 1, rtg(cell%bin)%nG
+            s = s + cell%cN(g)*pchip(h, rtg(cell%bin)%HgT(g,i), rtg(cell%bin)%mHT(g,i), rtg(cell%bin)%HgT(g,i+1), rtg(cell%bin)%mHT(g,i+1))
         end do
-        heat = max(s + c_G0*pchip(h, rtg(c_bin)%Hbg(i), rtg(c_bin)%mHb(i), rtg(c_bin)%Hbg(i+1), rtg(c_bin)%mHb(i+1)), 0d0)
+        heat = max(s + cell%G0*pchip(h, rtg(cell%bin)%Hbg(i), rtg(cell%bin)%mHb(i), rtg(cell%bin)%Hbg(i+1), rtg(cell%bin)%mHb(i+1)), 0d0)
     end subroutine kernels
 
     ! -------------------------------------------------------------- physics
-    real(dp) function ds87_tau(q)
+    real(dp) function ds87_tau(cell, q)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: q
-        ds87_tau = max(rtg(c_bin)%a*RTG_KB*c_T / max(q*q*RTG_ESTATC*RTG_ESTATC, RTG_TINY), RTG_TINY)
+        ds87_tau = max(rtg(cell%bin)%a*RTG_KB*cell%T / max(q*q*RTG_ESTATC*RTG_ESTATC, RTG_TINY), RTG_TINY)
     end function ds87_tau
 
     real(dp) function ds87_J(Z, q, tau, dlnJ)
@@ -1102,73 +1122,80 @@ module dust_charging
         end if
     end function ds87_L
 
-    real(dp) function sticking(Z)
+    real(dp) function sticking(cell, Z)
         ! WD01 eqs. 27-30 with the continuous extension used by the solver
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
-        if (Z <= rtg(c_bin)%Zmin) then
+        if (Z <= rtg(cell%bin)%Zmin) then
             sticking = 0d0
         else if (Z > 0d0) then
-            sticking = rtg(c_bin)%stick_pos
+            sticking = rtg(cell%bin)%stick_pos
         else
-            sticking = rtg(c_bin)%stick_neg
+            sticking = rtg(cell%bin)%stick_neg
         end if
     end function sticking
 
-    real(dp) function ion_capture(Z)
+    real(dp) function ion_capture(cell, Z)
         ! H+, He+ (one J~ for z = 1) and He++ captured at charge Z [s^-1]
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
         real(dp) :: j1, j3
         j1 = 0d0
         j3 = 0d0
-        if (c_nion(1) > 0d0 .or. c_nion(2) > 0d0) j1 = ds87_J(Z, 1d0, c_tau_ion(1))
-        if (c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3))
-        ion_capture = ion_sum(j1, j3)
+        if (cell%nion(1) > 0d0 .or. cell%nion(2) > 0d0) j1 = ds87_J(Z, 1d0, cell%tau_ion(1))
+        if (cell%nion(3) > 0d0) j3 = ds87_J(Z, cell%zion(3), cell%tau_ion(3))
+        ion_capture = ion_sum(cell, j1, j3)
     end function ion_capture
 
-    real(dp) function ion_sum(j1, j3)
+    real(dp) function ion_sum(cell, j1, j3)
         ! the ion capture rate from the J~ of z = 1 (H+, He+) and of He++, summed in that order; an ion
         ! with no density is skipped
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: j1, j3
         ion_sum = 0d0
-        if (c_nion(1) > 0d0) ion_sum = ion_sum + c_arr_ion(1)*j1
-        if (c_nion(2) > 0d0) ion_sum = ion_sum + c_arr_ion(2)*j1
-        if (c_nion(3) > 0d0) ion_sum = ion_sum + c_arr_ion(3)*j3
+        if (cell%nion(1) > 0d0) ion_sum = ion_sum + cell%arr_ion(1)*j1
+        if (cell%nion(2) > 0d0) ion_sum = ion_sum + cell%arr_ion(2)*j1
+        if (cell%nion(3) > 0d0) ion_sum = ion_sum + cell%arr_ion(3)*j3
     end function ion_sum
 
-    real(dp) function rate_up(photo, ion, je, dlt)
+    real(dp) function rate_up(cell, photo, ion, je, dlt)
         ! Up(Z): photoemission + ion capture + gas-electron secondaries (J~ of the electrons je, the
         ! secondary yield dlt of the hot-gas table)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: photo, ion, je, dlt
-        rate_up = photo + ion + c_arr_e*je*dlt
+        rate_up = photo + ion + cell%arr_e*je*dlt
     end function rate_up
 
-    real(dp) function rate_down(je, st, ptr)
+    real(dp) function rate_down(cell, je, st, ptr)
         ! Down(Z): electron capture (J~ je, sticking st, minus the pass-through fraction ptr)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: je, st, ptr
-        rate_down = c_arr_e*je*st*(1d0 - ptr)
+        rate_down = cell%arr_e*je*st*(1d0 - ptr)
     end function rate_down
 
-    real(dp) function rate_lam(st, lt, fc, je, dlt, eb)
+    real(dp) function rate_lam(cell, st, lt, fc, je, dlt, eb)
         ! the recombination cooling [erg/s per grain]: captured electrons (sticking st, Lambda~ lt,
         ! hot-gas factor fc) minus the energy of the secondaries (je, dlt, their mean energy eb)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: st, lt, fc, je, dlt, eb
         real(dp) :: kT
-        kT = RTG_KB*c_T
-        rate_lam = c_arr_e*st*lt*kT*fc - c_arr_e*je*dlt*eb*RTG_EV2ERG
+        kT = RTG_KB*cell%T
+        rate_lam = cell%arr_e*st*lt*kT*fc - cell%arr_e*je*dlt*eb*RTG_EV2ERG
     end function rate_lam
 
-    real(dp) function gfun(Z)
+    real(dp) function gfun(cell, Z)
         ! ln Up(Z) - ln Down(Z+1): Up = photoemission + ion capture + gas-electron secondaries at Z,
         ! Down = electron capture at Z + 1. The U indices of Z and Z + 1 and the photoemission at
         ! Z do not depend on T; those of the last GM_N charges of the cell are kept, so g at the
         ! same charges at T(1 + dlnT) (the d/d ln T of a wide P(Z)) costs only its T-dependent part
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
         real(dp) :: w, w1, photo, heat, up, down
         integer :: i, i1, m
@@ -1182,9 +1209,9 @@ module dust_charging
             w1 = gm_w1(m)
             photo = gm_photo(m)
         else
-            call u_of(Z, i, w)
-            call kernels(i, w, photo, heat, .false.)
-            call u_of(Z + 1d0, i1, w1)
+            call u_of(cell, Z, i, w)
+            call kernels(cell, i, w, photo, heat, .false.)
+            call u_of(cell, Z + 1d0, i1, w1)
             m = gm_next
             gm_Z(m) = Z
             gm_i(m) = i
@@ -1195,73 +1222,78 @@ module dust_charging
             gm_next = mod(m, GM_N) + 1
             gm_used = max(gm_used, m)
         end if
-        up = rate_up(photo, ion_capture(Z), ds87_J(Z, -1d0, c_tau_e), hot(rtg(c_bin)%delta, i, w))
-        down = rate_down(ds87_J(Z + 1d0, -1d0, c_tau_e), sticking(Z + 1d0), hot(rtg(c_bin)%Ptr, i1, w1))
+        up = rate_up(cell, photo, ion_capture(cell, Z), ds87_J(Z, -1d0, cell%tau_e), hot(cell, rtg(cell%bin)%delta, i, w))
+        down = rate_down(cell, ds87_J(Z + 1d0, -1d0, cell%tau_e), sticking(cell, Z + 1d0), hot(cell, rtg(cell%bin)%Ptr, i1, w1))
         gfun = log(max(up, RTG_TINY)) - log(max(down, RTG_TINY))
     end function gfun
 
-    subroutine heating_cooling(Z, gam, lam)
+    subroutine heating_cooling(cell, Z, gam, lam)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
         real(dp), intent(out) :: gam, lam
         real(dp) :: w, photo, heat
         integer :: i
-        call u_of(Z, i, w)
-        call kernels(i, w, photo, heat, .true.)
+        call u_of(cell, Z, i, w)
+        call kernels(cell, i, w, photo, heat, .true.)
         gam = RTG_EV2ERG*heat
-        lam = rate_lam(sticking(Z), ds87_L(Z, c_tau_e), hot(rtg(c_bin)%fcool, i, w), ds87_J(Z, -1d0, c_tau_e), &
-                       hot(rtg(c_bin)%delta, i, w), hot(rtg(c_bin)%Ebar, i, w))
+        lam = rate_lam(cell, sticking(cell, Z), ds87_L(Z, cell%tau_e), hot(cell, rtg(cell%bin)%fcool, i, w), ds87_J(Z, -1d0, cell%tau_e), &
+                       hot(cell, rtg(cell%bin)%delta, i, w), hot(cell, rtg(cell%bin)%Ebar, i, w))
     end subroutine heating_cooling
 
-    real(dp) function ln_capture_z1(Z)
+    real(dp) function ln_capture_z1(cell, Z)
         ! ln of pi a^2 (8kT / pi m_u)^1/2 J~(Z, z=1), log form (no underflow)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
-        ln_capture_z1 = log(c_geoA) + ds87_lnJ(Z, 1d0, c_tau_ion(1))
+        ln_capture_z1 = log(cell%geoA) + ds87_lnJ(Z, 1d0, cell%tau_ion(1))
     end function ln_capture_z1
 
     ! ------------------------------------------------------------- cell state
-    subroutine set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+    subroutine set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         implicit none
+        type(CellState), intent(out) :: cell
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg
-        c_bin = ii
-        c_cN(1:rtg(ii)%nG) = c_red*Np(1:rtg(ii)%nG)
+        cell%bin = ii
+        cell%cN(1:rtg(ii)%nG) = c_red*Np(1:rtg(ii)%nG)
         gm_used = 0
         gm_next = 1
-        c_ne = ne
-        c_G0 = G0_bg
-        c_nion = (/ n_Hp, n_Hep, n_Hepp /)
-        c_zion = (/ 1d0, 1d0, 2d0 /)
-        call set_cell_T(T)
+        cell%ne = ne
+        cell%G0 = G0_bg
+        cell%nion = (/ n_Hp, n_Hep, n_Hepp /)
+        cell%zion = (/ 1d0, 1d0, 2d0 /)
+        call set_cell_T(cell, T)
     end subroutine set_cell
 
-    subroutine set_cell_T(T)
+    subroutine set_cell_T(cell, T)
         ! the temperature-dependent part of the cell state
         implicit none
+        type(CellState), intent(inout) :: cell
         real(dp), intent(in) :: T
         integer :: k
-        c_T = T
-        c_ve = sqrt(8d0*RTG_KB*T/(RTG_PI*RTG_ME))
-        c_vion(1) = sqrt(8d0*RTG_KB*T/(RTG_PI*M_HION))
-        c_vion(2) = sqrt(8d0*RTG_KB*T/(RTG_PI*M_HEION))
-        c_vion(3) = c_vion(2)
-        c_tau_e = ds87_tau(-1d0)
+        cell%T = T
+        cell%ve = sqrt(8d0*RTG_KB*T/(RTG_PI*RTG_ME))
+        cell%vion(1) = sqrt(8d0*RTG_KB*T/(RTG_PI*M_HION))
+        cell%vion(2) = sqrt(8d0*RTG_KB*T/(RTG_PI*M_HEION))
+        cell%vion(3) = cell%vion(2)
+        cell%tau_e = ds87_tau(cell, -1d0)
         do k = 1, 3
-            c_tau_ion(k) = ds87_tau(c_zion(k))
+            cell%tau_ion(k) = ds87_tau(cell, cell%zion(k))
         end do
-        c_arr_e = RTG_PI*rtg(c_bin)%a*rtg(c_bin)%a*c_ne*c_ve
+        cell%arr_e = RTG_PI*rtg(cell%bin)%a*rtg(cell%bin)%a*cell%ne*cell%ve
         do k = 1, 3
-            c_arr_ion(k) = RTG_PI*rtg(c_bin)%a*rtg(c_bin)%a*c_nion(k)*c_vion(k)
+            cell%arr_ion(k) = RTG_PI*rtg(cell%bin)%a*rtg(cell%bin)%a*cell%nion(k)*cell%vion(k)
         end do
-        c_geoA = RTG_PI*rtg(c_bin)%a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RTG_MU))
-        call hot_index(T)
+        cell%geoA = RTG_PI*rtg(cell%bin)%a**2*sqrt(8d0*RTG_KB*cell%T/(RTG_PI*RTG_MU))
+        call hot_index(cell, T)
     end subroutine set_cell_T
 
     ! ---------------------------------------------------------------- root
-    real(dp) function illinois(a0, b0, fa0, fb0)
+    real(dp) function illinois(cell, a0, b0, fa0, fb0)
         ! root of gfun in [a0, b0], gfun(a0) > 0 > gfun(b0)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: a0, b0, fa0, fb0
         real(dp) :: a_, b_, fa, fb, fz, Zs
         integer :: side, it
@@ -1270,7 +1302,7 @@ module dust_charging
         do it = 1, 200
             Zs = (a_*fb - b_*fa)/(fb - fa)
             if (abs(b_ - a_) < 1d-7*max(1d0, abs(Zs))) exit
-            fz = gfun(Zs)
+            fz = gfun(cell, Zs)
             if (fz == 0d0) exit
             if (fz*fb > 0d0) then
                 b_ = Zs; fb = fz
@@ -1285,12 +1317,13 @@ module dust_charging
         illinois = Zs
     end function illinois
 
-    real(dp) function root_from_guess(Zg, Zlo, Zhi)
+    real(dp) function root_from_guess(cell, Zg, Zlo, Zhi)
         ! bracket the root by steps 1, 2, 4, ... from Zg, then Illinois
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Zg, Zlo, Zhi
         real(dp) :: a_, b_, fa, fb, fg, step
-        fg = gfun(Zg)
+        fg = gfun(cell, Zg)
         root_from_guess = Zg
         if (fg == 0d0) return
         step = 1d0
@@ -1298,13 +1331,13 @@ module dust_charging
             a_ = Zg; fa = fg
             do
                 b_ = min(a_ + step, Zhi)
-                fb = gfun(b_)
+                fb = gfun(cell, b_)
                 if (fb == 0d0) then
                     root_from_guess = b_
                     return
                 end if
                 if (fb < 0d0) then
-                    root_from_guess = illinois(a_, b_, fa, fb)
+                    root_from_guess = illinois(cell, a_, b_, fa, fb)
                     return
                 end if
                 if (b_ == Zhi) then
@@ -1318,13 +1351,13 @@ module dust_charging
         b_ = Zg; fb = fg                ! root below Zg
         do
             a_ = max(b_ - step, Zlo)
-            fa = gfun(a_)
+            fa = gfun(cell, a_)
             if (fa == 0d0) then
                 root_from_guess = a_
                 return
             end if
             if (fa > 0d0) then
-                root_from_guess = illinois(a_, b_, fa, fb)
+                root_from_guess = illinois(cell, a_, b_, fa, fb)
                 return
             end if
             if (a_ == Zlo) then
@@ -1336,35 +1369,37 @@ module dust_charging
         end do
     end function root_from_guess
 
-    subroutine slope_at(Zs, sigma, pair)
+    subroutine slope_at(cell, Zs, sigma, pair)
         ! sigma from g' by central difference at Z* +- 1/2, and that pair (z-, z+, g-, g+)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Zs
         real(dp), intent(out) :: sigma, pair(4)
         real(dp) :: sl
-        pair(1) = max(Zs - 0.5d0, rtg(c_bin)%Zmin)
-        pair(2) = min(Zs + 0.5d0, rtg(c_bin)%Zmax - 1d0)
-        pair(3) = gfun(pair(1))
-        pair(4) = gfun(pair(2))
+        pair(1) = max(Zs - 0.5d0, rtg(cell%bin)%Zmin)
+        pair(2) = min(Zs + 0.5d0, rtg(cell%bin)%Zmax - 1d0)
+        pair(3) = gfun(cell, pair(1))
+        pair(4) = gfun(cell, pair(2))
         sl = (pair(4) - pair(3)) / (pair(2) - pair(1))
         sigma = 0d0
         if (sl < 0d0) sigma = sqrt(-1d0/sl)
     end subroutine slope_at
 
-    subroutine chord_sigma(Zs, sigma, chord, have)
+    subroutine chord_sigma(cell, Zs, sigma, chord, have)
         ! pyCALIMA GroupChargingTable._chord: sigma from the chord of g over the integers
         ! floor(Z*) - k + 1 .. floor(Z*) + k, k = nint(sigma), re-centred until k is stable
         ! (sigma in: the starting width); the secant at Z* +- 1/2 is off by up to ~3x next
         ! to a kink of g. have: a chord with g decreasing was found (chord = lo, hi, g(lo), g(hi))
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Zs
         real(dp), intent(inout) :: sigma
         real(dp), intent(out) :: chord(4)
         logical, intent(out) :: have
         real(dp) :: Zlo, Zhi, lo, hi, glo, ghi, sl
         integer :: it, k, kn
-        Zlo = rtg(c_bin)%Zmin
-        Zhi = rtg(c_bin)%Zmax - 1d0
+        Zlo = rtg(cell%bin)%Zmin
+        Zhi = rtg(cell%bin)%Zmax - 1d0
         have = .false.
         chord = 0d0
         k = -1
@@ -1375,8 +1410,8 @@ module dust_charging
             lo = max(dble(floor(Zs)) - dble(k) + 1d0, Zlo)
             hi = min(dble(floor(Zs)) + dble(k), Zhi)
             if (hi <= lo) exit
-            glo = gfun(lo)
-            ghi = gfun(hi)
+            glo = gfun(cell, lo)
+            ghi = gfun(cell, hi)
             sl = (ghi - glo)/(hi - lo)
             if (sl >= 0d0) exit
             sigma = sqrt(-1d0/sl)
@@ -1385,21 +1420,22 @@ module dust_charging
         end do
     end subroutine chord_sigma
 
-    subroutine find_root(Z_guess, st, Zs, sigma, pair)
+    subroutine find_root(cell, Z_guess, st, Zs, sigma, pair)
         ! pyCALIMA GroupChargingTable._root
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z_guess
         type(RTGState), intent(in) :: st
         real(dp), intent(out) :: Zs, sigma, pair(4)
         real(dp) :: Zlo, Zhi, zm, zp, gm, gpl, sl, gs, zg, glo, ghi
-        Zlo = rtg(c_bin)%Zmin
-        Zhi = rtg(c_bin)%Zmax - 1d0
+        Zlo = rtg(cell%bin)%Zmin
+        Zhi = rtg(cell%bin)%Zmax - 1d0
         zg = Z_guess
         if (st%valid) then
             zm = max(st%Zstar - 0.5d0, Zlo)
             zp = min(st%Zstar + 0.5d0, Zhi)
-            gm = gfun(zm)
-            gpl = gfun(zp)
+            gm = gfun(cell, zm)
+            gpl = gfun(cell, zp)
             sl = (gpl - gm) / (zp - zm)
             if (sl < 0d0) then
                 Zs = zm - gm/sl
@@ -1409,13 +1445,13 @@ module dust_charging
                         pair = (/ zm, zp, gm, gpl /)
                         return
                     end if
-                    gs = gfun(Zs)
-                    if (abs(gs/sl) > 1d-3 .and. gm > 0d0 .and. 0d0 > gpl) Zs = illinois(zm, zp, gm, gpl)
+                    gs = gfun(cell, Zs)
+                    if (abs(gs/sl) > 1d-3 .and. gm > 0d0 .and. 0d0 > gpl) Zs = illinois(cell, zm, zp, gm, gpl)
                     if (abs(Zs - st%Zstar) <= 0.01d0) then
                         sigma = sqrt(-1d0/sl)
                         pair = (/ zm, zp, gm, gpl /)
                     else
-                        call slope_at(Zs, sigma, pair)
+                        call slope_at(cell, Zs, sigma, pair)
                     end if
                     return
                 end if
@@ -1423,23 +1459,23 @@ module dust_charging
             end if
         end if
         if (zg > Zlo .and. zg < Zhi) then
-            Zs = root_from_guess(zg, Zlo, Zhi)
+            Zs = root_from_guess(cell, zg, Zlo, Zhi)
         else
-            glo = gfun(Zlo)
-            ghi = gfun(Zhi)
+            glo = gfun(cell, Zlo)
+            ghi = gfun(cell, Zhi)
             if (glo <= 0d0) then
                 Zs = Zlo
             else if (ghi >= 0d0) then
                 Zs = Zhi
             else
-                Zs = illinois(Zlo, Zhi, glo, ghi)
+                Zs = illinois(cell, Zlo, Zhi, glo, ghi)
             end if
         end if
-        call slope_at(Zs, sigma, pair)
+        call slope_at(cell, Zs, sigma, pair)
     end subroutine find_root
 
     ! --------------------------------------------------------- discrete P(Z)
-    subroutine eval_int(Z, want_d, rates_only)
+    subroutine eval_int(cell, Z, want_d, rates_only)
         ! rates, heating, cooling (and their d/d ln T) of integer charge Z into the window buffers.
         ! Each J~ / Lambda~ and hot-gas row is evaluated once, with its d/d ln T when want_d: the
         ! electrons, z = 1 (H+, He+ and b_A share it) and He++ (only if present); the sums keep the
@@ -1447,6 +1483,7 @@ module dust_charging
         ! only Up, Down, the photoemission and b_A (and their d/d ln T), for the charges below the
         ! window in the recombination
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Z
         logical, intent(in) :: want_d
         logical, intent(in), optional :: rates_only
@@ -1457,55 +1494,55 @@ module dust_charging
         full = .true.
         if (present(rates_only)) full = .not. rates_only
         k = nint(Z) - b_base
-        call u_of(Z, i, w)
-        call kernels(i, w, photo, heat, full)
+        call u_of(cell, Z, i, w)
+        call kernels(cell, i, w, photo, heat, full)
         j3 = 0d0
         dj3 = 0d0
         if (want_d) then
-            je = ds87_J(Z, -1d0, c_tau_e, dje)
-            if (full) lt = ds87_L(Z, c_tau_e, dld)
-            j1 = ds87_J(Z, 1d0, c_tau_ion(1), dj1)
-            if (c_arr_ion(3) /= 0d0 .or. c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3), dj3)
-            dlt = hot(rtg(c_bin)%delta, i, w, dde)
-            ptr = hot(rtg(c_bin)%Ptr, i, w, dpt)
+            je = ds87_J(Z, -1d0, cell%tau_e, dje)
+            if (full) lt = ds87_L(Z, cell%tau_e, dld)
+            j1 = ds87_J(Z, 1d0, cell%tau_ion(1), dj1)
+            if (cell%arr_ion(3) /= 0d0 .or. cell%nion(3) > 0d0) j3 = ds87_J(Z, cell%zion(3), cell%tau_ion(3), dj3)
+            dlt = hot(cell, rtg(cell%bin)%delta, i, w, dde)
+            ptr = hot(cell, rtg(cell%bin)%Ptr, i, w, dpt)
             if (full) then
-                fc = hot(rtg(c_bin)%fcool, i, w, dfc)
-                eb = hot(rtg(c_bin)%Ebar, i, w, deb)
+                fc = hot(cell, rtg(cell%bin)%fcool, i, w, dfc)
+                eb = hot(cell, rtg(cell%bin)%Ebar, i, w, deb)
             end if
         else
-            je = ds87_J(Z, -1d0, c_tau_e)
-            if (full) lt = ds87_L(Z, c_tau_e)
-            j1 = ds87_J(Z, 1d0, c_tau_ion(1))
-            if (c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3))
-            dlt = hot(rtg(c_bin)%delta, i, w)
-            ptr = hot(rtg(c_bin)%Ptr, i, w)
+            je = ds87_J(Z, -1d0, cell%tau_e)
+            if (full) lt = ds87_L(Z, cell%tau_e)
+            j1 = ds87_J(Z, 1d0, cell%tau_ion(1))
+            if (cell%nion(3) > 0d0) j3 = ds87_J(Z, cell%zion(3), cell%tau_ion(3))
+            dlt = hot(cell, rtg(cell%bin)%delta, i, w)
+            ptr = hot(cell, rtg(cell%bin)%Ptr, i, w)
             if (full) then
-                fc = hot(rtg(c_bin)%fcool, i, w)
-                eb = hot(rtg(c_bin)%Ebar, i, w)
+                fc = hot(cell, rtg(cell%bin)%fcool, i, w)
+                eb = hot(cell, rtg(cell%bin)%Ebar, i, w)
             end if
         end if
-        ion = ion_sum(j1, j3)
-        st = sticking(Z)
-        kT = RTG_KB*c_T
-        b_up(k) = rate_up(photo, ion, je, dlt)
+        ion = ion_sum(cell, j1, j3)
+        st = sticking(cell, Z)
+        kT = RTG_KB*cell%T
+        b_up(k) = rate_up(cell, photo, ion, je, dlt)
         b_ph(k) = photo                             ! the photoemission part (rtgroups_solve_bin sens)
-        b_dn(k) = rate_down(je, st, ptr)
+        b_dn(k) = rate_down(cell, je, st, ptr)
         if (full) then
             b_gam(k) = RTG_EV2ERG*heat
-            b_lam(k) = rate_lam(st, lt, fc, je, dlt, eb)
+            b_lam(k) = rate_lam(cell, st, lt, fc, je, dlt, eb)
         end if
-        b_A(k) = c_geoA*j1
+        b_A(k) = cell%geoA*j1
         if (.not. want_d) return
         ! an ion with no density adds an exact zero: skipped
         dion = 0d0
-        if (c_arr_ion(1) /= 0d0) dion = dion + c_arr_ion(1)*j1*(0.5d0 + dj1)
-        if (c_arr_ion(2) /= 0d0) dion = dion + c_arr_ion(2)*j1*(0.5d0 + dj1)
-        if (c_arr_ion(3) /= 0d0) dion = dion + c_arr_ion(3)*j3*(0.5d0 + dj3)
-        b_dup(k) = dion + c_arr_e*je*(dlt*(0.5d0 + dje) + dde)
-        b_ddn(k) = c_arr_e*je*st*((1d0 - ptr)*(0.5d0 + dje) - dpt)
+        if (cell%arr_ion(1) /= 0d0) dion = dion + cell%arr_ion(1)*j1*(0.5d0 + dj1)
+        if (cell%arr_ion(2) /= 0d0) dion = dion + cell%arr_ion(2)*j1*(0.5d0 + dj1)
+        if (cell%arr_ion(3) /= 0d0) dion = dion + cell%arr_ion(3)*j3*(0.5d0 + dj3)
+        b_dup(k) = dion + cell%arr_e*je*(dlt*(0.5d0 + dje) + dde)
+        b_ddn(k) = cell%arr_e*je*st*((1d0 - ptr)*(0.5d0 + dje) - dpt)
         if (full) then
-            b_lamd(k) = c_arr_e*(st*lt*kT*fc - je*dlt*eb*RTG_EV2ERG)
-            b_dlam(k) = c_arr_e*(st*lt*kT*(fc*(1.5d0 + dld) + dfc) &
+            b_lamd(k) = cell%arr_e*(st*lt*kT*fc - je*dlt*eb*RTG_EV2ERG)
+            b_dlam(k) = cell%arr_e*(st*lt*kT*(fc*(1.5d0 + dld) + dfc) &
                         - je*RTG_EV2ERG*(dlt*eb*(0.5d0 + dje) + dde*eb + dlt*deb))
         end if
         b_dA(k) = 0.5d0 + dj1                       ! d ln b_A / d ln T (rtgroups_solve_bin sens)
@@ -1525,12 +1562,13 @@ module dust_charging
         pmax = maxval(b_P(lo - b_base:hi - b_base))
     end subroutine window_P
 
-    subroutine window(z0, z1, want_d, lo, hi, capped)
+    subroutine window(cell, z0, z1, want_d, lo, hi, capped)
         ! pyCALIMA _window: exact P(Z) on z0..z1, grown or trimmed at each end to one charge
         ! past where P < DISCRETE_TAIL of its maximum; P normalised in b_P(lo..hi).
         ! capped: the growth stopped at MAX_DISCRETE_STATES with P still above the tail at an end
         ! that could grow, so lo..hi need not hold the peak (a warm window far from the new root)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: z0, z1
         logical, intent(in) :: want_d
         integer, intent(out) :: lo, hi
@@ -1541,11 +1579,11 @@ module dust_charging
         if (present(capped)) capped = .false.
         lo = nint(z0)
         hi = nint(z1)
-        zl = nint(rtg(c_bin)%Zmin)
-        zh = nint(rtg(c_bin)%Zmax)
+        zl = nint(rtg(cell%bin)%Zmin)
+        zh = nint(rtg(cell%bin)%Zmax)
         b_base = lo - MAX_DISCRETE_STATES - 2
         do k = lo, hi
-            call eval_int(dble(k), want_d)
+            call eval_int(cell, dble(k), want_d)
         end do
         do
             call window_P(lo, hi, pmax)
@@ -1560,11 +1598,11 @@ module dust_charging
             end if
             if (glo) then
                 lo = lo - 1
-                call eval_int(dble(lo), want_d)
+                call eval_int(cell, dble(lo), want_d)
             end if
             if (ghi) then
                 hi = hi + 1
-                call eval_int(dble(hi), want_d)
+                call eval_int(cell, dble(hi), want_d)
             end if
         end do
         k0 = hi
@@ -1623,9 +1661,10 @@ module dust_charging
         chebval = c0 + c1*x
     end function chebval
 
-    subroutine cheb_coef(fkind, a, b, n, c)
+    subroutine cheb_coef(cell, fkind, a, b, n, c)
         ! Chebyshev coefficients of the degree n-1 interpolant on [a, b] of g (fkind 1) or ln A (2)
         implicit none
+        type(CellState), intent(in) :: cell
         integer, intent(in) :: fkind, n
         real(dp), intent(in) :: a, b
         real(dp), intent(out) :: c(n)
@@ -1634,9 +1673,9 @@ module dust_charging
         do k = 0, n - 1
             x = cos(RTG_PI*(dble(k) + 0.5d0)/dble(n))
             if (fkind == 1) then
-                y(k+1) = gfun(0.5d0*(a + b) + 0.5d0*(b - a)*x)
+                y(k+1) = gfun(cell, 0.5d0*(a + b) + 0.5d0*(b - a)*x)
             else
-                y(k+1) = ln_capture_z1(0.5d0*(a + b) + 0.5d0*(b - a)*x)
+                y(k+1) = ln_capture_z1(cell, 0.5d0*(a + b) + 0.5d0*(b - a)*x)
             end if
         end do
         do j = 0, n - 1
@@ -1649,9 +1688,10 @@ module dust_charging
         c(1) = c(1)*0.5d0
     end subroutine cheb_coef
 
-    subroutine add_piece(p, q)
+    subroutine add_piece(cell, p, q)
         ! a piece of g on the integers [p, q]: exact, or Chebyshev fits of g and ln A
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: p, q
         real(dp) :: ints, cw(6), tmp(7), cd(5)
         integer :: nseg, nA, j, n1, k
@@ -1663,16 +1703,16 @@ module dust_charging
         if ((-dble(RECOMB_KINK) <= p .and. q <= dble(RECOMB_KINK)) .or. ints <= dble(nseg)) then
             pc_kind(np_) = 1
             do k = 0, nint(ints) - 1
-                pc_vals(k+1, np_) = gfun(p + dble(k))
+                pc_vals(k+1, np_) = gfun(cell, p + dble(k))
             end do
             return
         end if
         pc_kind(np_) = 2
         pc_nc(np_) = nseg
-        call cheb_coef(1, p, q, nseg, pc_c(1:nseg, np_))
+        call cheb_coef(cell, 1, p, q, nseg, pc_c(1:nseg, np_))
         nA = min(RECOMB_FIT_NA, nseg)
         pc_ncA(np_) = nA
-        call cheb_coef(2, p, q, nA, pc_cA(1:nA, np_))
+        call cheb_coef(cell, 2, p, q, nA, pc_cA(1:nA, np_))
         ! chebint (lbnd 0, k 0)
         cw(1:nseg) = pc_c(1:nseg, np_)
         tmp(1) = cw(1)*0d0
@@ -1742,9 +1782,10 @@ module dust_charging
         piece_gsum = Gb - Ga - (piece_dg(k, b) - piece_dg(k, a))/24d0
     end function piece_gsum
 
-    subroutine cover(a, b, brk, nbrk)
+    subroutine cover(cell, a, b, brk, nbrk)
         ! pieces for the integers [a, b): cuts at the break charges and at -K, K+1
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: a, b, brk(:)
         integer, intent(in) :: nbrk
         real(dp) :: cuts(MAXB + 4)
@@ -1758,7 +1799,7 @@ module dust_charging
         if (a < -dble(RECOMB_KINK) .and. -dble(RECOMB_KINK) < b) call add_cut(-dble(RECOMB_KINK))
         if (a < dble(RECOMB_KINK + 1) .and. dble(RECOMB_KINK + 1) < b) call add_cut(dble(RECOMB_KINK + 1))
         do j = 1, nc - 1
-            call add_piece(cuts(j), cuts(j+1) - 1d0)
+            call add_piece(cell, cuts(j), cuts(j+1) - 1d0)
         end do
     contains
         subroutine add_cut(z)
@@ -1781,32 +1822,33 @@ module dust_charging
         end subroutine add_cut
     end subroutine cover
 
-    subroutine break_charges(brk, nbrk)
+    subroutine break_charges(cell, brk, nbrk)
         ! pyCALIMA _break_charges: kinks of g in this cell, sorted, without duplicates
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(out) :: brk(MAXB)
         integer, intent(out) :: nbrk
         integer :: g, k, j, key, nU, j0
         real(dp) :: rmax, zc, frac, x
         nbrk = 0
-        do g = 1, rtg(c_bin)%nG
-            if (c_cN(g) > 0d0) then
-                if (rtg(c_bin)%edge0(g) /= NONE) call add_brk(rtg(c_bin)%edge0(g))
-                if (rtg(c_bin)%edge1(g) /= NONE) call add_brk(rtg(c_bin)%edge1(g))
+        do g = 1, rtg(cell%bin)%nG
+            if (cell%cN(g) > 0d0) then
+                if (rtg(cell%bin)%edge0(g) /= NONE) call add_brk(rtg(cell%bin)%edge0(g))
+                if (rtg(cell%bin)%edge1(g) /= NONE) call add_brk(rtg(cell%bin)%edge1(g))
             end if
         end do
-        if (c_G0 > 0d0) then
+        if (cell%G0 > 0d0) then
             do k = 1, 4
-                if (rtg(c_bin)%edgebg(k) /= NONE) call add_brk(rtg(c_bin)%edgebg(k))
+                if (rtg(cell%bin)%edgebg(k) /= NONE) call add_brk(rtg(cell%bin)%edgebg(k))
             end do
         end if
-        nU = rtg(c_bin)%nU
-        j0 = rtg(c_bin)%jpos
+        nU = rtg(cell%bin)%nU
+        j0 = rtg(cell%bin)%jpos
         do key = 1, 2
             if (key == 1) then
-                f_row(j0:nU) = (1d0 - c_vh)*rtg(c_bin)%delta(j0:nU,c_kh) + c_vh*rtg(c_bin)%delta(j0:nU,c_kh+1)
+                f_row(j0:nU) = (1d0 - cell%vh)*rtg(cell%bin)%delta(j0:nU,cell%kh) + cell%vh*rtg(cell%bin)%delta(j0:nU,cell%kh+1)
             else
-                f_row(j0:nU) = (1d0 - c_vh)*rtg(c_bin)%Ptr(j0:nU,c_kh) + c_vh*rtg(c_bin)%Ptr(j0:nU,c_kh+1)
+                f_row(j0:nU) = (1d0 - cell%vh)*rtg(cell%bin)%Ptr(j0:nU,cell%kh) + cell%vh*rtg(cell%bin)%Ptr(j0:nU,cell%kh+1)
             end if
             if (j0 > nU) cycle
             rmax = maxval(f_row(j0:nU))
@@ -1815,10 +1857,10 @@ module dust_charging
                 frac = merge(1d-4, 0.5d0, k == 1)
                 do j = j0, nU
                     if (f_row(j) > frac*rmax) then
-                        x = rtg(c_bin)%U(j)*rtg(c_bin)%a/RTG_E2EVCM
+                        x = rtg(cell%bin)%U(j)*rtg(cell%bin)%a/RTG_E2EVCM
                         zc = anint(x)
                         if (abs(x - aint(x)) == 0.5d0) zc = 2d0*anint(0.5d0*x)    ! numpy round: half to even
-                        if (rtg(c_bin)%Zmin < zc .and. zc < rtg(c_bin)%Zmax) call add_brk(zc)
+                        if (rtg(cell%bin)%Zmin < zc .and. zc < rtg(cell%bin)%Zmax) call add_brk(zc)
                         exit
                     end if
                 end do
@@ -1918,9 +1960,10 @@ module dust_charging
         end function seg
     end subroutine geometric_sums
 
-    subroutine recomb_fit(Zs, sigma, alpha)
+    subroutine recomb_fit(cell, Zs, sigma, alpha)
         ! pyCALIMA GroupChargingTable._recombination_fit: grain-assisted recombination of a wide P(Z)
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Zs, sigma
         real(dp), intent(out) :: alpha(RTG_NRI)
         real(dp) :: brk(MAXB), Zlo, Zhi, top, bot, newb, rmin, lnA_geo, lnA_lo, base, z, la, curv, hz, below, vm, norm
@@ -1928,25 +1971,25 @@ module dust_charging
         integer :: nbrk, it, j, k, kk, nn, nloc, i
         logical :: done, any_m
 
-        Zlo = rtg(c_bin)%Zmin
-        Zhi = rtg(c_bin)%Zmax - 1d0
+        Zlo = rtg(cell%bin)%Zmin
+        Zhi = rtg(cell%bin)%Zmax - 1d0
         top = min(Zhi, dble(floor(Zs + RECOMB_UP*sigma)))
         bot = max(Zlo, dble(ceiling(Zs - RECOMB_DOWN*sigma)))
-        call break_charges(brk, nbrk)
+        call break_charges(cell, brk, nbrk)
         np_ = 0
-        call cover(bot, top + 1d0, brk, nbrk)
+        call cover(cell, bot, top + 1d0, brk, nbrk)
         rmin = huge(1d0)
         do j = 1, RTG_NRI
-            z = rtg(c_bin)%Zth(j)
+            z = rtg(cell%bin)%Zth(j)
             if (z >= Zlo .and. z < bot .and. Zs - z < RECOMB_REACH*sigma) rmin = min(rmin, z)
         end do
         if (rmin < huge(1d0)) then
             newb = max(Zlo, dble(floor(rmin - 2d0*sigma)))
-            call cover(newb, bot, brk, nbrk)
+            call cover(cell, newb, bot, brk, nbrk)
             bot = newb
         end if
-        lnA_geo = log(RTG_PI*rtg(c_bin)%a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RTG_MU)))
-        lnA_lo = ln_capture_z1(Zlo)
+        lnA_geo = log(RTG_PI*rtg(cell%bin)%a**2*sqrt(8d0*RTG_KB*cell%T/(RTG_PI*RTG_MU)))
+        lnA_lo = ln_capture_z1(cell, Zlo)
         nn = 0
         do it = 1, 40
             call sort_pieces()
@@ -1960,7 +2003,7 @@ module dust_charging
                         nn = nn + 1
                         f_Zn(nn) = z
                         f_lnP(nn) = base + piece_gsum(k, z)
-                        f_lnA(nn) = ln_capture_z1(z)
+                        f_lnA(nn) = ln_capture_z1(cell, z)
                     end do
                 else
                     z = pc_p(k)
@@ -2004,7 +2047,7 @@ module dust_charging
                 any_m = .false.
                 vm = -huge(1d0)
                 do i = 1, nn
-                    if (f_Zn(i) <= rtg(c_bin)%Zth(j)) then
+                    if (f_Zn(i) <= rtg(cell%bin)%Zth(j)) then
                         any_m = .true.
                         vm = max(vm, f_v(i))
                     end if
@@ -2014,11 +2057,11 @@ module dust_charging
             end do
             if (done) exit
             newb = max(Zlo, dble(floor(bot - max(4d0*sigma, 20d0))))
-            call cover(newb, bot, brk, nbrk)
+            call cover(cell, newb, bot, brk, nbrk)
             bot = newb
         end do
         norm = geometric_sum(nn, f_Zn(1:nn), f_lnP(1:nn), huge(1d0))
-        call geometric_sums(nn, f_Zn(1:nn), f_v(1:nn), rtg(c_bin)%Zth, RTG_NRI, alpha)
+        call geometric_sums(nn, f_Zn(1:nn), f_v(1:nn), rtg(cell%bin)%Zth, RTG_NRI, alpha)
         do j = 1, RTG_NRI
             alpha(j) = alpha(j) / norm / sqrt(RI_MASS(j))
         end do
@@ -2053,27 +2096,28 @@ module dust_charging
         end if
     end function log_ndtr
 
-    subroutine recomb_gauss(Zs, sigma, lg)
+    subroutine recomb_gauss(cell, Zs, sigma, lg)
         ! pyCALIMA _recombination_gauss: ln of a Gaussian estimate of alpha_i, for the reuse of a fit
         implicit none
+        type(CellState), intent(in) :: cell
         real(dp), intent(in) :: Zs, sigma
         real(dp), intent(out) :: lg(RTG_NRI)
         real(dp) :: Zlo, Zhi, mu, zp, z0, sl, mup, base
         integer :: it, j
-        Zlo = rtg(c_bin)%Zmin
-        Zhi = rtg(c_bin)%Zmax - 1d0
+        Zlo = rtg(cell%bin)%Zmin
+        Zhi = rtg(cell%bin)%Zmax - 1d0
         mu = Zs + 0.5d0
         zp = mu
         do it = 1, 2
             z0 = min(max(zp, Zlo + 1d0), Zhi - 1d0)
-            sl = 0.5d0*(ln_capture_z1(z0 + 1d0) - ln_capture_z1(z0 - 1d0))
+            sl = 0.5d0*(ln_capture_z1(cell, z0 + 1d0) - ln_capture_z1(cell, z0 - 1d0))
             zp = mu + sl*sigma**2
         end do
         zp = min(max(zp, Zlo), Zhi)
         mup = mu + sl*sigma**2
-        base = ln_capture_z1(zp) + sl*(mu - zp) + 0.5d0*sl*sl*sigma*sigma
+        base = ln_capture_z1(cell, zp) + sl*(mu - zp) + 0.5d0*sl*sl*sigma*sigma
         do j = 1, RTG_NRI
-            lg(j) = base + log_ndtr((rtg(c_bin)%Zth(j) + 0.5d0 - mup)/sigma) - ri_hlnm(j)
+            lg(j) = base + log_ndtr((rtg(cell%bin)%Zth(j) + 0.5d0 - mup)/sigma) - ri_hlnm(j)
         end do
     end subroutine recomb_gauss
 
@@ -2091,6 +2135,7 @@ module dust_charging
         ! _GAUSS (the estimate, which rtgroups_refine_alpha refines where it matters); a discrete P(Z) gets
         ! the exact sum unless _NONE.
         implicit none
+        type(CellState) :: cell, cell1   ! the cell, and the cell at T(1 + dlnT) for a wide P(Z)
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, dlnT
         type(RTGState), intent(inout) :: st
@@ -2106,7 +2151,7 @@ module dust_charging
         real(dp) :: dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN, sw
 
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
-        call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+        call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         want_d = dlnT > 0d0
         r%alpha = 0d0
 
@@ -2144,7 +2189,7 @@ module dust_charging
         else
             call wide_sens()
         end if
-        call anchor_kernels(Zs, st)
+        call anchor_kernels(cell, Zs, st)
         st%anchored = .true.
         st%aT = T
         st%ane = ne
@@ -2159,7 +2204,7 @@ module dust_charging
             ! step 1: Z*, sigma (pair, chord); for a discrete P(Z), the window lo..hi and its moments in r
             got = .false.
             if (st%valid .and. st%discrete) then
-                call window(st%wlo, st%whi, want_d, lo, hi, capped)
+                call window(cell, st%wlo, st%whi, want_d, lo, hi, capped)
                 call window_moments(lo, hi, r%Zmean, r%Zsigma)
                 ! a capped window is a cut tail, narrow whatever the true width: solve from the root
                 if (r%Zsigma < SIGMA_DISCRETE .and. .not. capped) then
@@ -2182,18 +2227,18 @@ module dust_charging
             if (got) then
                 disc = .true.
             else
-                call find_root(Z_guess, st, Zs, sigma, pair)
+                call find_root(cell, Z_guess, st, Zs, sigma, pair)
                 have_chord = .false.
                 if (sigma >= SIGMA_DISCRETE) then
                     ! warm and wide: start the chord from the last width, usually one chord
                     if (st%valid .and. .not. st%discrete) sigma = st%Zsigma
-                    call chord_sigma(Zs, sigma, chord, have_chord)
+                    call chord_sigma(cell, Zs, sigma, chord, have_chord)
                 end if
                 disc = sigma < SIGMA_DISCRETE
                 if (disc) then
                     half = ceiling(3d0*max(sigma, 0.5d0))
                     Zc = floor(Zs + 0.5d0)
-                    call window(max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), want_d, lo, hi)
+                    call window(cell, max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), want_d, lo, hi)
                     call window_moments(lo, hi, r%Zmean, r%Zsigma)
                 end if
             end if
@@ -2206,8 +2251,8 @@ module dust_charging
             end do
             if (dble(lo) == rtg(ii)%Zmin) then
                 EA = electron_affinity(ii, rtg(ii)%Zmin)
-                arrive2 = RTG_PI*rtg(ii)%a**2*c_ne*c_ve
-                r%Lambda_auto = b_P(lo - b_base)*arrive2*ds87_J(rtg(ii)%Zmin, -1d0, c_tau_e)*EA*RTG_EV2ERG
+                arrive2 = RTG_PI*rtg(ii)%a**2*cell%ne*cell%ve
+                r%Lambda_auto = b_P(lo - b_base)*arrive2*ds87_J(rtg(ii)%Zmin, -1d0, cell%tau_e)*EA*RTG_EV2ERG
             end if
         end subroutine discrete_rates
         subroutine discrete_recomb()
@@ -2226,9 +2271,9 @@ module dust_charging
                 ! below each ion's sum (at least 1e-300). No floor on the geometric rate: below it a
                 ! stopped sum misses the charges that set it, and jumps wherever the stop moves
                 lnP = log(b_P(lo - b_base))
-                lnAlo = log(c_geoA*ds87_J(rtg(ii)%Zmin, 1d0, c_tau_ion(1)))
+                lnAlo = log(cell%geoA*ds87_J(rtg(ii)%Zmin, 1d0, cell%tau_ion(1)))
                 do k = lo - 1, max(lo - MAX_DISCRETE_STATES, nint(rtg(ii)%Zmin), b_base + 1), -1
-                    call eval_int(dble(k), want_d, rates_only=.true.)
+                    call eval_int(cell, dble(k), want_d, rates_only=.true.)
                     lnP = lnP - gwin(k)
                     b_P(k - b_base) = exp(lnP)
                     do j = 1, RTG_NRI
@@ -2267,7 +2312,7 @@ module dust_charging
             end do
             r%dLambda = r%dLambda + zr
             if (dble(lo) == rtg(ii)%Zmin) then
-                je = ds87_J(dble(lo), -1d0, c_tau_e, dje)
+                je = ds87_J(dble(lo), -1d0, cell%tau_e, dje)
                 r%dLambda = r%dLambda + r%Lambda_auto*(c(1) + 0.5d0 + dje)
             end if
             dvar = dvar - 2d0*r%Zmean*r%dZmean
@@ -2278,27 +2323,27 @@ module dust_charging
             ! a wide P(Z), averaged at its mean Z* + 1/2 (pyCALIMA _wide_nodes): the rates, the Gaussian alpha, d/d ln T from the root at T(1 + dlnT)
             r%Zmean = Zs + 0.5d0
             r%Zsigma = sigma
-            call heating_cooling(Zs + 0.5d0, r%Gamma, r%Lambda)
+            call heating_cooling(cell, Zs + 0.5d0, r%Gamma, r%Lambda)
             if (alpha_mode == RTG_ALPHA_GAUSS) then
-                call recomb_gauss(Zs, sigma, lg)
+                call recomb_gauss(cell, Zs, sigma, lg)
                 r%alpha = exp(lg)
             end if
             if (want_d) then
-                call set_cell_T(T*(1d0 + dlnT))
-                gm1 = gfun(pair(1))
-                gp1 = gfun(pair(2))
+                cell1 = cell
+                call set_cell_T(cell1, T*(1d0 + dlnT))
+                gm1 = gfun(cell1, pair(1))
+                gp1 = gfun(cell1, pair(2))
                 s0 = (pair(4) - pair(3))/(pair(2) - pair(1))
                 s1 = (gp1 - gm1)/(pair(2) - pair(1))
                 Zs1 = Zs + (pair(1) - gm1/s1) - (pair(1) - pair(3)/s0)
                 sig1 = sigma
                 if (s1 < 0d0) sig1 = sqrt(-1d0/s1)
                 if (have_chord) then
-                    s1 = (gfun(chord(2)) - gfun(chord(1)))/(chord(2) - chord(1))
+                    s1 = (gfun(cell1, chord(2)) - gfun(cell1, chord(1)))/(chord(2) - chord(1))
                     sig1 = sigma
                     if (s1 < 0d0) sig1 = sqrt(-1d0/s1)
                 end if
-                call heating_cooling(Zs1 + 0.5d0, gam1, lam1)
-                call set_cell_T(T)
+                call heating_cooling(cell1, Zs1 + 0.5d0, gam1, lam1)
                 h = log1p(dlnT)
                 r%dZmean = (Zs1 - Zs)/h
                 r%dZsigma = (sig1 - sigma)/h
@@ -2380,8 +2425,8 @@ module dust_charging
             call dg_dtheta(Zs, sg)
             call dg_dtheta(Zs - 0.5d0, sgm)
             call dg_dtheta(Zs + 0.5d0, sgp)
-            call heating_cooling(Zs, gl, ll)
-            call heating_cooling(Zs + 1d0, gh, lh)
+            call heating_cooling(cell, Zs, gl, ll)
+            call heating_cooling(cell, Zs + 1d0, gh, lh)
             dZS = sigma*sigma*sg(1)
             dZN = sigma*sigma*sg(2)
             r%dZmean_S = dZS
@@ -2396,7 +2441,7 @@ module dust_charging
             if (alpha_mode == RTG_ALPHA_GAUSS) then
                 st%alg = lg
             else if (alpha_mode /= RTG_ALPHA_NONE) then
-                call recomb_gauss(Zs, sigma, st%alg)
+                call recomb_gauss(cell, Zs, sigma, st%alg)
             end if
         end subroutine wide_sens
         subroutine centre(cc)
@@ -2417,9 +2462,9 @@ module dust_charging
             real(dp), intent(out) :: d(2)
             real(dp) :: ww, ph, ht, upz
             integer :: iz
-            call u_of(z, iz, ww)
-            call kernels(iz, ww, ph, ht, .false.)
-            upz = max(rate_up(ph, ion_capture(z), ds87_J(z, -1d0, c_tau_e), hot(rtg(c_bin)%delta, iz, ww)), RTG_TINY)
+            call u_of(cell, z, iz, ww)
+            call kernels(cell, iz, ww, ph, ht, .false.)
+            upz = max(rate_up(cell, ph, ion_capture(cell, z), ds87_J(z, -1d0, cell%tau_e), hot(cell, rtg(cell%bin)%delta, iz, ww)), RTG_TINY)
             d(1) = ph/upz
             d(2) = (upz - ph)/upz - 1d0
         end subroutine dg_dtheta
@@ -2434,12 +2479,13 @@ module dust_charging
         ! The fitted recombination of a wide P(Z) (r from rtgroups_solve_bin of the same cell),
         ! for the bins dust_interface finds important (pyCALIMA refine_recombination)
         implicit none
+        type(CellState) :: cell
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg
         type(RTGResult), intent(inout) :: r
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
-        call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
-        call recomb_fit(r%Zstar, r%Zsigma, r%alpha)
+        call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+        call recomb_fit(cell, r%Zstar, r%Zsigma, r%alpha)
     end subroutine rtgroups_refine_alpha
 
 
@@ -2503,6 +2549,7 @@ module dust_charging
         ! a small grain in cold gas one step of P can exceed the range of a real.
         use constants, only: pi, e2instatC, kB
         implicit none
+        type(CellState) :: cell
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Zstar, Zsigma, Zmean
         real(dp), dimension(ISRF_ND), intent(out) :: ratio
@@ -2514,10 +2561,10 @@ module dust_charging
         lo = max(nint(rtg(ii)%Zmin), min(floor(Zstar - 8d0*max(Zsigma, 0.5d0) - 10d0), -3))
         hi = min(nint(rtg(ii)%Zmax), max(ceiling(Zstar + 8d0*max(Zsigma, 0.5d0) + 10d0), 3))
         if (hi - lo + 3 > NBUF) return
-        call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
+        call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         b_base = lo - 2
         do k = lo, hi
-            call eval_int(dble(k), .false.)
+            call eval_int(cell, dble(k), .false.)
         end do
         b_P(lo - b_base) = 0d0
         do k = lo - b_base, hi - b_base - 1
@@ -2559,7 +2606,7 @@ module dust_charging
         implicit none
         integer :: ii
         integer(kind=8) :: b
-        b = alloc_bytes(isrf_q) + alloc_bytes(c_cN) + alloc_bytes(f_Zn) + alloc_bytes(f_lnP) + alloc_bytes(f_lnA) &
+        b = alloc_bytes(isrf_q) + alloc_bytes(f_Zn) + alloc_bytes(f_lnP) + alloc_bytes(f_lnA) &
           + alloc_bytes(f_v) + alloc_bytes(f_ps) + alloc_bytes(f_row)
         if (allocated(rtg)) then
             do ii = 1, size(rtg)
@@ -2595,6 +2642,7 @@ module dust_charging
         use rt_parameters, only: smallNp
 #endif
         implicit none
+        type(CellState) :: cell
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp
         real(dp), intent(out) :: Zmean
@@ -2625,10 +2673,11 @@ module dust_charging
                         hi = nint(st%whi)
                         exact = .true.
                     else if (2*ceiling(5d0*r%Zsigma) + 1 <= MAX_DISCRETE_STATES) then
-                        ! the cell state of the solve is still set
+                        ! the solve's cell state, for the window around Z*
+                        call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
                         half = ceiling(3d0*r%Zsigma)
                         Zc = floor(r%Zstar + 0.5d0)
-                        call window(max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), &
+                        call window(cell, max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), &
                                     .false., lo, hi)
                         exact = hi - lo + 1 < MAX_DISCRETE_STATES     ! else truncated: the Gaussian
                     end if
