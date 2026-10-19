@@ -217,7 +217,8 @@ module dust_init
         ! their defaults (and rt_use_hll is set later, in rt_init)
         if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06tab') then
             if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06tab; ', &
-                'the RTZ chemistry keeps its grain recombination fit'
+                'it is switched off: the RTZ chemistry keeps its grain recombination fit'
+            dust_ion_recombination = .false.   ! from here on the flag alone decides
         end if
 #if defined(RT) && !defined(RTZ)
         ! RT + CALIMA without RTZ. The radiative dust coupling is ported into
