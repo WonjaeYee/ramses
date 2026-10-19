@@ -41,9 +41,8 @@ module dust_charging
     !    g(Z* +- 1/2) re-evaluated at T(1 + dlnT) for a Gaussian;
     !  - grain-assisted recombination alpha_i of the RTG_NRI singly charged ions
     !    (case A thresholds): the exact sum on a discrete window; for a Gaussian, the
-    !    segmented Chebyshev reconstruction of ln P (recomb_fit), reused times the
-    !    change of a Gaussian estimate (recomb_gauss) while the inputs drift by less
-    !    than RECOMB_REUSE_TOL in ln and the estimate by less than RECOMB_REUSE_EPS.
+    !    segmented Chebyshev reconstruction of ln P (recomb_fit), for the bins dust_interface
+    !    finds important; else the Gaussian estimate (recomb_gauss).
     ! Warm start (RTGState, kept per cell and bin by dust_interface): a discrete
     ! window is regrown in the new cell with no root search; a Gaussian's root costs
     ! g at Z*_prev +- 1/2.
@@ -85,7 +84,7 @@ module dust_charging
     integer, parameter :: NUNI_T = 81, NUNI_NE = 97
     real(dp), parameter :: UNI_LT0 = 1d0, UNI_LT1 = 9d0, UNI_LNE0 = -8d0, UNI_LNE1 = 8d0
     ! grain-assisted recombination: pyCALIMA RECOMB_IONS and RECOMB_* (rt_group_charging)
-    integer, parameter :: RTG_NRI = 10, RTG_MAXX = 64
+    integer, parameter :: RTG_NRI = 10
     integer, parameter :: RTG_MAXG = 32          ! rtgroups_predict: at most this many groups (else no anchor)
     real(dp), parameter :: RI_MASS(RTG_NRI) = (/1.00794d0, 4.002602d0, 12.0107d0, 14.0067d0, 15.9994d0, &
                                                 20.1797d0, 24.305d0, 28.0855d0, 32.065d0, 55.845d0/)
@@ -94,7 +93,6 @@ module dust_charging
     integer, parameter :: RECOMB_FIT_N = 5, RECOMB_FIT_NA = 5, RECOMB_KINK = 2
     real(dp), parameter :: RECOMB_PER_NODE = 5d0, RECOMB_DOWN = 8d0, RECOMB_UP = 5d0, RECOMB_REACH = 8d0
     real(dp), parameter :: RECOMB_CUT = 25d0, RECOMB_EPS = 0.08d0
-    real(dp), parameter :: RECOMB_RESOLVED = 1d-6, RECOMB_REUSE_TOL = 1d-2, RECOMB_REUSE_EPS = 0.02d0
     real(dp), parameter :: RECOMB_FLOOR = log(1d-8)
     real(dp), parameter :: MATHIS_BREAKS(4) = (/5.04d0, 9.26d0, 11.2d0, 13.6d0/)
     real(dp), parameter :: NONE = -huge(1d0)
@@ -126,7 +124,6 @@ module dust_charging
         real(dp) :: dZmean = 0d0, dZsigma = 0d0, dGamma = 0d0, dLambda = 0d0   ! d/d ln T (dLambda: of Lambda + auto)
         real(dp) :: alpha(RTG_NRI) = 0d0                                         ! cm^3 s^-1 per grain
         logical :: discrete = .false.
-        integer :: nfit = 0                                                      ! 1: recombination fitted this call
         ! sens of rtgroups_solve_bin: d/d ln S (every photon density scaled) and d/d ln N (n_e and the
         ! ion densities scaled), for rtgroups_predict (dLambda: of Lambda + auto)
         real(dp) :: dZmean_S = 0d0, dZsigma_S = 0d0, dGamma_S = 0d0, dLambda_S = 0d0
@@ -139,9 +136,6 @@ module dust_charging
         logical :: valid = .false., discrete = .false.
         real(dp) :: Zstar = 0d0, wlo = 0d0, whi = 0d0        ! last root; discrete window ends
         real(dp) :: Zsigma = 0d0                             ! last width (start of the chord of a wide P(Z))
-        integer :: nx = 0                                    ! recombination fit reference (0: none):
-        real(dp) :: x(RTG_MAXX) = 0d0, alpha(RTG_NRI) = 0d0  ! ln inputs, alpha and Gaussian estimate
-        real(dp) :: lg(RTG_NRI) = 0d0
         ! rtgroups_predict anchor: the last solve of this bin in this cell with sens (inputs, the
         ! per-group photoemission kernel at its Z*, its result with the sensitivities)
         logical :: anchored = .false.
@@ -201,7 +195,7 @@ module dust_charging
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_predict, &
               rtgroups_coulomb_ratio
     public :: dust_charge_moments
-    public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
+    public :: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
               RTG_RECOMB_IMPORTANT
 
     contains
@@ -2339,32 +2333,6 @@ module dust_charging
         end do
     end subroutine recomb_gauss
 
-    subroutine recomb_inputs(x, nx)
-        ! ln of the inputs a recombination fit depends on (for its reuse test)
-        implicit none
-        real(dp), intent(out) :: x(RTG_MAXX)
-        integer, intent(out) :: nx
-        integer :: g, k
-        nx = 2
-        x(1) = log(c_T)
-        x(2) = log(c_ne)
-        do g = 1, rtg(c_bin)%nG
-            if (c_cN(g) > 0d0) then
-                nx = nx + 1
-                x(nx) = log(c_cN(g))
-            end if
-        end do
-        do k = 1, 3
-            if (c_nion(k) > 0d0) then
-                nx = nx + 1
-                x(nx) = log(c_nion(k))
-            end if
-        end do
-        if (c_G0 > 0d0) then
-            nx = nx + 1
-            x(nx) = log(c_G0)
-        end if
-    end subroutine recomb_inputs
 
     ! ---------------------------------------------------------------- solver
     subroutine rtgroups_solve_bin(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, &
@@ -2395,9 +2363,7 @@ module dust_charging
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         want_d = dlnT > 0d0
-        r%nfit = 0
         r%alpha = 0d0
-        if (.not. st%valid) st%nx = 0          ! a cold solve has no recombination fit to reuse
 
         ! 1. charge distribution: a discrete window reused from the warm state, or root + width
         got = .false.
@@ -2521,7 +2487,6 @@ module dust_charging
                 r%dZsigma = 0d0
                 if (r%Zsigma > 0d0) r%dZsigma = 0.5d0*dvar/r%Zsigma
             end if
-            st%nx = 0
             st%wlo = dble(lo)
             st%whi = dble(hi)
         else
@@ -2533,7 +2498,7 @@ module dust_charging
                 call recomb_gauss(Zs, sigma, lg)
                 r%alpha = exp(lg)
             else if (alpha_mode == RTG_ALPHA_FIT) then
-                call refine(st, r)
+                call recomb_fit(r%Zstar, r%Zsigma, r%alpha)
             end if
             if (want_d) then
                 call set_cell_T(T*(1d0 + dlnT))
@@ -2697,57 +2662,18 @@ module dust_charging
         end function gwin
     end subroutine rtgroups_solve_bin
 
-    subroutine rtgroups_refine_alpha(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, st, r)
+    subroutine rtgroups_refine_alpha(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, r)
         ! The fitted recombination of a wide P(Z) (r from rtgroups_solve_bin of the same cell),
         ! for the bins dust_interface finds important (pyCALIMA refine_recombination)
         implicit none
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg
-        type(RTGState), intent(inout) :: st
         type(RTGResult), intent(inout) :: r
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
-        call refine(st, r)
+        call recomb_fit(r%Zstar, r%Zsigma, r%alpha)
     end subroutine rtgroups_refine_alpha
 
-    subroutine refine(st, r)
-        ! reuse the warm fit, times the change of its Gaussian estimate, while the cell drifts
-        ! little; else fit (cell state set)
-        implicit none
-        type(RTGState), intent(inout) :: st
-        type(RTGResult), intent(inout) :: r
-        real(dp) :: x(RTG_MAXX), lg(RTG_NRI), est(RTG_NRI), geo
-        integer :: nx, j
-        logical :: reused, res(RTG_NRI)
-        call recomb_inputs(x, nx)
-        call recomb_gauss(r%Zstar, r%Zsigma, lg)
-        reused = .false.
-        if (st%nx == nx .and. st%nx > 0) then
-            if (maxval(abs(x(1:nx) - st%x(1:nx))) <= RECOMB_REUSE_TOL) then
-                est = st%alpha*exp(lg - st%lg)
-                do j = 1, RTG_NRI
-                    geo = RTG_PI*rtg(c_bin)%a**2*sqrt(8d0*RTG_KB*c_T/(RTG_PI*RI_MASS(j)*RTG_MU))
-                    res(j) = st%alpha(j) > RECOMB_RESOLVED*geo .or. est(j) > RECOMB_RESOLVED*geo
-                end do
-                if (.not. any(res)) then
-                    reused = .true.
-                else
-                    reused = maxval(abs(lg - st%lg), mask=res) <= RECOMB_REUSE_EPS
-                end if
-            end if
-        end if
-        if (reused) then
-            r%alpha = est
-            r%nfit = 0
-        else
-            call recomb_fit(r%Zstar, r%Zsigma, r%alpha)
-            r%nfit = 1
-            st%nx = nx
-            st%x(1:nx) = x(1:nx)
-            st%alpha = r%alpha
-            st%lg = lg
-        end if
-    end subroutine refine
 
     subroutine rtgroups_uniform_lookup(ii, G0, T, ne, Zmean, Zsigma, Gamma, Lambda)
         ! Cells without local RT photons: bilinear lookup in (log T, log ne) of
