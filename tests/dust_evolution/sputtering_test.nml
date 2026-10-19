@@ -111,7 +111,6 @@ dust_sputtering=.true.      ! Enable thermal sputtering
 sputtering_model='RM2026'
 dust_sputtering_charge=.true.
 charging_model='WDB06isrf'
-nZmix=3
 
 !----------- Efficiency parameters -----------!
 Sconstant=0.333333333d0

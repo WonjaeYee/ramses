@@ -110,7 +110,6 @@ dust_solver_type=2
 dust_accretion=.true. ! Allow gas-phase accretion
 accretion_model='LeBourlot2012'
 charging_model='WDB06isrf'
-nZmix=3 ! Number of representative charges to reconstruct grain-ion interactions
 
 !----------- Efficiency parameters -----------!
 Sconstant=0.333333333d0
