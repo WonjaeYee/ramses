@@ -48,7 +48,7 @@ module dust_charging_rtgroups
 
     private
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
-              rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_dump, rtgroups_dump_mark, rtgroups_predict, &
+              rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_predict, &
               rtgroups_coulomb_ratio
     public :: dust_charge_moments
     public :: RTGState, RTGResult, RTG_NRI, RTG_MAXX, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
@@ -148,7 +148,6 @@ module dust_charging_rtgroups
     integer, parameter :: RI_ATOMIC(RTG_NRI) = (/1, 2, 6, 7, 8, 10, 12, 14, 16, 26/)   ! atomic numbers of the RI_* ions
 
     type(RTGroupTable), allocatable, save :: rtg(:)
-    integer, save :: debug_count = 0, debug_unit = 0
     real(dp), save :: ri_hlnm(RTG_NRI) = 0d0          ! 0.5 ln(RI_MASS), set at init
 
     ! per-call cell state (set_cell); ions 1 (H+) and 2 (He+) both have z = 1, hence the
@@ -2264,64 +2263,6 @@ module dust_charging_rtgroups
             ratio(m) = (Dx(m) / s) / Dg(ISRF_DCHARGE(m))
         end do
     end subroutine rtgroups_coulomb_ratio
-
-    ! -------------------------------------------------------------- debug dump
-    subroutine open_dump()
-        use amr_commons, only: myid
-        implicit none
-        character(len=32) :: fname
-        if (debug_unit /= 0) return
-        debug_unit = 931
-        write(fname, '(A,I5.5,A)') 'dust_rtgroups_debug_', myid, '.dat'
-        open(debug_unit, file=trim(fname), status='replace')
-        write(debug_unit, '(A)') '# WDB06rt calls, format 5. One line per call: icell bin path T ne n_Hp n_Hep n_Hepp '// &
-            'm_Hion m_Heion c_red G0_bg nG Np(nG) egy(nG) Z_guess | warm: valid discrete Zstar wlo whi Zsigma nx x(nx) alpha(10) lg(10) | '// &
-            'Zmean Zsigma Gamma Lambda Lambda_auto Zstar discrete dZmean dZsigma dGamma dLambda nfit refined alpha(10). '// &
-            'path 0: full solve, 1: uniform-G0 table, 2: from the d/dlnT of the last solve (outputs at T, ln(T/T_last) in Zstar)'
-        write(debug_unit, '(A)') '# lines "R" mark a reset of the warm states (new cell vector)'
-    end subroutine open_dump
-
-    subroutine rtgroups_dump_mark()
-        ! a reset of the warm states, for the replay
-        implicit none
-        if (debug_count >= dust_rtgroups_debug_max) return
-        call open_dump()
-        write(debug_unit, '(A)') 'R'
-    end subroutine rtgroups_dump_mark
-
-    subroutine rtgroups_dump(icell, ii, path, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, st0, r, &
-                             refined, ndumped)
-        ! Inputs, warm state used and outputs of one call, for the replay with the pyCALIMA
-        ! reference solver (diagnostics/dust_charge/compare_ramses_rtgroups.py).
-        implicit none
-        integer, intent(in) :: icell, ii, path
-        real(dp), intent(in) :: Np(:), egy(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess
-        type(RTGState), intent(in) :: st0
-        type(RTGResult), intent(in) :: r
-        logical, intent(in) :: refined           ! the recombination fit was done or reused (else: Gaussian estimate)
-        integer, intent(out) :: ndumped
-        integer :: nG
-        character(len=*), parameter :: F = '(1X,ES23.15E3)'
-        ndumped = debug_count
-        if (debug_count >= dust_rtgroups_debug_max) return
-        call open_dump()
-        nG = size(Np)
-        write(debug_unit, '(I6,1X,I3,1X,I1)', advance='no') icell, ii, path
-        write(debug_unit, '(9(1X,ES23.15E3))', advance='no') T, ne, n_Hp, n_Hep, n_Hepp, M_HION, M_HEION, c_red, G0_bg
-        write(debug_unit, '(1X,I3)', advance='no') nG
-        write(debug_unit, '(*(1X,ES23.15E3))', advance='no') Np(1:nG), egy(1:nG), max(Z_guess, -1d300)
-        write(debug_unit, '(1X,L1,1X,L1,4(1X,ES23.15E3),1X,I3)', advance='no') st0%valid, st0%discrete, &
-            st0%Zstar, st0%wlo, st0%whi, st0%Zsigma, st0%nx
-        if (st0%nx > 0) write(debug_unit, '(*(1X,ES23.15E3))', advance='no') st0%x(1:st0%nx)
-        write(debug_unit, '(*(1X,ES23.15E3))', advance='no') st0%alpha, st0%lg
-        write(debug_unit, '(6(1X,ES23.15E3),1X,L1,4(1X,ES23.15E3),1X,I1,1X,L1)', advance='no') r%Zmean, r%Zsigma, &
-            r%Gamma, r%Lambda, r%Lambda_auto, r%Zstar, r%discrete, r%dZmean, r%dZsigma, r%dGamma, r%dLambda, r%nfit, refined
-        write(debug_unit, '(*(1X,ES23.15E3))', advance='no') r%alpha
-        write(debug_unit, '(8(1X,ES23.15E3))') r%dZmean_S, r%dZsigma_S, r%dGamma_S, r%dLambda_S, &
-            r%dZmean_N, r%dZsigma_N, r%dGamma_N, r%dLambda_N
-        debug_count = debug_count + 1
-        ndumped = debug_count
-    end subroutine rtgroups_dump
 
     ! ------------------------------------------------- charge outside the cooling step
     subroutine dust_charge_moments(ii, Np, egy, c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp, Zmean, Zsigma, &

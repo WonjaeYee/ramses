@@ -136,10 +136,6 @@ module dust_commons
 #endif
     character(LEN=30)::ice_model='Hollenbach2009'     ! Model for ice formation on dust grains
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
-    logical :: dust_rtgroups_debug=.false.             ! WDB06rt: dump per-call inputs/outputs (dust_rtgroups_debug_XXXXX.dat)
-    integer :: dust_rtgroups_debug_max=2000            ! WDB06rt: maximum number of dumped calls per rank
-    logical :: dust_rtgroups_verify=.false.            ! WDB06rt: dump (as dust_rtgroups_debug) and stop after dust_rtgroups_debug_max calls
-    logical :: dust_charging_timer=.false.             ! wall-clock time of the grain charging and PE heating (all models), printed at the end
     logical :: dust_ion_recombination=.false.          ! WDB06rt/WDB06isrf: grain-assisted recombination of the singly charged
                                                        ! ions from the charge balance, used by the RTZ chemistry instead of its
                                                        ! fit; off: WDB06rt skips it and WDB06isrf does not load that part
