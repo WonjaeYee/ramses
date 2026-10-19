@@ -116,6 +116,7 @@ asize=0.1d0
 sgrain=2.2d0
 amin = 3d-2
 amax = 1.0d0
-charging_model='Ibanez2019' ! no charge-dependent process here; the uniform-ISRF tables (WDB06isrf) are for the 0.01 um DustBin_01
+charging_model='WDB06isrf' ! no charge-dependent process here: the uniform-ISRF tables (WDB06rt would need tables for this run's 5-10 eV group)
+charging_table_label='DustBin_02' ! the shipped 0.1 um graphite bin's
 dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
 /
