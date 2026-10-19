@@ -1209,6 +1209,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call compute_dust_rad_rates(dust_helper,advected_G0+UV_background_G0,Tk,ne,&
                                     &dustAbs,dustSc,dustRp,&
                                     &pahAbs,pahSc,pahRp)
+         if (npah > 0) call store_pah_ion_fraction(dust_helper, icell)
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_end)
             t_dust_rad_rates = t_dust_rad_rates + (t_sub_end - t_sub_start)

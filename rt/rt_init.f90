@@ -122,8 +122,9 @@ SUBROUTINE rt_ramp_lightspeed
 !   f(n) = f_tgt * (f_start/f_tgt)**(1 - n/N)
 !
 ! which is f_start at n=0 and exactly f_tgt at n=N, i.e. c decays exponentially
-! with step number. Called once per RHD step; a no-op once converged, and a
-! no-op entirely unless rt_c_ramp_nstep > 0.
+! with step number. n is nstep_coarse, the coarse steps done (it is called once
+! per coarse step, at levelmin), so a restart continues the ramp where the run
+! stopped. A no-op once converged, and a no-op entirely unless rt_c_ramp_nstep > 0.
 !
 ! Everything downstream picks this up automatically: rt_c/rt_c2 via
 ! update_rt_c, the group cooling constants via updateRTGroups_CoolConstants
@@ -133,13 +134,12 @@ SUBROUTINE rt_ramp_lightspeed
   use rt_parameters
   use amr_commons
   implicit none
-  integer,save::nramp=0
   integer::ilevel
   real(dp)::w
 !-------------------------------------------------------------------------
   if(rt_c_ramp_nstep .le. 0) return
-  if(nramp .gt. rt_c_ramp_nstep) return              ! already converged
-  w = 1d0 - dble(min(nramp, rt_c_ramp_nstep)) / dble(rt_c_ramp_nstep)
+  if(nstep_coarse .gt. rt_c_ramp_nstep) return       ! already converged
+  w = 1d0 - dble(min(nstep_coarse, rt_c_ramp_nstep)) / dble(rt_c_ramp_nstep)
   do ilevel=1,nlevelmax
      rt_c_fraction(ilevel) = rt_c_fraction_tgt(ilevel)                       &
           * (rt_c_ramp_start/rt_c_fraction_tgt(ilevel))**w
@@ -148,9 +148,8 @@ SUBROUTINE rt_ramp_lightspeed
      rt_c_cgs(ilevel) = c_cgs * rt_c_fraction(ilevel)
   end do
   call update_rt_c
-  if(myid==1 .and. (nramp==0 .or. nramp==rt_c_ramp_nstep)) write(*,115)      &
-       nramp, rt_c_fraction(nlevelmax)
-  nramp = nramp + 1
+  if(myid==1 .and. (nstep_coarse==0 .or. nstep_coarse==rt_c_ramp_nstep)) write(*,115) &
+       nstep_coarse, rt_c_fraction(nlevelmax)
 115 format(' Light-speed ramp: RHD step ',I8,'  f_c= ',1pe12.4)
 END SUBROUTINE rt_ramp_lightspeed
 
@@ -600,8 +599,15 @@ SUBROUTINE read_rt_groups()
   ! RTZ ordering unchanged.
   call init_dust_efficiency_tables(nGroups)
   if (dust_pe_heating) call init_dust_dielectric_tables
-  ! Initialize per-group dust/PAH cross-sections after dust tables exist.
+  ! Initialize per-group dust/PAH cross-sections after dust tables exist: averaged over the
+  ! blackbody of the gas cross sections and group energies (rtz_source_temperature); plain RT
+  ! has no source temperature and takes RTZ's default. Stars replace them with their SEDs
+  ! (updateSEDgroups).
+#ifdef RTZ
+  call initialize_cross_sections_from_blackbody_dust_pah(rtz_source_temperature, groupL0, groupL1, nGroups)
+#else
   call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
+#endif
   call init_dust_mean_cross_sections(sed_dir)
   ! Local-field grain charging tables (charging_model='WDB06rt')
   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)
