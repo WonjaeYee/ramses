@@ -6,7 +6,6 @@ module dust_charging
 
     implicit none
     
-    integer,parameter :: n_charge_threshold = 10
 
     ! charging_model = 'WDB06isrf': WDB06 charging under a uniform ISRF, per dust bin, from
     ! pyCALIMA export_dust_charging_isrf (dust_charging_isrf_DustBin_XX.dat in dust_tables_dir).
@@ -61,7 +60,7 @@ module dust_charging
     ! photons use a (log T, log ne) table of the full solve at the run's G0 (ions:
     ! H+ with n = ne), built once at first use and again only if G0 changes.
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the (reused) fit
-    integer, parameter :: RTG_ALPHA_NONE = 0, RTG_ALPHA_GAUSS = 1, RTG_ALPHA_FIT = 2
+    integer, parameter :: RTG_ALPHA_NONE = 0, RTG_ALPHA_GAUSS = 1
     ! dust_interface fits only the wide bins with more than this share of an ion's grain recombination
     real(dp), parameter :: RTG_RECOMB_IMPORTANT = 0.1d0
     ! rtgroups_predict guards: identical to pyCALIMA rt_group_charging PREDICT_WIDE_ZERO, _WIDE_DZ
@@ -188,14 +187,13 @@ module dust_charging
 
     private
     public :: compute_mean_dust_charge, compute_dust_charge_sigma,&
-              compute_dust_charge_dist, compute_Coulomb_focusing,&
               compute_Coulomb_focusing_ions,&
               init_dust_charging_isrf, isrf_lookup, ISRF_ND, ISRF_DCHARGE
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_predict, &
               rtgroups_coulomb_ratio
     public :: dust_charge_moments
-    public :: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
+    public :: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RI_ATOMIC, &
               RTG_RECOMB_IMPORTANT
 
     contains
@@ -349,107 +347,6 @@ module dust_charging
             if (n == ISRF_NQ) alpha = exp(c(ISRF_NQ_CHARGE + 1:ISRF_NQ))
         end if
     end subroutine isrf_lookup
-
-    subroutine compute_dust_charge_dist(i_dust,Z_avg,Zsigma,Zdust,fcharge,n_charge)
-        ! ====== CHARGE DISTRIBUTION ======
-        ! This subroutine computes the dust charge distribution following interpolation
-        ! of the equilibrium distribution properties presented in Rodríguez Montero
-        ! et al. (2026), which in turn is based on the model from Weingartner &
-        ! Draine (2001)
-        use constants, only: sq2pi
-        implicit none
-        integer, intent(in) :: i_dust
-        real(dp), intent(in) :: Z_avg,Zsigma
-        real(dp), dimension(:), intent(inout) :: Zdust
-        real(dp), dimension(:), intent(inout) :: fcharge
-        integer, intent(out) :: n_charge
-
-        integer :: j,kk,isize
-        integer :: Zmin,Zmax
-        real(dp) :: inv_Zsigma, inv_sqrt2pi_Zsigma, factor
-
-        ! 1. Compute approx. min and max of distribution by considering the points
-        ! 3 sigma away from the mean (also, charge should be the nearest integer value)
-        Zmin = nint(Z_avg - 3 * Zsigma)
-        Zmax = nint(Z_avg + 3 * Zsigma)
-        n_charge = Zmax - Zmin + 1
-
-        if (n_charge > size(Zdust)) then
-            n_charge = size(Zdust)
-            Zmin = nint(Z_avg - dble(n_charge)/2d0)
-            Zmax = Zmin + n_charge - 1
-        end if
-
-        ! 2. And now compute charge values and the Gaussian distribution
-        inv_Zsigma = 1d0 / Zsigma
-        inv_sqrt2pi_Zsigma = 1d0 / (Zsigma * sq2pi)
-        factor = -0.5d0 * (inv_Zsigma * inv_Zsigma)
-        do j=1,n_charge
-            Zdust(j) = dble(Zmin + j - 1)
-            fcharge(j) = inv_sqrt2pi_Zsigma * exp(factor * (Zdust(j) - Z_avg)**2)
-        end do
-        ! 3. Renormalise distribution to make sure it adds to 1
-        if (n_charge > 0) then
-            fcharge(1:n_charge) = fcharge(1:n_charge) / sum(fcharge(1:n_charge))
-        end if
-    end subroutine compute_dust_charge_dist
-
-    subroutine compute_Coulomb_focusing(i_dust,Tgas,Zmean,Zsigma,Zion,D_coulomb)
-        ! ====== Coulomb enhancement factor =====
-        ! This is based on Eq. 6-7 in Weingartner & Draine (1999) which allows
-        ! the computation of the Coulomb enhancement factor from the charge
-        ! distribution (https://iopscience.iop.org/article/10.1086/307197)
-        use constants, only: pi,e2instatC,kB
-        implicit none
-        ! Input/Output variables
-        integer, intent(in) :: i_dust
-        real(dp), intent(in) :: Tgas,Zmean,Zsigma,Zion
-        real(dp), intent(inout) :: D_coulomb
-
-        ! Local variables
-        integer :: Zmin,Zmax,n_charge
-        real(dp) :: alpha, D_debug
-        real(dp),dimension(1:n_charge_threshold) :: Zvals,fcharge
-
-        ! 1. Determine the charge range within +/- 3 sigma
-        Zmin = nint(Zmean - 3d0 * Zsigma)
-        Zmax = nint(Zmean + 3d0 * Zsigma)
-        n_charge = Zmax - Zmin + 1
-
-        ! 2. Determine what method to use depending on the width and charge range
-        ! if (.true.) then
-        if (abs(Zmean/Zsigma) > 3d0 .and. n_charge > n_charge_threshold) then
-            ! A. This uses a simple Taylor expansion around the mean charge
-            alpha = (Zion * e2instatC) / (kB * Tgas * dustbins_props(i_dust)%asize_cm)
-            if (Zmean * Zion > 0d0) then
-                ! Repulsive Regime: Second order expansion of exp(-alpha * Z)
-                ! Expands around mu: exp(-alpha*mu) * (1 + 0.5 * alpha^2 * sigma^2)
-                D_coulomb = safe_exp(-alpha * Zmean) * (1d0 + 0.5d0 * alpha**2d0 * Zsigma**2d0)
-            else
-                ! Attractive Regime: Linear expansion of (1 - alpha * Z)
-                ! Expansion around mu is exact (second derivative is 0)
-                D_coulomb = 1d0 - alpha * Zmean
-            end if
-            ! call compute_dust_charge_dist(i_dust,Zmean,Zsigma,Zvals,fcharge,n_charge)
-            ! call compute_Coulomb_focusing_dist(Tgas,dustbins_props(i_dust)%asize_cm,fcharge,Zvals,n_charge,Zion,D_debug)
-            ! if (abs(D_coulomb-D_debug)/D_debug > 0.5d0 .and. D_debug >1d-10) then
-            !     print*, 'WARNING: Error in taylor expansion'
-            !     print*, 'i_dust: ',i_dust,' Zmean: ',Zmean,' Zsigma: ',Zsigma,' Zion: ',Zion,' G0: ',dust_helper%local_G0,' Tgas: ',Tgas,' ne: ',dust_helper%local_ne
-            !     print*, 'D_coulomb: ',D_coulomb,' D_debug: ',D_debug, ' alpha: ',alpha
-            !     print*,'Zion,e2instatC,kB,Tgas,dustbins_props(i_dust)%asize_cm: ',Zion,e2instatC,kB,Tgas,dustbins_props(i_dust)%asize_cm
-            !     call clean_stop
-            ! end if
-        else
-            ! B. In the case of a small distribution, it's more accurate
-            ! to compute the Coulomb focusing factor directly from the
-            ! charge distribution assumming a Gaussian distribution
-            call compute_dust_charge_dist(i_dust,Zmean,Zsigma,Zvals,fcharge,n_charge)
-            call compute_Coulomb_focusing_dist(Tgas,dustbins_props(i_dust)%asize_cm,fcharge,Zvals,n_charge,Zion,D_coulomb)
-        end if
-        
-        ! 3. Make sure that the Coulomb factor does not become too small
-        D_coulomb = max(D_coulomb, 1d-5)
-    end subroutine compute_Coulomb_focusing
 
     subroutine compute_Coulomb_focusing_ions(i_dust,Tgas,Zmean,Zsigma,jmax,D_coulomb)
         ! Coulomb focusing factors (Weingartner & Draine 1999, eqs. 6-7) of bin i_dust for the
@@ -648,131 +545,6 @@ module dust_charging
             end if
         end do
     end subroutine compute_Coulomb_focusing_ions
-
-    subroutine compute_Coulomb_focusing_dist(Tgas,agrain,fcharge,Zdust,n_charge,Zion,D_Coulomb)
-        ! ====== Coulomb enhancement factor =====
-        ! This is based on Eq. 6-7 in Weingartner & Draine (1999) which allows
-        ! the computation of the Coulomb enhancement factor from the charge
-        ! distribution (https://iopscience.iop.org/article/10.1086/307197)
-        ! Updated to safely support arbitrary array spacing (Delta Z != 1)
-        use cooling_module, only: kB
-        use constants, only: pi,e2instatC
-        implicit none
-        
-        integer, intent(in) :: n_charge
-        real(dp), dimension(n_charge), intent(in) :: fcharge
-        real(dp), dimension(n_charge), intent(in) :: Zdust
-        real(dp), intent(in) :: Zion,agrain,Tgas
-        real(dp), intent(inout) :: D_Coulomb
-
-        integer :: j, j_zero, j_start, j_end
-        integer :: j_act_lo, j_act_hi
-        real(dp) :: Zg, Bfact_zero, inv_kT_a, C
-        real(dp) :: min_dist, current_dist
-        real(dp), parameter :: f_thresh = 1.0d-20  ! Threshold to safely bypass denormalized numbers
-
-        D_Coulomb = 0d0
-        if (Zion.ne.0d0) then
-            if (n_charge .gt. 0) then
-                ! =========================================================
-                ! ACTIVE WINDOW TRIM: Locate the living slice of the Gaussian
-                ! =========================================================
-                j_act_lo = 1
-                do while (j_act_lo <= n_charge)
-                    if (fcharge(j_act_lo) >= f_thresh) exit
-                    j_act_lo = j_act_lo + 1
-                end do
-
-                j_act_hi = n_charge
-                do while (j_act_hi >= j_act_lo)
-                    if (fcharge(j_act_hi) >= f_thresh) exit
-                    j_act_hi = j_act_hi - 1
-                end do
-
-                ! If the entire array was empty or below threshold, return default neutral focusing
-                if (j_act_lo > j_act_hi) then
-                    D_Coulomb = 1d0
-                    return
-                end if
-
-                ! =========================================================
-                ! ROBUST NEUTRAL LOCATOR: Find array index closest to zero charge
-                ! =========================================================
-                j_zero = j_act_lo
-                min_dist = abs(Zdust(j_act_lo))
-                do j = j_act_lo + 1, j_act_hi
-                    current_dist = abs(Zdust(j))
-                    if (current_dist < min_dist) then
-                        min_dist = current_dist
-                        j_zero = j
-                    end if
-                end do
-
-                inv_kT_a = e2instatC / (kB*Tgas*agrain)
-                C = Zion * inv_kT_a
-                Bfact_zero = 1d0 + sqrt(pi * Zion**2 * inv_kT_a / 2d0)
-                
-                if (Zion .gt. 0d0) then
-                    ! 1. Attractive Regime: Zg < 0 => Zg * Zion < 0
-                    j_start = j_act_lo
-                    j_end   = min(j_zero - 1, j_act_hi)
-                    if (j_start .le. j_end) then
-                        do j = j_start, j_end
-                            Zg = Zdust(j)
-                            D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
-                        end do
-                    end if
-                    
-                    ! 2. Neutral Grain: Zg == 0
-                    if (j_zero .ge. j_act_lo .and. j_zero .le. j_act_hi) then
-                        if (abs(Zdust(j_zero)) < 1d-5) then
-                            D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
-                        end if
-                    end if
-                    
-                    ! 3. Repulsive Regime: Zg > 0 => Zg * Zion > 0
-                    j_start = max(j_zero + 1, j_act_lo)
-                    j_end   = j_act_hi
-                    if (j_start .le. j_end) then
-                        do j = j_start, j_end
-                            D_Coulomb = D_Coulomb + fcharge(j) * exp(-Zdust(j) * C)
-                        end do
-                    end if
-                    
-                else
-                    ! Zion < 0
-                    ! 1. Repulsive Regime: Zg < 0 => Zg * Zion > 0
-                    j_start = j_act_lo
-                    j_end   = min(j_zero - 1, j_act_hi)
-                    if (j_start .le. j_end) then
-                        do j = j_start, j_end
-                            D_Coulomb = D_Coulomb + fcharge(j) * exp(-Zdust(j) * C)
-                        end do
-                    end if
-                    
-                    ! 2. Neutral Grain: Zg == 0
-                    if (j_zero .ge. j_act_lo .and. j_zero .le. j_act_hi) then
-                        if (abs(Zdust(j_zero)) < 1d-5) then
-                            D_Coulomb = D_Coulomb + fcharge(j_zero) * Bfact_zero
-                        end if
-                    end if
-                    
-                    ! 3. Attractive Regime: Zg > 0 => Zg * Zion < 0
-                    j_start = max(j_zero + 1, j_act_lo)
-                    j_end   = j_act_hi
-                    if (j_start .le. j_end) then
-                        do j = j_start, j_end
-                            Zg = Zdust(j)
-                            D_Coulomb = D_Coulomb + fcharge(j) * (1d0 - Zg * C)
-                        end do
-                    end if
-                end if
-            end if
-        else
-            ! Neutral impactor: No Coulomb focusing occurs
-            D_Coulomb = 1d0
-        end if
-    end subroutine compute_Coulomb_focusing_dist
 
     ! ======================================================== charging_model = 'WDB06rt'
 
@@ -2343,8 +2115,9 @@ module dust_charging
         ! G0_bg: UV background [Habing]; Z_guess: start of a cold root search,
         ! ignored outside (Zmin, Zmax-1) (-huge(1d0) for none); st: warm state of
         ! this bin in this cell (in: the previous solve, out: this one); dlnT > 0:
-        ! also d/d ln T; alpha_mode: grain-assisted recombination of a wide P(Z), RTG_ALPHA_NONE,
-        ! _GAUSS (estimate) or _FIT (rtgroups_refine_alpha); a discrete P(Z) gets the exact sum unless _NONE.
+        ! also d/d ln T; alpha_mode: grain-assisted recombination of a wide P(Z), RTG_ALPHA_NONE or
+        ! _GAUSS (the estimate, which rtgroups_refine_alpha refines where it matters); a discrete P(Z) gets
+        ! the exact sum unless _NONE.
         implicit none
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, dlnT
@@ -2497,8 +2270,6 @@ module dust_charging
             if (alpha_mode == RTG_ALPHA_GAUSS) then
                 call recomb_gauss(Zs, sigma, lg)
                 r%alpha = exp(lg)
-            else if (alpha_mode == RTG_ALPHA_FIT) then
-                call recomb_fit(r%Zstar, r%Zsigma, r%alpha)
             end if
             if (want_d) then
                 call set_cell_T(T*(1d0 + dlnT))

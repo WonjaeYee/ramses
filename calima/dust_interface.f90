@@ -234,7 +234,7 @@ contains
         ! nCO --> local carbon monoxide density (cm^-3)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_dust_charge_dist, compute_Coulomb_focusing_ions,&
+                                compute_Coulomb_focusing_ions,&
                                 isrf_lookup, ISRF_ND, ISRF_DCHARGE
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
