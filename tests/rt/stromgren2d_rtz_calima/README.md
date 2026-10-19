@@ -5,7 +5,7 @@
   heating and recombination cooling with the two charging models: the WDB06 charge
   balance under a uniform Mathis ISRF at the local G0, tabulated on (T, n_e/G0)
   (`charging_model='WDB06isrf'`, `calima/dust_charging.f90`), and the per-group charge
-  balance on the local RT photon groups (`'WDB06rt'`, `calima/dust_charging_rtgroups.f90`).
+  balance on the local RT photon groups (`'WDB06rt'`, `calima/dust_charging.f90`).
 * Keywords: RTZ, CALIMA, dust charging, photoelectric heating, Stromgren
 
 Same chemistry, dust (4 bins) and PAHs (2 bins) as the 3D

@@ -11,7 +11,7 @@ module dust_radpressure_module
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS, ntva
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO, e2instatC, kB, pi
-    use dust_charging_rtgroups, only: dust_charge_moments
+    use dust_charging, only: dust_charge_moments
     ! rt_pressBoost / rt_isoPress / rt_isIR / iIR / rt_isIRtrap / iIRtrapVar are
     ! declared unconditionally in rt_parameters (see the note at their declaration),
     ! so they need no RTZ fork. isH2_rtz, rtz_UV_background_G0 and the rank of
