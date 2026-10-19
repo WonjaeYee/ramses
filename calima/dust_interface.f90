@@ -65,6 +65,12 @@ module dust_interface
     ! with and without the cell's RT photon densities (Np present or not in compute_dust_precool)
     procedure(charge_routine), pointer, save :: charge_with_Np => null(), charge_without_Np => null()
     real(dp), dimension(0), save :: no_Np
+    ! dust_debug: the charging paths taken (0 full solve, 1 uniform table, 2 served, 4 predicted) and, for
+    ! every RTG_DBG_EVERY-th served or predicted bin, a full solve of the same inputs to compare with:
+    ! the largest |d<Z>|, |dGamma|/Gamma and |dLambda|/Lambda seen, per path (rtg_debug_check)
+    integer, parameter :: RTG_DBG_EVERY = 1000, RTG_DBG_REPORT = 100000
+    integer(kind=8), save :: rtg_dbg_n(0:4) = 0
+    real(dp), save :: rtg_dbg_max(3, 2) = 0d0      ! (dZ, dGamma, dLambda; served, predicted)
     ! .true. during the cooling solver's T(1 + 1e-5) call of an RTZ sub-step, and its T(1 - 1e-5) call
     ! with rtz_dCdT_central (rtgroups_derivative_calls)
     logical, save :: rtg_dT_calls = .false.
@@ -626,6 +632,7 @@ contains
                 rtg_Zguess(ii) = rr%Zstar
             end if
             paths(ii) = path
+            if (dust_debug) call rtg_debug_check(ii, path, rr)
             dinfo%Z_dust(ii) = rr%Zmean
             dinfo%Z_sigma(ii) = rr%Zsigma
             co%Pinj(ii) = rr%Gamma
@@ -658,6 +665,31 @@ contains
             end do
         end if
     contains
+        subroutine rtg_debug_check(ib, path, rr)
+            ! dust_debug: count the path, and check a served or predicted result against a full solve of
+            ! the same inputs, from a cold state (st and rtg_last are left as they are)
+            use amr_commons, only: myid
+            integer, intent(in) :: ib, path
+            type(RTGResult), intent(in) :: rr
+            type(RTGState) :: st0
+            type(RTGResult) :: r0
+            integer :: k
+            rtg_dbg_n(path) = rtg_dbg_n(path) + 1
+            if ((path == 2 .or. path == 4) .and. mod(rtg_dbg_n(path), int(RTG_DBG_EVERY, 8)) == 0) then
+                k = merge(1, 2, path == 2)
+                call rtgroups_solve_bin(ib, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
+                                        dinfo%G0_background, -huge(1d0), st0, 0d0, RTG_ALPHA_NONE, r0)
+                rtg_dbg_max(1, k) = max(rtg_dbg_max(1, k), abs(rr%Zmean - r0%Zmean))
+                if (r0%Gamma /= 0d0) rtg_dbg_max(2, k) = max(rtg_dbg_max(2, k), abs(rr%Gamma/r0%Gamma - 1d0))
+                if (r0%Lambda + r0%Lambda_auto /= 0d0) rtg_dbg_max(3, k) = max(rtg_dbg_max(3, k), &
+                    abs(rr%Lambda/(r0%Lambda + r0%Lambda_auto) - 1d0))
+            end if
+            if (myid == 1 .and. mod(sum(rtg_dbg_n), int(RTG_DBG_REPORT, 8)) == 0) &
+                write(*,'(A,4I12,A,3ES9.2,A,3ES9.2)') ' WDB06rt paths (full, table, served, predicted):', &
+                    rtg_dbg_n(0), rtg_dbg_n(1), rtg_dbg_n(2), rtg_dbg_n(4), '; vs full solve, served dZ dG dL', &
+                    rtg_dbg_max(:, 1), ', predicted', rtg_dbg_max(:, 2)
+        end subroutine rtg_debug_check
+
         logical function rtg_served(ib)
             ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T: in the
             ! sub-step's T(1 +- 1e-5) calls by construction, else checked

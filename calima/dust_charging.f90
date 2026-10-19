@@ -1699,6 +1699,10 @@ module dust_charging
         real(dp) :: ints, cw(6), tmp(7), cd(5)
         integer :: nseg, nA, j, n1, k
         np_ = np_ + 1
+        if (np_ > MAXP) then
+            write(*,*) 'WDB06rt recombination fit: more than MAXP = ', MAXP, ' pieces (bin ', cell%bin, ')'
+            call clean_stop
+        end if
         pc_p(np_) = p
         pc_q(np_) = q
         ints = q - p + 1d0
@@ -2509,6 +2513,9 @@ module dust_charging
         dlt = (UNI_LT1 - UNI_LT0) / dble(NUNI_T - 1)
         dlne = (UNI_LNE1 - UNI_LNE0) / dble(NUNI_NE - 1)
         if (rtg(ii)%G0_uni /= G0 .or. .not. allocated(rtg(ii)%uni)) then
+            ! a rebuild costs NUNI_T x NUNI_NE full solves: dust_debug says when the background changes
+            if (dust_debug .and. allocated(rtg(ii)%uni)) write(*,'(A,I2,A,ES10.3,A,ES10.3)') &
+                ' WDB06rt: uniform-background table of bin ', ii, ' rebuilt, G0 ', rtg(ii)%G0_uni, ' -> ', G0
             if (.not. allocated(rtg(ii)%uni)) allocate(rtg(ii)%uni(4,NUNI_T,NUNI_NE))
             allocate(Np0(rtg(ii)%nG), egy0(rtg(ii)%nG))
             Np0 = 0d0
