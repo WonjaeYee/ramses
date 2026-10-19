@@ -209,27 +209,14 @@ module rt_parameters
   ! RTZ parameters -----------------------------------------------------------------------
   logical::rtz_cooling=.false. ! RTZ Non-equilibrium cooling ------------
   integer::rtz_equilibrium_test=-1 ! RTZ EQM test ------------------
-  ! Shielding configuration (for equilibrium-test comparisons):
-  !  0 = old: fixed MW comp_Sd for H2, NO shielding applied to CO photodissociation
-  !  1 = new H2 dust only: CALIMA per-bin tau for H2, NO shielding applied to CO
-  !  2 = new CO line: CALIMA per-bin tau for H2, comp_SCO line shielding applied to CO (no dust)
-  !  3 = full (default): CALIMA per-bin tau for H2, comp_SCO * exp(-tau) applied to CO
+  ! Shielding configuration (for equilibrium-test comparisons). The dust inside the cell: MW dust
+  ! with 0, the local CALIMA dust and PAHs with 1-3 (MW without CALIMA), in the FUV band for the
+  ! grains' processes, the LW band for the H2 and the CO band for the CO:
+  !  0 = MW dust; NO shielding applied to CO photodissociation
+  !  1 = local dust; NO shielding applied to CO
+  !  2 = local dust; comp_SCO line shielding applied to CO (no dust)
+  !  3 = full (default): local dust; comp_SCO times the CO-band dust transmission applied to CO
   integer::rtz_shielding_config=3
-  ! H2 self-shielding through the RT (Nickerson, Teyssier & Rosdahl 2018): > 0 is the effective
-  ! cross-section [cm^2] with which H2 absorbs LW-group photons, and the dissociation then carries no
-  ! local H2 self-shielding factor (the shielding is the RT attenuation itself). 0 [default]: the
-  ! local comp_SH2 factor on both. Nickerson+18 calibrate 400 x 2.1e-19 = 8.4e-17.
-  real(dp)::rtz_h2_lw_sigma_abs=0d0
-  ! The same scheme with sigma_abs and sigma_d derived from line-by-line transfer through the H2 data over
-  ! the LW group (CRISpy lw_band; RAMSES_dev/h2_lines/export_sigma_abs_table.py): sigma_abs = sigma_g/G,
-  ! G = sigma_g int f_diss exp(-2 sigma_g N2) dN2 (Sternberg et al. 2014) at the cell's T, n_H, LW field
-  ! and dust LW cross-section sigma_g, so that the grey photon budget gives the H I column of the line
-  ! data. Several LW groups (same band) are the terms of an exponential-sum fit of the shielding, each with
-  ! its k_i; the source must split its LW photons by the table's w_i. Set: used instead of
-  ! rtz_h2_lw_sigma_abs. '' [default]: off.
-  character(len=256)::rtz_h2_band_file=''
-  ! With several LW groups, take the field chi for the table from the last (tail) group, N_tail/w_tail
-  logical::rtz_h2_tail_chi=.false.
   logical::rtz_include_collisional_ionization=.true.
   logical::rtz_include_photoionization=.true.
   logical::rtz_include_cosmic_ray_ionization=.true.

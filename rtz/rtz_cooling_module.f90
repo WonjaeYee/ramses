@@ -55,7 +55,7 @@ module rtz_cooling_module
    ! Mode 3 shielding test: last rtz_cool_step call values for output comparison
    real(dp), save :: eqm_dust_to_gas_mw = 1.0_dp
 #ifdef CALIMA
-   real(dp), save :: eqm_tau_dust_LW_new = 0.0_dp
+   real(dp), save :: eqm_tau_dust_LW_new = 0.0_dp, eqm_tau_dust_CO_new = 0.0_dp
 #endif
    ! The recombination and collisional-ionisation rate of each (ion, element) at the last
    ! temperature it was evaluated at: at fixed temperature (rt_Tconst) the ion update asks for the
@@ -487,10 +487,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #else
             tau_shld_new = tau_shld_old   ! non-CALIMA: old and new are identical
 #endif
-            f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i), TK_to_save(i))
+            f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i))
             ! f_CO_out = line shielding × dust continuum (isotropic), as in rtz_cool_step
+#ifdef CALIMA
+            f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i)) &
+                      * lw_transmission(eqm_tau_dust_CO_new, 0d0)
+#else
             f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i)) &
                       * lw_transmission(co_dust_to_lw * tau_shld_new, 0d0)
+#endif
             write(shld_unit, '(*(ES15.7," "))') nElement(1,i), N_H_col, N_H2_col, &
                  xion(1,3,i), xion(1,1,i), nCO(i)/nElement(1,i), TK_to_save(i), eqm_dust_to_gas_mw, &
                  tau_shld_old, tau_shld_new, f_SH2_out, &
@@ -884,7 +889,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
                              &ndust_processes,npah_processes
-      use dust_optics,  only: compute_lw_dust_optical_depth, compute_lw_tau_groups
       use dust_interface
 #endif
       implicit none
@@ -934,15 +938,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! differ by Z/Zsun (see the comment at the depletion loop below).
       real(dp):: Z_over_Zsun, dust_to_metal_over_mw
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO, sh2_loc
-      real(dp):: tau_dust_LW
-      integer :: nlw, ig_lw
-      real(dp), dimension(nGroups) :: tau_lw_g, f_lw_g
-      real(dp) :: trans_lw, trans_lw_co, trans_dust
-      logical :: h2_derived
-      integer :: ilw_g, nlw_h2, ik
-      integer, dimension(nGroups) :: lw_rank
-      real(dp) :: chi_lw, hb_sd, sg_loc
-      real(dp), dimension(nGroups) :: hb_k
+      real(dp):: tau_dust_FUV, tau_dust_LW, tau_dust_CO, sco_loc
+      real(dp) :: trans_dust
+#ifdef CALIMA
+      integer :: n_lw, n_fuv
+      logical :: in_fuv
+      real(dp) :: trans_fuv, trans_lw, trans_co, trans_g
+      real(dp) :: sum_lw, wsum_lw, mean_lw, sum_fuv, wsum_fuv, mean_fuv
+#endif
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
       real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
@@ -1101,68 +1104,37 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       TK = dT2 * mu                                        !      Temperature
       if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
 
-      ! Shielding of the Lyman-Werner band, applied to the advected field only (the UV background
-      ! stays unattenuated), over dx_SS_H2 = min(Jeans length, cell size): the RT already removes the
-      ! photons absorbed between cells. Dust: the effective attenuation cross-section (Draine &
-      ! Bertoldi 1996; per bin under CALIMA); H2: Wolcott-Green et al. (2011) at the gas temperature;
-      ! CO: Visser et al. (2009). The field is taken as isotropic here (lw_transmission with f = 0);
-      ! with LW RT groups the transmission is recomputed below with their anisotropy.
-      f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0 ; trans_dust = 1d0
-      if (isH2_rtz .or. isCO_rtz) then
+      ! Dust shielding inside the cell, of the advected field only (the UV background stays
+      ! unattenuated), over dx_SS_H2 = min(Jeans length, cell size): the RT already removes the
+      ! photons absorbed between cells. In three bands (dust_shield_tau): FUV (5.6-13.6 eV, the band of
+      ! G0) for the grains' processes (grain recombination, PE heating, dust cooling, CALIMA's field),
+      ! LW for the H2 and the CO photodissociation band, from the local dust and PAHs under CALIMA.
+      ! The field is isotropic here (lw_transmission with f = 0); with RT groups in a band the
+      ! transmission is recomputed below from the groups. Line shielding: H2, Gnedin et al. (2009);
+      ! CO, Lee et al. (1996), in N(CO) and N(H2).
+      f_shd = 1.d0 ; f_shd_CO = 1.d0
+      call dust_shield_tau(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, icell, &
+                           tau_dust_FUV, tau_dust_LW, tau_dust_CO)
 #ifdef CALIMA
-         ! rtz_shielding_config 0: MW dust; 1,2,3: per-bin CALIMA (MW when there is no LW group)
-         if (rtz_shielding_config .le. 0) then
-            tau_dust_LW = tau_dust_lw_mw(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw)
-         else
-            call compute_lw_dust_optical_depth(dust_helper%rho_dust, dx_SS_H2(icell), &
-                 dust_to_gas_mass_ratio_over_mw, nElement_dep(1), tau_dust_LW)
-         end if
-         if (rtz_equilibrium_test .eq. 3) eqm_tau_dust_LW_new = tau_dust_LW
-#else
-         tau_dust_LW = tau_dust_lw_mw(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw)
-#endif
+      if (rtz_equilibrium_test .eq. 3) then
+         eqm_tau_dust_LW_new = tau_dust_LW ; eqm_tau_dust_CO_new = tau_dust_CO
       end if
-      ! local H2 line self-shielding; none when the RT carries it (rtz_h2_lw_sigma_abs > 0)
+#endif
+      ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0
+      trans_dust = lw_transmission(tau_dust_FUV, 0d0)
+      ! local H2 line self-shielding
       sh2_loc = 1d0
-      if (isH2_rtz .and. rtz_h2_lw_sigma_abs .le. 0d0) &
-         sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK)
-      ! the same dust transmission for the grains' FUV field (grain recombination, PE heating, dust cooling)
-      trans_dust = lw_transmission(tau_dust_LW, 0d0)
-      if (isH2_rtz) f_shd = sh2_loc * trans_dust
-      ! Derived grey scheme (rtz_h2_band_file): the dissociation is sigma_d c N_LW with the line-by-line
-      ! sigma_d, and nothing local multiplies it: the H2 and the dust inside the cell are in the RT
-      ! (N_LW is the cell average). chi: the local LW photon flux in Draine units (2.06e7 cm^-2 s^-1)
-      h2_derived = .false.
-#ifdef RT
-      h2_derived = isH2_rtz .and. rt_advect .and. len_trim(rtz_h2_band_file) > 0
-      if (h2_derived) then
-         ! the LW groups in their RT order are the terms of the table's exponential sum (lw_rank)
-         ilw_g = 0; nlw_h2 = 0; lw_rank = 0; chi_lw = 0d0
-         do igroup = 1, nGroups
-            if (isLW(igroup) == 1) then
-               nlw_h2 = nlw_h2 + 1; lw_rank(igroup) = nlw_h2
-               if (ilw_g == 0) ilw_g = igroup
-               chi_lw = chi_lw + dNp(igroup) * rt_c_cgs(ilevel) / 2.06d7
-               ! several groups: the field that pumps the H2 is the incident one attenuated by dust, which
-               ! the last (tail, least H2-absorbed) group measures; the summed flux collapses once the
-               ! H2 has taken the line-core group
-               if (rtz_h2_tail_chi .and. nlw_h2 > 1) &
-                  chi_lw = dNp(igroup) * rt_c_cgs(ilevel) / (2.06d7 * h2_band_split(nlw_h2))
-            end if
-         end do
-         call h2_band_lookup(TK, nElement_dep(1), chi_lw, 1.9d-21, nlw_h2, hb_k(1:nlw_h2), hb_sd)
-         sh2_loc = hb_sd * rt_c_cgs(ilevel) / signc(ilw_g,1,3)   ! every LW group dissociates with sigma_d
-         f_shd = sh2_loc
-         trans_dust = 1d0   ! the dust inside the cell is in the RT too
-      end if
-#endif
+      if (isH2_rtz) &
+         sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
+      if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
+      sco_loc = 1d0
       if (isCO_rtz) then
          ! rtz_shielding_config 0,1: no CO shielding (f_shd_CO stays 1); 2: CO line shielding only;
-         ! 3 [default]: line shielding and dust, exp(-3.53 A_V) for CO (co_dust_to_lw)
+         ! 3 [default]: line shielding and dust in the CO band
          if (rtz_shielding_config .ge. 2) then
-            f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
-            if (rtz_shielding_config .ge. 3) &
-               f_shd_CO = f_shd_CO * lw_transmission(co_dust_to_lw * tau_dust_LW, 0d0)
+            sco_loc = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
+            f_shd_CO = sco_loc
+            if (rtz_shielding_config .ge. 3) f_shd_CO = sco_loc * lw_transmission(tau_dust_CO, 0d0)
          end if
       end if
       fracMax = 0d0 ! Max fractional update, to check if dt can be increased
@@ -1382,17 +1354,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
                ! Deal with molecules separately
                if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-                  if (isLW(igroup).eq.1 .and. h2_derived) then
-                     ! k_i of this group's term at the dust LW cross-section the RT applies here (one
-                     ! group: k = sigma_g / G - 2 sigma_g, Sternberg+14 G of the line-by-line shielding)
-                     sg_loc = dustAbs(igroup) / (rt_c_cgs(ilevel) * nElement_dep(1))
-                     call h2_band_lookup(TK, nElement_dep(1), chi_lw, sg_loc, nlw_h2, hb_k(1:nlw_h2), hb_sd)
-                     ik = lw_rank(igroup)
-                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * hb_k(ik) * rt_c_cgs(ilevel)
-                  else if (isLW(igroup).eq.1 .and. rtz_h2_lw_sigma_abs .gt. 0d0) then
-                     ! Nickerson+18: H2 removes many more LW photons than it dissociates (line overlap)
-                     phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * rtz_h2_lw_sigma_abs * rt_c_cgs(ilevel)
-                  else if (isLW(igroup).eq.1) then
+                  if (isLW(igroup).eq.1) then
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3) * f_shd  ! s-1
                   else
                      phAbs(igroup) = phAbs(igroup) + 0.5d0 * nElement_dep(1) * dXion(1, 3) * signc(igroup,1,3)
@@ -1586,29 +1548,52 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dust_helper%local_solid_angle(:) = 0d0
       end if
 
-      ! With LW RT groups, the dust transmission with the local anisotropy of each group, f = |Fp|/(c Np):
+      ! With RT, the dust transmission of each group from its attenuation rate dustRp (C_abs + (1-g) C_sca
+      ! of the dust and of the PAHs at this substep's charges) and the local anisotropy f = |Fp|/(c Np):
       !   T = f e^-tau + (1 - f) E2(tau),  tau = (dustRp / local_c) dx_SS_H2,
-      ! the beam (f = 1) and isotropic (f = 0) limits exact (exp(-(2-f) tau) only held for tau << 1);
-      ! dustRp is the effective attenuation, C_abs + (1-g) C_sca (Draine & Bertoldi 1996). Needs
-      ! rt_advect (dustRp from compute_dust_rad_rates); otherwise the isotropic values above stay.
-      ! Equilibrium tests keep the isotropic values.
-      if ((isH2_rtz .or. isCO_rtz) .and. rt_advect .and. rtz_equilibrium_test.le.0) then
-         call compute_lw_tau_groups(dustRp, dust_helper%local_rad_ani, dust_helper%local_c, &
-                                    dx_SS_H2(icell), nlw, tau_lw_g, f_lw_g)
-         if (nlw > 0) then
-            ! mean transmission over the LW groups, each with its own anisotropy
-            trans_lw = 0d0; trans_lw_co = 0d0
-            do ig_lw = 1, nlw
-               trans_lw    = trans_lw    + lw_transmission(tau_lw_g(ig_lw), f_lw_g(ig_lw))
-               trans_lw_co = trans_lw_co + lw_transmission(co_dust_to_lw * tau_lw_g(ig_lw), f_lw_g(ig_lw))
-            end do
-            trans_lw = trans_lw / nlw; trans_lw_co = trans_lw_co / nlw
-            if (.not. h2_derived) trans_dust = trans_lw
-            if (isH2_rtz) f_shd = sh2_loc * trans_lw
-            if (h2_derived) f_shd = sh2_loc
-            if (isCO_rtz .and. rtz_shielding_config .ge. 3) &
-               f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * trans_lw_co
+      ! exact in the beam (f = 1) and isotropic (f = 0) limits. A band's transmission is that of its
+      ! groups weighted by their share of the field: their photons for the LW groups (the H2, and the
+      ! CO, whose band the groups do not separate from the LW one), their G0 for the FUV groups (those
+      ! of advected_G0). A band without a group keeps the isotropic value, now from the PAH charges of
+      ! this substep. Needs rt_advect (dustRp from compute_dust_rad_rates); the equilibrium tests
+      ! keep the isotropic values above.
+      if (rt_advect .and. rtz_equilibrium_test.le.0 .and. dust_helper%local_c > 0d0) then
+         call dust_shield_tau(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, 0, &
+                              tau_dust_FUV, tau_dust_LW, tau_dust_CO)
+         trans_fuv = lw_transmission(tau_dust_FUV, 0d0)
+         trans_lw  = lw_transmission(tau_dust_LW, 0d0)
+         trans_co  = lw_transmission(tau_dust_CO, 0d0)
+         n_lw = 0 ; n_fuv = 0
+         sum_lw = 0d0 ; wsum_lw = 0d0 ; mean_lw = 0d0
+         sum_fuv = 0d0 ; wsum_fuv = 0d0 ; mean_fuv = 0d0
+         do igroup = 1, nGroups
+            in_fuv = group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0
+            if (isLW(igroup).ne.1 .and. .not. in_fuv) cycle
+            trans_g = lw_transmission(dustRp(igroup) / dust_helper%local_c * dx_SS_H2(icell), &
+                                      dust_helper%local_rad_ani(igroup))
+            if (isLW(igroup).eq.1) then
+               n_lw = n_lw + 1 ; mean_lw = mean_lw + trans_g
+               wsum_lw = wsum_lw + dNp(igroup) ; sum_lw = sum_lw + dNp(igroup) * trans_g
+            end if
+            if (in_fuv) then
+               n_fuv = n_fuv + 1 ; mean_fuv = mean_fuv + trans_g
+               wsum_fuv = wsum_fuv + dNp(igroup) * group_egy(igroup)
+               sum_fuv = sum_fuv + dNp(igroup) * group_egy(igroup) * trans_g
+            end if
+         end do
+         ! no photons in the band: the plain mean over its groups
+         if (n_lw > 0) then
+            trans_lw = mean_lw / n_lw
+            if (wsum_lw > 0d0) trans_lw = sum_lw / wsum_lw
+            trans_co = trans_lw
          end if
+         if (n_fuv > 0) then
+            trans_fuv = mean_fuv / n_fuv
+            if (wsum_fuv > 0d0) trans_fuv = sum_fuv / wsum_fuv
+         end if
+         trans_dust = trans_fuv
+         if (isH2_rtz) f_shd = sh2_loc * trans_lw
+         if (isCO_rtz .and. rtz_shielding_config .ge. 3) f_shd_CO = sco_loc * trans_co
       end if
 
       if (rtz_equilibrium_test.gt.0) then
@@ -1863,9 +1848,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_dx = dx_loc*scale_l ! dx_SS_H2(icell)
       dust_helper%local_vol = (dx_loc*scale_l)**3 ! (dx_SS_H2(icell)*dx_SS_H2(icell)) * dx_SS_H2(icell)
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
-      ! Apply dust self-shielding so CALIMA sees the within-cell-attenuated field.
-      ! tau_dust_LW is computed above from per-bin grain properties (or the MW fallback).
-      dust_helper%local_G0 = (advected_G0 + UV_background_G0) * safe_exp(-tau_dust_LW)
+      ! CALIMA's field: the advected FUV through the dust inside the cell, as the rest of the grains'
+      ! processes see it (trans_dust), plus the unattenuated background
+      dust_helper%local_G0 = advected_G0 * trans_dust + UV_background_G0
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
       ! TVA drift of every species in this cell, for the grain-grain collisions
@@ -2856,6 +2841,55 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       fred = sqrt(sum(Fp**2))/cNp
       if(fred .gt. 1d0) Fp = Fp/fred
    END SUBROUTINE reduce_flux
+
+   !=========================================================================
+   SUBROUTINE dust_shield_tau(nH_tot, dx_SS, d2g_mw, icell, tau_fuv, tau_lw, tau_co)
+   ! The dust optical depths over dx_SS of the in-cell shielding, in the FUV (5.6-13.6 eV), LW and CO
+   ! bands. Under CALIMA (rtz_shielding_config >= 1), from the local dust and PAH bins and their band
+   ! cross-sections (dust_band_tau), the PAHs weighted by their ion fraction: with icell > 0 that of
+   ! the cell's last charge solve (pah_fion_vec; neutral before the first), with icell = 0 that of the
+   ! charges just computed (dust_helper, compute_dust_rad_rates). Otherwise (no CALIMA, no optical
+   ! tables, or rtz_shielding_config 0) MW dust scaled by the dust-to-gas ratio: Draine & Bertoldi
+   ! (1996) in the LW (tau_dust_lw_mw), and in units of A_V exp(-1.8 A_V) in the FUV and exp(-3.53 A_V)
+   ! for CO (fuv_dust_to_lw, co_dust_to_lw).
+   ! nH_tot : hydrogen nuclei number density, all states [cm^-3]; dx_SS : shielding length [cm];
+   ! d2g_mw : dust-to-gas mass ratio in MW units
+   !-------------------------------------------------------------------------
+     use molecules_module, only: tau_dust_lw_mw, co_dust_to_lw, fuv_dust_to_lw
+#ifdef CALIMA
+     use dust_commons, only: dust_helper, pah_fion_vec, pahbins_props, nshield_band, SHB_FUV, SHB_LW, SHB_CO
+     use dust_radiation, only: dust_band_tau
+     use hydro_parameters, only: npah
+#endif
+     implicit none
+     real(dp), intent(in) :: nH_tot, dx_SS, d2g_mw
+     integer, intent(in) :: icell
+     real(dp), intent(out) :: tau_fuv, tau_lw, tau_co
+#ifdef CALIMA
+     real(dp) :: tau(nshield_band), f_ion(max(npah,1))
+     integer :: ii
+
+     if (rtz_shielding_config .ge. 1) then
+        f_ion = 0d0
+        do ii = 1, npah
+           if (icell > 0) then
+              f_ion(ii) = max(pah_fion_vec(icell, ii), 0d0)
+           else if (pahbins_props(ii)%cation_start_idx <= pahbins_props(ii)%ncharge_states) then
+              f_ion(ii) = sum(dust_helper%fcharge_pah(pahbins_props(ii)%cation_start_idx: &
+                                                      pahbins_props(ii)%ncharge_states, ii))
+           end if
+        end do
+        call dust_band_tau(dust_helper%rho_dust, dust_helper%rho_pah, f_ion, dx_SS, tau)
+        if (tau(1) >= 0d0) then
+           tau_fuv = tau(SHB_FUV) ; tau_lw = tau(SHB_LW) ; tau_co = tau(SHB_CO)
+           return
+        end if
+     end if
+#endif
+     tau_lw  = tau_dust_lw_mw(nH_tot, dx_SS, d2g_mw)
+     tau_fuv = fuv_dust_to_lw * tau_lw
+     tau_co  = co_dust_to_lw * tau_lw
+   END SUBROUTINE dust_shield_tau
 #endif
 
 !***********************************************************************

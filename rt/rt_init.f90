@@ -194,7 +194,6 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,cosmic_rays                                                    &
 #ifdef RTZ
        & ,rtz_cooling, rtz_equilibrium_test, rtz_shielding_config         &
-       & ,rtz_h2_lw_sigma_abs, rtz_h2_band_file, rtz_h2_tail_chi        &
        & ,rtz_include_collisional_ionization, rtz_include_photoionization&
        & ,rtz_include_cosmic_ray_ionization, rtz_include_charge_exchange &
        & ,rtz_include_dust_recombination, rtz_include_HM12_UVB           &
@@ -612,6 +611,7 @@ SUBROUTINE read_rt_groups()
   call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
 #endif
   call init_dust_mean_cross_sections(sed_dir)
+  call init_dust_band_cross_sections()          ! the in-cell dust shielding of the FUV, LW and CO bands
   ! Local-field grain charging tables (charging_model='WDB06rt')
   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)
   ! all CALIMA tables are built: their memory per rank
