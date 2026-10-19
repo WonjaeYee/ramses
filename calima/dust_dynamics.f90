@@ -608,14 +608,14 @@ module dust_dynamics
 #endif
 
     subroutine draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps, eps_tot, a_rad_g, a_rad_d, s_IRtrap, &
-                               drag_state, do_irtrap, a_cm, s_cgs, scale_v, scale_t, ts)
+                               drag_state, do_irtrap, scale_v, scale_t, ts)
         use hydro_parameters, only: smallr, iu1, iu2, ju1, ju2, ku1, ku2
         ! Draine (2011) stopping time [code] of every TVA species at every cell of a stencil, from
         ! the magnitude of its full driving acceleration D (main.tex eq:draine_terminal): G(s) is
         ! nonlinear in the drift, so in 2D/3D t_s(|D|) differs from t_s(|D_idim|) of a direction
         ! sweep. D_k = grad(P_g)/rho + a_k - a_mix (- the trapped-IR term), with the gradients of
-        ! the flux routine: central inside the stencil, one-sided on its outer planes. ndim >= 2 only
-        ! (in 1D the sweeps take t_s(|D_x|), the same thing).
+        ! the flux routine: central inside the stencil, one-sided on its outer planes. In 1D this is
+        ! t_s(|D_x|), bit for bit the value the flux routine had computed from its own D_x.
         integer, intent(in) :: ngrid
         real(dp), intent(in) :: dx, scale_v, scale_t
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2), intent(in) :: Pg, Ptrap, rho_mix, eps_tot
@@ -624,7 +624,6 @@ module dust_dynamics
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva, 1:ndim), intent(in) :: a_rad_d
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), intent(in) :: drag_state
         logical, intent(in) :: do_irtrap
-        real(dp), dimension(1:ntva), intent(in) :: a_cm, s_cgs
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), intent(out) :: ts
         integer :: l, i, j, k, d, jbin, i0, j0, k0, lo, hi, c
         real(dp) :: gP, gT, amix, rho
@@ -658,7 +657,7 @@ module dust_dynamics
                 end do
             end do
             do jbin = 1, ntva
-                ts(l,i,j,k,jbin) = draine2011_stopping_time(a_cm(jbin), s_cgs(jbin), sqrt(D2(jbin)) * scale_v / scale_t, &
+                ts(l,i,j,k,jbin) = draine2011_stopping_time(tva_a_cm(jbin), tva_s_cgs(jbin), sqrt(D2(jbin)) * scale_v / scale_t, &
                     drag_state(l,i,j,k,1), drag_state(l,i,j,k,2), drag_state(l,i,j,k,2+jbin)) / scale_t
             end do
         end do; end do; end do; end do
@@ -750,12 +749,11 @@ module dust_dynamics
         ! outside the #ifdef RT guards (they stay zero without RT).
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), save :: s_IRtrap
-        ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
+        ! n_H, T and per-bin Coulomb coefficient for the Draine drag laws
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), save :: drag_state
-        real(dp), dimension(1:ntva+2) :: drag_state_face
         real(dp) :: Ptrap_L, Ptrap_R, grad_Ptrap
         real(dp), dimension(1:ntva) :: s_IRtrap_face
-        logical  :: do_irtrap, use_draine   ! use_draine: draine_drag(), a string comparison, once per call
+        logical  :: do_irtrap
         real(dp) :: a_rad_g_face, a_rad_mix, w_g, w_d_val, sum_eps_ts_D
         real(dp) :: w_cap, wmax_all
         integer(kind=8) :: nclip_all
@@ -946,7 +944,6 @@ module dust_dynamics
                 ! Trapped-IR pressure, same definition as the flux routine so
                 ! this CFL bound applies to the drift actually taken.
                 do_irtrap = .false.
-                use_draine = draine_drag()
 #if defined(RT) && NENER>0
                 do_irtrap = rt_isIR .and. rt_isIRtrap
 #endif
@@ -965,13 +962,13 @@ module dust_dynamics
                 end if
 #endif
 
-                ! Draine drag in 2D/3D: the cells' stopping times of their full |D|, as the fluxes
-                draine_cells = ndim > 1 .and. draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+                ! Draine drag: the cells' stopping times of their full |D|, as the fluxes
+                draine_cells = draine_on .and. (tva_test_mode == TVA_TEST_NONE &
                                .or. tva_test_mode >= TVA_TEST_SPRESS)
 #ifdef RT
                 if (draine_cells) call draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps_arr, eps_tot_arr, &
                                                        a_rad_g, a_rad_d, s_IRtrap, drag_state, do_irtrap, &
-                                                       tva_a_cm, tva_s_cgs, scale_v, scale_t, ts_draine)
+                                                       scale_v, scale_t, ts_draine)
 #else
                 draine_cells = .false.
 #endif
@@ -1123,18 +1120,6 @@ module dust_dynamics
                                     else
                                         t_s_face_arr(jbin) = half * (ts_draine(l,i,j,k-1,jbin) + ts_draine(l,i,j,k,jbin))
                                     end if
-                                else if (use_draine .and. (tva_test_mode == TVA_TEST_NONE &
-                                    .or. tva_test_mode >= TVA_TEST_SPRESS)) then
-                                    if (idim == 1) then
-                                        drag_state_face = half * (drag_state(l,i-1,j,k,:) + drag_state(l,i,j,k,:))
-                                    else if (idim == 2) then
-                                        drag_state_face = half * (drag_state(l,i,j-1,k,:) + drag_state(l,i,j,k,:))
-                                    else
-                                        drag_state_face = half * (drag_state(l,i,j,k-1,:) + drag_state(l,i,j,k,:))
-                                    end if
-                                    t_s_face_arr(jbin) = draine2011_stopping_time(tva_a_cm(jbin), &
-                                        tva_s_cgs(jbin), D_bin(jbin) * scale_v / scale_t,          &
-                                        drag_state_face(1), drag_state_face(2), drag_state_face(2+jbin)) / scale_t
                                 end if
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
                             end do
@@ -1911,7 +1896,7 @@ module dust_dynamics
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva,1:ndim),save::a_rad_d
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva),save::s_IRtrap
-        ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
+        ! n_H, T and per-bin Coulomb coefficient for the Draine drag laws
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:ntva+2),save::drag_state
         
         integer,dimension(1:nvector),save::ind_cell, ind_father, igrid_nbor, ind_exist, ind_nexist, ind_buffer
@@ -2222,7 +2207,7 @@ module dust_dynamics
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva, 1:ndim), intent(in) :: a_rad_d
         ! Trapped-IR Rosseland opacity share per bin, chi_R,k/chi_R,tot
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva), intent(in) :: s_IRtrap
-        ! n_H, T and per-bin Coulomb coefficient for drag_model='draine2011'
+        ! n_H, T and per-bin Coulomb coefficient for the Draine drag laws
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva+2), intent(in) :: drag_state
         ! Grain properties (sizes and material densities) [code units]
         real(dp), dimension(1:ntva), intent(in)   :: agrain_code, sgrain_code
@@ -2246,7 +2231,7 @@ module dust_dynamics
         ! Trapped-IR radiation pressure, exactly as the Riemann solver sees it
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
         real(dp) :: grad_Ptrap_cell
-        logical  :: do_irtrap, irtrap_diag, use_draine   ! use_draine: draine_drag(), a string comparison, once per call
+        logical  :: do_irtrap, irtrap_diag
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
@@ -2364,7 +2349,6 @@ module dust_dynamics
         ! whatever the rt_c_fraction normalisation turns out to be.
         ! ========================================================================
         do_irtrap = .false.
-        use_draine = draine_drag()
 #if NENER>0
         do_irtrap = rt_isIR .and. rt_isIRtrap
 #endif
@@ -2382,12 +2366,11 @@ module dust_dynamics
         end if
 #endif
 
-        ! Draine drag in 2D/3D: the stopping time of the full |D| of each cell, once, for every sweep
-        draine_cells = ndim > 1 .and. draine_drag() .and. (tva_test_mode == TVA_TEST_NONE &
+        ! Draine drag: the stopping time of the full |D| of each cell, once, for every sweep
+        draine_cells = draine_on .and. (tva_test_mode == TVA_TEST_NONE &
                        .or. tva_test_mode >= TVA_TEST_SPRESS) .and. .not. use_w_drift_test
         if (draine_cells) call draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps, eps_tot, a_rad_g, a_rad_d, &
-                                               s_IRtrap, drag_state, do_irtrap, tva_a_cm, tva_s_cgs, &
-                                               scale_v, scale_t, ts_draine)
+                                               s_IRtrap, drag_state, do_irtrap, scale_v, scale_t, ts_draine)
 
         ! ========================================================================
         ! MAIN DIRECTION SWEEP LOOP (idim = 1: X-sweep, 2: Y-sweep, 3: Z-sweep)
@@ -2511,14 +2494,7 @@ module dust_dynamics
                         end if
                         ! Draine (2011) drag is nonlinear in the drift, so its
                         ! stopping time needs the driving acceleration D first.
-                        if (draine_cells) then
-                            t_s_intrinsic(jbin) = ts_draine(l,i,j,k,jbin)
-                        else if (use_draine .and. (tva_test_mode == TVA_TEST_NONE &
-                            .or. tva_test_mode >= TVA_TEST_SPRESS)) then
-                            t_s_intrinsic(jbin) = draine2011_stopping_time(tva_a_cm(jbin), &
-                                tva_s_cgs(jbin), D_bin(jbin) * scale_v / scale_t,          &
-                                drag_state(l,i,j,k,1), drag_state(l,i,j,k,2), drag_state(l,i,j,k,2+jbin)) / scale_t
-                        end if
+                        if (draine_cells) t_s_intrinsic(jbin) = ts_draine(l,i,j,k,jbin)
                         sum_eps_ts_D = sum_eps_ts_D + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_bin(jbin)
                     end do
                     if (irtrap_diag) then
