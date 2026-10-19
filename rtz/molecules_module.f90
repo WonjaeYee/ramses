@@ -8,6 +8,7 @@ module molecules_module
   private  ! everything is private by default
   public :: alpha_H2, beta_H2_umist, beta_H2, beta_H2_krome, alpha_CO, beta_CO, alpha_H2_prim, alpha_H2_dust
   public :: comp_SH2, comp_Sd, comp_SCO, initialize_SCO_table, lw_transmission, tau_dust_lw_mw, co_dust_to_lw
+  public :: fuv_dust_to_lw
 
   real(dp), dimension(52, 2):: sco_table ! self shielding coefficient vs. CO column density
   real(dp), dimension(43, 2):: sh2_table ! self shielding coefficient vs. H2 column density
@@ -19,6 +20,8 @@ module molecules_module
   ! CO and H2 dust attenuation in units of A_V: CO exp(-3.53 A_V) (Visser et al. 2009; van Dishoeck
   ! et al. 2006), H2 sigma_dust_lw_mw N_H = 3.74 A_V for N_H/A_V = 1.87e21 cm^-2 mag^-1
   real(dp), parameter :: co_dust_to_lw = 3.53d0 / 3.74d0
+  ! The FUV (6-13.6 eV) field's dust attenuation, exp(-1.8 A_V) (Tielens & Hollenbach 1985), for MW dust
+  real(dp), parameter :: fuv_dust_to_lw = 1.8d0 / 3.74d0
 
 CONTAINS
 
