@@ -918,8 +918,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: dUU, fracMax
       real(dp):: mu, TK, ne, neInit
       !  real(dp):: xHI,dxHI, xH2=0d0,dXH2=0d0, xHeI,dxHeI
-      real(dp):: Crate, Crate_prime, Crate_prime_a, dCdT2, X_nHkb, rate, dRate, cr, de=0d0
-      real(dp), dimension(1:50):: prime_cooling_rates            ! the rates of the T(1 + 1e-5) call (unsaved)
+      real(dp):: Crate, Crate_prime, Crate_prime_a, Crate_prime_b, dCdT2, X_nHkb, rate, dRate, cr, de=0d0
+      real(dp), dimension(1:50):: prime_cooling_rates            ! the rates of the T(1 +- 1e-5) calls (unsaved)
       character(len=20), dimension(1:50):: prime_cooling_rates_names
       real(dp):: ss_factor, f_dust
 #ifdef RT
@@ -1623,9 +1623,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! UPDATE TEMPERATURE *************************************************
       !if(c_switch(icell) .and. .not. rt_isTconst .and. .not. rt_T_rad) then
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
-         ! C(T) first (CALIMA: the dust of the precool call at T), whose rates are saved; then
-         ! C(T (1 + 1e-5)) for dC/dT by a forward difference, one all_cooling call fewer than the
-         ! central one (their difference is of relative order 1e-5)
+         ! C(T) first (CALIMA: the dust of the precool call at T), whose rates are saved; then dC/dT
+         ! from C(T (1 + 1e-5)) by a forward difference, or with rtz_dCdT_central from C(T (1 +- 1e-5))
+         ! by a central one, one all_cooling call more (their difference is of relative order 1e-5)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
@@ -1640,6 +1640,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names)
+         if (rtz_dCdT_central) then
+            prime_cooling_rates = 0.d0
+            call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+                              primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
+                              ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names)
+         end if
 #ifdef CALIMA
          call rtgroups_derivative_calls(.false.)
 #endif
@@ -1647,7 +1653,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! photoheating of the helium photons that ionize hydrogen on the spot (otsa_he_photons)
          Crate = Crate - rec_charge + ots_heat
          Crate_prime_a = Crate_prime_a - rec_charge + ots_heat
-         Crate_prime = (Crate_prime_a - Crate) / (1.d-5*TK)
+         if (rtz_dCdT_central) then
+            Crate_prime_b = Crate_prime_b - rec_charge + ots_heat
+            Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK)
+         else
+            Crate_prime = (Crate_prime_a - Crate) / (1.d-5*TK)
+         end if
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
          X_nHkb = 1.d0/(1.5d0 * (rho/mH) * kB)

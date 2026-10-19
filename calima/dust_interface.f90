@@ -65,7 +65,8 @@ module dust_interface
     ! with and without the cell's RT photon densities (Np present or not in compute_dust_precool)
     procedure(charge_routine), pointer, save :: charge_with_Np => null(), charge_without_Np => null()
     real(dp), dimension(0), save :: no_Np
-    ! .true. during the cooling solver's T(1 + 1e-5) call of an RTZ sub-step (rtgroups_derivative_calls)
+    ! .true. during the cooling solver's T(1 + 1e-5) call of an RTZ sub-step, and its T(1 - 1e-5) call
+    ! with rtz_dCdT_central (rtgroups_derivative_calls)
     logical, save :: rtg_dT_calls = .false.
 
 contains
