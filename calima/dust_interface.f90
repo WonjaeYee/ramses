@@ -68,8 +68,8 @@ module dust_interface
 contains
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
-        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~0.7 kB
-        ! (RTGState: 88 reals), (nvector + 1) x ndust of them per rank.
+        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~1.9 kB
+        ! (RTGState: 232 reals with the prediction anchor), (nvector + 1) x ndust of them per rank.
         implicit none
         integer, intent(in) :: ncell
         if (allocated(rtg_warm)) then
