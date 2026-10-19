@@ -232,9 +232,7 @@ contains
         ! nH2 --> local molecular hydrogen density (cm^-3)
         ! nCO --> local carbon monoxide density (cm^-3)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
-        use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
-                                compute_Coulomb_focusing_ions,&
-                                isrf_lookup, ISRF_ND, ISRF_DCHARGE
+        use dust_charging, only: compute_Coulomb_focusing_ions, isrf_lookup, ISRF_ND, ISRF_DCHARGE
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
                                             compute_pah_peh_equilibrium,&
@@ -260,10 +258,9 @@ contains
         logical, intent(in), optional :: rates_only   ! only the rates compute_dust_coolrates returns (not the Coulomb factors)
 
         ! ---- Local variables ----
-        integer :: ii,j,idx_g,idx_T
+        integer :: ii,j
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: nHI
-        integer :: n_charge
         logical :: skip_coulomb
         logical :: need_T, need_Z   ! the grain temperature, the grain charge, are used
         type(ChargeOut) :: co
@@ -532,7 +529,6 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: Np(:)
         type(ChargeOut), intent(inout) :: co
-        real(dp), dimension(ISRF_ND, 1:ndust) :: rtg_D
         real(dp) :: zz, ss, gg, ll
         real(dp) :: n_Hp, n_Hep, n_Hepp, h
         type(RTGState), pointer :: st
@@ -718,21 +714,20 @@ contains
     end subroutine charge_isrf
 
     subroutine charge_fits(dinfo, G0_total, Tk, ne, nElement, xelem_ions, Np, co)
-        ! WDB06rt in a call without the cell's RT photons: the (gamma, T) fits of the mean charge and its
-        ! width; the PE heating then comes from interpolate_dust_peh_rate (has_pe stays false). Np is not used.
-        use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma
+        ! WDB06rt in a call without the cell's RT photons: the mean charge and its width of the uniform-ISRF
+        ! tables at G0_total, one lookup per bin; the PE heating then comes from interpolate_dust_peh_rate
+        ! (has_pe stays false). Np is not used.
+        use dust_charging, only: isrf_lookup
         implicit none
         class(DustChemistryInfo), intent(inout) :: dinfo
         real(dp), intent(in) :: G0_total, Tk, ne
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: Np(:)
         type(ChargeOut), intent(inout) :: co
-        integer :: ii, idx_g, idx_T
-        idx_g = -1
-        idx_T = -1
+        integer :: ii
+        real(dp) :: gam, lam, Dj(ISRF_ND)
         do ii = 1, dinfo%ndust
-            call compute_mean_dust_charge(ii,G0_total,Tk,ne,dinfo%Z_dust(ii),idx_g,idx_T)
-            call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii),idx_g,idx_T)
+            call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), gam, lam, Dj)
         end do
     end subroutine charge_fits
 

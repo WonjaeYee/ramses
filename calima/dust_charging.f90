@@ -186,8 +186,7 @@ module dust_charging
     end interface
 
     private
-    public :: compute_mean_dust_charge, compute_dust_charge_sigma,&
-              compute_Coulomb_focusing_ions,&
+    public :: compute_Coulomb_focusing_ions, &
               init_dust_charging_isrf, isrf_lookup, ISRF_ND, ISRF_DCHARGE
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_predict, &
@@ -197,43 +196,6 @@ module dust_charging
               RTG_RECOMB_IMPORTANT
 
     contains
-
-    subroutine compute_mean_dust_charge(i_dust,G0,Tgas,ne,Zdust,idx_x,idx_y)
-        ! ====== Mean Dust Charge ======
-        ! This subroutine computes the mean dust charge following inteporlation
-        ! of the equilibrium distribution properties presented in Rodríguez Montero
-        ! et al. (2026), which in turn is based on the model from Weingartner &
-        ! Draine (2001)
-        implicit none
-        integer, intent(in) :: i_dust
-        real(dp), intent(in) :: G0,Tgas,ne
-        real(dp), intent(inout) :: Zdust
-        integer, intent(inout), optional :: idx_x, idx_y
-
-        real(dp) :: Zsigma, Gam, Lam, Dj(ISRF_ND)
-
-        ! charging_model = 'WDB06isrf' (WDB06rt is computed in compute_dust_precool and
-        ! dust_charge_moments): the uniform-ISRF tables at G0
-        call isrf_lookup(i_dust, G0, Tgas, ne, Zdust, Zsigma, Gam, Lam, Dj)
-    end subroutine compute_mean_dust_charge
-
-    subroutine compute_dust_charge_sigma(i_dust,G0,Tgas,ne,Zsigma,idx_x,idx_y)
-        ! ====== Dust Charge Sigma ======
-        ! This subroutine computes the dust charge sigma following inteporlation
-        ! of the equilibrium distribution properties presented in Rodríguez Montero
-        ! et al. (2026), which in turn is based on the model from Weingartner &
-        ! Draine (2001)
-        implicit none
-        integer, intent(in) :: i_dust
-        real(dp), intent(in) :: G0,Tgas,ne
-        real(dp), intent(inout) :: Zsigma
-        integer, intent(inout), optional :: idx_x, idx_y
-
-        real(dp) :: Z_avg, Gam, Lam, Dj(ISRF_ND)
-
-        ! charging_model = 'WDB06isrf': the uniform-ISRF tables at G0
-        call isrf_lookup(i_dust, G0, Tgas, ne, Z_avg, Zsigma, Gam, Lam, Dj)
-    end subroutine compute_dust_charge_sigma
 
     subroutine init_dust_charging_isrf
         ! Reads the uniform-ISRF WDB06 charging tables of every dust bin (pyCALIMA
@@ -2607,7 +2569,7 @@ module dust_charging
         real(dp), intent(out), optional :: Zsigma
         real(dp), intent(in), optional :: lnL1
         real(dp), intent(out), optional :: coul
-        real(dp) :: Gamma, Lambda, Zsig
+        real(dp) :: Gamma, Lambda, Zsig, Dj(ISRF_ND)
         integer :: lo, hi, half, Zc
         logical :: exact
         type(RTGState) :: st
@@ -2642,9 +2604,7 @@ module dust_charging
                 end if
             end if
         else
-            call compute_mean_dust_charge(ii, G0, T, ne, Zmean)
-            ! the second table only when sigma_Z is asked for (Zsigma, or coul on its Gaussian)
-            if (present(Zsigma) .or. present(coul)) call compute_dust_charge_sigma(ii, G0, T, ne, Zsig)
+            call isrf_lookup(ii, G0, T, ne, Zmean, Zsig, Gamma, Lambda, Dj)
         end if
         if (present(coul) .and. .not. exact) coul = coul_gauss(Zmean, Zsig, lnL1)
         if (present(Zsigma)) Zsigma = Zsig
