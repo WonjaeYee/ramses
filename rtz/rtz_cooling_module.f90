@@ -263,9 +263,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    loopCodes01 = 0
    loopCodes02 = 0
-   loopCodes08 = 0
-   loopCodes09 = 0
-   loopCodes10 = 0
+   ! only the ion slots in use are counted and printed (3 x 27 x 27 int8, 17.7 KB, zeroed in full at
+   ! every call before)
+   loopCodes08(:,1:nslot) = 0
+   loopCodes09(:,1:nslot) = 0
+   loopCodes10(:,0:nslot) = 0
 
 #ifdef RT
    call rtz_updateRTGroups_CoolConstants(ilevel)
