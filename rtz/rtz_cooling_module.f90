@@ -487,7 +487,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #else
             tau_shld_new = tau_shld_old   ! non-CALIMA: old and new are identical
 #endif
-            f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i), TK_to_save(i))
+            f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i))
             ! f_CO_out = line shielding × dust continuum (isotropic), as in rtz_cool_step
             f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i)) &
                       * lw_transmission(co_dust_to_lw * tau_shld_new, 0d0)
@@ -1099,8 +1099,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Shielding of the Lyman-Werner band, applied to the advected field only (the UV background
       ! stays unattenuated), over dx_SS_H2 = min(Jeans length, cell size): the RT already removes the
       ! photons absorbed between cells. Dust: the effective attenuation cross-section (Draine &
-      ! Bertoldi 1996; per bin under CALIMA); H2: Wolcott-Green et al. (2011) at the gas temperature;
-      ! CO: Visser et al. (2009). The field is taken as isotropic here (lw_transmission with f = 0);
+      ! Bertoldi 1996; per bin under CALIMA); H2: Gnedin et al. (2009); CO: Lee et al. (1996), in
+      ! N(CO) and N(H2). The field is taken as isotropic here (lw_transmission with f = 0);
       ! with LW RT groups the transmission is recomputed below with their anisotropy.
       f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0 ; trans_dust = 1d0
       if (isH2_rtz .or. isCO_rtz) then
@@ -1120,7 +1120,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! local H2 line self-shielding
       sh2_loc = 1d0
       if (isH2_rtz) &
-         sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell), TK)
+         sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
       ! the same dust transmission for the grains' FUV field (grain recombination, PE heating, dust cooling)
       trans_dust = lw_transmission(tau_dust_LW, 0d0)
       if (isH2_rtz) f_shd = sh2_loc * trans_dust

@@ -233,13 +233,13 @@ contains
 #endif
         Tk = P_gas / rho_loc * scale_T2 * mu
 
-        ! H2 shielding (as rtz_cool_step, isotropic: Wolcott-Green et al. 2011 at Tk, MW dust of
+        ! H2 shielding (as rtz_cool_step, isotropic: Gnedin et al. 2009, MW dust of
         ! Draine & Bertoldi 1996 on the total hydrogen column, over the cell)
         f_shd = 1.d0
 #ifdef RTZ
         if (isH2_rtz) then
            dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
-           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3), dx, Tk) * comp_Sd(nElement(1), dx, dtg_mw)
+           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3), dx) * comp_Sd(nElement(1), dx, dtg_mw)
         end if
 #else
         ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
