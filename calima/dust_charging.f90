@@ -2103,62 +2103,103 @@ module dust_charging
         logical, intent(in), optional :: sens    ! also d/d ln S, d/d ln N and the anchor of rtgroups_predict
         ! c, cS, cN: indexed by charge - lo + 1, from the lowest charge below the window in the recombination
         real(dp) :: cS(1 - MAX_DISCRETE_STATES:NBUF), cN(1 - MAX_DISCRETE_STATES:NBUF)
-        real(dp) :: cbS, cbN, dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN, sw
+        real(dp) :: dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN, sw
 
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         want_d = dlnT > 0d0
         r%alpha = 0d0
 
-        ! 1. charge distribution: a discrete window reused from the warm state, or root + width
-        got = .false.
-        if (st%valid .and. st%discrete) then
-            call window(st%wlo, st%whi, want_d, lo, hi, capped)
-            call window_moments(lo, hi, r%Zmean, r%Zsigma)
-            ! a capped window is a cut tail, narrow whatever the true width: solve from the root
-            if (r%Zsigma < SIGMA_DISCRETE .and. .not. capped) then
-                got = .true.
-                ! Z*: root of g interpolated between the integers of the window
-                Zs = dble(hi)
-                if (hi == lo) then
-                    Zs = dble(lo)
-                else if (gwin(lo) <= 0d0) then
-                    Zs = dble(lo)
-                end if
-                do k = lo, hi - 2
-                    if (gwin(k) > 0d0 .and. gwin(k + 1) <= 0d0) then
-                        Zs = dble(k) + gwin(k)/(gwin(k) - gwin(k + 1))
-                        exit
-                    end if
-                end do
-            end if
-        end if
-        if (got) then
-            disc = .true.
-        else
-            call find_root(Z_guess, st, Zs, sigma, pair)
-            have_chord = .false.
-            if (sigma >= SIGMA_DISCRETE) then
-                ! warm and wide: start the chord from the last width, usually one chord
-                if (st%valid .and. .not. st%discrete) sigma = st%Zsigma
-                call chord_sigma(Zs, sigma, chord, have_chord)
-            end if
-            disc = sigma < SIGMA_DISCRETE
-            if (disc) then
-                half = ceiling(3d0*max(sigma, 0.5d0))
-                Zc = floor(Zs + 0.5d0)
-                call window(max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), want_d, lo, hi)
-                call window_moments(lo, hi, r%Zmean, r%Zsigma)
-            end if
-        end if
+        ! 1. the charge distribution: a discrete window reused from the warm state, or root + width
+        call distribution()
         r%discrete = disc
         r%Zstar = Zs
 
-        ! 2. heating, cooling, autoionisation; recombination; d/d ln T
         r%Gamma = 0d0
         r%Lambda = 0d0
         r%Lambda_auto = 0d0
         if (disc) then
+            ! 2. heating, cooling, autoionisation, recombination and d/d ln T of the discrete window
+            call discrete_rates()
+            call discrete_recomb()
+            if (want_d) call discrete_dlnT()
+            st%wlo = dble(lo)
+            st%whi = dble(hi)
+        else
+            ! ... or of the wide P(Z)
+            call wide_closure()
+        end if
+        st%valid = .true.
+        st%discrete = disc
+        st%Zstar = Zs
+        st%Zsigma = r%Zsigma
+
+        ! 3. sens: d/d ln S and d/d ln N (pyCALIMA GroupChargingTable._sensitivities), and the anchor
+        !    of rtgroups_predict
+        st%anchored = .false.
+        if (.not. present(sens)) return
+        if (.not. sens .or. rtg(ii)%nG > RTG_MAXG) return
+        if (disc) then
+            call discrete_sens()
+        else
+            call wide_sens()
+        end if
+        call anchor_kernels(Zs, st)
+        st%anchored = .true.
+        st%aT = T
+        st%ane = ne
+        st%anion = (/n_Hp, n_Hep, n_Hepp/)
+        st%acred = c_red
+        st%aG0 = G0_bg
+        st%aNp = 0d0
+        st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
+        st%ar = r
+    contains
+        subroutine distribution()
+            ! step 1: Z*, sigma (pair, chord); for a discrete P(Z), the window lo..hi and its moments in r
+            got = .false.
+            if (st%valid .and. st%discrete) then
+                call window(st%wlo, st%whi, want_d, lo, hi, capped)
+                call window_moments(lo, hi, r%Zmean, r%Zsigma)
+                ! a capped window is a cut tail, narrow whatever the true width: solve from the root
+                if (r%Zsigma < SIGMA_DISCRETE .and. .not. capped) then
+                    got = .true.
+                    ! Z*: root of g interpolated between the integers of the window
+                    Zs = dble(hi)
+                    if (hi == lo) then
+                        Zs = dble(lo)
+                    else if (gwin(lo) <= 0d0) then
+                        Zs = dble(lo)
+                    end if
+                    do k = lo, hi - 2
+                        if (gwin(k) > 0d0 .and. gwin(k + 1) <= 0d0) then
+                            Zs = dble(k) + gwin(k)/(gwin(k) - gwin(k + 1))
+                            exit
+                        end if
+                    end do
+                end if
+            end if
+            if (got) then
+                disc = .true.
+            else
+                call find_root(Z_guess, st, Zs, sigma, pair)
+                have_chord = .false.
+                if (sigma >= SIGMA_DISCRETE) then
+                    ! warm and wide: start the chord from the last width, usually one chord
+                    if (st%valid .and. .not. st%discrete) sigma = st%Zsigma
+                    call chord_sigma(Zs, sigma, chord, have_chord)
+                end if
+                disc = sigma < SIGMA_DISCRETE
+                if (disc) then
+                    half = ceiling(3d0*max(sigma, 0.5d0))
+                    Zc = floor(Zs + 0.5d0)
+                    call window(max(rtg(ii)%Zmin, dble(Zc - half)), min(rtg(ii)%Zmax, dble(Zc + half)), want_d, lo, hi)
+                    call window_moments(lo, hi, r%Zmean, r%Zsigma)
+                end if
+            end if
+        end subroutine distribution
+        subroutine discrete_rates()
+            ! Gamma, Lambda and the autoionisation of the discrete window
             do k = lo, hi
                 r%Gamma = r%Gamma + b_P(k - b_base)*b_gam(k - b_base)
                 r%Lambda = r%Lambda + b_P(k - b_base)*b_lam(k - b_base)
@@ -2168,6 +2209,9 @@ module dust_charging
                 arrive2 = RTG_PI*rtg(ii)%a**2*c_ne*c_ve
                 r%Lambda_auto = b_P(lo - b_base)*arrive2*ds87_J(rtg(ii)%Zmin, -1d0, c_tau_e)*EA*RTG_EV2ERG
             end if
+        end subroutine discrete_rates
+        subroutine discrete_recomb()
+            ! the grain-assisted recombination alpha of the window and of the charges below it, down to lt
             lt = lo
             if (alpha_mode /= RTG_ALPHA_NONE) then
                 do j = 1, RTG_NRI
@@ -2196,46 +2240,42 @@ module dust_charging
                 end do
                 r%alpha = r%alpha/sqrt(RI_MASS)
             end if
-            if (want_d) then
-                c(1) = 0d0
-                do k = lo, hi - 1
-                    c(k - lo + 2) = c(k - lo + 1) + b_dup(k - b_base)/max(b_up(k - b_base), RTG_TINY) &
-                                    - b_ddn(k + 1 - b_base)/max(b_dn(k + 1 - b_base), RTG_TINY)
-                end do
-                cb = 0d0
-                do k = lo, hi
-                    cb = cb + b_P(k - b_base)*c(k - lo + 1)
-                end do
-                r%dZmean = 0d0
-                dvar = 0d0
-                r%dGamma = 0d0
-                r%dLambda = 0d0
-                do k = lo, hi
-                    c(k - lo + 1) = c(k - lo + 1) - cb
-                    r%dZmean = r%dZmean + b_P(k - b_base)*(c(k - lo + 1)*dble(k))
-                    dvar = dvar + b_P(k - b_base)*(c(k - lo + 1)*dble(k)*dble(k))
-                    r%dGamma = r%dGamma + b_P(k - b_base)*(c(k - lo + 1)*b_gam(k - b_base))
-                end do
-                do k = lo, hi
-                    r%dLambda = r%dLambda + b_P(k - b_base)*(c(k - lo + 1)*b_lamd(k - b_base))
-                end do
-                zr = 0d0
-                do k = lo, hi
-                    zr = zr + b_P(k - b_base)*b_dlam(k - b_base)
-                end do
-                r%dLambda = r%dLambda + zr
-                if (dble(lo) == rtg(ii)%Zmin) then
-                    je = ds87_J(dble(lo), -1d0, c_tau_e, dje)
-                    r%dLambda = r%dLambda + r%Lambda_auto*(c(1) + 0.5d0 + dje)
-                end if
-                dvar = dvar - 2d0*r%Zmean*r%dZmean
-                r%dZsigma = 0d0
-                if (r%Zsigma > 0d0) r%dZsigma = 0.5d0*dvar/r%Zsigma
+        end subroutine discrete_recomb
+        subroutine discrete_dlnT()
+            ! d/d ln T of <Z>, sigma, Gamma and Lambda of the window; c: d ln P / d ln T, kept for sens
+            c(1) = 0d0
+            do k = lo, hi - 1
+                c(k - lo + 2) = c(k - lo + 1) + b_dup(k - b_base)/max(b_up(k - b_base), RTG_TINY) &
+                                - b_ddn(k + 1 - b_base)/max(b_dn(k + 1 - b_base), RTG_TINY)
+            end do
+            call centre(c)
+            r%dZmean = 0d0
+            dvar = 0d0
+            r%dGamma = 0d0
+            r%dLambda = 0d0
+            do k = lo, hi
+                r%dZmean = r%dZmean + b_P(k - b_base)*(c(k - lo + 1)*dble(k))
+                dvar = dvar + b_P(k - b_base)*(c(k - lo + 1)*dble(k)*dble(k))
+                r%dGamma = r%dGamma + b_P(k - b_base)*(c(k - lo + 1)*b_gam(k - b_base))
+            end do
+            do k = lo, hi
+                r%dLambda = r%dLambda + b_P(k - b_base)*(c(k - lo + 1)*b_lamd(k - b_base))
+            end do
+            zr = 0d0
+            do k = lo, hi
+                zr = zr + b_P(k - b_base)*b_dlam(k - b_base)
+            end do
+            r%dLambda = r%dLambda + zr
+            if (dble(lo) == rtg(ii)%Zmin) then
+                je = ds87_J(dble(lo), -1d0, c_tau_e, dje)
+                r%dLambda = r%dLambda + r%Lambda_auto*(c(1) + 0.5d0 + dje)
             end if
-            st%wlo = dble(lo)
-            st%whi = dble(hi)
-        else
-            ! a wide P(Z) is averaged at its mean Z* + 1/2 (pyCALIMA _wide_nodes)
+            dvar = dvar - 2d0*r%Zmean*r%dZmean
+            r%dZsigma = 0d0
+            if (r%Zsigma > 0d0) r%dZsigma = 0.5d0*dvar/r%Zsigma
+        end subroutine discrete_dlnT
+        subroutine wide_closure()
+            ! a wide P(Z), averaged at its mean Z* + 1/2 (pyCALIMA _wide_nodes): the rates, the Gaussian alpha, d/d ln T from the root at T(1 + dlnT)
             r%Zmean = Zs + 0.5d0
             r%Zsigma = sigma
             call heating_cooling(Zs + 0.5d0, r%Gamma, r%Lambda)
@@ -2265,19 +2305,9 @@ module dust_charging
                 r%dGamma = (gam1 - r%Gamma)/h
                 r%dLambda = (lam1 - r%Lambda)/h
             end if
-        end if
-        st%valid = .true.
-        st%discrete = disc
-        st%Zstar = Zs
-        st%Zsigma = r%Zsigma
-
-        ! 3. sens: d/d ln S and d/d ln N (pyCALIMA GroupChargingTable._sensitivities), and the anchor
-        st%anchored = .false.
-        if (.not. present(sens)) return
-        if (.not. sens .or. rtg(ii)%nG > RTG_MAXG) return
-        if (disc) then
-            ! d ln P(Z): cumulative sums of d ln Up - d ln Down, as the d/d ln T above; heating ~ S,
-            ! cooling and autoionisation ~ N
+        end subroutine wide_closure
+        subroutine discrete_sens()
+            ! d ln P(Z): cumulative sums of d ln Up - d ln Down, as the d/d ln T; heating ~ S, cooling and autoionisation ~ N
             cS(1) = 0d0
             cN(1) = 0d0
             do k = lo, hi - 1
@@ -2285,12 +2315,8 @@ module dust_charging
                 cS(k - lo + 2) = cS(k - lo + 1) + b_ph(k - b_base)/cb
                 cN(k - lo + 2) = cN(k - lo + 1) + ((cb - b_ph(k - b_base))/cb - 1d0)
             end do
-            cbS = 0d0
-            cbN = 0d0
-            do k = lo, hi
-                cbS = cbS + b_P(k - b_base)*cS(k - lo + 1)
-                cbN = cbN + b_P(k - b_base)*cN(k - lo + 1)
-            end do
+            call centre(cS)
+            call centre(cN)
             r%dZmean_S = 0d0
             r%dZmean_N = 0d0
             dvS = 0d0
@@ -2300,8 +2326,6 @@ module dust_charging
             r%dLambda_S = 0d0
             r%dLambda_N = 0d0
             do k = lo, hi
-                cS(k - lo + 1) = cS(k - lo + 1) - cbS
-                cN(k - lo + 1) = cN(k - lo + 1) - cbN
                 r%dZmean_S = r%dZmean_S + b_P(k - b_base)*(cS(k - lo + 1)*dble(k))
                 r%dZmean_N = r%dZmean_N + b_P(k - b_base)*(cN(k - lo + 1)*dble(k))
                 dvS = dvS + b_P(k - b_base)*(cS(k - lo + 1)*dble(k)*dble(k))
@@ -2350,9 +2374,9 @@ module dust_charging
                     if (sw > 0d0) st%adla(j, :) = st%adla(j, :)/sw
                 end do
             end if
-        else
-            ! the root moves by sigma^2 dg/dtheta; sigma with the slope across Z* -+ 1/2; Gamma and
-            ! Lambda (at Z* + 1/2) along their slope over [Z*, Z* + 1]
+        end subroutine discrete_sens
+        subroutine wide_sens()
+            ! a wide P(Z): the root moves by sigma^2 dg/dtheta; sigma with the slope across Z* -+ 1/2; Gamma and Lambda (at Z* + 1/2) along their slope over [Z*, Z* + 1]
             call dg_dtheta(Zs, sg)
             call dg_dtheta(Zs - 0.5d0, sgm)
             call dg_dtheta(Zs + 0.5d0, sgp)
@@ -2374,18 +2398,19 @@ module dust_charging
             else if (alpha_mode /= RTG_ALPHA_NONE) then
                 call recomb_gauss(Zs, sigma, st%alg)
             end if
-        end if
-        call anchor_kernels(Zs, st)
-        st%anchored = .true.
-        st%aT = T
-        st%ane = ne
-        st%anion = (/n_Hp, n_Hep, n_Hepp/)
-        st%acred = c_red
-        st%aG0 = G0_bg
-        st%aNp = 0d0
-        st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
-        st%ar = r
-    contains
+        end subroutine wide_sens
+        subroutine centre(cc)
+            ! cc - <cc> over the window's P (a d ln P relative to its mean)
+            real(dp), intent(inout) :: cc(1 - MAX_DISCRETE_STATES:NBUF)
+            real(dp) :: m
+            m = 0d0
+            do k = lo, hi
+                m = m + b_P(k - b_base)*cc(k - lo + 1)
+            end do
+            do k = lo, hi
+                cc(k - lo + 1) = cc(k - lo + 1) - m
+            end do
+        end subroutine centre
         subroutine dg_dtheta(z, d)
             ! dg/d ln S and dg/d ln N at charge z (Up at z, Down at z + 1 ~ n_e)
             real(dp), intent(in) :: z
