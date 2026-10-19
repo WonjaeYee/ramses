@@ -165,7 +165,7 @@ contains
 
     subroutine compute_dust_precool(dinfo, G0_total, Tk, ne,&
                                     &nElement, xelem_ions, nH2, nCO, &
-                                    & Np)
+                                    & Np, ion_rec)
         ! Pre-computes the dust and PAH cooling and heating rates for the given local conditions, 
         ! which can then be used in subsequent calls to compute_dust_coolrates to save computational time.
         ! dinfo --> the DustChemistryInfo instance to update with the computed rates
@@ -177,6 +177,8 @@ contains
         ! nH2 --> local molecular hydrogen density (cm^-3)
         ! nCO --> local carbon monoxide density (cm^-3)
         ! Np --> the radiation energy density (#/cm^3) for each radiation group
+        ! ion_rec --> .true. in the RTZ step's call at T: with dust_ion_recombination, also fill
+        !             dinfo%rec_ion_rate (the cooling solver's T(1 +- 1e-5) calls leave it as it is)
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma,&
                                 compute_dust_charge_dist, compute_Coulomb_focusing
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate,&
@@ -198,6 +200,7 @@ contains
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: nH2, nCO
         real(dp), dimension(1:dinfo%nGroups), intent(in), optional :: Np
+        logical, intent(in), optional :: ion_rec
 
         ! ---- Local variables ----
         integer :: ii,j,idx_g,idx_T
@@ -213,9 +216,17 @@ contains
         integer :: path, ic
         integer, dimension(1:dinfo%ndust) :: paths
         real(dp) :: rate(RTG_NRI, 1:dinfo%ndust), tot(RTG_NRI)
-        real(dp) :: alpha_bins(RTG_NRI, 1:dinfo%ndust), n_grain
+        real(dp) :: alpha_bins(RTG_NRI, 1:dinfo%ndust)
+        logical :: rec
+
+        ! the grain-assisted ion recombination rates, in the RTZ step's call at T only
+        rec = .false.
+        if (dust_ion_recombination .and. present(ion_rec)) rec = ion_rec
 
         if (dinfo%ndust > 0) then
+            do ii = 1, dinfo%ndust
+                dinfo%n_dust(ii) = dinfo%rho_dust(ii) / dustbins_props(ii)%mgrain   ! grains per cm^3
+            end do
             ! 1. Compute the equilibrium dust charge
             use_rtg = (trim(charging_model) == 'WDB06rt') .and. present(Np)
             use_tab = trim(charging_model) == 'WDB06tab'
@@ -295,26 +306,26 @@ contains
                     rtg_Pinj(ii) = rr%Gamma
                     rtg_Prec(ii) = rr%Lambda
                 end do
-                ! grain-assisted recombination (pyCALIMA solve_cell): the fit only for the wide bins
-                ! that carry more than RTG_RECOMB_IMPORTANT of the cell's rate of some ion
-                if (dust_ion_recombination .and. any(paths == 0)) then
-                    rate = 0d0
+                if (rec) then
+                    ! grain-assisted recombination (pyCALIMA solve_cell): the fit only for the wide bins
+                    ! that carry more than RTG_RECOMB_IMPORTANT of the cell's rate of some ion
+                    if (any(paths == 0)) then
+                        rate = 0d0
+                        do ii = 1, dinfo%ndust
+                            if (paths(ii) == 0) rate(:, ii) = dinfo%n_dust(ii)*rtg_last(ii)%r%alpha
+                        end do
+                        tot = sum(rate, dim=2)
+                        do ii = 1, dinfo%ndust
+                            if (paths(ii) /= 0) cycle
+                            if (rtg_last(ii)%r%discrete) cycle
+                            if (maxval(rate(:, ii)/merge(tot, 1d0, tot > 0d0), mask=tot > 0d0) <= RTG_RECOMB_IMPORTANT) cycle
+                            call rtgroups_refine_alpha(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
+                                                       dinfo%G0_background, rtg_last(ii)%r)
+                        end do
+                    end if
+                    ! alpha of each bin's solve in this cell (paths 0 and 2; with the flag on there is no path 1)
                     do ii = 1, dinfo%ndust
-                        if (paths(ii) == 0) rate(:, ii) = (dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain)*rtg_last(ii)%r%alpha
-                    end do
-                    tot = sum(rate, dim=2)
-                    do ii = 1, dinfo%ndust
-                        if (paths(ii) /= 0) cycle
-                        if (rtg_last(ii)%r%discrete) cycle
-                        if (maxval(rate(:, ii)/merge(tot, 1d0, tot > 0d0), mask=tot > 0d0) <= RTG_RECOMB_IMPORTANT) cycle
-                        call rtgroups_refine_alpha(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
-                                                   dinfo%G0_background, rtg_last(ii)%r)
-                    end do
-                end if
-                if (dust_ion_recombination) then
-                    ! alpha of the last full solve of each bin: this cell's, also for the T +- 1e-5 calls it served
-                    do ii = 1, dinfo%ndust
-                        if (paths(ii) >= 0 .and. rtg_last(ii)%valid) alpha_bins(:, ii) = rtg_last(ii)%r%alpha
+                        if (paths(ii) >= 0) alpha_bins(:, ii) = rtg_last(ii)%r%alpha
                     end do
                 end if
             else
@@ -325,14 +336,13 @@ contains
                     call compute_dust_charge_sigma(ii,G0_total,Tk,ne,dinfo%Z_sigma(ii),idx_g,idx_T)
                 end do
             end if
-            if (dust_ion_recombination .and. (use_rtg .or. use_tab)) then
+            if (rec .and. (use_rtg .or. use_tab)) then
                 ! grain-assisted X+ -> X per X+ ion [s^-1]: sum over the bins of n_grain alpha (dust bins only)
                 dinfo%rec_ion_rate = 0d0
                 do ii = 1, dinfo%ndust
                     if (dinfo%rho_dust(ii) <= 0d0) cycle
-                    n_grain = dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain
                     do j = 1, RTG_NRI
-                        dinfo%rec_ion_rate(RI_ATOMIC(j)) = dinfo%rec_ion_rate(RI_ATOMIC(j)) + n_grain*alpha_bins(j, ii)
+                        dinfo%rec_ion_rate(RI_ATOMIC(j)) = dinfo%rec_ion_rate(RI_ATOMIC(j)) + dinfo%n_dust(ii)*alpha_bins(j, ii)
                     end do
                 end do
             end if
@@ -402,7 +412,6 @@ contains
 
             ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
             do ii = 1, dinfo%ndust
-                dinfo%n_dust(ii) = dinfo%rho_dust(ii) / dustbins_props(ii)%mgrain
                 dinfo%Pcoll_dust(ii) = dinfo%Pcoll_dust(ii) * dinfo%n_dust(ii)
                 ! print*,'ii,dinfo%Pcoll_dust(ii),dinfo%n_dust(ii): ',ii,dinfo%Pcoll_dust(ii),dinfo%n_dust(ii)
                 dinfo%Prec_dust(ii) = dinfo%Prec_dust(ii) * dinfo%n_dust(ii)

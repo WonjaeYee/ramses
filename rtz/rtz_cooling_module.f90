@@ -1586,7 +1586,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       call compute_dust_precool(dust_helper, advected_G0+UV_background_G0, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
-                                 ,dNp)
+                                 ,dNp, ion_rec=.true.)
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_end)
          t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
