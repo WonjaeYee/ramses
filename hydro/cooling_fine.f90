@@ -81,7 +81,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use constants, only: a_r, Myr2sec, mH, pi, rhoc, twopi
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb,dustbins_props,pahbins_props, &
-                          tva_test_mode,TVA_TEST_IRTRAP,tva_wdrift,tva_wdrift_batch,ntva
+                          tva_test_mode,TVA_TEST_IRTRAP,tva_wdrift,tva_wdrift_batch,ntva,pah_fion_vec
   use dust_utils, only: cmp_sigma_turb
   use dust_optics, only: get_IR_mean_cross_sections
 #endif
@@ -146,7 +146,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
   integer :: jbin
   ! IR trapping from the actual CALIMA Rosseland extinction
-  real(dp) :: chi_R_IR, E_IR_loc, T_rad_loc
+  real(dp) :: chi_R_IR, E_IR_loc, T_rad_loc, f_ion_pah
   real(dp),dimension(max(1,ndust))  :: sigR_IR_dust, sigP_IR_dust
   real(dp),dimension(max(1,2*npah)) :: sigR_IR_pah,  sigP_IR_pah
 #endif
@@ -229,6 +229,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         end if
      end do
      if(nleaf.eq.0)cycle
+#ifdef CALIMA
+     if(npah > 0) pah_fion_vec = -1d0   ! a new vector: no PAH charge from the chemistry yet
+#endif
 
 #ifdef RTZ_ONE_CELL_TEST
      ! force to read first row
@@ -1179,12 +1182,15 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
               chi_R_IR = chi_R_IR + sigR_IR_dust(jbin) * rho_dust(i,jbin) &
                                   / dustbins_props(jbin)%mgrain
            end do
-           ! PAHs: the local charge fraction is not available here, so take the
-           ! mean of the two charge states. Their IR opacity is a small
-           ! correction (PAHs are far smaller than IR wavelengths).
+           ! PAHs: neutral and ionised weighted by the cell's ion fraction from the
+           ! chemistry's last sub-step, or the mean of the two charge states where
+           ! the chemistry did not set it (a small correction either way: PAHs are
+           ! far smaller than IR wavelengths)
            do jbin = 1, npah
-              chi_R_IR = chi_R_IR + 0.5d0 * (sigR_IR_pah(2*(jbin-1)+1)      &
-                                           + sigR_IR_pah(2*(jbin-1)+2))     &
+              f_ion_pah = pah_fion_vec(i,jbin)
+              if (f_ion_pah < 0d0) f_ion_pah = 0.5d0
+              chi_R_IR = chi_R_IR + ((1d0-f_ion_pah) * sigR_IR_pah(2*(jbin-1)+1) &
+                                   + f_ion_pah * sigR_IR_pah(2*(jbin-1)+2))       &
                                   * rho_pah(i,jbin) / pahbins_props(jbin)%mpah
            end do
            tau = 1.5d0 * dx_loc * scale_l * chi_R_IR
