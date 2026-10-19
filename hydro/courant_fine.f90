@@ -234,7 +234,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul) = max((gamma-one)*uu(k,neul),uu(k,1)*smallp)
 #else
-     if (dust_tva .and. ntva>0) then
+     if (dust_tva) then
         eps_total=0.0d0
         do id = 1,ntva
            eps_total=eps_total+uu(k,ipah+id-1)/uu(k,1)
@@ -270,7 +270,7 @@ subroutine cmpdt(uu,gg,dx,dt,ncell)
 #ifndef CALIMA
      uu(k,neul)=sqrt(uu(k,neul)/uu(k,1))
 #else
-      if (dust_tva .and. ntva>0) then
+      if (dust_tva) then
          eps_total=0.0d0
          do id = 1,ntva
             eps_total=eps_total+uu(k,ipah+id-1)/uu(k,1)
