@@ -1,7 +1,7 @@
 module dust_interface
     use amr_commons, only:dp,ndim
     use amr_parameters, only: nvector
-    use dust_charging_rtgroups, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, RTG_RECOMB_IMPORTANT, &
+    use dust_charging, only: RTGState, RTGResult, RTG_NRI, RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, RTG_RECOMB_IMPORTANT, &
                                       RI_ATOMIC
     use dust_radiation, only: TdustLin
     use constants
@@ -202,7 +202,7 @@ contains
                                             compute_pah_charge_equilibrium
         use dust_radiation, only: update_T_dust, serve_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
-        use dust_charging_rtgroups, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, &
+        use dust_charging, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, &
                                           rtgroups_predict, rtgroups_coulomb_ratio
 #ifdef RT
         use rt_parameters, only: rt_isIR
