@@ -229,7 +229,8 @@ the momentum transfer keeps the same form as `tests/dust_tva/levgas_rt15`.
 ### Two limitations, both deliberate and both warned about at startup
 
 1. **No dust -> gas thermal coupling.** `compute_dust_precool` fills `%Pcoll_dust`, `%Pinj_dust`
-   and `%Prec_dust`, but the routine that applies them to the gas (`compute_dust_coolrates`) is
+   and `%Prec_dust`, which enter the grains' energy balance (`update_T_dust`), but the routine that
+   applies them to the gas (`compute_dust_coolrates`) is
    reached only from `rtz_coolrates_module`'s `all_cooling`, which does not exist in this build.
    Dust absorbs IR, heats up and re-emits into the IR band via `Prad_dust`, but dust recombination
    cooling, photoelectric heating and dust-gas collisional cooling do not reach `T_gas`. This is
