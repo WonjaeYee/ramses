@@ -133,8 +133,10 @@ The typical order is:
   tests use `bin_dust` with `RT=0 RTZ=0 CALIMA=1 NGROUPS=0 NDIM=1 NDUST=1 NPAH=0 NDCHEMTYPE=1`
   (`NDCHEMTYPE` must match the namelist's compositions). Radiation pressure
   (`dust_radpressure_module`) and the LW groups need RT and are compiled only with it; without RT the
-  default `charging_model` is `WDB06isrf`, whose tables are for the shipped grain bins, so idealised
-  setups with other grain sizes set `charging_model='Ibanez2019'`. CALIMA with plain RT (`RT=1
+  default `charging_model` is `WDB06isrf`. Its tables are per grain size: setups whose bins differ from
+  the shipped ones name the table of each bin with `charging_table_label` (e.g. `'DustBin_02'`, the
+  0.1 um graphite table, for a single 0.1 um carbon bin), or export one with pyCALIMA
+  (`export_dust_charging_rtgroups`, then `export_dust_charging_isrf`). CALIMA with plain RT (`RT=1
   RTZ=0`) also builds.
 
 ## Trapped IR radiation pressure on the dust

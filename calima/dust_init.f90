@@ -216,16 +216,16 @@ module dust_init
         ! read_CALIMA_params, before read_rt_params, where rt_isIRtrap and rt_isIR are still at
         ! their defaults (and rt_use_hll is set later, in rt_init)
         select case (trim(charging_model))
-        case ('Ibanez2019', 'WDB06isrf')
+        case ('WDB06isrf')
         case ('WDB06rt')
 #ifndef RT
             if (myid == 1) write(*,*) 'Error: charging_model='//trim(charging_model)//' needs RT photon groups; ', &
-                'use WDB06isrf (uniform ISRF) or Ibanez2019'
+                'use WDB06isrf (uniform ISRF)'
             check_params_dust = .false.
 #endif
         case default
-            if (myid == 1) write(*,*) 'Error: unknown charging_model='//trim(charging_model)//' (WDB06rt, ', &
-                'WDB06isrf or Ibanez2019; the old (gamma, T) charge tables and WDB06tab were removed)'
+            if (myid == 1) write(*,*) 'Error: unknown charging_model='//trim(charging_model)//' (WDB06rt or ', &
+                'WDB06isrf; Ibanez2019, the old (gamma, T) charge tables and WDB06tab were removed)'
             check_params_dust = .false.
         end select
         if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06isrf') then
@@ -1321,11 +1321,10 @@ module dust_init
         ! 9. Read the dust collisional tables
         if (dust_coll_cooling) call init_dust_collisional_tables
 
-        ! 10. Read the uniform-ISRF charging tables: charging_model='WDB06isrf', the PE heating of the
-        ! models that do not compute their own (WDB06rt does), and the Coulomb factors of the WDB06rt
-        ! cells without local photons
-        if (trim(charging_model) == 'WDB06isrf' .or. (dust_pe_heating .and. trim(charging_model) /= 'WDB06rt') &
-            .or. (Coulomb_precompute .and. trim(charging_model) == 'WDB06rt')) call init_dust_charging_isrf
+        ! 10. Read the uniform-ISRF charging tables: charging_model='WDB06isrf', and the Coulomb factors
+        ! of the WDB06rt cells without local photons
+        if (trim(charging_model) == 'WDB06isrf' .or. (Coulomb_precompute .and. trim(charging_model) == 'WDB06rt')) &
+            call init_dust_charging_isrf
 
         ! 11b. Read the dust IR emission tables
         call init_dust_IR_emission_tables
@@ -1376,7 +1375,7 @@ module dust_init
                 dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,&
                 dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
                 dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
-                dust_sublimation,dust_pe_heating,dust_pe_heating_isrf,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
+                dust_sublimation,dust_pe_heating,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&
                 ! PAH physics flags
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
@@ -1384,8 +1383,8 @@ module dust_init
                 dust_tva, dust_radpressure, dust_drift_collisions, use_w_drift_test, w_drift_test,drag_coefficient,&
                 tva_wmax_cs,drag_model,&
                 ! Dust modelling options
-                sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
-                dust_rtgroups_debug,dust_rtgroups_debug_max,dust_rtgroups_verify,dust_charging_timer,dust_ion_recombination,&
+                sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,charging_table_label,ice_model,&
+                dust_ion_recombination,&
                 rtg_predict_tol,rtg_predict_tol_shape,&
                 ! PAH modelling options
                 photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&

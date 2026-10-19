@@ -300,7 +300,6 @@
     dust_coll_lowT=.false. ! Extend collisional cooling to low T based on Hollenbach and McKee
     dust_coll_charge=.false. ! Coulomb effects on cooling efficiency
     dust_pe_heating=.false. ! Activate the grain-assisted PEH and recombination cooling
-    dust_pe_heating_isrf=.false. ! PEH and recombination using ISRF-averaged tables
     poppe_ice_enhancement=.false. ! Enhancement of v_thres in coagulation due to ice formation
     H2ondust=.false. ! Activate H2 formation on dust grains
     
@@ -324,7 +323,6 @@
     coagulation_model='Smoluchowski1916'
     dust_velocity_model='Hirashita2019'
     charging_model='WDB06isrf' ! dust processes are off; WDB06isrf (the replacement of RM2026) reads only the shipped calima_data tables
-    nZmix=3 ! Number of representative charges to reconstruct grain-ion interactions
 
     !----------- PAH modelling choices -----------!
     photolysis_model='RM2026'

@@ -654,6 +654,7 @@ contains
         ! this --> the DustChemistryInfo instance to reset
         class(DustChemistryInfo), intent(inout) :: this
 
+        this%icell = 0   ! no WDB06rt warm state until rtz_cool_step names its cell
         if (allocated(this%rho_dust)) this%rho_dust = 0d0
         if (allocated(this%n_dust)) this%n_dust = 0d0
         if (allocated(this%rho_pah)) this%rho_pah = 0d0

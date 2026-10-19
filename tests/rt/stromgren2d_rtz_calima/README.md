@@ -5,7 +5,7 @@
   heating and recombination cooling with the two charging models: the WDB06 charge
   balance under a uniform Mathis ISRF at the local G0, tabulated on (T, n_e/G0)
   (`charging_model='WDB06isrf'`, `calima/dust_charging.f90`), and the per-group charge
-  balance on the local RT photon groups (`'WDB06rt'`, `calima/dust_charging_rtgroups.f90`).
+  balance on the local RT photon groups (`'WDB06rt'`, `calima/dust_charging.f90`).
 * Keywords: RTZ, CALIMA, dust charging, photoelectric heating, Stromgren
 
 Same chemistry, dust (4 bins) and PAHs (2 bins) as the 3D
@@ -30,9 +30,8 @@ CALIMA tables plus, from pyCALIMA:
 * `WDB06isrf`: `python -m pycalima.models.dust_charge.export_dust_charging_isrf` (built from
   the RT-group tables; RAMSES checks each table's grain radius against its bin).
 
-`data_dir` in `&HYDRO_PARAMS` must point to the RTZ data.
-`dust_charging_timer=.true.` prints, per rank, the RTZ cell sub-steps and the time of the
-steps and of the grain charging.
+`data_dir` in `&HYDRO_PARAMS` must point to the RTZ data. The cost of the grain charging and of the
+rest of the chemistry is measured by the tier-3 suite (RAMSES_dev tests_final/suites, sampling), not by the code.
 
     mpirun -np 4 ./ramses2d stromgren2d_rtz.nml
 
@@ -46,14 +45,9 @@ every bin and the PE heating and recombination cooling per H, each as the run's 
 gives them on its cell state (pyCALIMA `solve_cell`, or `isrf_lookup` at the G0 of the groups
 with 5.6 < egy < 13.6 eV, which is what RTZ passes to CALIMA).
 
-To check RAMSES against pyCALIMA, restart a run with `nrestart=3`,
-`dust_rtgroups_verify=.true.` and `dust_rtgroups_debug_max=40000` (it dumps every call and
-stops), then
-
-    python PYCALIMA/diagnostics/dust_charge/compare_ramses_rtgroups.py RUN --tables DIR
-
-and, for the errors of WDB06rt against the full charge distribution,
-`PYCALIMA/diagnostics/dust_charge/check_charging_methods_errors.py`.
+The agreement of the WDB06rt solver with pyCALIMA (a transcription of
+`pycalima.models.dust_charge.rt_group_charging`) is checked in pyCALIMA, and the errors of WDB06rt against the
+full charge distribution by `PYCALIMA/diagnostics/dust_charge/check_charging_methods_errors.py`.
 
 ## Results
 

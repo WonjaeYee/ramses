@@ -422,7 +422,7 @@ SUBROUTINE read_rt_groups()
 #ifdef CALIMA
   use dust_optics
   use dust_commons, only: charging_model
-  use dust_charging_rtgroups, only: init_dust_charging_rtgroups
+  use dust_charging, only: init_dust_charging_rtgroups
 #endif
   use SED_module
   implicit none

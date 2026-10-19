@@ -112,7 +112,6 @@ dust_sputtering=.false.
 dust_coagulation=.true.     ! Enable grain coagulation
 coagulation_model='Aoyama2017'
 charging_model='WDB06isrf'
-nZmix=3
 
 !----------- Efficiency parameters -----------!
 Sconstant=0.333333333d0
