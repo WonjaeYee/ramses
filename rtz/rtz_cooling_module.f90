@@ -62,9 +62,6 @@ module rtz_cooling_module
    ! same rates at every substep and in every cell (as charge_exchange_module does for its rates)
    real(dp), dimension(27,27), save :: rec_T = -1d0, rec_rate = 0d0
    real(dp), dimension(27,27), save :: cion_T = -1d0, cion_rate = 0d0
-   ! Number of ion slots in use, max over the tracked elements of n_ions + n_mol: the state
-   ! copies of the substep loop run over xion(:, 1:nslot) instead of all 27 x 27
-   integer, save :: nslot = 0
 
   
   ! temporal brutal force trial
@@ -249,13 +246,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
    integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
    
-   if (nslot == 0) then
-      do iElement = 1, n_elements
-         if (elements(iElement)%atomic_number > 0) &
-            nslot = max(nslot, elements(iElement)%n_ions + elements(iElement)%n_mol)
-      end do
-      nslot = max(nslot, 3)          ! the H2 slot (1,3) is read whenever isH2_rtz
-   end if
    ! the slots above nslot are never read; keep them defined for the whole-array updates of the
    ! equilibrium mode
    dXion(:,nslot+1:n_elements) = 0d0
