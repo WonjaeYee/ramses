@@ -782,15 +782,11 @@ subroutine output_frame()
                                      uvar = uold(ind_cell(i),4) / max(uold(ind_cell(i),1),smallr)
 #endif
 
-                                     ! Metallicity map
+                                     ! Metallicity map: the gas-phase metals (metal_idx, set in
+                                     ! read_hydro_params; with RTZ the elements beyond H and He)
                                   else if(movie_vars(kk).eq.i_mv_metallicity)then
                                      ok_frame=.true.
-                                     ! NOTE (RTZ): imetal is the first tracked element's
-                                     ! density, i.e. HYDROGEN, not a metallicity -- so this
-                                     ! movie field is the hydrogen mass fraction in RTZ runs.
-                                     ! Not fixed; build Z from the element slots (e.g. O/H) if
-                                     ! a real metallicity map is needed.
-                                     uvar = uold(ind_cell(i),imetal)/max(uold(ind_cell(i),1),smallr)
+                                     uvar = sum(uold(ind_cell(i),metal_idx(1:n_metal_idx)))/max(uold(ind_cell(i),1),smallr)
 
                                      ! Any scalars map
                                   else if(movie_vars(kk).eq.i_mv_var)then
@@ -853,26 +849,8 @@ subroutine output_frame()
 #ifdef CALIMA
                                   if(movie_vars(kk).eq.i_mv_DTM)then
                                      ok_frame=.true.
-                                     ! Gas-phase metal density. The element block at
-                                     ! imetal is packed over elements(:) with
-                                     ! atomic_number > 0, so it starts with H (and He
-                                     ! when helium is tracked); neither is a metal.
-                                     rho_metal_loc = 0.0d0
-#ifdef RTZ
-                                     e_counter = 0
-                                     do iii = 1, n_elements
-                                        if (elements(iii)%atomic_number.gt.0) then
-                                           if (elements(iii)%atomic_number.gt.2) &
-                                                & rho_metal_loc = rho_metal_loc &
-                                                & + uold(ind_cell(i), imetal + e_counter)
-                                           e_counter = e_counter + 1
-                                        end if
-                                     end do
-#else
-                                     do j_band = 1, nmetals
-                                        rho_metal_loc = rho_metal_loc + uold(ind_cell(i), imetal + j_band - 1)
-                                     end do
-#endif
+                                     ! Gas-phase metal density (metal_idx: not H, not He)
+                                     rho_metal_loc = sum(uold(ind_cell(i),metal_idx(1:n_metal_idx)))
                                      ! Total dust includes the PAH bins, as in
                                      ! rtz_cooling_module.f90:909-910
                                      rho_dust_loc = sum(uold(ind_cell(i),idust:idust+ndust-1))

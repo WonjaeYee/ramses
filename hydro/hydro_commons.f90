@@ -23,6 +23,10 @@ module hydro_commons
   ! consistency diagnostics accumulated in cooling_fine since the last report
   integer(kind=8)::ps_nbad_top=0,ps_nbad_child=0,ps_ncheck=0,ps_nrenorm=0
   real(dp)::ps_maxdev_top=0,ps_maxdev_child=0
+  ! The uold slots of the gas-phase metals, set once in read_hydro_params: with RTZ the tracked elements beyond H and
+  ! He, without RTZ the metallicity scalars. Used by the metallicity and DTM movie maps and CALIMA's box masses.
+  integer::n_metal_idx=0
+  integer,dimension(1:max(nmetals,1))::metal_idx=0
 end module hydro_commons
 
 module const
