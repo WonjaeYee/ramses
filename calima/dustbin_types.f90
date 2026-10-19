@@ -3,9 +3,12 @@ module dustbin_types
     use hydro_parameters, only:n_elements
     use dust_utils, only: interpolate1D_eqw, interpolate1D_noeqw, &
                           interpolate2D_eqw, interpolate2D_noeqw, &
-                          interpolate3D_eqw, interpolate3D_noeqw, locate, locate_eqw
+                          interpolate3D_eqw, interpolate3D_noeqw, locate, locate_eqw, alloc_bytes
 
     implicit none
+
+    ! bytes of the DustTable tables of this rank, added as each one is initialised (report_calima_memory)
+    integer(kind=8) :: dust_table_bytes = 0
 
     ! ==== Dust table derived type ====
     type DustTable
@@ -467,8 +470,11 @@ contains
             write(*,*) 'Found spacing between element 1 and 2: ', this%tab1d(2,1) - this%tab1d(1,1)
         end if
 
-        ! 4. Set the table as initialised
+        ! 4. Set the table as initialised, and count its memory
         this%initialised = .true.
+        dust_table_bytes = dust_table_bytes + alloc_bytes(this%ipos_zero) + alloc_bytes(this%npts) &
+                         + alloc_bytes(this%tab1d) + alloc_bytes(this%tab2d) + alloc_bytes(this%tab3d) &
+                         + alloc_bytes(this%dx) + alloc_bytes(this%inv_dx)
     end subroutine initialise_dust_table
 
     subroutine init_dust_chemistry_info(this, ndust, npah, nGroups, ncharge_pah_max, nion_charges)

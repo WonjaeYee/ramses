@@ -13,7 +13,7 @@ module dust_interface
     public :: compute_dust_rad_rates,compute_dust_precool,&
             compute_dust_coolrates,compute_local_anisotropy_factor,&
             compute_dust_update,rtgroups_reset_warm,store_pah_ion_fraction,&
-            rtgroups_ir_emitted
+            rtgroups_derivative_calls
 
     ! Cache to avoid automatic array allocations in compute_dust_update
     real(dp), allocatable, save, target :: y_gas_cache(:,:), y_gas_out_cache(:,:)
@@ -46,6 +46,7 @@ module dust_interface
     ! ions RI_ATOMIC per grain. The routines are chosen once from charging_model (charge_select).
     type ChargeOut
         logical :: has_pe = .false., has_alpha = .false.
+        logical :: want_alpha = .false.   ! in: the call needs the grain-assisted recombination (alpha)
         real(dp) :: Pinj(1:ndust) = 0d0, Prec(1:ndust) = 0d0          ! erg/s per grain
         integer :: Dmode(1:ndust) = 0
         real(dp) :: D(ISRF_ND, 1:ndust) = 1d0
@@ -64,6 +65,8 @@ module dust_interface
     ! with and without the cell's RT photon densities (Np present or not in compute_dust_precool)
     procedure(charge_routine), pointer, save :: charge_with_Np => null(), charge_without_Np => null()
     real(dp), dimension(0), save :: no_Np
+    ! .true. during the cooling solver's T(1 + 1e-5) call of an RTZ sub-step (rtgroups_derivative_calls)
+    logical, save :: rtg_dT_calls = .false.
 
 contains
     subroutine store_pah_ion_fraction(dinfo, icell)
@@ -98,21 +101,16 @@ contains
         td_valid = .false.
     end subroutine rtgroups_reset_warm
 
-    subroutine rtgroups_ir_emitted(ig, Tk, ne, Np_ig)
-        ! WDB06rt with rt_isIR: rtz_cool_step adds the sub-step's dust IR emission to group ig
-        ! after the precool solve at (Tk, ne) and before the cooling solver's T(1 +- 1e-5)
-        ! calls, which only need dC/dT. The bins just solved take the new N_ig as theirs, so
-        ! those calls are served from the precool solve's d/d ln T (rtg_served), as without
-        ! rt_isIR, instead of two more full solves whose warm-started roots need not agree.
+    subroutine rtgroups_derivative_calls(on)
+        ! WDB06rt: rtz_cool_step brackets the cooling solver's T(1 +- 1e-5) calls with on = .true.
+        ! and .false. They need only dC/dT and have the inputs of the sub-step's precool solve but T
+        ! (and, with rt_isIR, the dust IR emission it added to the IR group in between), so its bins
+        ! are served from that solve's d/d ln T (rtg_served), instead of two more full solves whose
+        ! warm-started roots need not agree.
         implicit none
-        integer, intent(in) :: ig
-        real(dp), intent(in) :: Tk, ne, Np_ig
-        integer :: ib
-        if (.not. allocated(rtg_last)) return
-        do ib = 1, size(rtg_last)
-            if (rtg_last(ib)%valid .and. rtg_last(ib)%T == Tk .and. rtg_last(ib)%ne == ne) rtg_last(ib)%Np(ig) = Np_ig
-        end do
-    end subroutine rtgroups_ir_emitted
+        logical, intent(in) :: on
+        rtg_dT_calls = on
+    end subroutine rtgroups_derivative_calls
 
     subroutine compute_local_anisotropy_factor(dinfo,Fp,Np)
         ! Computes the local radiation anisotropy factor and solid angle 
@@ -268,9 +266,17 @@ contains
         logical :: skip_coulomb
         logical :: need_T, need_Z   ! the grain temperature, the grain charge, are used
         type(ChargeOut) :: co
-        real(dp) :: n_grain
+        logical :: rec
+
+        ! the grain-assisted ion recombination rates in the RTZ step's call at T only, not in the
+        ! cooling solver's T(1 + 1e-5) call for the rates (rates_only)
+        rec = dust_ion_recombination
+        if (present(rates_only)) rec = rec .and. .not. rates_only
 
         if (dinfo%ndust > 0) then
+            do ii = 1, dinfo%ndust
+                dinfo%n_dust(ii) = dinfo%rho_dust(ii) / dustbins_props(ii)%mgrain   ! grains per cm^3
+            end do
             ! The grain temperature and charge only where something uses them: T_dust in the gas-grain
             ! collisional heating, H2 formation, the dust and PAH processes, the dust IR emission and
             ! the equilibrium-test output; the charge in those (through the T_dust balance), the PE
@@ -289,6 +295,7 @@ contains
             ! 1. Compute the equilibrium dust charge
             co%has_pe = .false.
             co%has_alpha = .false.
+            co%want_alpha = rec
             co%Dmode = 0
             co%alpha = 0d0
             if (need_Z) then
@@ -300,14 +307,13 @@ contains
                     call charge_without_Np(dinfo, G0_total, Tk, ne, nElement, xelem_ions, no_Np, co)
                 end if
             end if
-            if (dust_ion_recombination .and. co%has_alpha) then
+            if (rec .and. co%has_alpha) then
                 ! grain-assisted X+ -> X per X+ ion [s^-1]: sum over the bins of n_grain alpha (dust bins only)
                 dinfo%rec_ion_rate = 0d0
                 do ii = 1, dinfo%ndust
                     if (dinfo%rho_dust(ii) <= 0d0) cycle
-                    n_grain = dinfo%rho_dust(ii)/dustbins_props(ii)%mgrain
                     do j = 1, RTG_NRI
-                        dinfo%rec_ion_rate(RI_ATOMIC(j)) = dinfo%rec_ion_rate(RI_ATOMIC(j)) + n_grain*co%alpha(j, ii)
+                        dinfo%rec_ion_rate(RI_ATOMIC(j)) = dinfo%rec_ion_rate(RI_ATOMIC(j)) + dinfo%n_dust(ii)*co%alpha(j, ii)
                     end do
                 end do
             end if
@@ -387,7 +393,6 @@ contains
 
             ! 5. Now convert all the rates from erg/s per grain to erg/s/cm3
             do ii = 1, dinfo%ndust
-                dinfo%n_dust(ii) = dinfo%rho_dust(ii) / dustbins_props(ii)%mgrain
                 dinfo%Pcoll_dust(ii) = dinfo%Pcoll_dust(ii) * dinfo%n_dust(ii)
                 ! print*,'ii,dinfo%Pcoll_dust(ii),dinfo%n_dust(ii): ',ii,dinfo%Pcoll_dust(ii),dinfo%n_dust(ii)
                 dinfo%Prec_dust(ii) = dinfo%Prec_dust(ii) * dinfo%n_dust(ii)
@@ -649,21 +654,26 @@ contains
                 if (st%anchored) st%ar%alpha = rtg_last(ii)%r%alpha      ! predictions scale the fitted alpha
             end do
         end if
-        if (dust_ion_recombination) then
-            ! alpha of the last full solve of each bin: this cell's, also for the T +- 1e-5 calls it served
+        if (co%want_alpha) then
+            ! alpha of the last full solve of each bin: this cell's (with the flag on there is no uniform path)
             do ii = 1, dinfo%ndust
                 if (paths(ii) >= 0 .and. rtg_last(ii)%valid) co%alpha(:, ii) = rtg_last(ii)%r%alpha
             end do
         end if
     contains
         logical function rtg_served(ib)
-            ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T
+            ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T: in the
+            ! sub-step's T(1 +- 1e-5) calls by construction, else checked
             integer, intent(in) :: ib
             real(dp) :: x
             rtg_served = .false.
             if (.not. rtg_last(ib)%valid) return
             x = Tk/rtg_last(ib)%T
             if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
+            if (rtg_dT_calls) then
+                rtg_served = .true.
+                return
+            end if
             if (ne /= rtg_last(ib)%ne .or. n_Hp /= rtg_last(ib)%n_Hp .or. n_Hep /= rtg_last(ib)%n_Hep .or. &
                 n_Hepp /= rtg_last(ib)%n_Hepp .or. dinfo%G0_background /= rtg_last(ib)%G0 .or. &
                 dinfo%local_c /= rtg_last(ib)%c_red) return
@@ -695,7 +705,7 @@ contains
         co%has_pe = .true.
         co%has_alpha = .true.
         do ii = 1, dinfo%ndust
-            if (dust_ion_recombination) then
+            if (co%want_alpha) then
                 call isrf_lookup(ii, G0_total, Tk, ne, dinfo%Z_dust(ii), dinfo%Z_sigma(ii), co%Pinj(ii), co%Prec(ii), &
                                  co%D(:, ii), co%alpha(:, ii))
             else
