@@ -35,8 +35,8 @@ module dust_interface
 contains
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
-        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~0.7 kB
-        ! (RTGState: 88 reals), (nvector + 1) x ndust of them per rank.
+        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state (RTGState) is
+        ! 4 reals and 2 flags, (nvector + 1) x ndust of them per rank.
         implicit none
         integer, intent(in) :: ncell
         if (allocated(rtg_warm)) then
@@ -308,9 +308,8 @@ contains
                         if (paths(ii) /= 0) cycle
                         if (rtg_last(ii)%r%discrete) cycle
                         if (maxval(rate(:, ii)/merge(tot, 1d0, tot > 0d0), mask=tot > 0d0) <= RTG_RECOMB_IMPORTANT) cycle
-                        st => rtg_warm(ic, ii)
                         call rtgroups_refine_alpha(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, n_Hp, n_Hep, n_Hepp, &
-                                                   dinfo%G0_background, st, rtg_last(ii)%r)
+                                                   dinfo%G0_background, rtg_last(ii)%r)
                     end do
                 end if
                 if (dust_ion_recombination) then
