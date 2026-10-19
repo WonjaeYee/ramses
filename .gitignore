@@ -40,3 +40,5 @@ tests/**/ramses_*
 .vscode
 Makefile
 CLAUDE.md
+# run markers the dust_tva plot scripts write (which namelist variant made the outputs)
+tests/**/.variant

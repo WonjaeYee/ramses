@@ -133,16 +133,7 @@ SUBROUTINE rt_init_xion_vsweep(ind_grid, ngrid)
             end do
          end if
 #else
-        ! At low T (T/mu < 1e4 K), H2 collisional dissociation rates → 0
-        ! and D_H2 = 0 exactly (no UV photons at init). With any C_H2 > 0
-        ! (gas-phase formation via n_E_min floor), f_H2 → ∞ → all H in H2
-        ! → mu ≈ 2.67 > mu_right=2.3 → bisection diverges. The physical
-        ! initial state for cold neutral ISM is fully neutral atomic H.
-        if (T2 .lt. 1d4) then
-           nSpec = 0d0 ; nSpec(3) = nH   ! all H neutral atomic
-        else
-           call cmp_Equilibrium_Abundances(T2,nH,pHI_rates,mu,nSpec,Zsolar)
-        endif
+        call cmp_Equilibrium_Abundances(T2,nH,pHI_rates,mu,nSpec,Zsolar)
 
         ! UPDATE IONIZATION STATES
         if(isH2) then
@@ -259,20 +250,27 @@ SUBROUTINE cmp_Equilibrium_Abundances(T2,nH,phI_rates,mu,nSpec,Zsolar)
 !-------------------------------------------------------------------------
   use amr_commons,only:dp
   use rt_cooling_module
-  use rt_parameters,only:nIons
+  use rt_parameters,only:nIons,isHe
+  use cooling_module,only:Y
   implicit none
   real(dp) ::T2,nH
   real(dp),dimension(nIons)::phI_rates
   real(dp) ::mu,Zsolar
   real(dp),dimension(1:7)::nSpec!-----------------------------------------
-  real(dp) ::mu_old, err_mu, mu_left, mu_right, T, nTot
+  real(dp) ::mu_old, err_mu, mu_left, mu_right, T, nTot, mu_mol
   integer :: niter
 !-------------------------------------------------------------------------
+  ! The largest mu cmp_chem_eq can return is that of fully molecular gas,
+  ! with He counted only if tracked: 2/(1-Y) = 2.63 for Y=0.24 without He
+  ! (2.27 with it). The bisection bracket must contain it (+1%), or the
+  ! bisection never converges.
+  mu_mol = 1.01d0/(1d0-Y)/0.5d0
+  if(isHe) mu_mol = 1.01d0/(1d0-Y)/(0.5d0+0.25d0*Y/(1d0-Y))
   ! Iteration to find mu                     ! n_E     = n_spec(1) ! e
                                              ! n_H2    = n_spec(2) ! H2
   err_mu=1.                                  ! n_HI    = n_spec(3) ! H
   mu_left=0.5                                ! n_HII   = n_spec(4) ! H+
-  mu_right=2.3                               ! n_HEI   = n_spec(5) ! He
+  mu_right=max(real(2.3,dp),mu_mol)          ! n_HEI   = n_spec(5) ! He
   niter=0                                    ! n_HEII  = n_spec(6) ! He+
   do while (err_mu > 1d-4 .and. niter <= 50) ! n_HEIII = n_spec(7) ! He++
      mu_old=0.5*(mu_left+mu_right)
