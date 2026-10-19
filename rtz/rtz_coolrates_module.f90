@@ -2171,9 +2171,9 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp), intent(inout):: rate
     real(dp), dimension(50), intent(inout)::saved_cooling_rates
     character(len=20), dimension(50), intent(inout)::saved_cooling_rates_names
-    ! .true.: the call is the T(1 + 1e-5) one of rtz_cool_step, with every argument but T as in the
-    ! previous call, so the terms that do not depend on T (cosmic-ray heating, UVB and G0
-    ! photoheating, photoheating by the local field) are those of that call
+    ! .true.: the call is a T(1 +- 1e-5) one of rtz_cool_step, with every argument but T as in the
+    ! last call without it (the one at T), so the terms that do not depend on T (cosmic-ray heating,
+    ! UVB and G0 photoheating, photoheating by the local field) are those of that call
     logical, intent(in), optional :: reuse_T_independent
     logical :: reuse
     real(dp), save :: last_cosmic_ray_heat = 0d0, last_uvb_photoheat = 0d0
