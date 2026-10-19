@@ -297,8 +297,8 @@ module dust_charging
         j = j + 1
         n = ISRF_NQ_CHARGE
         if (present(alpha)) n = isrf_nqload
-        c(1:n) = (1d0 - u) * (1d0 - v) * isrf_q(1:n, i, j, ii) + u * (1d0 - v) * isrf_q(1:n, i + 1, j, ii) &
-                 + (1d0 - u) * v * isrf_q(1:n, i, j + 1, ii) + u * v * isrf_q(1:n, i + 1, j + 1, ii)
+        c(1:n) = bilinear(isrf_q(1:n, i, j, ii), isrf_q(1:n, i + 1, j, ii), isrf_q(1:n, i, j + 1, ii), &
+                          isrf_q(1:n, i + 1, j + 1, ii), u, v)
         Zmean = c(1)
         Zsigma = c(2)
         Gamma = G0 * exp(c(3))
@@ -791,21 +791,15 @@ module dust_charging
         implicit none
         real(dp), intent(in) :: Z
         type(RTGState), intent(inout) :: st
-        real(dp) :: w, w2, w3, h00, h10, h01, h11
+        real(dp) :: w, h(4)
         integer :: i, g
         call u_of(Z, i, w)
-        w2 = w*w
-        w3 = w*w*w
-        h00 = 2d0*w3 - 3d0*w2 + 1d0
-        h10 = w3 - 2d0*w2 + w
-        h01 = 3d0*w2 - 2d0*w3
-        h11 = w3 - w2
+        call hermite4(w, h)
         st%akstar = 0d0
         do g = 1, rtg(c_bin)%nG
-            st%akstar(g) = h00*rtg(c_bin)%KgT(g,i) + h10*rtg(c_bin)%mKT(g,i) &
-                           + h01*rtg(c_bin)%KgT(g,i+1) + h11*rtg(c_bin)%mKT(g,i+1)
+            st%akstar(g) = pchip(h, rtg(c_bin)%KgT(g,i), rtg(c_bin)%mKT(g,i), rtg(c_bin)%KgT(g,i+1), rtg(c_bin)%mKT(g,i+1))
         end do
-        st%akbg = h00*rtg(c_bin)%Kbg(i) + h10*rtg(c_bin)%mKb(i) + h01*rtg(c_bin)%Kbg(i+1) + h11*rtg(c_bin)%mKb(i+1)
+        st%akbg = pchip(h, rtg(c_bin)%Kbg(i), rtg(c_bin)%mKb(i), rtg(c_bin)%Kbg(i+1), rtg(c_bin)%mKb(i+1))
     end subroutine anchor_kernels
 
     subroutine rtgroups_predict(ii, st, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, tol, tol_shape, r, ok)
@@ -961,30 +955,51 @@ module dust_charging
         if (rtg(c_bin)%lTh(1) < lT .and. lT < rtg(c_bin)%lTh(n)) c_dhot = dl
     end subroutine hot_index
 
-    real(dp) function hot(tab, i, w)
+    real(dp) function hot(tab, i, w, dv)
+        ! a hot-gas table (U, log T) at U index i, weight w and the cell's log T; dv: its d/d ln T (the
+        ! slope in log10 T, zero where log T is clamped), from the same pair of U interpolations
         implicit none
         real(dp), intent(in) :: tab(:,:)
         integer, intent(in) :: i
         real(dp), intent(in) :: w
-        hot = (1d0 - c_vh)*((1d0 - w)*tab(i,c_kh) + w*tab(i+1,c_kh)) &
-              + c_vh*((1d0 - w)*tab(i,c_kh+1) + w*tab(i+1,c_kh+1))
-    end function hot
-
-    subroutine hot_and_dlnT(tab, i, w, v, dv)
-        ! hot and its d/d ln T (the slope in log10 T, zero where log T is clamped) from one
-        ! pair of U interpolations
-        implicit none
-        real(dp), intent(in) :: tab(:,:)
-        integer, intent(in) :: i
-        real(dp), intent(in) :: w
-        real(dp), intent(out) :: v, dv
+        real(dp), intent(out), optional :: dv
         real(dp) :: a0, a1
         a0 = (1d0 - w)*tab(i,c_kh) + w*tab(i+1,c_kh)
         a1 = (1d0 - w)*tab(i,c_kh+1) + w*tab(i+1,c_kh+1)
-        v = (1d0 - c_vh)*a0 + c_vh*a1
-        dv = 0d0
-        if (c_dhot > 0d0) dv = (a1 - a0) / c_dhot / log(10d0)
-    end subroutine hot_and_dlnT
+        hot = (1d0 - c_vh)*a0 + c_vh*a1
+        if (present(dv)) then
+            dv = 0d0
+            if (c_dhot > 0d0) dv = (a1 - a0) / c_dhot / log(10d0)
+        end if
+    end function hot
+
+    pure subroutine hermite4(w, h)
+        ! the cubic Hermite basis h00, h10, h01, h11 at w in [0, 1] (PCHIP between two nodes)
+        implicit none
+        real(dp), intent(in) :: w
+        real(dp), intent(out) :: h(4)
+        real(dp) :: w2, w3
+        w2 = w*w
+        w3 = w*w*w
+        h(1) = 2d0*w3 - 3d0*w2 + 1d0
+        h(2) = w3 - 2d0*w2 + w
+        h(3) = 3d0*w2 - 2d0*w3
+        h(4) = w3 - w2
+    end subroutine hermite4
+
+    pure real(dp) function pchip(h, y0, m0, y1, m1)
+        ! the PCHIP interpolant on the basis h of hermite4: values y0, y1 and slopes m0, m1 of the nodes
+        implicit none
+        real(dp), intent(in) :: h(4), y0, m0, y1, m1
+        pchip = h(1)*y0 + h(2)*m0 + h(3)*y1 + h(4)*m1
+    end function pchip
+
+    pure elemental real(dp) function bilinear(q00, q10, q01, q11, u, v)
+        ! bilinear interpolation between the corner values q_ij at the weights u (first index), v (second)
+        implicit none
+        real(dp), intent(in) :: q00, q10, q01, q11, u, v
+        bilinear = (1d0 - u)*(1d0 - v)*q00 + u*(1d0 - v)*q10 + (1d0 - u)*v*q01 + u*v*q11
+    end function bilinear
 
     subroutine kernels(i, w, photo, heat, want_heat)
         ! PCHIP photoemission (and heating) kernels summed over the groups and the background
@@ -993,30 +1008,21 @@ module dust_charging
         real(dp), intent(in) :: w
         real(dp), intent(out) :: photo, heat
         logical, intent(in) :: want_heat
-        real(dp) :: w2, w3, h00, h10, h01, h11, s
+        real(dp) :: h(4), s
         integer :: g
-        w2 = w*w
-        w3 = w*w*w
-        h00 = 2d0*w3 - 3d0*w2 + 1d0
-        h10 = w3 - 2d0*w2 + w
-        h01 = 3d0*w2 - 2d0*w3
-        h11 = w3 - w2
+        call hermite4(w, h)
         s = 0d0
         do g = 1, rtg(c_bin)%nG
-            s = s + c_cN(g)*(h00*rtg(c_bin)%KgT(g,i) + h10*rtg(c_bin)%mKT(g,i) &
-                             + h01*rtg(c_bin)%KgT(g,i+1) + h11*rtg(c_bin)%mKT(g,i+1))
+            s = s + c_cN(g)*pchip(h, rtg(c_bin)%KgT(g,i), rtg(c_bin)%mKT(g,i), rtg(c_bin)%KgT(g,i+1), rtg(c_bin)%mKT(g,i+1))
         end do
-        photo = max(s + c_G0*(h00*rtg(c_bin)%Kbg(i) + h10*rtg(c_bin)%mKb(i) &
-                              + h01*rtg(c_bin)%Kbg(i+1) + h11*rtg(c_bin)%mKb(i+1)), 0d0)
+        photo = max(s + c_G0*pchip(h, rtg(c_bin)%Kbg(i), rtg(c_bin)%mKb(i), rtg(c_bin)%Kbg(i+1), rtg(c_bin)%mKb(i+1)), 0d0)
         heat = 0d0
         if (.not. want_heat) return
         s = 0d0
         do g = 1, rtg(c_bin)%nG
-            s = s + c_cN(g)*(h00*rtg(c_bin)%HgT(g,i) + h10*rtg(c_bin)%mHT(g,i) &
-                             + h01*rtg(c_bin)%HgT(g,i+1) + h11*rtg(c_bin)%mHT(g,i+1))
+            s = s + c_cN(g)*pchip(h, rtg(c_bin)%HgT(g,i), rtg(c_bin)%mHT(g,i), rtg(c_bin)%HgT(g,i+1), rtg(c_bin)%mHT(g,i+1))
         end do
-        heat = max(s + c_G0*(h00*rtg(c_bin)%Hbg(i) + h10*rtg(c_bin)%mHb(i) &
-                             + h01*rtg(c_bin)%Hbg(i+1) + h11*rtg(c_bin)%mHb(i+1)), 0d0)
+        heat = max(s + c_G0*pchip(h, rtg(c_bin)%Hbg(i), rtg(c_bin)%mHb(i), rtg(c_bin)%Hbg(i+1), rtg(c_bin)%mHb(i+1)), 0d0)
     end subroutine kernels
 
     ! -------------------------------------------------------------- physics
@@ -1460,11 +1466,11 @@ module dust_charging
             if (full) lt = ds87_L(Z, c_tau_e, dld)
             j1 = ds87_J(Z, 1d0, c_tau_ion(1), dj1)
             if (c_arr_ion(3) /= 0d0 .or. c_nion(3) > 0d0) j3 = ds87_J(Z, c_zion(3), c_tau_ion(3), dj3)
-            call hot_and_dlnT(rtg(c_bin)%delta, i, w, dlt, dde)
-            call hot_and_dlnT(rtg(c_bin)%Ptr, i, w, ptr, dpt)
+            dlt = hot(rtg(c_bin)%delta, i, w, dde)
+            ptr = hot(rtg(c_bin)%Ptr, i, w, dpt)
             if (full) then
-                call hot_and_dlnT(rtg(c_bin)%fcool, i, w, fc, dfc)
-                call hot_and_dlnT(rtg(c_bin)%Ebar, i, w, eb, deb)
+                fc = hot(rtg(c_bin)%fcool, i, w, dfc)
+                eb = hot(rtg(c_bin)%Ebar, i, w, deb)
             end if
         else
             je = ds87_J(Z, -1d0, c_tau_e)
@@ -2421,7 +2427,7 @@ module dust_charging
         real(dp), intent(in) :: G0, T, ne
         real(dp), intent(out) :: Zmean, Zsigma, Gamma, Lambda
         real(dp), allocatable :: Np0(:), egy0(:)
-        real(dp) :: x, y, fx, fy, u, v, ne_n, dlt, dlne
+        real(dp) :: x, y, fx, fy, u, v, ne_n, dlt, dlne, c(4)
         integer :: i, j
         type(RTGState) :: st0
         type(RTGResult) :: r0
@@ -2455,14 +2461,11 @@ module dust_charging
         v = fy - dble(j)
         i = i + 1
         j = j + 1
-        Zmean = (1d0-u)*(1d0-v)*rtg(ii)%uni(1,i,j) + u*(1d0-v)*rtg(ii)%uni(1,i+1,j) &
-              + (1d0-u)*v*rtg(ii)%uni(1,i,j+1) + u*v*rtg(ii)%uni(1,i+1,j+1)
-        Zsigma = (1d0-u)*(1d0-v)*rtg(ii)%uni(2,i,j) + u*(1d0-v)*rtg(ii)%uni(2,i+1,j) &
-              + (1d0-u)*v*rtg(ii)%uni(2,i,j+1) + u*v*rtg(ii)%uni(2,i+1,j+1)
-        Gamma = (1d0-u)*(1d0-v)*rtg(ii)%uni(3,i,j) + u*(1d0-v)*rtg(ii)%uni(3,i+1,j) &
-              + (1d0-u)*v*rtg(ii)%uni(3,i,j+1) + u*v*rtg(ii)%uni(3,i+1,j+1)
-        Lambda = (1d0-u)*(1d0-v)*rtg(ii)%uni(4,i,j) + u*(1d0-v)*rtg(ii)%uni(4,i+1,j) &
-              + (1d0-u)*v*rtg(ii)%uni(4,i,j+1) + u*v*rtg(ii)%uni(4,i+1,j+1)
+        c = bilinear(rtg(ii)%uni(:,i,j), rtg(ii)%uni(:,i+1,j), rtg(ii)%uni(:,i,j+1), rtg(ii)%uni(:,i+1,j+1), u, v)
+        Zmean = c(1)
+        Zsigma = c(2)
+        Gamma = c(3)
+        Lambda = c(4)
     end subroutine rtgroups_uniform_lookup
 
     subroutine rtgroups_coulomb_ratio(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Zstar, Zsigma, Zmean, ratio)
