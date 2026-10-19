@@ -88,8 +88,8 @@ contains
 
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
-        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is ~1.2 kB
-        ! (RTGState: 148 reals, most of them the prediction anchor), (nvector + 1) x ndust of them per rank.
+        ! those cells' states and the no-cell slot (nvector + 1) are touched; a state is 84 + 2 NGROUPS
+        ! reals (0.8 kB with 8 groups, most of them the prediction anchor), (nvector + 1) x ndust of them per rank.
         implicit none
         integer, intent(in) :: ncell
         if (allocated(rtg_warm)) then

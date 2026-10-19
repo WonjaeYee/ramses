@@ -84,7 +84,6 @@ module dust_charging
     real(dp), parameter :: UNI_LT0 = 1d0, UNI_LT1 = 9d0, UNI_LNE0 = -8d0, UNI_LNE1 = 8d0
     ! grain-assisted recombination: pyCALIMA RECOMB_IONS and RECOMB_* (rt_group_charging)
     integer, parameter :: RTG_NRI = 10
-    integer, parameter :: RTG_MAXG = 32          ! rtgroups_predict: at most this many groups (else no anchor)
     real(dp), parameter :: RI_MASS(RTG_NRI) = (/1.00794d0, 4.002602d0, 12.0107d0, 14.0067d0, 15.9994d0, &
                                                 20.1797d0, 24.305d0, 28.0855d0, 32.065d0, 55.845d0/)
     real(dp), parameter :: RI_IP(RTG_NRI) = (/13.598d0, 24.587d0, 11.260d0, 14.534d0, 13.618d0, &
@@ -139,7 +138,11 @@ module dust_charging
         ! per-group photoemission kernel at its Z*, its result with the sensitivities)
         logical :: anchored = .false.
         real(dp) :: aT = 0d0, ane = 0d0, anion(3) = 0d0, acred = 0d0, aG0 = 0d0, akbg = 0d0
-        real(dp) :: aNp(RTG_MAXG) = 0d0, akstar(RTG_MAXG) = 0d0
+#ifdef RT
+        real(dp) :: aNp(NGROUPS) = 0d0, akstar(NGROUPS) = 0d0   ! the run's groups (the tables have them)
+#else
+        real(dp) :: aNp(1) = 0d0, akstar(1) = 0d0
+#endif
         real(dp) :: adla(RTG_NRI, 3) = 0d0   ! discrete P(Z): d ln alpha_i / d ln S, N, T
         real(dp) :: alg(RTG_NRI) = 0d0       ! wide P(Z): its Gaussian estimate of ln alpha_i
         type(RTGResult) :: ar
@@ -2183,7 +2186,7 @@ module dust_charging
         !    of rtgroups_predict
         st%anchored = .false.
         if (.not. present(sens)) return
-        if (.not. sens .or. rtg(ii)%nG > RTG_MAXG) return
+        if (.not. sens) return
         if (disc) then
             call discrete_sens()
         else
