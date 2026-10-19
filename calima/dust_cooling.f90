@@ -91,6 +91,9 @@ module dust_cooling
     end subroutine init_dust_coll_heating_BH80_cache
 
     subroutine compute_dust_coll_heating_BH80(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,Td,Hcoll)
+        ! Gas-grain collisional energy exchange after Burke & Hollenbach (the bh80_* routines), with
+        ! their soft-cube treatment of the energy accommodation. To do, not yet planned: replace it by a
+        ! more recent model of the gas-grain energy accommodation.
         implicit none
 
         integer, intent(in) :: i_dust

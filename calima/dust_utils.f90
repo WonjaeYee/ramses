@@ -2,7 +2,45 @@ module dust_utils
     use amr_parameters, only:dp
     use constants
     use safe_math, only: safe_exp
+
+    ! bytes of an allocatable array, 0 if it is not allocated (the memory report of the CALIMA tables)
+    interface alloc_bytes
+        module procedure alloc_bytes_i1, alloc_bytes_r1, alloc_bytes_r2, alloc_bytes_r3, alloc_bytes_r4, &
+                         alloc_bytes_s7
+    end interface alloc_bytes
+
     contains
+
+    integer(kind=8) function alloc_bytes_i1(x)
+        integer, allocatable, intent(in) :: x(:)
+        alloc_bytes_i1 = 0
+        if (allocated(x)) alloc_bytes_i1 = size(x, kind=8) * storage_size(x) / 8
+    end function alloc_bytes_i1
+    integer(kind=8) function alloc_bytes_r1(x)
+        real(dp), allocatable, intent(in) :: x(:)
+        alloc_bytes_r1 = 0
+        if (allocated(x)) alloc_bytes_r1 = size(x, kind=8) * storage_size(x) / 8
+    end function alloc_bytes_r1
+    integer(kind=8) function alloc_bytes_r2(x)
+        real(dp), allocatable, intent(in) :: x(:,:)
+        alloc_bytes_r2 = 0
+        if (allocated(x)) alloc_bytes_r2 = size(x, kind=8) * storage_size(x) / 8
+    end function alloc_bytes_r2
+    integer(kind=8) function alloc_bytes_r3(x)
+        real(dp), allocatable, intent(in) :: x(:,:,:)
+        alloc_bytes_r3 = 0
+        if (allocated(x)) alloc_bytes_r3 = size(x, kind=8) * storage_size(x) / 8
+    end function alloc_bytes_r3
+    integer(kind=8) function alloc_bytes_r4(x)
+        real(dp), allocatable, intent(in) :: x(:,:,:,:)
+        alloc_bytes_r4 = 0
+        if (allocated(x)) alloc_bytes_r4 = size(x, kind=8) * storage_size(x) / 8
+    end function alloc_bytes_r4
+    integer(kind=8) function alloc_bytes_s7(x)
+        real(kind=4), allocatable, intent(in) :: x(:,:,:,:,:,:,:)
+        alloc_bytes_s7 = 0
+        if (allocated(x)) alloc_bytes_s7 = size(x, kind=8) * storage_size(x) / 8
+    end function alloc_bytes_s7
 
     subroutine cmp_sigma_turb(icell,sigma2,ilevel)
         use amr_commons

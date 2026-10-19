@@ -201,6 +201,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rtz_primary_cosmic_ray_ionization_rate, rtz_max_cool_timestep  &
        & ,rtz_eqm_min_its, rtz_source_temperature, rtz_include_dust      &
        & ,rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac                &
+       & ,rtz_dCdT_central                                                &
        & ,rtz_single_cell_test, rtz_single_cell_test_file               &
 #endif
        ! RT regions (for initialization)                                 &
@@ -421,6 +422,7 @@ SUBROUTINE read_rt_groups()
   use dust_optics
   use dust_commons, only: charging_model
   use dust_charging, only: init_dust_charging_rtgroups
+  use dust_init, only: report_calima_memory
 #endif
   use SED_module
   implicit none
@@ -611,6 +613,8 @@ SUBROUTINE read_rt_groups()
   call init_dust_mean_cross_sections(sed_dir)
   ! Local-field grain charging tables (charging_model='WDB06rt')
   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)
+  ! all CALIMA tables are built: their memory per rank
+  call report_calima_memory()
 #endif
 
   if(minval(group_egy) .le. 0d0 .and. myid==1) then

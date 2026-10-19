@@ -9,7 +9,8 @@ module charge_exchange_module
   real(dp):: CTRecomb(6,4,30)
   real(dp):: CTIon(7,4,30)
   ! the rate of each (stage, element) at the last temperature it was asked for: the chemistry and
-  ! the cooling ask for the same pairs at the same T several times per cooling step
+  ! the cooling ask for the same pairs at the same T several times per cooling step. One cache per
+  ! MPI rank: shared module state, so it would need to become thread-private under OpenMP
   real(dp), save :: ctr_T(4,30) = -1d0, ctr_rate(4,30) = 0d0
   real(dp), save :: cti_T(4,30) = -1d0, cti_rate(4,30) = 0d0
 
