@@ -60,8 +60,8 @@ module dust_dynamics
         ! maximum of G it jumps to the collisional branch (Draine's runaway). cgs.
         real(dp), intent(in) :: a, rho_s, D, nH, T, coul
         real(dp) :: t_s
-        real(dp) :: G_target, g0, s_lin, s_lo, s_hi, s_mid
-        integer  :: it
+        real(dp) :: G_target, g0, s_lin, s_lo, s_hi, s_new, f_lo, f_hi, f_new, c0, b, p3, q3, u, s_min
+        integer  :: it, side, m
 
         g0       = (8d0 + 4d0*coul) / (3d0*sqrt(pi))          ! dG/ds at s = 0
         G_target = (2d0/3d0) * a * rho_s * abs(D) / (max(nH, 1d-30) * kB * T)
@@ -71,20 +71,59 @@ module dust_dynamics
             t_s = (2d0/3d0) * a * rho_s * sqrt(2d0*kB*T/mH) / (max(nH, 1d-30) * kB * T * g0)
             return
         end if
-        ! Bracket the smallest root by stepping out from deep in the linear regime
+        c0 = 8d0/(3d0*sqrt(pi))
+        b  = 9d0*pi/64d0
+        if (coul == 0d0) then
+            ! No Coulomb drag: G^2 = c0^2 s^2 (1 + b s^2) is a quadratic in s^2, whose positive root
+            ! (in the form without cancellation) is the drift
+            s_new = sqrt(2d0*G_target**2 / (c0**2 + sqrt(c0**4 + 4d0*b*c0**2*G_target**2)))
+            t_s = s_new * sqrt(2d0*kB*T/mH) / abs(D)
+            return
+        end if
+        ! Bracket the smallest root by stepping out by 1.2 from deep in the linear regime (1e-3 s_lin),
+        ! so that the bracket holds the first crossing of G_target, the branch a grain reaches from
+        ! rest. The steps below s_min cannot end the step-out and are skipped, on the same grid: G is
+        ! below U(s) = max(g0, c0) s + (c0 b/2) s^3 (sqrt(1 + x) <= 1 + x/2; s^3 >= 0 in the Coulomb
+        ! term, which is dropped if coul < 0), and s_min, the root of U = G_target, is that of the
+        ! cubic s^3 + p3 s = q3 (Cardano).
+        p3 = max(g0, c0) / (0.5d0*c0*b)
+        q3 = G_target / (0.5d0*c0*b)
+        u = (0.5d0*q3 + sqrt(0.25d0*q3**2 + p3**3/27d0))**(1d0/3d0)
+        s_min = u - p3/(3d0*u)
         s_lo = 1d-3 * s_lin
+        m = floor(log(s_min/s_lo) / log(1.2d0))
+        if (m > 0) then
+            s_lo = s_lo * 1.2d0**m
+            if (s_lo > s_min) s_lo = s_lo / 1.2d0
+        end if
         s_hi = s_lo
         do it = 1, 400
             s_hi = 1.2d0 * s_lo
             if (G_draine(s_hi) >= G_target) exit
             s_lo = s_hi
         end do
-        do it = 1, 50
-            s_mid = 0.5d0 * (s_lo + s_hi)
-            if (G_draine(s_mid) >= G_target) then
-                s_hi = s_mid
+        ! Illinois (regula falsi that halves the weight of a retained end) in [s_lo, s_hi], to a
+        ! relative 1e-12 in s: superlinear, typically 5-8 evaluations of G instead of 50 bisections
+        f_lo = G_draine(s_lo) - G_target
+        f_hi = G_draine(s_hi) - G_target
+        side = 0
+        do it = 1, 100
+            if (s_hi - s_lo <= 1d-12 * s_hi) exit
+            s_new = (s_lo*f_hi - s_hi*f_lo) / (f_hi - f_lo)
+            if (.not. (s_new > s_lo .and. s_new < s_hi)) s_new = 0.5d0*(s_lo + s_hi)
+            f_new = G_draine(s_new) - G_target
+            if (f_new >= 0d0) then
+                s_hi = s_new; f_hi = f_new
+                if (side == -1) f_lo = 0.5d0*f_lo
+                side = -1
             else
-                s_lo = s_mid
+                s_lo = s_new; f_lo = f_new
+                if (side == 1) f_hi = 0.5d0*f_hi
+                side = 1
+            end if
+            if (f_new == 0d0) then
+                s_lo = s_new; s_hi = s_new
+                exit
             end if
         end do
         t_s = 0.5d0 * (s_lo + s_hi) * sqrt(2d0*kB*T/mH) / abs(D)
