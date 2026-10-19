@@ -877,7 +877,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       use cosmic_ray_ionization_module
       use molecules_module
       ! use auger_ionization_module
-      use rtz_coolrates_module, only: all_cooling
+      use rtz_coolrates_module, only: all_cooling, TIndepHeat
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
                              &ndust_processes,npah_processes
@@ -893,6 +893,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: Crate, Crate_prime, Crate_prime_a, Crate_prime_b, dCdT2, X_nHkb, rate, dRate, cr, de=0d0
       real(dp), dimension(1:50):: prime_cooling_rates            ! the rates of the T(1 +- 1e-5) calls (unsaved)
       character(len=20), dimension(1:50):: prime_cooling_rates_names
+      type(TIndepHeat):: t_indep                                 ! all_cooling's T-independent terms at T, for the dC/dT calls
       real(dp):: ss_factor, f_dust
 #ifdef RT
       integer::igroup,idim
@@ -1604,7 +1605,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
+                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names, &
+                           t_indep_out=t_indep)
          prime_cooling_rates = 0.d0
 #ifdef CALIMA
          call rtgroups_derivative_calls(.true.)    ! WDB06rt: served from the precool solve
@@ -1612,13 +1614,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names, &
-                           reuse_T_independent=.true.)
+                           t_indep_in=t_indep)
          if (rtz_dCdT_central) then
             prime_cooling_rates = 0.d0
             call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                               primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                               ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names, &
-                              reuse_T_independent=.true.)
+                              t_indep_in=t_indep)
          end if
 #ifdef CALIMA
          call rtgroups_derivative_calls(.false.)

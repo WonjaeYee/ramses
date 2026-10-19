@@ -8,6 +8,13 @@ module rtz_coolrates_module
   public :: initialize_high_temperature_metal_cooling, initialize_fine_structure_tables
   public :: all_cooling
 
+  ! The terms of all_cooling that do not depend on T (cosmic-ray heating, UVB and G0 photoheating,
+  ! photoheating by the local field). The caller keeps them from its call at T (t_indep_out) and
+  ! passes them to the T(1 +- 1e-5) calls of its dC/dT (t_indep_in), which then skip them
+  type, public :: TIndepHeat
+     real(dp) :: cosmic_ray = 0d0, uvb = 0d0, uvb_G0 = 0d0, local = 0d0
+  end type TIndepHeat
+
   ! Constants
   real(dp):: MIN_METAL_COOL_DENS = 1.d-10 ! minimum number density to calc cooling
   real(dp):: MIN_COOL_ION = 1.d-10 !//minimum number density to calculate cooling for a particular ion
@@ -2140,7 +2147,7 @@ END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
                      nCO, f_shd, local_G0, background_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
-                     saved_cooling_rates, saved_cooling_rates_names, reuse_T_independent)
+                     saved_cooling_rates, saved_cooling_rates_names, t_indep_out, t_indep_in)
     ! Main cooling driver
     ! 
     ! T --> Temperature [K]
@@ -2170,13 +2177,11 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp), intent(inout):: rate
     real(dp), dimension(50), intent(inout)::saved_cooling_rates
     character(len=20), dimension(50), intent(inout)::saved_cooling_rates_names
-    ! .true.: the call is a T(1 +- 1e-5) one of rtz_cool_step, with every argument but T as in the
-    ! last call without it (the one at T), so the terms that do not depend on T (cosmic-ray heating,
-    ! UVB and G0 photoheating, photoheating by the local field) are those of that call
-    logical, intent(in), optional :: reuse_T_independent
+    ! t_indep_out: returns the terms that do not depend on T. t_indep_in: those terms from a call
+    ! with every argument but T the same (rtz_cool_step's call at T, for its T(1 +- 1e-5) calls)
+    type(TIndepHeat), intent(out), optional :: t_indep_out
+    type(TIndepHeat), intent(in),  optional :: t_indep_in
     logical :: reuse
-    real(dp), save :: last_cosmic_ray_heat = 0d0, last_uvb_photoheat = 0d0
-    real(dp), save :: last_uvb_photoheat_G0 = 0d0, last_photoheating = 0d0
     real(dp):: nH_I, nH_II, nH2, nHe_I, nHe_II, nHe_III, nH, xHI, xHII, xH2
     real(dp):: metal_cool_smooth_f1, metal_cool_smooth_f2
     real(dp):: cooling_HI, cooling_HII, cooling_HeI, cooling_HeII
@@ -2204,8 +2209,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: total_cooling, total_heating
     integer:: save_cooling_counter
 
-    reuse = .false.
-    if (present(reuse_T_independent)) reuse = reuse_T_independent
+    reuse = present(t_indep_in)
     h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
@@ -2466,13 +2470,13 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Cosmic ray heating
     if (reuse) then
-       cosmic_ray_heat = last_cosmic_ray_heat
+       cosmic_ray_heat = t_indep_in%cosmic_ray
     else
        cosmic_ray_heat = cosmic_ray_heating(xe, nH_I, nHe_I, nH2, &
                                             ne, xi_h_cr, &
                                             element_number_densities, &
                                             element_ion_fractions)
-       last_cosmic_ray_heat = cosmic_ray_heat
+       if (present(t_indep_out)) t_indep_out%cosmic_ray = cosmic_ray_heat
     end if
 
     ! Save cooling rates
@@ -2480,11 +2484,11 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Photoheating from the UV background
     if (reuse) then
-       uvb_photoheat = last_uvb_photoheat
+       uvb_photoheat = t_indep_in%uvb
     else
        uvb_photoheat = photoheating_UVB(element_number_densities, element_ion_fractions)
        uvb_photoheat = uvb_photoheat * ss_factor ! Account for self-shielding
-       last_uvb_photoheat = uvb_photoheat
+       if (present(t_indep_out)) t_indep_out%uvb = uvb_photoheat
     end if
 
     ! Save cooling rates
@@ -2492,10 +2496,10 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Photoheating from the G0 FUV background
     if (reuse) then
-       uvb_photoheat_G0 = last_uvb_photoheat_G0
+       uvb_photoheat_G0 = t_indep_in%uvb_G0
     else
        uvb_photoheat_G0 = photoheating_UVB_G0(local_G0+background_G0, element_number_densities,element_ion_fractions)
-       last_uvb_photoheat_G0 = uvb_photoheat_G0
+       if (present(t_indep_out)) t_indep_out%uvb_G0 = uvb_photoheat_G0
     end if
 
     ! Save cooling rates
@@ -2532,10 +2536,10 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     ! Photoheating from the local radiation field
     if (rt_advect) then
        if (reuse) then
-          photoheating = last_photoheating
+          photoheating = t_indep_in%local
        else
           photoheating = local_photoheating(dNp, element_number_densities, element_ion_fractions, ilevel)
-          last_photoheating = photoheating
+          if (present(t_indep_out)) t_indep_out%local = photoheating
        end if
 
        ! Save cooling rates
