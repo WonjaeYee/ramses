@@ -487,12 +487,25 @@ subroutine read_hydro_params(nml_ok)
   do i=1,n_elements
      if (elements(i)%atomic_number.gt.0) then
         elements(i)%u_hydro_idx = imetal + counter
+        if (elements(i)%atomic_number.gt.2) then   ! the metals: not H, not He
+           n_metal_idx = n_metal_idx + 1
+           metal_idx(n_metal_idx) = imetal + counter
+        end if
         counter = counter + 1
      end if
   end do
+#else
+  n_metal_idx = nmetals
+  metal_idx(1:nmetals) = (/ (imetal + i, i = 0, nmetals - 1) /)
 #endif
 #else
   if(metal)idelay=imetal+1
+#ifndef RTZ
+  if(metal)then
+     n_metal_idx = 1
+     metal_idx(1) = imetal
+  end if
+#endif
 #endif
   iCO = idelay
 #ifdef CO
