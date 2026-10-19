@@ -92,6 +92,7 @@ contains
         real(dp) :: E_IR_tot_cgs, T_rad_loc, chi_R_tot
         real(dp), dimension(max(1, ndust))  :: sig_R_dust, sig_P_dust, chi_R_dust
         real(dp), dimension(max(1, npah))   :: chi_R_pah
+        real(dp), dimension(max(1, npah))   :: f_ion_pah   ! PAH ion fractions of this cell (force routine)
         real(dp), dimension(1:ncharge_pah_max) :: fch_drag
         real(dp) :: rho_gas_tva, Z2_drag
         integer :: istate
@@ -294,10 +295,11 @@ contains
         end if
 
         ! 6. Call compute_gas_dust_radpressure_force
+        f_ion_pah = 0.5d0
         call compute_gas_dust_radpressure_force(cell_rt_state, ilevel, sig_R_dust, sig_R_pah, &
             gas_force, dust_force, pah_force, &
             nElement, xion, rho_dust, rho_pah, &
-            Tk, ne, G0, f_shd)
+            Tk, ne, G0, f_shd, f_ion_pah)
 
         ! 7. Calculate accelerations. The PAHs drift as TVA species, so the gas phase is the
         ! mixture without the dust and the PAHs
@@ -328,7 +330,7 @@ contains
         ! gradient that species k feels. The dust and the PAHs carry all of chi_tot.
         if (present(irtrap_share)) then
            irtrap_share = 0d0
-           if (rt_isIR .and. ntva > 0) then
+           if (rt_isIR) then
               chi_R_tot = 0d0
               do jbin = 1, ndust
                  chi_R_dust(jbin) = sig_R_dust(jbin) * rho_dust(jbin) * scale_d &
@@ -336,10 +338,11 @@ contains
                  chi_R_tot = chi_R_tot + chi_R_dust(jbin)
               end do
 #if NPAH>0
-              ! Charge-state mean, as in the trapping optical depth in
-              ! cooling_fine; PAH IR opacity is a small correction.
+              ! Neutral and ionised weighted by the ion fraction the force routine has
+              ! just computed for this cell, as for the streaming force
               do jbin = 1, npah
-                 chi_R_pah(jbin) = 0.5d0 * (sig_R_pah(2*(jbin-1)+1) + sig_R_pah(2*(jbin-1)+2)) &
+                 chi_R_pah(jbin) = ((1d0-f_ion_pah(jbin)) * sig_R_pah(2*(jbin-1)+1) &
+                                    + f_ion_pah(jbin) * sig_R_pah(2*(jbin-1)+2)) &
                                  * rho_pah(jbin) * scale_d / pahbins_props(jbin)%mpah
                  chi_R_tot = chi_R_tot + chi_R_pah(jbin)
               end do
@@ -429,7 +432,7 @@ contains
     subroutine compute_gas_dust_radpressure_force(cell_rt_state, ilevel, sig_R_dust, sig_R_pah, &
         gas_force_code, dust_force_code, pah_force_code, &
         nElement, dXion, rho_dust, rho_pah, &
-        Tk, ne, G0, f_shd)
+        Tk, ne, G0, f_shd, f_ion_pah)
 
         ! Input/Output declarations
         real(dp), dimension(:), intent(in) :: cell_rt_state
@@ -449,6 +452,7 @@ contains
         real(dp), dimension(:), intent(in) :: rho_dust
         real(dp), dimension(:), intent(in) :: rho_pah
         real(dp), intent(in) :: Tk, ne, G0, f_shd
+        real(dp), dimension(:), intent(inout), optional :: f_ion_pah   ! (1:npah): their ion fractions
 
         ! Local variables
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
@@ -569,6 +573,7 @@ contains
                 if (pahbins_props(ii)%cation_start_idx <= pahbins_props(ii)%ncharge_states) &
                     pah_ion_fraction = sum(fcharge_pah_local(pahbins_props(ii)%cation_start_idx: &
                                                              pahbins_props(ii)%ncharge_states, ii))
+                if (present(f_ion_pah)) f_ion_pah(ii) = pah_ion_fraction
                 ! group_cs*_pah is laid out interlaced, neutral then ion for
                 ! each bin (see initialize_cross_sections_from_blackbody_dust_pah
                 ! and rad_pah_rate). The previous (ii)/(npah+ii) block indexing
