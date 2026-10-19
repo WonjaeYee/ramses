@@ -14,8 +14,11 @@ module dust_commons
 
     implicit none
 
-    ! ==== Flags and logicals (read from nml) ====
+    ! ==== Set by the build (not namelist entries) ====
     logical, parameter ::dust=(ndust>0)          ! CALIMA includes dust if ndust > 0
+    logical, parameter ::dust_pahs=(npah>0)      ! CALIMA includes PAHs if npah > 0
+
+    ! ==== Flags and logicals (read from nml) ====
     logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
     logical ::dust_debug=.false.                 ! Activate detailed dust mass-budget logging (per-process dM/dt; heavier overhead)
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
@@ -46,7 +49,6 @@ module dust_commons
     logical ::ratd_only_rtadv=.false.            ! Only allow for RATD if the rt_advect=.true.
     logical ::poppe_ice_enhancement=.false.      ! Whether to use the empirical enhancement in coagulation threshold due to ice mantel
     logical ::H2ondust=.false.                   ! Activate H2 formation on dust
-    logical, parameter ::dust_pahs=(npah>0)       ! CALIMA includes PAHs if npah > 0
     logical ::dust_turbulent_model=.false.       ! Activate the subgrid model of turbulent shattering and coagulation
     logical ::pah_accretion=.false.              ! Activate the simple growth of PAH mass by accretion of gas phase C atoms
     logical ::pah_acc_spu=.false.                ! Activate the destruction of PAHs by accretion of C+
@@ -733,21 +735,17 @@ module dust_commons
 
     subroutine print_box_dust_masses()
         use amr_commons
-        use hydro_commons, only: uold, imetal,nmetals
+        use hydro_commons, only: uold, metal_idx, n_metal_idx
         use constants, only: M_sun
-#ifdef RTZ
-        use rtz_module, only: elements
-#endif
 #ifndef WITHOUTMPI
         use mpi_mod
 #endif
         implicit none
-        integer :: ilevel, i, ind, iskip, ii, icell, igrid, nx_loc, ncache, ngrid, counter
+        integer :: ilevel, i, ind, iskip, ii, icell, igrid, nx_loc, ncache, ngrid
         integer, dimension(1:nvector) :: ind_grid, ind_cell
         real(dp) :: dx, dx_loc, scale, scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2, scale_msun
         real(dp), dimension(1:ndust+npah) :: local_bin_masses, global_bin_masses
         real(dp) :: local_gas_mass, local_metal_mass, global_gas_mass, global_metal_mass
-        logical, dimension(1:nmetals) :: metal_slot
 #ifndef WITHOUTMPI
         integer :: mpi_err
 #endif
@@ -759,24 +757,6 @@ module dust_commons
         local_metal_mass = 0d0
         global_gas_mass = 0d0
         global_metal_mass = 0d0
-
-        ! The element block at imetal is packed in the order of elements(:) with
-        ! atomic_number > 0, so it starts with H (and He, when helium is tracked).
-        ! Those are not metals and must be left out of the metal mass.
-#ifdef RTZ
-        metal_slot = .false.
-        counter = 0
-        do ii = 1, n_elements
-            if (elements(ii)%atomic_number > 0) then
-                counter = counter + 1
-                if (counter > nmetals) exit
-                metal_slot(counter) = (elements(ii)%atomic_number > 2)
-            end if
-        end do
-#else
-        ! Without RTZ, imetal is the plain metallicity scalar block: all of it is metal.
-        metal_slot = .true.
-#endif
 
         ! 2. Compute local grid leaf cell contributions
         nx_loc = (icoarse_max - icoarse_min + 1)
@@ -799,11 +779,9 @@ module dust_commons
                     do i = 1, ngrid
                         if (son(ind_cell(i)) == 0) then
                             local_gas_mass = local_gas_mass + (uold(ind_cell(i), 1) * dx_loc**3)
-                            ! Accumulate metal mass (H and He are skipped, see metal_slot)
-                            do ii = 1, nmetals
-                                if (metal_slot(ii)) local_metal_mass = local_metal_mass + &
-                                    (uold(ind_cell(i), imetal + ii - 1) * dx_loc**3)
-                            end do
+                            ! Accumulate the gas-phase metal mass (metal_idx: not H, not He)
+                            local_metal_mass = local_metal_mass + &
+                                sum(uold(ind_cell(i), metal_idx(1:n_metal_idx))) * dx_loc**3
                             ! Accumulate PAH bin masses
                             do ii = 1, npah
                                 local_bin_masses(ii) = local_bin_masses(ii) + &
