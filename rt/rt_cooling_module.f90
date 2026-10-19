@@ -487,10 +487,12 @@ contains
           dust_helper%local_dx      = 0d0
           dust_helper%local_vol     = 0d0
           dust_helper%local_Jeans   = 0d0
-          dust_helper%rho_dust(1:ndust) = rho_dust(icell,1:ndust)
-          dust_helper%csa_dust(:,:) = sigca_dust(:,:)
-          dust_helper%css_dust(:,:) = sigcs_dust(:,:)
-          dust_helper%csr_dust(:,:) = sigcr_dust(:,:)
+          if(ndust .gt. 0) then   ! the sig*_dust tables are allocated only with dust bins
+             dust_helper%rho_dust(1:ndust) = rho_dust(icell,1:ndust)
+             dust_helper%csa_dust(:,:) = sigca_dust(:,:)
+             dust_helper%css_dust(:,:) = sigcs_dust(:,:)
+             dust_helper%csr_dust(:,:) = sigcr_dust(:,:)
+          endif
           if(npah .gt. 0) then
              dust_helper%rho_pah(1:npah) = rho_pah(icell,1:npah)
              dust_helper%csa_pah(:,:) = sigca_pah(:,:)
