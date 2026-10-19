@@ -1073,8 +1073,10 @@ module dust_dynamics
         wmax_all = tva_wmax_seen
 #ifndef WITHOUTMPI
         call MPI_ALLREDUCE(dt_loc, dt_all, 1, MPI_DOUBLE_PRECISION, MPI_MIN, MPI_COMM_WORLD, info)
-        call MPI_ALLREDUCE(tva_nclip, nclip_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, info)
-        call MPI_ALLREDUCE(tva_wmax_seen, wmax_all, 1, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, info)
+        if (dust_debug) then   ! the clipping report: two more global reductions per level and step
+            call MPI_ALLREDUCE(tva_nclip, nclip_all, 1, MPI_INTEGER8, MPI_SUM, MPI_COMM_WORLD, info)
+            call MPI_ALLREDUCE(tva_wmax_seen, wmax_all, 1, MPI_DOUBLE_PRECISION, MPI_MAX, MPI_COMM_WORLD, info)
+        end if
 #endif
         ! Say so when the drift is what is setting the timestep. t_s ~ 1/rho_gas, so a
         ! single low-density cell can throttle every rank; without this the collapse is
@@ -1083,7 +1085,7 @@ module dust_dynamics
             tva_last_warn_step = nstep_coarse
             write(*,'(A,I3,A,ES10.3,A,ES10.3)') &
                 ' TVA: dust drift sets dt at level ', ilevel, ': ', dt_all, ' vs hydro ', dtnew(ilevel)
-            if (nclip_all > 0) write(*,'(A,I12,A,ES10.3)') &
+            if (dust_debug .and. nclip_all > 0) write(*,'(A,I12,A,ES10.3)') &
                 '      drift clipped at tva_wmax_cs*c_s in ', nclip_all, &
                 ' faces; max |w|/c_s = ', wmax_all
         end if
@@ -2136,7 +2138,7 @@ module dust_dynamics
         ! Trapped-IR radiation pressure, exactly as the Riemann solver sees it
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: Ptrap
         real(dp) :: grad_Ptrap_cell
-        logical  :: do_irtrap
+        logical  :: do_irtrap, irtrap_diag
         
         ! Arrays strictly matching Lebreuilly 2019 formulation
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
@@ -2259,6 +2261,10 @@ module dust_dynamics
 #if NENER>0
         do_irtrap = rt_isIR .and. rt_isIRtrap
 #endif
+        ! dustyirtrap test diagnostic (dust_debug): the trapped-IR drift on the first step,
+        ! while the state is still the analytic one set by condinit, so plot-dustyirtrap.py
+        ! can check it against the closed-form prediction
+        irtrap_diag = dust_debug .and. do_irtrap .and. tva_test_mode == TVA_TEST_IRTRAP .and. nstep <= 1
         Ptrap = 0.0_dp
 #if NENER>0
         if (do_irtrap) then
@@ -2407,23 +2413,21 @@ module dust_dynamics
                                 drag_state(l,i,j,k,1), drag_state(l,i,j,k,2), drag_state(l,i,j,k,2+jbin)) / scale_t
                         end if
                         sum_eps_ts_D = sum_eps_ts_D + eps(l,i,j,k,jbin) * t_s_intrinsic(jbin) * D_bin(jbin)
-                        ! dustyirtrap test diagnostic: report the trapped-IR
-                        ! drift on the first step, while the state is still the
-                        ! analytic one set by condinit, so plot-dustyirtrap.py
-                        ! can check it against the closed-form prediction.
-                        if (do_irtrap .and. tva_test_mode == TVA_TEST_IRTRAP .and. &
-                            (i == 1 .or. i == 2) .and. j == 1 .and. k == 1 .and.   &
-                            idim == 1 .and. nstep <= 1) then
-                            write(*,'(A,I3,A,I2,6(A,ES14.6))') 'IRTRAP_DIAG step=',nstep, &
-                              ' bin=',jbin,                                            &
-                              ' grad_Ptrap=',grad_Ptrap_cell,                          &
-                              ' share=',s_IRtrap(l,i,j,k,jbin),                        &
-                              ' rho_d=',rhod_cell(l,i,j,k,jbin),                       &
-                              ' D=',D_bin(jbin),                                       &
-                              ' t_s=',t_s_intrinsic(jbin),                             &
-                              ' ts_D=',t_s_intrinsic(jbin)*D_bin(jbin)
-                        end if
                     end do
+                    if (irtrap_diag) then
+                        if ((i == 1 .or. i == 2) .and. j == 1 .and. k == 1 .and. idim == 1) then
+                            do jbin = 1, ntva
+                                write(*,'(A,I3,A,I2,6(A,ES14.6))') 'IRTRAP_DIAG step=',nstep, &
+                                  ' bin=',jbin,                                            &
+                                  ' grad_Ptrap=',grad_Ptrap_cell,                          &
+                                  ' share=',s_IRtrap(l,i,j,k,jbin),                        &
+                                  ' rho_d=',rhod_cell(l,i,j,k,jbin),                       &
+                                  ' D=',D_bin(jbin),                                       &
+                                  ' t_s=',t_s_intrinsic(jbin),                             &
+                                  ' ts_D=',t_s_intrinsic(jbin)*D_bin(jbin)
+                            end do
+                        end if
+                    end if
 
                     w_g_cell(l,i,j,k) = -sum_eps_ts_D
                     do jbin = 1, ntva

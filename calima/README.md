@@ -118,8 +118,8 @@ The typical order is:
 - **`tva_wmax_cs`** caps `|w_drift|` at that multiple of the local sound speed, in both
   `get_dust_courant_dt` and the flux routines. TVA assumes Stokes << 1, which fails once the drift
   approaches `c_s`; since `t_s ~ 1/rho_gas`, a single hot/diffuse cell would otherwise drive the
-  global timestep to zero. Set `<= 0` to disable (not recommended). Clipping is counted and
-  reported alongside the "dust drift sets dt" message.
+  global timestep to zero. Set `<= 0` to disable (not recommended). With `dust_debug`, clipping is
+  counted and reported alongside the "dust drift sets dt" message.
 - **Enabling TVA changes the pure hydro** even before any drift matters: `ctoprim`
   (`hydro/umuscl.f90`) and `cmpdt` (`hydro/courant_fine.f90`) take the sound speed of the gas,
   `sqrt(gamma P/rho_gas)` with `rho_gas = rho_mix*(1-eps_tot)`, the pressure itself being unchanged,
@@ -182,7 +182,7 @@ the barycentric part cancels exactly. Things to be aware of:
   destabilises the run outright.
 - **The drift can be large by construction**: a ~1% dust mass fraction absorbs ~100% of the IR
   momentum, so `w ~ t_s |grad P_trap| / rho_d`. At `tau_IR ~ 1` this is tens of km/s, well outside
-  the `Stokes << 1` regime TVA assumes, so `tva_wmax_cs` will clip. Watch `tva_nclip`.
+  the `Stokes << 1` regime TVA assumes, so `tva_wmax_cs` will clip (reported with `dust_debug`).
 - **PAHs contribute to `chi_R,tot` and drift** as TVA species, so they feel their share of the
   trapped force (`s_k`). The TVA closure conserves barycentric momentum.
 - Requires `NENER>=1`, `rt_isIR`, `NDUST>0` and `rt_flux_scheme='glf'` (RT15 footnote 3 — the
