@@ -49,7 +49,7 @@ module dust_charging_rtgroups
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup
-    public :: dust_charge_moments, rtgroups_table_bytes
+    public :: dust_charge_moments, coul_term, rtgroups_table_bytes
     public :: RTGState, RTGResult, RTG_NRI, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, RI_ATOMIC, &
               RTG_RECOMB_IMPORTANT
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the fit
@@ -2102,10 +2102,11 @@ module dust_charging_rtgroups
         implicit none
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp
-        real(dp), intent(out) :: Zmean, Zsigma
+        real(dp), intent(out) :: Zmean
+        real(dp), intent(out), optional :: Zsigma
         real(dp), intent(in), optional :: lnL1
         real(dp), intent(out), optional :: coul
-        real(dp) :: pin(PSI_NIN), Gamma, Lambda, alpha(RTG_NRI)
+        real(dp) :: pin(PSI_NIN), Gamma, Lambda, alpha(RTG_NRI), Zsig
         integer :: lo, hi, half, Zc
         logical :: exact
         type(RTGState) :: st
@@ -2117,15 +2118,15 @@ module dust_charging_rtgroups
         exact = .false.
         if (trim(charging_model) == 'WDB06tab') then
             call psitab_inputs(Np, c_red, G0_bg, egy, pin)
-            call psitab_lookup(ii, T, ne, pin, Zmean, Zsigma, Gamma, Lambda, alpha)
+            call psitab_lookup(ii, T, ne, pin, Zmean, Zsig, Gamma, Lambda, alpha)
         else if (trim(charging_model) == 'WDB06rt') then
             if (all(Np <= smallNp)) then
-                call rtgroups_uniform_lookup(ii, G0_bg, T, ne, Zmean, Zsigma, Gamma, Lambda)
+                call rtgroups_uniform_lookup(ii, G0_bg, T, ne, Zmean, Zsig, Gamma, Lambda)
             else
                 call rtgroups_solve_bin(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, -huge(1d0), &
                                         st, 0d0, RTG_ALPHA_NONE, r)
                 Zmean = r%Zmean
-                Zsigma = r%Zsigma
+                Zsig = r%Zsigma
                 if (present(coul)) then
                     if (r%discrete) then
                         lo = nint(st%wlo)
@@ -2144,9 +2145,11 @@ module dust_charging_rtgroups
             end if
         else
             call compute_mean_dust_charge(ii, G0, T, ne, Zmean)
-            call compute_dust_charge_sigma(ii, G0, T, ne, Zsigma)
+            ! the second table only when sigma_Z is asked for (Zsigma, or coul on its Gaussian)
+            if (present(Zsigma) .or. present(coul)) call compute_dust_charge_sigma(ii, G0, T, ne, Zsig)
         end if
-        if (present(coul) .and. .not. exact) coul = coul_gauss(Zmean, Zsigma, lnL1)
+        if (present(coul) .and. .not. exact) coul = coul_gauss(Zmean, Zsig, lnL1)
+        if (present(Zsigma)) Zsigma = Zsig
     end subroutine dust_charge_moments
 
     real(dp) function coul_term(Z, lnL1)

@@ -289,6 +289,8 @@ module dust_commons
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
     logical::carry_gas_ions=.false.       ! Whether to carry the individual ion densities for gas species
+    logical::draine_on=.false.            ! drag_model is a Draine (2011) law (set by check_params_dust)
+    logical::draine_pz=.false.            ! ... and its Coulomb term is averaged over P(Z) ('draine2011_pz')
 
 
     ! ==== Some internal constants ====
@@ -340,11 +342,6 @@ module dust_commons
     !! minimum of mass density of gas, dust, and PAH
 
     contains
-
-    logical function draine_drag()
-        ! drag_model is one of the Draine (2011) drag laws
-        draine_drag = trim(drag_model) == 'draine2011' .or. trim(drag_model) == 'draine2011_pz'
-    end function draine_drag
 
     subroutine dust_log_tdust_solver_update(i_dust, T, n_iter, used_brent)
         implicit none
