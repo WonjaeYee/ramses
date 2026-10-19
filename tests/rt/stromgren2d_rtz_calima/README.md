@@ -32,9 +32,8 @@ CALIMA tables plus, from pyCALIMA:
   tables at the run's group mean energies, the `egy` of `info_rt`; RAMSES warns if they
   differ).
 
-`data_dir` in `&HYDRO_PARAMS` must point to the RTZ data.
-`dust_charging_timer=.true.` prints, per rank, the RTZ cell sub-steps and the time of the
-steps and of the grain charging.
+`data_dir` in `&HYDRO_PARAMS` must point to the RTZ data. The cost of the grain charging and of the
+rest of the chemistry is measured by the tier-3 suite (RAMSES_dev tests_final/suites, sampling), not by the code.
 
     mpirun -np 4 ./ramses2d stromgren2d_rtz.nml
 
@@ -49,15 +48,9 @@ every bin and the PE heating and recombination cooling per H, each as the run's 
 gives them on its cell state (pyCALIMA `solve_cell`, `psi_lookup`, or the original tables at
 G0 of the groups with 5.6 < egy < 13.6 eV).
 
-To check RAMSES against pyCALIMA, restart a run with `nrestart=3`,
-`dust_rtgroups_verify=.true.` and `dust_rtgroups_debug_max=40000` (it dumps every call and
-stops), then
-
-    python PYCALIMA/diagnostics/dust_charge/compare_ramses_rtgroups.py RUN --tables DIR      # WDB06rt
-    python PYCALIMA/diagnostics/dust_charge/compare_ramses_rtgroups.py RUN --tables x --psitab DIR  # WDB06tab
-
-and, for the errors of both against the full charge distribution,
-`PYCALIMA/diagnostics/dust_charge/check_charging_methods_errors.py`.
+The agreement of the WDB06rt solver with pyCALIMA (a transcription of
+`pycalima.models.dust_charge.rt_group_charging`) is checked in pyCALIMA, and the errors of the charging methods
+against the full charge distribution by `PYCALIMA/diagnostics/dust_charge/check_charging_methods_errors.py`.
 
 ## Results (2026-10-01)
 
