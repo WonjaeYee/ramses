@@ -252,7 +252,7 @@ contains
            end do
         end if
 
-        ! H2 shielding over the cell, as rtz_cool_step, isotropic: Gnedin et al. (2009), and the dust
+        ! H2 shielding over the cell, as rtz_cool_step, isotropic: Wolcott-Green et al. (2011) at Tk, and the dust
         ! inside the cell in the LW band from the local dust and PAHs (dust_band_tau; the PAHs at their
         ! charge equilibrium in this field); MW dust of Draine & Bertoldi (1996) on the total hydrogen
         ! column without the optical tables. dx is in code units, the columns in cm^-2.
@@ -273,7 +273,7 @@ contains
               dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
               trans_lw = comp_Sd(nElement(1), dx*scale_l, dtg_mw)
            end if
-           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3), dx*scale_l) * trans_lw
+           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3), dx*scale_l, Tk) * trans_lw
         end if
 #else
         ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
