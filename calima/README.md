@@ -84,6 +84,7 @@ The typical order is:
 ## Notes
 
 - The dust optical tables are read from the directory given by dust_tables_dir.
+- At start-up CALIMA writes its grain-optics tables (Rosseland and Planck means, emitted power, the inverse T_dust table, per dust bin and per PAH charge state) into the SED directory (`SEDtables/` in the tests). `utils/py/calima/calima_tables.py SEDtables` lists and checks them (`--png` plots them); from python, `read()` and `cross_section()`.
 - The shared per-rank chemistry workspace is the DustChemistryInfo instance dust_helper.
 - Most CALIMA routines depend on dust_commons for bin metadata and on dustbin_types for the storage layout of tables and helper arrays.
 

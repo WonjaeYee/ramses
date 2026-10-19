@@ -65,7 +65,7 @@ Two traps to avoid when interpreting these:
   the Rosseland mean sits in the sub-mm and `kappa_R = 1.2` rather than 22.
   Assuming 30 K overestimates `tau_cell` by ~15x and will make you think
   trapping is active when it is not.
-- **Use the Rosseland table the code writes** (`SEDtables/rosseland_mean_DustBin_NN.list`)
+- **Use the Rosseland table the code writes** (`SEDtables/rosseland_mean_DustBin_NN.list`; `utils/py/calima/calima_tables.py` reads and checks all of them)
   rather than re-integrating the harmonic mean yourself; an independent
   re-integration differed by ~2x, which is enough to move `f_trap = exp(-1/tau)`
   by two orders of magnitude.
