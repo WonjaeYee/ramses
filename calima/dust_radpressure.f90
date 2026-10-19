@@ -11,7 +11,7 @@ module dust_radpressure_module
     use dust_commons, only: tva_test_mode, TVA_TEST_SPRESS, ntva
     use amr_commons, only: cosmo, aexp
     use constants, only: c_cgs, eV2erg, mCO, e2instatC, kB, pi
-    use dust_charging_rtgroups, only: dust_charge_moments
+    use dust_charging_rtgroups, only: dust_charge_moments, coul_term
     ! rt_pressBoost / rt_isoPress / rt_isIR / iIR / rt_isIRtrap / iIRtrapVar are
     ! declared unconditionally in rt_parameters (see the note at their declaration),
     ! so they need no RTZ fork. isH2_rtz, rtz_UV_background_G0 and the rank of
@@ -68,12 +68,12 @@ contains
         ! chi_R,k / chi_R,tot. Zero unless rt_isIR (see Part D of the trapped-IR scheme).
         ! Optional so non-TVA callers need not supply it.
         real(dp), dimension(max(1, ntva)), intent(out), optional :: irtrap_share
-        ! Local state for the Draine (2011) drag (drag_model='draine2011'):
+        ! Local state for the Draine (2011) drag laws:
         ! (1) n_H [cm^-3], (2) T [K], (2+k) Coulomb coefficient of TVA species k,
-        ! (n_H+/n_H) phi_k^2 ln(Lambda_k), with phi_k = Z_k e^2/(a_k kT): the mean charge of
-        ! charging_model for a dust bin (with drag_model='draine2011_pz', (n_H+/n_H) <phi^2 ln(Lambda)>
-        ! over its charge distribution P(Z)), the rms charge of the charge-state distribution for a
-        ! PAH bin; Lambda from Draine & Salpeter (1979).
+        ! (n_H+/n_H) phi_k^2 ln(Lambda_k), with phi_k = Z_k e^2/(a_k kT) and Lambda from Draine &
+        ! Salpeter (1979): of the mean charge of charging_model for a dust bin and of the rms charge
+        ! of the charge-state distribution for a PAH bin ('draine2011'), or averaged over the charge
+        ! distribution P(Z) of either ('draine2011_pz').
         real(dp), dimension(1:ntva+2), intent(out), optional :: drag_state
 
         ! Local variables for cell state extraction
@@ -98,7 +98,7 @@ contains
         integer :: istate
         real(dp), dimension(max(1, 2*npah)) :: sig_R_pah,  sig_P_pah
         integer :: id, iion, counter, e_counter, jbin
-        real(dp) :: nH_drag, nHp_drag, Z_drag, phi_drag, Lambda_drag
+        real(dp) :: nH_drag, nHp_drag, Z_drag
         real(dp) :: nHep_drag, nHepp_drag, G0_bg_drag, phi1_drag, lnL1_drag, coul_drag
         real(dp), dimension(1:nGroups) :: Np_drag
 #ifndef RTZ
@@ -386,42 +386,43 @@ contains
            drag_state(2) = Tk
            ! No Coulomb drag without free electrons or hydrogen: the coefficients stay 0
            if (ne > 0d0 .and. nH_drag > 0d0) then
+              ! With phi = Z phi_1, phi_1 = e^2/(a kT), Lambda = Lambda_1/|Z| and Lambda_1 =
+              ! 3 kT/(2 e^3) (kT/(pi ne))^1/2, the same for every grain size, the coefficient is
+              ! (n_H+/n_H) phi_1^2 Z^2 ln+(Lambda_1/|Z|) (coul_term). The charge fluctuates much faster
+              ! than the grain is stopped, so under draine2011_pz the drift feels its average over P(Z).
+              lnL1_drag = log(1.5d0 * kB * Tk / (e2instatC * sqrt(e2instatC)) * sqrt(kB * Tk / (pi * ne)))
               do jbin = 1, ndust
+                 phi1_drag = e2instatC / (dustbins_props(jbin)%asize_cm * kB * Tk)
                  if (draine_pz) then
-                    ! The charge fluctuates much faster than the grain is stopped, so the drift
-                    ! feels the Coulomb force averaged over P(Z): with phi = Z phi_1 and
-                    ! Lambda = Lambda_1/|Z|, phi^2 ln(Lambda) -> phi_1^2 <Z^2 ln+(Lambda_1/|Z|)>
-                    phi1_drag = e2instatC / (dustbins_props(jbin)%asize_cm * kB * Tk)
-                    lnL1_drag = log(3d0 / (2d0 * dustbins_props(jbin)%asize_cm * sqrt(e2instatC) * phi1_drag) &
-                                    * sqrt(kB * Tk / (pi * ne)))
                     call dust_charge_moments(jbin, Np_drag, group_egy, rt_c_cgs(ilevel), G0_bg_drag, G0, Tk, ne, &
                                              nHp_drag, nHep_drag, nHepp_drag, Z_drag, lnL1=lnL1_drag, coul=coul_drag)
-                    drag_state(2+npah+jbin) = nHp_drag / nH_drag * phi1_drag**2 * coul_drag
                  else
                     call dust_charge_moments(jbin, Np_drag, group_egy, rt_c_cgs(ilevel), G0_bg_drag, G0, Tk, ne, &
                                              nHp_drag, nHep_drag, nHepp_drag, Z_drag)
-                    phi_drag = abs(Z_drag) * e2instatC / (dustbins_props(jbin)%asize_cm * kB * Tk)
-                    if (phi_drag > 0d0) then
-                       Lambda_drag = 3d0 / (2d0 * dustbins_props(jbin)%asize_cm * sqrt(e2instatC) * phi_drag) &
-                                   * sqrt(kB * Tk / (pi * ne))
-                       drag_state(2+npah+jbin) = nHp_drag / nH_drag * phi_drag**2 * log(max(Lambda_drag, 1d0))
-                    end if
+                    coul_drag = coul_term(Z_drag, lnL1_drag)
                  end if
+                 drag_state(2+npah+jbin) = nHp_drag / nH_drag * phi1_drag**2 * coul_drag
               end do
 #if NPAH>0
               do jbin = 1, npah
-                 ! the Coulomb drag goes as Z^2: the rms charge of the PAH charge-state distribution
+                 phi1_drag = e2instatC / (pahbins_props(jbin)%apah_cm * kB * Tk)
                  call interpolate_pah_charge_equilibrium(jbin, G0, ne, Tk, fch_drag)
-                 Z2_drag = 0d0
-                 do istate = 1, pahbins_props(jbin)%ncharge_states
-                    Z2_drag = Z2_drag + fch_drag(istate) * pahbins_props(jbin)%charge_states(istate)**2
-                 end do
-                 phi_drag = sqrt(Z2_drag) * e2instatC / (pahbins_props(jbin)%apah_cm * kB * Tk)
-                 if (phi_drag > 0d0) then
-                    Lambda_drag = 3d0 / (2d0 * pahbins_props(jbin)%apah_cm * sqrt(e2instatC) * phi_drag) &
-                                * sqrt(kB * Tk / (pi * ne))
-                    drag_state(2+jbin) = nHp_drag / nH_drag * phi_drag**2 * log(max(Lambda_drag, 1d0))
+                 if (draine_pz) then
+                    ! the exact average over the charge states
+                    coul_drag = 0d0
+                    do istate = 1, pahbins_props(jbin)%ncharge_states
+                       coul_drag = coul_drag + fch_drag(istate) &
+                                 * coul_term(pahbins_props(jbin)%charge_states(istate), lnL1_drag)
+                    end do
+                 else
+                    ! the rms charge of the charge-state distribution
+                    Z2_drag = 0d0
+                    do istate = 1, pahbins_props(jbin)%ncharge_states
+                       Z2_drag = Z2_drag + fch_drag(istate) * pahbins_props(jbin)%charge_states(istate)**2
+                    end do
+                    coul_drag = coul_term(sqrt(Z2_drag), lnL1_drag)
                  end if
+                 drag_state(2+jbin) = nHp_drag / nH_drag * phi1_drag**2 * coul_drag
               end do
 #endif
            end if

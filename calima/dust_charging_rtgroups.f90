@@ -49,7 +49,7 @@ module dust_charging_rtgroups
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup
     public :: init_dust_charging_psitab, psitab_inputs, psitab_lookup
-    public :: dust_charge_moments
+    public :: dust_charge_moments, coul_term
     public :: RTGState, RTGResult, RTG_NRI, PSI_NIN, RTG_ALPHA_NONE, RTG_ALPHA_GAUSS, RTG_ALPHA_FIT, &
               RTG_RECOMB_IMPORTANT
     ! recombination of a wide P(Z) in rtgroups_solve_bin: none, the Gaussian estimate, the fit
