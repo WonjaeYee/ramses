@@ -93,6 +93,7 @@ module dust_init
         
         logical :: metals_for_dust
         real(dp):: fpah_total
+        integer :: ii, jj
 
         check_params_dust = .true.
         !-------------------------------------------------
@@ -116,7 +117,23 @@ module dust_init
             pah_acc_spu = .false.
         end if
 #ifdef RTZ 
-        metals_for_dust=(N_OXYGEN_IONS>0).and.(N_MAGNESIUM_IONS>0).and.(N_CARBON_IONS>0).and.(N_IRON_IONS>0).and.(N_SILICON_IONS>0)
+        ! Every element of the grains we track (dust_composition of each chemtype with bins; carbon for the PAHs)
+        ! must be a tracked gas-phase element, or those grains cannot exchange it with the gas
+        metals_for_dust = .true.
+        do ii = 1, ndchemtype
+            if (dustbins_per_chemtype(ii) <= 0) cycle
+            do jj = 1, n_elements
+                if (dust_composition(ii,jj) > 0d0 .and. elements(jj)%atomic_number <= 0) then
+                    metals_for_dust = .false.
+                    if (myid==1) write(*,'(A,I0,A,I0,A)') ' WARNING: dust chemtype ', ii, ' contains element Z = ', jj, &
+                        & ', which RTZ does not track'
+                end if
+            end do
+        end do
+        if (npah > 0 .and. elements(6)%atomic_number <= 0) then
+            metals_for_dust = .false.
+            if (myid==1) write(*,*) 'WARNING: the PAHs are carbon, which RTZ does not track'
+        end if
         if (.not. metals_for_dust) then
             if (myid==1) then
                 write(*,*) "WARNING: missing metals required to track dust composition."
