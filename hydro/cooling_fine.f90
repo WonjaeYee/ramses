@@ -110,7 +110,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   real(dp)::scale_Np,scale_Fp,work,Npc,Npnew,fred,kIR,E_rad,TR
   real(dp),dimension(1:ndim)::Fpnew
 #ifdef RTZ
-  real(dp),dimension(1:n_elements, 1:n_elements, 1:nvector),save:: xion
+  real(dp),dimension(1:n_elements, 1:n_elements, 1:nvector),save:: xion = 0d0
 #else
   real(dp),dimension(nIons, 1:nvector),save:: xion
 #endif
