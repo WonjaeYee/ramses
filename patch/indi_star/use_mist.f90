@@ -337,8 +337,8 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
       ! use_t_now = -infinity
       ! idx_real = -infinity
       ! floor(idx_real) = some huge number :/
-      use_t_now = merge(log10(t_now), -10.0_rp, t_now>1.0_rp)
-      use_t_pre = merge(log10(t_pre), -10.0_rp, t_pre>1.0_rp)
+      use_t_now = merge(log10(max(t_now, 1.0_rp)), -10.0_rp, t_now>1.0_rp)
+      use_t_pre = merge(log10(max(t_pre, 1.0_rp)), -10.0_rp, t_pre>1.0_rp)
    else if (axes_t_scale == 1) then
       use_t_now = t_now
       use_t_pre = t_pre
