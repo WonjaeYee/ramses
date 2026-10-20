@@ -940,6 +940,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO, sh2_loc
       real(dp):: tau_dust_FUV, tau_dust_LW, tau_dust_CO, sco_loc
       real(dp) :: trans_dust
+      real(dp) :: bg_dust, bg_CO   ! mode 3: the background's shielding for the grains and metals, and for CO
 #ifdef CALIMA
       integer :: n_lw, n_fuv
       logical :: in_fuv
@@ -1124,7 +1125,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          eqm_tau_dust_LW_new = tau_dust_LW ; eqm_tau_dust_CO_new = tau_dust_CO
       end if
 #endif
-      ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0
+      ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0 (times bg_dust in mode 3)
       trans_dust = lw_transmission(tau_dust_FUV, 0d0)
       ! local H2 line self-shielding
       sh2_loc = 1d0
@@ -1140,6 +1141,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             f_shd_CO = sco_loc
             if (rtz_shielding_config .ge. 3) f_shd_CO = sco_loc * lw_transmission(tau_dust_CO, 0d0)
          end if
+      end if
+      ! Mode 3: the background is the field of the test and is shielded as the rest is: through the dust
+      ! for the grains and the metals' photoionization, through f_shd_CO for CO (the H2 through f_shd)
+      bg_dust = 1d0 ; bg_CO = 1d0
+      if (rtz_equilibrium_test .eq. 3) then
+         bg_dust = trans_dust ; bg_CO = f_shd_CO
+#ifdef CALIMA
+         dust_helper%G0_background = UV_background_G0 * bg_dust
+#endif
       end if
       fracMax = 0d0 ! Max fractional update, to check if dt can be increased
       ss_factor = 1d0                  ! UV background self_shielding factor
@@ -1603,7 +1613,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_start)
       end if
-      call compute_dust_precool(dust_helper, advected_G0*trans_dust+UV_background_G0, TK, ne, nElement_dep, &
+      call compute_dust_precool(dust_helper, advected_G0*trans_dust+UV_background_G0*bg_dust, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
                                  ,dNp)
@@ -1854,7 +1864,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
       ! CALIMA's field: the advected FUV through the dust inside the cell, as the rest of the grains'
       ! processes see it (trans_dust), plus the unattenuated background
-      dust_helper%local_G0 = advected_G0 * trans_dust + UV_background_G0
+      dust_helper%local_G0 = advected_G0 * trans_dust + UV_background_G0 * bg_dust
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
       ! TVA drift of every species in this cell, for the grain-grain collisions
@@ -2008,15 +2018,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
          if (H2ondust) then
             alpha_H2_loc = alpha_H2(TK, 0d0, xe, H2_cosmic_ray_ionization_rate, &
-                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
+                           advected_G0*f_shd + UV_background_G0*bg_dust, dXion(1,1), dXion(1,2), nElement_dep(1)) 
             alpha_H2_loc = alpha_H2_loc + dust_helper%H2_formation_rate * dXion(1,1) * nElement_dep(1)
          else
             alpha_H2_loc = alpha_H2(TK, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionization_rate, &
-                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1))
+                           advected_G0*f_shd + UV_background_G0*bg_dust, dXion(1,1), dXion(1,2), nElement_dep(1))
          end if
 #else 
          alpha_H2_loc = alpha_H2(TK, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionization_rate, &
-                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
+                           advected_G0*f_shd + UV_background_G0*bg_dust, dXion(1,1), dXion(1,2), nElement_dep(1)) 
 #endif
          cr_H2 = cr_H2 + alpha_H2_loc
 
@@ -2128,8 +2138,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! formation rate per C+ [s-1] (Nelson & Langer 1997) and its destruction rate [s-1]
             n_OI  = nElement_dep(8) * dXion(8,1)
             n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
-            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, 1d0, n_H2, n_OI)
-            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
+            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0*bg_CO, H2_cosmic_ray_ionization_rate, 1d0, n_H2, n_OI)
+            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0*bg_CO, H2_cosmic_ray_ionization_rate)
             co_implicit = .true.
          end if
       end if
@@ -2211,7 +2221,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   ! (at the background alone every grain is as in the dark, with its largest rate);
                   ! the local field through the dust inside the cell, as for the H2
                   if (rtz_include_dust_recombination .and. .not. (dust_ion_recombination .and. iIon == 1)) &
-                     saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0*trans_dust + UV_background_G0, ne)
+                     saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0*trans_dust + UV_background_G0*bg_dust, ne)
                end if
 
                ! Initialize the change to zero
@@ -2257,7 +2267,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
                if (rtz_include_photoionization) then 
                   if (iIon.eq.2) then 
-                     crl = crl + (UV_background_G0 * elements(iElement)%G0_photo_rate)
+                     crl = crl + (UV_background_G0 * bg_dust * elements(iElement)%G0_photo_rate)
                   end if
                end if
 
@@ -2337,7 +2347,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
                if (rtz_include_photoionization) then 
                   if (iIon .eq. 1) then
-                     de = de + (UV_background_G0 * elements(iElement)%G0_photo_rate)
+                     de = de + (UV_background_G0 * bg_dust * elements(iElement)%G0_photo_rate)
                   end if
                end if
 
