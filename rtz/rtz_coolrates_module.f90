@@ -2215,6 +2215,8 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     ! The FUV field the grains and the sub-ionising photoheating see: the advected field through the
     ! dust inside the cell, as the H2 (f_shd) and CALIMA's charging see it, plus the unattenuated background
     G0_shd = local_G0*trans_dust + background_G0
+    ! mode 3: the background is the field of the test, through the same dust (rtz_cool_step, bg_dust)
+    if (rtz_equilibrium_test .eq. 3) G0_shd = (local_G0 + background_G0)*trans_dust
     h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
@@ -2526,7 +2528,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
        end if
     end if
     ! h2_heat = H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr)
-    h2_heat = H2_heating_bialy(local_G0*f_shd+background_G0, k_pd_H2, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, &
+    h2_heat = H2_heating_bialy(local_G0*f_shd+background_G0*merge(f_shd, 1d0, rtz_equilibrium_test .eq. 3), k_pd_H2, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, &
                                xi_h2_cr, h2_formation_dust)
 
     ! Save cooling rates
