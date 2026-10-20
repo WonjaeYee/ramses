@@ -49,7 +49,7 @@ subroutine deallocate_amr
 
   use amr_commons
   implicit none
-  integer :: ilevel
+  integer :: ilevel,ibound
 
   ! allocations in read_params.f90
   if(allocated(remap_pscalar)) deallocate(remap_pscalar)
@@ -65,7 +65,14 @@ subroutine deallocate_amr
   if(allocated(headb)) deallocate(headb)
   if(allocated(tailb)) deallocate(tailb)
   if(allocated(numbb)) deallocate(numbb)
-  if(allocated(boundary)) deallocate(boundary)
+  if(allocated(boundary))then
+     do ilevel=1,nlevelmax
+        do ibound=1,MAXBOUND
+           if(boundary(ibound,ilevel)%ngrid>0) deallocate(boundary(ibound,ilevel)%igrid)
+        enddo
+     enddo
+     deallocate(boundary)
+  endif
   ! communicators
   if(allocated(active))then
      do ilevel=1,nlevelmax
