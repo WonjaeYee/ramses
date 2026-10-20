@@ -2691,8 +2691,8 @@ module pah_photoelectric_heating
         implicit none
         integer, intent(in) :: i_pah,nGroups
         real(dp), intent(in) :: local_c, Tgas, ne
-        real(dp), dimension(1:nGroups), intent(in) :: Np, E, solid_angle
-        real(dp), dimension(1:nGroups), intent(in) :: csa_anion, csa_neutral, csa_cation, csa_dication
+        real(dp), dimension(:), intent(in) :: Np, E, solid_angle
+        real(dp), dimension(:), intent(in) :: csa_anion, csa_neutral, csa_cation, csa_dication
         real(dp), dimension(:), intent(out) :: fcharge_pahs
 
         integer :: i, Nc, nstates
@@ -2701,7 +2701,7 @@ module pah_photoelectric_heating
         real(dp) :: IP_anion, IP_neutral, IP_cation
         real(dp) :: f_anion, f_neutral, f_1, f_2, f_total
         real(dp) :: w_n, w_1, w_2
-        real(dp),dimension(1:nGroups) :: yield_anion, yield_neutral, yield_cation
+        real(dp) :: yield
 
         if (all(Np.eq.0d0)) return
 
@@ -2712,8 +2712,8 @@ module pah_photoelectric_heating
         k_det = 0.0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle
-            yield_anion(i) = ionisation_yield(Nc,-1,E(i),IP_anion)
-            k_det = k_det + ionisation_rate(IP_anion,solid_angle(i)*yield_anion(i)*csa_anion(i), &
+            yield = ionisation_yield(Nc,-1,E(i),IP_anion)
+            k_det = k_det + ionisation_rate(IP_anion,solid_angle(i)*yield*csa_anion(i), &
                                             Np(i),E(i))
         end do
 
@@ -2730,8 +2730,8 @@ module pah_photoelectric_heating
         k_pe_0 = 0.0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle
-            yield_neutral(i) = ionisation_yield(Nc,0,E(i),IP_neutral)
-            k_pe_0 = k_pe_0 + ionisation_rate(IP_neutral,solid_angle(i)*yield_neutral(i)*csa_neutral(i), &
+            yield = ionisation_yield(Nc,0,E(i),IP_neutral)
+            k_pe_0 = k_pe_0 + ionisation_rate(IP_neutral,solid_angle(i)*yield*csa_neutral(i), &
                                               Np(i),E(i))
         end do
 
@@ -2757,8 +2757,8 @@ module pah_photoelectric_heating
         k_pe_1 = 0.0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle
-            yield_cation(i) = ionisation_yield(Nc,1,E(i),IP_cation)
-            k_pe_1 = k_pe_1 + ionisation_rate(IP_cation,solid_angle(i)*yield_cation(i)*csa_cation(i), &
+            yield = ionisation_yield(Nc,1,E(i),IP_cation)
+            k_pe_1 = k_pe_1 + ionisation_rate(IP_cation,solid_angle(i)*yield*csa_cation(i), &
                                               Np(i),E(i))
         end do
 
