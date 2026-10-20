@@ -2263,7 +2263,12 @@ module dust_init
                 end do
             end do
 
-            call pahbins_props(ipahbin)%dissociation_tab%init()
+            ! A table with invalid values is left uninitialised: no photolysis for this bin
+            if (any(isnan(pahbins_props(ipahbin)%dissociation_tab%tab2d(:,:,1)))) then
+                if (myid.eq.1) write(*,*) 'WARNING: invalid values in ', trim(f_diss_filename), ', no photolysis for PAH bin ', ipahbin
+            else
+                call pahbins_props(ipahbin)%dissociation_tab%init()
+            end if
             close(111)
         end do
     end subroutine init_pah_dissociation_tables
