@@ -948,10 +948,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
-      real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
-      real(dp):: n_C_og, n_O_og, n_CII, n_H2, n_OI, nCII_new, nCO_new, nOI_new
-      real(dp):: tot_C, tot_O
+      real(dp):: cr_CO, de_CO, delta_CO, n_H2, n_OI, nCO_new, tot_O
+      ! the C0/C+/CO block of the carbon ion update (co_implicit)
+      real(dp):: L0_C, krec_C, kout_C, S_C, nC_gas, nC_new, N0_new, N1_new, NCO_old, dtb
+      real(dp):: a_co, b_co, c_co, d_co
+      logical :: co_implicit
+      integer :: jIon
 #endif
+      logical :: carbon_block
       real(dp),dimension(1:27,10):: saved_rates
       real(dp),dimension(1:27,1:10,1:NGROUPS)::auger_yields
       real(dp)::loc_auger_prob
@@ -2117,174 +2121,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CO
       cr_CO = 0.d0
       de_CO = 0.d0
-      dUU = 0.d0
+      co_implicit = .false.
       if (isCO_rtz) then
-         if (update_COspecies) then 
-            n_C_og = n_CII + nCO(icell)
-            n_O_og = n_OI + nCO(icell)
-            n_CII = nElement_dep(6) * dXion(6,2)
+         if (update_COspecies) then
+            ! CO is updated with C0 and C+ in the carbon ion update below (co_implicit); here its
+            ! formation rate per C+ [s-1] (Nelson & Langer 1997) and its destruction rate [s-1]
             n_OI  = nElement_dep(8) * dXion(8,1)
             n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
-
-            !! Creation !!
-            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
-
-            !! Destruction !!
+            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, 1d0, n_H2, n_OI)
             de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
-
-            ! Compute the initial guess of new nCO (exact exponential integrator)
-            if (de_CO * ddt(icell) < 1.d-6) then
-               nCO_new = (nCO(icell) + cr_CO * ddt(icell)) / (1.d0 + de_CO * ddt(icell))
-            else
-               nCO_new = (cr_CO / de_CO) + (nCO(icell) - (cr_CO / de_CO)) * exp(-de_CO * ddt(icell))
-            end if
-
-            ! Tentative update
-            delta_CO = nCO_new - nCO(icell)
-
-            ! Enforce positivity floors: don't destroy more CO than exists,
-            ! and don't create more than allowed by available CII and OI
-            max_delta_CO = max(min(n_CII, n_OI) - 1.d-30, 0.d0)
-            min_delta_CO = min(-nCO(icell) + 1.d-30, 0.d0)
-
-            ! Clip delta_CO to enforce physical bounds
-            delta_CO = max(min(delta_CO, max_delta_CO), min_delta_CO)
-
-            ! Apply updates
-            nCO_new  = nCO(icell) + delta_CO
-            nCII_new = n_CII - delta_CO
-            nOI_new  = n_OI  - delta_CO
-         
-            ! if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
-            !    write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
-            !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-            ! end if
-
-            ! Now update the ion fractions for C and O
-            ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
-            tot_C = nElement_dep(6) - n_CII
-            tot_C = tot_C + nCII_new
-            ! even though we are using the names `n_CII` and `nCII_new`,
-            ! tot_C is essentially nElement_dep(6) - delta_CO
-            do iIon = 1, elements(6)%n_ions
-               ! trial 1:
-               ! - if CO created, take from C II
-               ! - if CO destroyed, dump on C I
-               ! -> add delta_CO (negative) on dXion(6, 1)
-
-               ! trial 2:
-               ! - if CO created, take from C Ii
-               ! - if CO destroyed, dump on all C
-               ! -> no update of dXion
-               if (delta_CO > 0.0_dp) then
-                  if (iIon.ne.2) then 
-                     dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-                     ! xion(6,iIon, icell) = nElement_dep(6) * xion(6,iIon, icell) / tot_C
-                  else
-                     dXion(6,iIon) = nCII_new / tot_C
-                     ! xion(6,iIon, icell) = nCII_new / tot_C
-                  end if
-               else
-                  ! if (iIon.ne.1) then
-                  !    dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-                  ! else
-                  !    dXion(6,iIon) = (nElement_dep(6)*dXion(6,iIon) - delta_CO) / tot_C
-                  ! end if
-               end if
-            end do
-
-            ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
-            tot_O = nElement_dep(8) - n_OI
-            tot_O = tot_O + nOI_new
-            do iIon = 1, elements(8)%n_ions
-               if (delta_CO > 0.0_dp) then
-                  if (iIon.ne.1) then 
-                     dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
-                  else
-                     dXion(8,iIon) = nOI_new / tot_O
-                  end if
-               else
-                  ! doing nothing in this case means
-                  ! oxygen from destroyed CO goes to all ionization status equally;
-                  ! we don't adjust dXion, but only change nElement_dep
-               end if
-            end do
-
-            if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
-            ! if (rtz_single_cell_test) then
-            ! if (.false.) then
-            ! if (nElement_dep(6)<0.0) then
-               write(*,*) "     loopcnt:", loopcnt
-               write(*,*) '         nCO:', nCO(icell)
-               write(*,*) '     nCO_new:', nCO_new
-               write(*,*) '    delta_CO:', delta_CO
-
-               write(*,*) ' dust_to_gas:', dust_to_gas_mass_ratio_over_mw
-
-               write(*,*) "for Carbon"
-               write(*,*) "    nElement:", nElement(6, icell)
-               write(*,*) 'nElement_dep:', nElement_dep(6)
-               write(*,*) '        xion:', xion(6,1:elements(6)%n_ions,icell)
-               write(*,*) '       dXion:', dXion(6,1:elements(6)%n_ions)
-               write(*,*) '  sum(dXion):', sum(dXion(6,1:elements(6)%n_ions))
-               write(*,*) '       tot_C:', tot_C
-               write(*,*) '       n_CII:', n_CII
-               write(*,*) '    nCII_new:', nCII_new
-               
-               ! write(*,*) "for Oxygen"
-               ! write(*,*) "    nElement:", nElement(8, icell)
-               ! write(*,*) 'nElement_dep:', nElement_dep(8)
-               ! write(*,*) '        xion:', xion(8,1:elements(8)%n_ions,icell)
-               ! write(*,*) '       dXion:', dXion(8,1:elements(8)%n_ions)
-               ! write(*,*) '  sum(dXion):', sum(dXion(8,1:elements(8)%n_ions))
-               ! write(*,*) '       tot_O:', tot_O
-               ! write(*,*) '        n_OI:', n_OI
-               ! write(*,*) '     nOI_new:', nOI_new
-
-               ! write(*,*) '   loopCodes:',loopCodes
-            end if
-
-            ! Check for convergence
-            if (nCO(icell).gt.1.d-10) then 
-               dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-               dUU = dUU * one_over_x_FRAC
-               fracMax=MAX(fracMax,dUU)
-               if(dUU .gt. 1.d0) then
-                  ! write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-                  dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-                  dt_rec = min(dt_rec,0.5d0*ddt(icell))
-                  if (rtz_equilibrium_test.gt.0) then
-                     call cpu_time(t_now)
-                     t_mol = t_mol + (t_now - t_last)
-                  end if
-                  code=7
-
-                  ! print some before return
-                  if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
-                     write(*,*) 'This is raised in `rtz_cool_step`'
-                     write(*,*) 'icell:', icell
-                     write(*,*) ' code:', code
-                     write(*,*) '-> from CO update'
-                     
-                     write(*,*) '     nCO:', nCO(i)
-                     write(*,*) ' nCO_new:', nCO_new
-                     write(*,*) 'delta_CO:', delta_CO
-                     write(*,*) '   cr_CO:', cr_CO
-                     write(*,*) '   de_CO:', de_CO
-                     ! write(*,*) ':', 
-                  end if
-                  
-                  RETURN
-               end if
-            end if
-
-
-            ! Update species number densities --> need to fix this in case other species fail
-            dCO = nCO_new
-            dnElement(6) = dnElement(6) - delta_CO
-            nElement_dep(6) = nElement_dep(6) - delta_CO
-            dnElement(8) = dnElement(8) - delta_CO
-            nElement_dep(8) = nElement_dep(8) - delta_CO
+            co_implicit = .true.
          end if
       end if
 #endif
@@ -2600,11 +2446,97 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   cr = cr + crl * x_low
                end if
                x_old = dXion(iElement,iIon)
-               if (de * ddt(icell) < 1.d-6) then
-                  dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
-               else
-                  x_eq = cr / de
-                  dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
+               carbon_block = .false.
+#ifdef CO
+               if (co_implicit .and. iElement == 6 .and. iIon == 1) then
+                  ! C0 is updated with C+ and CO (iIon = 2): its destruction rate, and the C+ -> C0 rate
+                  ! (every creation term of C0 is a recombination of C+)
+                  L0_C = de
+                  krec_C = cr / max(dXion(6,2), x_MIN)
+                  cycle
+               end if
+               if (co_implicit .and. iElement == 6 .and. iIon == 2) then
+                  ! C0, C+ and CO by backward Euler, rates frozen over the substep: CO forms from C+ and its
+                  ! destruction gives C0; C+ also exchanges with the higher ions. CO formed from the C+ of the
+                  ! start of the substep oscillated with period 2 for ddt above ~1/cr_CO in cold dense gas
+                  carbon_block = .true.
+                  nC_gas = nElement_dep(6)
+                  NCO_old = nCO(icell)
+                  S_C = max(cr - L0_C*dXion(6,1), 0d0) * nC_gas   ! into C+ from the higher ions [cm-3 s-1]
+                  kout_C = max(de - krec_C, 0d0)                   ! C+ to C2+ and above [s-1]
+                  dtb = ddt(icell)
+                  a_co = NCO_old / (1d0 + dtb*de_CO)
+                  b_co = dtb*cr_CO / (1d0 + dtb*de_CO)
+                  c_co = (dXion(6,1)*nC_gas + dtb*de_CO*a_co) / (1d0 + dtb*L0_C)
+                  d_co = dtb*(krec_C + de_CO*b_co) / (1d0 + dtb*L0_C)
+                  N1_new = (dXion(6,2)*nC_gas + dtb*S_C + dtb*L0_C*c_co) &
+                         / (1d0 + dtb*(krec_C + kout_C + cr_CO) - dtb*L0_C*d_co)
+                  N0_new = c_co + d_co*N1_new
+                  nCO_new = a_co + b_co*N1_new
+                  delta_CO = nCO_new - NCO_old
+                  ! no more CO than the atomic O allows (the carbon left over stays in C+)
+                  if (delta_CO > max(n_OI - 1d-30, 0d0)) then
+                     N1_new = N1_new + delta_CO - max(n_OI - 1d-30, 0d0)
+                     delta_CO = max(n_OI - 1d-30, 0d0)
+                     nCO_new = NCO_old + delta_CO
+                  end if
+                  ! the fractions are of the carbon outside CO; the higher ions keep their densities
+                  nC_new = nC_gas - delta_CO
+                  dXion(6,3:n_ions) = dXion(6,3:n_ions) * nC_gas / nC_new
+                  dXion(6,1) = min(max(N0_new / nC_new, x_MIN), 1.d0)
+                  dXion(iElement,iIon) = N1_new / nC_new
+                  ! CO formed takes O from O0; the O of destroyed CO goes back to every O state
+                  if (delta_CO > 0.0_dp) then
+                     tot_O = nElement_dep(8) - delta_CO
+                     do jIon = 2, elements(8)%n_ions
+                        dXion(8,jIon) = nElement_dep(8) * dXion(8,jIon) / tot_O
+                     end do
+                     dXion(8,1) = (n_OI - delta_CO) / tot_O
+                  end if
+                  dCO = nCO_new
+                  dnElement(6) = dnElement(6) - delta_CO
+                  nElement_dep(6) = nC_new
+                  dnElement(8) = dnElement(8) - delta_CO
+                  nElement_dep(8) = nElement_dep(8) - delta_CO
+                  ! Check for convergence -- fractional change in CO and C0 (C+ below)
+                  if (nCO(icell).gt.1.d-10) then
+                     dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)) * one_over_x_FRAC
+                     fracMax = MAX(fracMax,dUU)
+                     if (dUU .gt. 1.d0) then
+                        dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                        dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                        if (rtz_equilibrium_test.gt.0) then
+                           call cpu_time(t_now)
+                           t_ion = t_ion + (t_now - t_last)
+                        end if
+                        code=7
+                        RETURN
+                     end if
+                  end if
+                  if (xion(6,1,icell).gt.1.d-10) then
+                     dUU = ABS((dXion(6,1)-xion(6,1,icell))/(xion(6,1,icell)+x_FM)) * one_over_x_FRAC
+                     fracMax = MAX(fracMax,dUU)
+                     if (dUU .gt. 1.d0) then
+                        dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                        dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                        if (rtz_equilibrium_test.gt.0) then
+                           call cpu_time(t_now)
+                           t_ion = t_ion + (t_now - t_last)
+                        end if
+                        code=8
+                        loopCodes08(6,1) = loopCodes08(6,1) + 1
+                        RETURN
+                     end if
+                  end if
+               end if
+#endif
+               if (.not. carbon_block) then
+                  if (de * ddt(icell) < 1.d-6) then
+                     dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
+                  else
+                     x_eq = cr / de
+                     dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
+                  end if
                end if
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
