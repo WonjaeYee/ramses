@@ -777,7 +777,7 @@ FUNCTION cloudy_rad_rec(iz, in, t) result(rate)
   integer, intent(in) :: iz, in
   real(dp), intent(in) :: t
   real(dp) :: rate
-  real(dp) :: tt
+  real(dp) :: tt, ltt
   
   if (iz < 1 .or. iz > 30) then
       print*, "rad_rec called with insane atomic number, =", iz
@@ -788,13 +788,15 @@ FUNCTION cloudy_rad_rec(iz, in, t) result(rate)
   
   if ((((in <= 3 .or. in == 11) .or. (iz > 5 .and. iz < 9)) .or. iz == 10) .or. &
       (iz == 26 .and. in > 11)) then
+      ! the two powers as one exp of the sum of their logs
       tt = sqrt(t / rnew(in, iz, 3))
-      rate = rnew(in, iz, 1) / (tt * (tt + 1.0d0)**(1.0d0 - rnew(in, iz, 2)) * &
-             (1.0d0 + sqrt(t / rnew(in, iz, 4)))**(1.0d0 + rnew(in, iz, 2)))
+      rate = rnew(in, iz, 1) / (tt * exp((1.0d0 - rnew(in, iz, 2)) * log(tt + 1.0d0) + &
+             (1.0d0 + rnew(in, iz, 2)) * log(1.0d0 + sqrt(t / rnew(in, iz, 4)))))
   else
       tt = t * 1.0d-04
       if (iz == 26 .and. in <= 13) then
-          rate = fe(in, 1) / (tt**(fe(in, 2) + fe(in, 3) * log10(tt)))
+          ltt = log(tt)
+          rate = fe(in, 1) / exp((fe(in, 2) + fe(in, 3) * ltt / log(10.0d0)) * ltt)
       else
           rate = rrec(in, iz, 1) / (tt**rrec(in, iz, 2))
       end if

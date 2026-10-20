@@ -46,6 +46,10 @@ module rtz_coolrates_module
   ! solver does not have.
   real(dp), allocatable:: high_t_cooling_rates_opt(:,:,:,:)
   real(dp):: fs_cool_tab(27,160,8)  ! Array for fine structure cooling rates  
+  ! the CMB intensities at the lines of each fine-structure species, for the redshift they were last
+  ! computed at (they depend on nothing else); per MPI rank, as the CT rate cache
+  real(dp), save:: cmb3_z(27) = -1d0, cmb3_Bnu(3,27) = 0d0
+  real(dp), save:: cmb2_z(27) = -1d0, cmb2_Bnu(27) = 0d0
 
   real(dp):: G0_heating_rates(26) = (/ &
     0.d0, & ! 1 - Hydrogen
@@ -780,6 +784,14 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     real(dp):: CIE_frac_used, CIE_frac_theo
     real(dp):: x_ne, w_ne, w00, w10, w01, w11
     integer:: ine, ine2
+    real(dp), parameter:: ln10 = 2.302585092994045684d0
+
+    ! below 1000 K the tables are taken at 1000 K and scaled by exp(-(2000/1000)^5) = 1.3e-14:
+    ! negligible, so the ~100 table interpolations are skipped
+    if (T <= 1000.d0) then
+        rate = 1.d-100
+        return
+    end if
 
     loc_T = max(T,1000.d0)
     log_T = log10(loc_T)
@@ -787,7 +799,7 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     t_max = 9.d0
     dt = 0.05d0
     rate = 0.d0
-    t_scale_fac = safe_exp(-1.d0 * ((2000.d0/loc_T)**5.d0))
+    t_scale_fac = safe_exp(-1.d0 * ((2000.d0/loc_T)**5))
 
     ! bounds for temperature --> no cooling
     if (log_T < t_min) then
@@ -845,15 +857,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
           else
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j)))
               if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
                   loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+                     * exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
               end if
           end if
 
@@ -872,15 +884,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
           else
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j)))
               if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
                   loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+                     * exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
               end if
           end if
 
@@ -899,15 +911,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
           else
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j)))
               if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
                   loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+                     * exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
               end if
           end if
 
@@ -1090,9 +1102,15 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     B_21 = (g_1 / g_2) * B_12
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
-    B_nu_20 = (2.d0 * H_PLANCK * (nu_20 * nu_20 * nu_20) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
-    B_nu_21 = (2.d0 * H_PLANCK * (nu_21 * nu_21 * nu_21) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
+    if (z /= cmb3_z(idx_0)) then
+       cmb3_z(idx_0) = z
+       cmb3_Bnu(1,idx_0) = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+       cmb3_Bnu(2,idx_0) = (2.d0 * H_PLANCK * (nu_20 * nu_20 * nu_20) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
+       cmb3_Bnu(3,idx_0) = (2.d0 * H_PLANCK * (nu_21 * nu_21 * nu_21) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
+    end if
+    B_nu_10 = cmb3_Bnu(1,idx_0)
+    B_nu_20 = cmb3_Bnu(2,idx_0)
+    B_nu_21 = cmb3_Bnu(3,idx_0)
 
     ! Find temperature index
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -1248,7 +1266,11 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     B_10 = (g_0 / g_1) * B_01
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    if (z /= cmb2_z(idx_0)) then
+       cmb2_z(idx_0) = z
+       cmb2_Bnu(idx_0) = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    end if
+    B_nu_10 = cmb2_Bnu(idx_0)
 
     ! Find temperature index.
     itemp_low = floor((logT - tmin)/delta_temp) + 1
