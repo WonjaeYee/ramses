@@ -834,16 +834,20 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
        ! Loop over 1 fewer than n_ions to handle untracked ionization states if needed
        do j = 1, elements(i)%n_ions - 1
           ! Interpolate the cooling rate for the ion
-          loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                   + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
-
           ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
-          ! the rest of their table (the optical lines) stays
+          ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
-          if (high_t_cooling_rates_tflag(i,j)) then
-              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                 * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                           + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          else
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
+                  loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              end if
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -857,16 +861,20 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           j = elements(i)%n_ions
 
           ! Interpolate the cooling rate for the ion
-          loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                   + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
-
           ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
-          ! the rest of their table (the optical lines) stays
+          ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
-          if (high_t_cooling_rates_tflag(i,j)) then
-              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                 * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                           + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          else
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
+                  loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              end if
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -880,16 +888,20 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
          do j = elements(i)%n_ions, elements(i)%atomic_number+1
 
           ! Interpolate the cooling rate for the ion
-          loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                   + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
-
           ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
-          ! the rest of their table (the optical lines) stays
+          ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
-          if (high_t_cooling_rates_tflag(i,j)) then
-              loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                 * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                           + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          else
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
+                  loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              end if
           end if
 
           rate = rate + ((CIE_frac_used / CIE_frac_theo) * element_number_densities(i) * high_t_cooling_fracs_CIE(CIE_Tidx,i,j) * ne * loc_cooling_rate * loc_temp_smooth)
