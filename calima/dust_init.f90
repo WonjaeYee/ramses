@@ -1008,7 +1008,8 @@ module dust_init
 
             ! 4.2 Check the fractions of mass in stellar ejecta
             frac_tot = sum(fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1))
-            fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) = fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) / frac_tot
+            if (frac_tot .gt. 0.0d0) &
+                fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) = fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) / frac_tot
         end do
 
         if (dust_pahs) then
@@ -2262,7 +2263,12 @@ module dust_init
                 end do
             end do
 
-            call pahbins_props(ipahbin)%dissociation_tab%init()
+            ! A table with invalid values is left uninitialised: no photolysis for this bin
+            if (any(isnan(pahbins_props(ipahbin)%dissociation_tab%tab2d(:,:,1)))) then
+                if (myid.eq.1) write(*,*) 'WARNING: invalid values in ', trim(f_diss_filename), ', no photolysis for PAH bin ', ipahbin
+            else
+                call pahbins_props(ipahbin)%dissociation_tab%init()
+            end if
             close(111)
         end do
     end subroutine init_pah_dissociation_tables
