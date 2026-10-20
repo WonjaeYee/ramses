@@ -3308,6 +3308,7 @@ module pah_photoelectric_heating
         real(dp) :: k_det, k_att, k_pe_0, k_pe_1, k_rec_1, k_rec_2
         real(dp) :: IP_anion, IP_neutral, IP_cation
         real(dp) :: f_anion, f_neutral, f_1, f_2, f_total
+        real(dp) :: w_n, w_1, w_2
         real(dp),dimension(1:nGroups) :: yield_anion, yield_neutral, yield_cation
 
         if (all(Np.eq.0d0)) return
@@ -3369,18 +3370,29 @@ module pah_photoelectric_heating
                                               Np(i),E(i))
         end do
 
-        f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
-                    k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
-                    k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
+        if (k_det*k_pe_0*k_pe_1 .gt. 0d0) then
+            f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
+                        k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
+                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
 
-        f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
-                        k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
+            f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
+                            k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
 
-        f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
-                    k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
+            f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
+                        k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
 
-        f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+            f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
+                        k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+        else
+            ! No (or too weak) photo-ionisation: the same equilibrium without 0/0 and x/0
+            w_n = k_det / (k_att*ne)
+            w_1 = w_n * k_pe_0 / (k_rec_1*ne)
+            w_2 = w_1 * k_pe_1 / (k_rec_2*ne)
+            f_anion = 1d0 / (1d0 + w_n + w_1 + w_2)
+            f_neutral = w_n * f_anion
+            f_1 = w_1 * f_anion
+            f_2 = w_2 * f_anion
+        end if
 
         f_total = f_anion + f_neutral + f_1 + f_2
         nstates = pahbins_props(i_pah)%ncharge_states
@@ -3432,6 +3444,7 @@ module pah_photoelectric_heating
         real(dp) :: k_det, k_att, k_pe_0, k_pe_1, k_rec_1, k_rec_2
         real(dp) :: IP_anion, IP_neutral, IP_cation
         real(dp) :: f_anion, f_neutral, f_1, f_2, f_total
+        real(dp) :: w_n, w_1, w_2
         real(dp) :: f_cat, f_dicat
         real(dp) :: Pinj_local, Prad_local, Prec_local
         real(dp),dimension(1:nGroups) :: Pabs_local
@@ -3504,18 +3517,29 @@ module pah_photoelectric_heating
         end do
 
         ! 8. Compute the equilibrium charge distribution
-        f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
-                    k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
-                    k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
+        if (k_det*k_pe_0*k_pe_1 .gt. 0d0) then
+            f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
+                        k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
+                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
 
-        f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
-                        k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
+            f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
+                            k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
         
-        f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
-                    k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
+            f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
+                        k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
         
-        f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+            f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
+                        k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+        else
+            ! No (or too weak) photo-ionisation: the same equilibrium without 0/0 and x/0
+            w_n = k_det / (k_att*ne)
+            w_1 = w_n * k_pe_0 / (k_rec_1*ne)
+            w_2 = w_1 * k_pe_1 / (k_rec_2*ne)
+            f_anion = 1d0 / (1d0 + w_n + w_1 + w_2)
+            f_neutral = w_n * f_anion
+            f_1 = w_1 * f_anion
+            f_2 = w_2 * f_anion
+        end if
 
         ! 9. Normalise the fractions
         f_total = f_anion + f_neutral + f_1 + f_2
