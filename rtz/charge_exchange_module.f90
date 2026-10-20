@@ -13,6 +13,8 @@ module charge_exchange_module
   ! MPI rank: shared module state, so it would need to become thread-private under OpenMP
   real(dp), save :: ctr_T(4,30) = -1d0, ctr_rate(4,30) = 0d0
   real(dp), save :: cti_T(4,30) = -1d0, cti_rate(4,30) = 0d0
+  ! log(T/1e4) of the last T, shared by all the pairs asked for at that T
+  real(dp), save :: ct_lT_T = -1d0, ct_lT = 0d0
 
 CONTAINS
 
@@ -108,10 +110,16 @@ FUNCTION charge_transfer_recombination(ion, nelem, T) result(rate)
   tused = tused * 1d-4
   tused = max(tused,1d-10) ! harley added to prevent zero temperature
 
-  ! The interpolation equation
-  rate = CTRecomb(1,ipIon,nelem) * 1d-9 * (tused**CTRecomb(2,ipIon,nelem)) * (1.d0 + CTRecomb(3,ipIon,nelem) * safe_exp(CTRecomb(4,ipIon,nelem)*tused) )
-
-  rate = MAX(rate,1.d-100)
+  ! The interpolation equation, a 1e-9 (T/1e4)^b (1 + c exp(d T/1e4)), with the power as exp(b log)
+  ! and the terms of a zero coefficient skipped
+  if (CTRecomb(1,ipIon,nelem) == 0d0) then
+     rate = 1.d-100
+  else
+     rate = CTRecomb(1,ipIon,nelem) * 1d-9
+     if (CTRecomb(2,ipIon,nelem) /= 0d0) rate = rate * safe_exp(CTRecomb(2,ipIon,nelem) * ct_log(T, tused))
+     if (CTRecomb(3,ipIon,nelem) /= 0d0) rate = rate * (1.d0 + CTRecomb(3,ipIon,nelem) * safe_exp(CTRecomb(4,ipIon,nelem)*tused))
+     rate = MAX(rate,1.d-100)
+  end if
   ctr_T(ipIon,nelem) = T
   ctr_rate(ipIon,nelem) = rate
 
@@ -151,13 +159,37 @@ FUNCTION charge_transfer_ionization(ion, nelem, T) result(rate)
   tused = tused * 1d-4
   tused = max(tused,1d-10) ! harley added to prevent zero temperature
 
-  ! the interpolation equation
-  rate = CTIon(1,ipIon,nelem) * 1d-9 * (tused**CTIon(2,ipIon,nelem)) * (1.d0 + CTIon(3,ipIon,nelem) * safe_exp(CTIon(4,ipIon,nelem)*tused) ) * safe_exp(-1.d0 * CTIon(7,ipIon,nelem)/tused)
-
-  rate = MAX(rate,1.d-100)
+  ! the interpolation equation, a 1e-9 (T/1e4)^b (1 + c exp(d T/1e4)) exp(-e/(T/1e4)), as above
+  if (CTIon(1,ipIon,nelem) == 0d0) then
+     rate = 1.d-100
+  else
+     rate = CTIon(1,ipIon,nelem) * 1d-9
+     if (CTIon(2,ipIon,nelem) /= 0d0) rate = rate * safe_exp(CTIon(2,ipIon,nelem) * ct_log(T, tused))
+     if (CTIon(3,ipIon,nelem) /= 0d0) rate = rate * (1.d0 + CTIon(3,ipIon,nelem) * safe_exp(CTIon(4,ipIon,nelem)*tused))
+     if (CTIon(7,ipIon,nelem) /= 0d0) rate = rate * safe_exp(-1.d0 * CTIon(7,ipIon,nelem)/tused)
+     rate = MAX(rate,1.d-100)
+  end if
   cti_T(ipIon,nelem) = T
   cti_rate(ipIon,nelem) = rate
 
 END FUNCTION charge_transfer_ionization
+
+FUNCTION ct_log(T, tused) result(lt)
+  ! log(tused), from the shared log(T/1e4) when the fit's T range did not clamp T
+  implicit none
+  real(dp), intent(in):: T, tused
+  real(dp):: lt
+
+  if (tused /= T * 1d-4) then
+     lt = log(tused)
+     return
+  end if
+  if (T /= ct_lT_T) then
+     ct_lT_T = T
+     ct_lT = log(tused)
+  end if
+  lt = ct_lT
+
+END FUNCTION ct_log
 
 end module charge_exchange_module
