@@ -1008,7 +1008,8 @@ module dust_init
 
             ! 4.2 Check the fractions of mass in stellar ejecta
             frac_tot = sum(fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1))
-            fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) = fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) / frac_tot
+            if (frac_tot .gt. 0.0d0) &
+                fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) = fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) / frac_tot
         end do
 
         if (dust_pahs) then
