@@ -1879,6 +1879,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
       else
          dust_step_ok = .true.
+         dUU = 0d0
       end if
 
       ! Scale dUU from a raw fractional change (returned by compute_dust_update in
