@@ -13,7 +13,8 @@ module use_mist
    private
    public read_mist_parameters, load_sample,&
       get_stellar_properties, get_stellar_lifetime,&
-      i_mass, i_rmom, i_chem, i_phot, photon_scale
+      i_mass, i_rmom, i_chem, i_phot, photon_scale,&
+      wind_temperature
 
    integer,parameter::rp=kind(1.0e0)
    !! Precision number to use in this module
@@ -65,8 +66,11 @@ module use_mist
    !! scale of photon numbers.
    !! to get the actual number of photons, `prop` should be multiplied with this factor
 
+   real(dp)::wind_temperature=0.0_dp
+   !! ``assumed'' gas temperature of the stellar wind [K]
+
    ! integer,allocatable,dimension(:,:)::idx_table
-   !! Table to store parameter indices
+   ! Table to store parameter indices
    ! ... probably become problem if list of sink is dynamic
    ! in this new code, not yet used.
    
@@ -81,7 +85,7 @@ subroutine read_mist_parameters()
    implicit none
 
    ! for now, there is only one parameter to read
-   namelist /indi_star/ mist_sample
+   namelist /indi_star/ mist_sample, wind_temperature
 
    rewind(1)
    ! following the method of read_stellar_params in read_sink_feedback_params,
