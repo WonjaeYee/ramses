@@ -66,9 +66,9 @@ subroutine backup_hydro(filename, filename_desc)
 
   write(unit_out) ncpu
   if(strict_equilibrium>0)then
-     write(unit_out) nvar+2
+     write(unit_out) nvar + 2 + nvarnoadvect
   else
-     write(unit_out) nvar
+     write(unit_out) nvar + nvarnoadvect
   endif
   write(unit_out) ndim
   write(unit_out) nlevelmax
@@ -232,6 +232,18 @@ subroutine backup_hydro(filename, filename_desc)
                  end if
                  call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
               end do
+
+#if NVARNOADVECT>0
+              do ivar=1,nvarnoadvect
+                 do i=1,ncache
+                    xdp(i)=unoadvect(ind_grid(i)+iskip,ivar)
+                 end do
+                 write(field_name, '("non_advected_scalar_", i0.2)') ivar
+                 call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
+              end do
+#endif
+
+
 #endif
               if(strict_equilibrium>0)then
                  do i = 1, ncache

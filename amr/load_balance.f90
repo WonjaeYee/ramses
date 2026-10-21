@@ -5,7 +5,7 @@
 subroutine load_balance
   use amr_commons
   use pm_commons
-  use hydro_commons, ONLY: nvar_all
+  use hydro_commons, ONLY: nvar_all, nvarnoadvect, unoadvect
 #ifndef WITHOUTMPI
   use hydro_commons, ONLY: uold, pstarold, rho_eq, p_eq
   use poisson_commons, ONLY: phi, f
@@ -77,6 +77,11 @@ subroutine load_balance
         do ivar=1,nvar_all
            call make_virtual_fine_dp(uold(1,ivar),ilevel)
         end do
+#if NVARNOADVECT>0
+        do ivar=1,nvarnoadvect
+           call make_virtual_fine_dp(unoadvect(1,ivar),ilevel)
+        enddo
+#endif
         if(momentum_feedback>0)then
            call make_virtual_fine_dp(pstarold(1),ilevel)
         endif
@@ -1342,6 +1347,40 @@ subroutine defrag
   end do
   end do
   end do
+
+#if NVARNOADVECT>0
+  do ivar=1,nvarnoadvect
+  do ind=1,twotondim
+  iskip2=ncoarse+(ind-1)*ngridmax
+  ngrid2=0
+  do igrid=1,igridmax
+     hilbert_key(igrid)=0.0D0
+  end do
+  do ilevel=1,nlevelmax
+     do ibound=1,nboundary+ncpu
+        if(ibound<=ncpu)then
+           ncache=numbl(ibound,ilevel)
+           istart=headl(ibound,ilevel)
+        else
+           ncache=numbb(ibound-ncpu,ilevel)
+           istart=headb(ibound-ncpu,ilevel)
+        end if
+        if(ncache>0)then
+           igrid=istart
+           do i=1,ncache
+              hilbert_key(ngrid2+i)=real(unoadvect(iskip2+igrid,ivar),kind=qdp)
+              igrid=next(igrid)
+           end do
+           ngrid2=ngrid2+ncache
+        end if
+     end do
+  end do
+  do igrid=1,igridmax
+     unoadvect(iskip2+igrid,ivar)=real(hilbert_key(igrid),kind=8)
+  end do
+  end do
+  end do
+#endif
 
   end if
 

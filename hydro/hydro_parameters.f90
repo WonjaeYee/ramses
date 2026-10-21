@@ -34,6 +34,13 @@ module hydro_parameters
   integer,parameter::nvar=NVAR
 #endif
   integer,parameter::nvar_all=nvar
+#ifndef NVARNOADVECT
+  integer,parameter::nvarnoadvect=0
+  integer::nvarnoadvect_og=0 ! This is needed in case we need to restart from a run without this
+#else
+  integer,parameter::nvarnoadvect=NVARNOADVECT
+  integer::nvarnoadvect_og=NVARNOADVECT ! This is needed in case we need to restart from a run without this
+#endif
 
   ! Global parameters that need to be use by RTZ and CALIMA
   integer, parameter :: n_elements = 27
@@ -151,5 +158,7 @@ module hydro_parameters
   integer::idust=nhydro+1
   integer::ipah=nhydro+1
 #endif
+
+  real(dp)::noadvect_init=-1.d0
 
 end module hydro_parameters
