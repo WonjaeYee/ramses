@@ -42,6 +42,17 @@ subroutine init_hydro
   allocate(unoadvect(1:ncell,1:nvarnoadvect))
   !TODO(code): we might want a different initial value per variable
   unoadvect=noadvect_init
+  if(cost_measured>0d0.and.(cost_ivar<1.or.cost_ivar>nvarnoadvect))then
+     if(myid==1)write(*,*)'cost_measured: cost_ivar must be in 1..NVARNOADVECT, it is',cost_ivar
+     call clean_stop
+  end if
+  if(cost_measured>0d0.and.noadvect_init>=0d0.and.myid==1) &
+       & write(*,*)'Warning: cost_measured reads cells with noadvect_init >= 0 as measured'
+#else
+  if(cost_measured>0d0)then
+     if(myid==1)write(*,*)'cost_measured needs a build with NVARNOADVECT >= 1'
+     call clean_stop
+  end if
 #endif
   if(momentum_feedback>0)then
      allocate(pstarold(1:ncell))
