@@ -92,6 +92,7 @@ module amr_parameters
   logical::cost_weighting=.true.           ! Activate load balancing according to cpu time
   real(dp)::cost_measured=0.0d0            ! Weight of the measured cooling cost per cell in the load balance (0..1)
   integer::cost_ivar=1                     ! Non-advected scalar (unoadvect) that holds that cost
+  real(dp)::cost_cell_ratio_max=4.0d0      ! cost_measured: at most ~this times the mean number of cells per rank
   ! Recursive bisection tree parameters
   integer::nbilevelmax=1                   ! Max steps of bisection partitioning
   integer::nbinodes=3                      ! Max number of internal nodes

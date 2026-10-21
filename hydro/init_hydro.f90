@@ -49,6 +49,10 @@ subroutine init_hydro
      if(myid==1)write(*,*)'cost_measured: cost_ivar must be in 1..NVARNOADVECT, it is',cost_ivar
      call clean_stop
   end if
+  if(cost_measured>0d0.and.cost_cell_ratio_max<1d0)then
+     if(myid==1)write(*,*)'cost_measured: cost_cell_ratio_max must be >= 1, it is',cost_cell_ratio_max
+     call clean_stop
+  end if
   if(cost_measured>0d0.and.noadvect_init>=0d0.and.myid==1) &
        & write(*,*)'Warning: cost_measured reads cells with noadvect_init >= 0 as measured'
 #else
