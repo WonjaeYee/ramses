@@ -36,10 +36,10 @@ module hydro_parameters
   integer,parameter::nvar_all=nvar
 #ifndef NVARNOADVECT
   integer,parameter::nvarnoadvect=0
-  integer::nvarnoadvect_og=0 ! This is needed in case we need to restart from a run without this
+  integer::nvarnoadvect_og=-1 ! Non-advected scalars in the restart file (-1: from its variable count)
 #else
   integer,parameter::nvarnoadvect=NVARNOADVECT
-  integer::nvarnoadvect_og=NVARNOADVECT ! This is needed in case we need to restart from a run without this
+  integer::nvarnoadvect_og=-1 ! Non-advected scalars in the restart file (-1: from its variable count)
 #endif
 
   ! Global parameters that need to be use by RTZ and CALIMA

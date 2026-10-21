@@ -65,7 +65,7 @@ subroutine backup_hydro(filename, filename_desc)
   end if
 
   write(unit_out) ncpu
-  write(unit_out) nvar+3
+  write(unit_out) nvar+3+nvarnoadvect
   write(unit_out) ndim
   write(unit_out) nlevelmax
   write(unit_out) nboundary
