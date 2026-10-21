@@ -642,9 +642,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       nAct=nCell                                      ! Currently active cells
       cellcnt(1:nCell) = 0
       last_code = 0
-      loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
+      loopcnt=0 ; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
-         loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
+         loopcnt=loopcnt+1   ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
          ! if (rtz_single_cell_test .and. mod(loopcnt,50)==0) then
          if (rtz_single_cell_test) then
             i = indAct(1)
