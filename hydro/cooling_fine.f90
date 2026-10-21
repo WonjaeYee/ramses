@@ -1495,6 +1495,11 @@ subroutine ps_frac_to_mass_uold
            end do
         end do
      end do
+     ! Ghost cells still hold x_ion*rho
+     do k=1,ps_cstart(ps_npar+1)-1
+        call make_virtual_fine_dp(uold(1,ps_child(k)),ilevel)
+     end do
+     if(simple_boundary)call make_boundary_hydro(ilevel)
   end do
 end subroutine ps_frac_to_mass_uold
 !###########################################################
