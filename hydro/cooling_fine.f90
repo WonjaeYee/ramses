@@ -13,6 +13,10 @@ subroutine cooling_fine(ilevel)
   !-------------------------------------------------------------------
   integer::ncache,i,igrid,ngrid
   integer,dimension(1:nvector),save::ind_grid
+#if NVARNOADVECT>0
+  integer::ind,icell,nleaf
+  real(kind=8)::t0,dt_cell
+#endif
 
   if(numbtot(1,ilevel)==0)return
   if(verbose)write(*,111)ilevel
@@ -25,7 +29,36 @@ subroutine cooling_fine(ilevel)
      do i=1,ngrid
         ind_grid(i)=active(ilevel)%igrid(igrid+i-1)
      end do
+#if NVARNOADVECT>0
+     if(cost_measured>0d0)t0=wall_seconds()
+#endif
      call coolfine1(ind_grid,ngrid,ilevel)
+#if NVARNOADVECT>0
+     if(cost_measured>0d0)then
+        ! The wall time of this call shared by its leaf cells, the cost per cell and call of this
+        ! level for the load balance (cost_measured), averaged with the previous calls
+        nleaf=0
+        do ind=1,twotondim
+           do i=1,ngrid
+              if(son(ncoarse+(ind-1)*ngridmax+ind_grid(i))==0)nleaf=nleaf+1
+           end do
+        end do
+        if(nleaf>0)then
+           dt_cell=(wall_seconds()-t0)/dble(nleaf)
+           do ind=1,twotondim
+              do i=1,ngrid
+                 icell=ncoarse+(ind-1)*ngridmax+ind_grid(i)
+                 if(son(icell)/=0)cycle
+                 if(unoadvect(icell,cost_ivar)<0d0)then
+                    unoadvect(icell,cost_ivar)=dt_cell
+                 else
+                    unoadvect(icell,cost_ivar)=0.5d0*(unoadvect(icell,cost_ivar)+dt_cell)
+                 end if
+              end do
+           end do
+        end if
+     end if
+#endif
   end do
 
 #ifndef RTZ
@@ -43,6 +76,21 @@ subroutine cooling_fine(ilevel)
 #endif
 
 111 format('   Entering cooling_fine for level',i2)
+
+#if NVARNOADVECT>0
+contains
+
+  function wall_seconds() result(t)
+    real(kind=8)::t
+#ifdef WITHOUTMPI
+    integer(kind=8)::count,count_rate
+    call system_clock(count=count,count_rate=count_rate)
+    t=dble(count)/dble(count_rate)
+#else
+    t=MPI_WTIME()
+#endif
+  end function wall_seconds
+#endif
 
 end subroutine cooling_fine
 !###########################################################
