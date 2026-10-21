@@ -951,7 +951,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
-      real(dp):: cr_CO, de_CO, delta_CO, n_H2, n_OI, nCO_new, tot_O
+      real(dp):: cr_CO, de_CO, f_CO_Cp, delta_CO, n_H2, n_OI, nCO_new, tot_O
       ! the C0/C+/CO block of the carbon ion update (co_implicit)
       real(dp):: L0_C, krec_C, kout_C, S_C, nC_gas, nC_new, N0_new, N1_new, NCO_old, dtb
       real(dp):: a_co, b_co, c_co, d_co
@@ -2174,6 +2174,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CO
       cr_CO = 0.d0
       de_CO = 0.d0
+      f_CO_Cp = 0.d0
       co_implicit = .false.
       if (isCO_rtz) then
          if (update_COspecies) then
@@ -2183,6 +2184,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
             cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0*bg_CO, H2_cosmic_ray_ionization_rate, 1d0, n_H2, n_OI)
             de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0*bg_CO, H2_cosmic_ray_ionization_rate)
+            ! the share of the destruction that gives C+: the cosmic-ray term, for He+ + CO -> C+ + O + He,
+            ! the main channel in shielded gas (Gong+17); the FUV photodissociation gives C + O
+            f_CO_Cp = beta_CO(0d0, H2_cosmic_ray_ionization_rate) / de_CO
             co_implicit = .true.
          end if
       end if
@@ -2512,8 +2516,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                end if
                if (co_implicit .and. iElement == 6 .and. iIon == 2) then
                   ! C0, C+ and CO by backward Euler, rates frozen over the substep: CO forms from C+ and its
-                  ! destruction gives C0; C+ also exchanges with the higher ions. CO formed from the C+ of the
-                  ! start of the substep oscillated with period 2 for ddt above ~1/cr_CO in cold dense gas
+                  ! destruction gives C0 and C+ (f_CO_Cp); C+ also exchanges with the higher ions. CO formed from
+                  ! the C+ of the start of the substep oscillated with period 2 for ddt above ~1/cr_CO in cold dense gas
                   carbon_block = .true.
                   nC_gas = nElement_dep(6)
                   NCO_old = nCO(icell)
@@ -2522,10 +2526,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dtb = ddt(icell)
                   a_co = NCO_old / (1d0 + dtb*de_CO)
                   b_co = dtb*cr_CO / (1d0 + dtb*de_CO)
-                  c_co = (dXion(6,1)*nC_gas + dtb*de_CO*a_co) / (1d0 + dtb*L0_C)
-                  d_co = dtb*(krec_C + de_CO*b_co) / (1d0 + dtb*L0_C)
-                  N1_new = (dXion(6,2)*nC_gas + dtb*S_C + dtb*L0_C*c_co) &
-                         / (1d0 + dtb*(krec_C + kout_C + cr_CO) - dtb*L0_C*d_co)
+                  c_co = (dXion(6,1)*nC_gas + dtb*(1d0-f_CO_Cp)*de_CO*a_co) / (1d0 + dtb*L0_C)
+                  d_co = dtb*(krec_C + (1d0-f_CO_Cp)*de_CO*b_co) / (1d0 + dtb*L0_C)
+                  N1_new = (dXion(6,2)*nC_gas + dtb*S_C + dtb*L0_C*c_co + dtb*f_CO_Cp*de_CO*a_co) &
+                         / (1d0 + dtb*(krec_C + kout_C + cr_CO) - dtb*L0_C*d_co - dtb*f_CO_Cp*de_CO*b_co)
                   N0_new = c_co + d_co*N1_new
                   nCO_new = a_co + b_co*N1_new
                   delta_CO = nCO_new - NCO_old
