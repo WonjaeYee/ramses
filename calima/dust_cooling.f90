@@ -229,7 +229,7 @@ module dust_cooling
         logical, intent(in), optional :: deriv
 
         integer :: j,iel,nT,nphi,nions_loc
-        real(dp) :: lT,cooling_rate
+        real(dp) :: lT,cooling_rate,rate_lin
         real(dp) :: xion,phi_charge
 
         real(dp) :: sum_rate, sum_element
@@ -296,11 +296,12 @@ module dust_cooling
                         phi_charge = dust_charge * dustbins_props(i_dust)%phi_prefact(j-1) ! [eV]
                         call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, phi_charge, cooling_rate, idx_x=idx_T)
                         if (cooling_rate < -30d0) cycle
-                        sum_element = sum_element + xion * exp(cooling_rate * ln10)
+                        rate_lin = exp(cooling_rate * ln10)
+                        sum_element = sum_element + xion * rate_lin
                         if (want_d) then
                             call dustbins_props(i_dust)%collisional_tab(iel)%slope_2d(lT, phi_charge, sx, sy)
-                            dsl = dsl + nElement(iel) * xion * exp(cooling_rate * ln10) * sx
-                            dsz = dsz + nElement(iel) * xion * exp(cooling_rate * ln10) * sy * &
+                            dsl = dsl + nElement(iel) * xion * rate_lin * sx
+                            dsz = dsz + nElement(iel) * xion * rate_lin * sy * &
                                   dustbins_props(i_dust)%phi_prefact(j-1)
                         end if
                     end do
@@ -309,10 +310,11 @@ module dust_cooling
                     ! No charge dependence: just add contribution from the total abundance of this element
                     call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, cooling_rate, idx_x=idx_T)
                     if (cooling_rate >= -30d0) then
-                        sum_rate = sum_rate + nElement(iel) * exp(cooling_rate * ln10)
+                        rate_lin = exp(cooling_rate * ln10)
+                        sum_rate = sum_rate + nElement(iel) * rate_lin
                         if (want_d) then
                             call dustbins_props(i_dust)%collisional_tab(iel)%slope_1d(lT, sx)
-                            dsl = dsl + nElement(iel) * exp(cooling_rate * ln10) * sx
+                            dsl = dsl + nElement(iel) * rate_lin * sx
                         end if
                     end if
                 end if
