@@ -559,6 +559,22 @@ SUBROUTINE hlld(qleft,qright,fgdnv)
      end do
 #endif
      einto=eintl
+  else if (SR<0d0) then
+     ro=rr
+     uo=ur
+     vo=vr
+     wo=wr
+     Bo=Br
+     Co=Cr
+     Ptoto=Ptotr
+     etoto=etotr
+     vdotBo=vdotBr
+#if NENER>0
+     do irad = 1,nener
+        erado(irad)=eradr(irad)
+     end do
+#endif
+     einto=eintr
   else if(SAL>0d0)then
      ro=rstarl
      uo=ustar
