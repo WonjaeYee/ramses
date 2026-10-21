@@ -1073,6 +1073,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp),dimension(1:NMETALS)::loc_metal_yield
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
   real(dp)::ijm, ije, sn_e_code_units
+  real(dp)::dep_d, dep_ekin
+  real(dp),dimension(1:ndim)::dep_p
   logical::is_hn, is_sn, is_central_cloud_particle
   integer::counter, iElement, pre_accretion_evolution_flag, elem_k
   real(dp)::star_met_fe
@@ -1291,6 +1293,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
            unew(indp(j,ind),1)=unew(indp(j,ind),1)-m_acc/vol_loc
            unew(indp(j,ind),2:ndim+1)=unew(indp(j,ind),2:ndim+1)-m_acc*vv(1:ndim)/vol_loc
            unew(indp(j,ind),neul)=unew(indp(j,ind),neul)-m_acc*e/vol_loc
+           ! the accreted gas takes its internal energy with it, also from enew (pressure_fix)
+           if (pressure_fix) enew(indp(j,ind))=enew(indp(j,ind))-m_acc*(e-0.5d0*sum(vv(1:ndim)**2))/vol_loc
            ! Note that we do not accrete magnetic fields and non-thermal energies.
 
            ! Accrete passive scalars
@@ -1517,12 +1521,32 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  ije = 0.0d0
 #endif
 
+                 ! The cell's state before this deposit: uold plus what has been deposited in it so far
+                 ! (unew holds only the deposits in the cells of another rank, uold plus them otherwise)
+                 if (pressure_fix) then
+                    dep_d = unew(indp(j,ind),1)
+                    dep_p(1:ndim) = unew(indp(j,ind),2:ndim+1)
+                    if (cpu_map(indp(j,ind)) /= myid) then
+                       dep_d = dep_d + uold(indp(j,ind),1)
+                       dep_p(1:ndim) = dep_p(1:ndim) + uold(indp(j,ind),2:ndim+1)
+                    end if
+                    dep_ekin = 0.5d0 * sum(dep_p**2) / max(dep_d, smallr)
+                 end if
+
                  ! Update density, momentum, and internal energy
                  unew(indp(j,ind),1) = unew(indp(j,ind),1) + ijm
                  unew(indp(j,ind),2) = unew(indp(j,ind),2) + ijp(1)
                  unew(indp(j,ind),3) = unew(indp(j,ind),3) + ijp(2)
                  unew(indp(j,ind),4) = unew(indp(j,ind),4) + ijp(3)
                  unew(indp(j,ind),neul) = unew(indp(j,ind),neul) + ije + (sn_e_code_units * (weight/volume) / vol_loc)
+
+                 ! The internal energy the deposit creates (its energy minus the change of the cell's kinetic
+                 ! energy) also goes into enew: where set_uold takes the internal energy from enew (pressure_fix),
+                 ! the heat of the thermalised wind and of the SN would otherwise be lost
+                 if (pressure_fix) then
+                    enew(indp(j,ind)) = enew(indp(j,ind)) + ije + (sn_e_code_units * (weight/volume) / vol_loc) &
+                         & - (0.5d0 * sum((dep_p + ijp)**2) / max(dep_d + ijm, smallr) - dep_ekin)
+                 end if
 
                  ! Update the metals
                  do iElement=1,NMETALS
