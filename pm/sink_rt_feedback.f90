@@ -160,7 +160,7 @@ SUBROUTINE gather_ioni_flux(dt,ilevel)
   use sink_feedback_parameters
   ! use SED_module, only: interpolate_popII_table, interpolate_popIII_table, get_popIII_temp_from_mass
 #ifdef INDIVIDUAL_SINK_STARS
-  use SED_module, only: interpolate_popIII_table, get_popIII_temp_from_mass
+  use SED_module, only: interpolate_popIII_table, get_popIII_temp_from_mass, init_popIII_table, popIII_table_ready
   use use_mist, only:get_stellar_properties, i_phot, photon_scale
 #endif
   use constants, only: M_sun, twopi
@@ -217,6 +217,7 @@ SUBROUTINE gather_ioni_flux(dt,ilevel)
 
         !TODO(code): for now assume everything is a modified blackbody
         if (star_met.lt.z_crit_pop3) then
+           if (.not. popIII_table_ready) call init_popIII_table(groupL0, groupL1)
            do ig=1,ngroups
               star_effective_temp = get_popIII_temp_from_mass(msink_actual(isink) * scale_msun)
               sink_ioni_flux(isink,ig) = interpolate_popIII_table(star_effective_temp,ig)
