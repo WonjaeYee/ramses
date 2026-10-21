@@ -1016,7 +1016,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
 #endif
 #ifdef INDIVIDUAL_SINK_STARS
   use imf_module
-  use use_mist, only: get_stellar_properties, get_stellar_lifetime, i_rmom, i_chem
+  use use_mist, only: get_stellar_properties, get_stellar_lifetime, i_rmom, i_chem, wind_temperature
 #endif
   implicit none
   !----------------------------------------------------------------------------
@@ -1069,10 +1069,10 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp)::star_alpha_over_fe
   real(dp)::l_abs, l_max
   real(sp)::t_pre,t_now
-  real(dp),dimension(1:ndim)::pwind, ijp
+  real(dp),dimension(1:ndim)::ijp
   real(dp),dimension(1:NMETALS)::loc_metal_yield
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
-  real(dp)::ijm, ije, sn_e_code_units
+  real(dp)::ijm, pwind, ije, sn_e_code_units
   real(dp)::dep_d, dep_ekin
   real(dp),dimension(1:ndim)::dep_p
   logical::is_hn, is_sn, is_central_cloud_particle
@@ -1081,10 +1081,6 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   integer::ielem,jelem
   real(dp)::fchem
 
-  ! strict initialization 
-  injected_mass = 0d0
-  loc_metal_yield = 0d0
-  pwind = 0d0
 #endif
 
   ! Conversion factor from user units to cgs units
@@ -1345,9 +1341,25 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
               unew(indp(j,ind),ivar)=unew(indp(j,ind),ivar)-m_acc*uold(indp(j,ind),ivar)/d/vol_loc
            end do
 
-
+           ! above: accretion (gas -> sink)
+           ! below: injection (sink -> gas)
 
 #ifdef INDIVIDUAL_SINK_STARS
+           ! strict initialization 
+           injected_mass = 0d0
+           loc_metal_yield = 0d0
+           pwind = 0d0
+
+           ! switch the relative position vector
+           ! in the accretion: sink -> cell
+           ! in the injection: sink -> cloud
+           r_rel(1:ndim)=xpart(j,1:ndim)-xsink(isink,1:ndim)
+           do idim=1,ndim
+              if (period(idim) .and. r_rel(idim)>boxlen*0.5d0)r_rel(idim)=r_rel(idim)-boxlen
+              if (period(idim) .and. r_rel(idim)<boxlen*(-0.5d0))r_rel(idim)=r_rel(idim)+boxlen
+           end do
+           r_len=sqrt(sum(r_rel**2))
+
            ! SN feedback
            if(.not.on_creation)then
               ! Initialize SN feedback to false
@@ -1402,15 +1414,20 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  else
                     ! Get the main-sequence lifetime
                     ! ms_lifetime = get_portinari_stellar_lifetime(star_met,msink_actual(isink) * scale_m/M_sun)
-                    ! for v/v_crit, set it zero for now
-                    ! -> copying from the print part
+                    ! -> for consistency, replace with MIST lifetime
+
+                    ! for v/v_crit, copying from the print part
+                    ! using ir_cloud, not the actual stellar radius, this must be wrong
                     l_abs=(lsink(isink,1)**2+lsink(isink,2)**2+lsink(isink,3)**2)**0.5d0
                     l_max=msink(isink)*sqrt(factG*msink(isink)*(dble(ir_cloud)*dx_min))
+
                     star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
                     ! get [alpha/Fe]
                     ! hard-coded! should be modified to handle general cases
                     star_alpha_over_Fe = log10(sum(sink_metallicity(isink,5:9)/(/15.999, 20.180, 24.305, 28.086, 32.065/))/(sink_metallicity(isink,10)/55.845)) - 1.32238560
+                    
                     ms_lifetime = get_stellar_lifetime(real(star_met_fe, sp), real(star_alpha_over_fe, sp), real(l_abs/l_max, sp), real(msink_actual(isink)*scale_m/M_sun, sp))                     
+                    
                     ! Check if the stellar age is older than the main-sequence lifetime
                     if (star_age_Myr.gt.ms_lifetime) then
                        ! Convert metallicity to format needed by portinari
@@ -1438,7 +1455,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        loc_metal_yield = 0.0
 #endif
                      ! <<WJ>> In case of main-sequence, get properties from MIST
-                     else
+                    else
                        ! get [Fe/H]
                        star_met_fe = log10((sink_metallicity(isink,10)+1.d-40)/(sink_metallicity(isink,1)*55.864d0)) - log10(3.16e-05)
 
@@ -1456,13 +1473,12 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                        
                        ! set `loc_metal_yield` variable from MIST
                        loc_metal_yield(1:NMETALS) = mist_prop(i_chem:i_chem+NMETALS-1)
-                       ! write(*,*)'loc_metal_yield:',loc_metal_yield
 
                        ! energy is calculated later
                        sn_e = 0d0
 
-                       ! get vector from radial momentum of stellar wind
-                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m) * (r_rel / max(r_len, tiny(0.0_dp)))
+                       ! get magnitude of radial momentum of stellar wind
+                       pwind = (mist_prop(i_rmom)*1.d5/scale_v*M_sun/scale_m)
                     end if
                  end if
               end if 
@@ -1499,24 +1515,47 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
               end if
 
               ! Update sink mass
-              ! if (is_sn) then
+              ! if (is_sn) then ! now we do this part not only for SN but also for MS
               injected_mass = SUM(loc_metal_yield(1:NMETALS)) / (scale_m/M_sun) ! Convert mass loss to code units
               if (injected_mass > 0.0_dp) then
                  ! Update hydro variables in the relevant cells
                  sn_e_code_units = sn_e/scale_d/scale_l/scale_l/scale_l/scale_v/scale_v
 
-                 ijm = injected_mass * (weight/volume) / vol_loc ! injected mass density
+                 ! injected mass density
+                 ijm = injected_mass * (weight/volume) / vol_loc
 
-                 ijp = pwind(1:ndim) * (weight/volume) / vol_loc ! injected momentum density
+                 ! injected momentum density
+                 ! - far-field approximation
+                 if (r_len > dx_loc) then
+                    ijp = pwind * (weight/volume) / vol_loc * (r_rel/r_len)
+                 ! - near-field approximation
+                 else
+                    ijp = pwind * (weight/volume) / vol_loc * (r_rel/dx_loc)
+                 end if
                  ijp = ijp + ijm*vsink(isink,1:ndim) ! also consider motion of the sink
+               
+                 ! injected energy density
+                 ! - kinetic energy 1. wind motion
+                 ije = 0.5d0 * pwind**2/injected_mass * (weight/volume) / vol_loc
+                 ! - kinetic energy 2. sink motion
+                 ije = ije + 0.5d0 * ijm * sum(vsink(isink,1:ndim)**2)
+                 ! - thermal energy 1. assumed gas temperature
+                 ! k_B / mu/m_u ~ 6E7 [cm^2 s^-2 K^-1] for mu=1.4
+                 ije = ije + ijm * (6.0d7 * wind_temperature)
+                 ! - thermal energy 2. SN energy
+                 ije = ije + (sn_e_code_units * (weight/volume) / vol_loc)
 
-                 ije = 0.5d0 * sum(ijp**2) / (ijm+tiny(0.0d0))
-
-#ifdef NO_FEEDBACK_KIN
+#ifdef NO_FEEDBACK_ALL
                  ! test purpose: temporarily set no feedback
-                 sn_e_code_units = 0.0d0
                  loc_metal_yield = 0.0d0
                  ijm = 0.0d0
+                 ijp = 0.0d0
+                 ije = 0.0d0
+#endif
+
+#ifdef NO_FEEDBACK_KIN
+                 ! test purpose: temporarily set no kinetic feedback
+                 ! mass is still dumped on gas
                  ijp = 0.0d0
                  ije = 0.0d0
 #endif
@@ -1538,13 +1577,13 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  unew(indp(j,ind),2) = unew(indp(j,ind),2) + ijp(1)
                  unew(indp(j,ind),3) = unew(indp(j,ind),3) + ijp(2)
                  unew(indp(j,ind),4) = unew(indp(j,ind),4) + ijp(3)
-                 unew(indp(j,ind),neul) = unew(indp(j,ind),neul) + ije + (sn_e_code_units * (weight/volume) / vol_loc)
+                 unew(indp(j,ind),neul) = unew(indp(j,ind),neul) + ije
 
                  ! The internal energy the deposit creates (its energy minus the change of the cell's kinetic
                  ! energy) also goes into enew: where set_uold takes the internal energy from enew (pressure_fix),
                  ! the heat of the thermalised wind and of the SN would otherwise be lost
                  if (pressure_fix) then
-                    enew(indp(j,ind)) = enew(indp(j,ind)) + ije + (sn_e_code_units * (weight/volume) / vol_loc) &
+                    enew(indp(j,ind)) = enew(indp(j,ind)) + ije &
                          & - (0.5d0 * sum((dep_p + ijp)**2) / max(dep_d + ijm, smallr) - dep_ekin)
                  end if
 
