@@ -446,6 +446,8 @@ MODULE SED_module
         ,initialize_group_energies_from_blackbody
 #ifdef INDIVIDUAL_SINK_STARS
   PUBLIC init_popIII_table, interpolate_popIII_table, get_popIII_temp_from_mass
+  ! the Pop III photon table is built when the first Pop III sink needs it (sink_rt_feedback)
+  logical, PUBLIC :: popIII_table_ready=.false.
   PUBLIC init_popII_stellar_properties, init_popII_table, interpolate_popII_table
   PUBLIC interpolate_popII_age
 #endif
@@ -2396,6 +2398,7 @@ SUBROUTINE init_popIII_table(group_L0, group_L1)
      end do
 
   end do
+  popIII_table_ready = .true.
 END SUBROUTINE init_popIII_table
 
 FUNCTION get_popIII_temp_from_mass(mass) result(T)
