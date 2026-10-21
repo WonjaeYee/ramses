@@ -1119,9 +1119,10 @@ subroutine kill_grid(ind_cell,ilevel,nn,ibound,boundary_region)
            end do
         end do
 #if NVARNOADVECT>0
+        ! back to the initial value, so that a reused cell does not inherit a killed cell's value
         do ivar=1,nvarnoadvect
            do i=1,nn
-              unoadvect(ind_cell_son(i),ivar)=0.0D0
+              unoadvect(ind_cell_son(i),ivar)=noadvect_init
            end do
         end do
 #endif

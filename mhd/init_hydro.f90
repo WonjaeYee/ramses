@@ -11,6 +11,7 @@ subroutine init_hydro
   integer::irad
 #endif
   integer::nvar2,ilevel2,numbl2,ilun,ibound,istart
+  integer::nnoadv_file,nvar_adv
   integer::ncpu2,ndim2,nlevelmax2,nboundary2
   integer ,dimension(:),allocatable::ind_grid
   real(dp),dimension(:),allocatable::xx
@@ -88,7 +89,17 @@ subroutine init_hydro
      open(unit=ilun,file=fileloc,form='unformatted')
      read(ilun)ncpu2
      read(ilun)nvar2
-     nvar2 = nvar2 - nvarnoadvect_og
+     ! The non-advected scalars in the file: nvarnoadvect_og if set (>= 0); otherwise this build's
+     ! number if the file has exactly that many variables beyond the advected ones, else none
+     nvar_adv=nvar+3
+     if(nvarnoadvect_og>=0)then
+        nnoadv_file=nvarnoadvect_og
+     else if(nvarnoadvect>0.and.nvar2==nvar_adv+nvarnoadvect)then
+        nnoadv_file=nvarnoadvect
+     else
+        nnoadv_file=0
+     end if
+     nvar2 = nvar2 - nnoadv_file
      read(ilun)ndim2
      read(ilun)nlevelmax2
      read(ilun)nboundary2
@@ -191,17 +202,17 @@ subroutine init_hydro
                     end do
                  end do
 #endif
+                 ! Read the file's non-advected scalars; those beyond this build's are skipped
+                 do ivar=1,nnoadv_file
+                    read(ilun)xx
 #if NVARNOADVECT>0
-                 ! TODO(code): HK note: not sure if this is compatible with the above code
-                 if (nvarnoadvect_og.gt.0) then
-                    do ivar=1,nvarnoadvect_og
-                       read(ilun)xx
+                    if(ivar<=nvarnoadvect)then
                        do i=1,ncache
                           unoadvect(ind_grid(i)+iskip,ivar)=xx(i)
                        end do
-                    end do
-                 end if
+                    end if
 #endif
+                 end do
               end do
               deallocate(ind_grid,xx)
            end if

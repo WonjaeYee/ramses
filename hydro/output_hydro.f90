@@ -273,7 +273,10 @@ subroutine backup_hydro(filename, filename_desc)
                  call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
               end do
 
+
+#endif
 #if NVARNOADVECT>0
+              ! Write the non-advected scalars (after the passive scalars, as init_hydro reads them)
               do ivar=1,nvarnoadvect
                  do i=1,ncache
                     xdp(i)=unoadvect(ind_grid(i)+iskip,ivar)
@@ -281,9 +284,6 @@ subroutine backup_hydro(filename, filename_desc)
                  write(field_name, '("non_advected_scalar_", i0.2)') ivar
                  call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
               end do
-#endif
-
-
 #endif
               if(strict_equilibrium>0)then
                  do i = 1, ncache
