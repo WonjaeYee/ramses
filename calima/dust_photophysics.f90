@@ -2746,7 +2746,7 @@ module pah_photoelectric_heating
         if (k_det*k_pe_0*k_pe_1 .gt. 0d0) then
             f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
                         k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
-                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
+                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*(ne*ne*ne)))
 
             f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
                             k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
@@ -2755,7 +2755,7 @@ module pah_photoelectric_heating
                         k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
 
             f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                        k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+                        k_att*k_rec_1*k_rec_2*(ne*ne*ne)/(k_det*k_pe_0*k_pe_1))
         else
             ! No (or too weak) photo-ionisation: the same equilibrium without 0/0 and x/0
             w_n = k_det / (k_att*ne)
@@ -2893,7 +2893,7 @@ module pah_photoelectric_heating
         if (k_det*k_pe_0*k_pe_1 .gt. 0d0) then
             f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
                         k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
-                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
+                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*(ne*ne*ne)))
 
             f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
                             k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
@@ -2902,7 +2902,7 @@ module pah_photoelectric_heating
                         k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
         
             f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                        k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+                        k_att*k_rec_1*k_rec_2*(ne*ne*ne)/(k_det*k_pe_0*k_pe_1))
         else
             ! No (or too weak) photo-ionisation: the same equilibrium without 0/0 and x/0
             w_n = k_det / (k_att*ne)
