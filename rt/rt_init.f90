@@ -583,9 +583,9 @@ SUBROUTINE read_rt_groups()
   ! in each photon group
   ! call init_popII_table(groupL0, groupL1)
 
-  ! Get the number of photons emitted by each Pop III star
-  ! in each photon group
-  call init_popIII_table(groupL0, groupL1)
+  ! The number of photons emitted by each Pop III star in each photon group is
+  ! tabulated when the first Pop III sink needs it (sink_rt_feedback): 1.1 s per
+  ! rank at every start, for runs that mostly have no Pop III star
 #endif
 
 #endif
