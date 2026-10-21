@@ -112,7 +112,8 @@ recursive subroutine amr_step(ilevel,icount)
   !--------------------------
                                call timer('load balance','start')
   ok_defrag=.false.
-  if(levelmin.lt.nlevelmax)then
+  ! a uniform grid is only rebalanced on the measured cost
+  if(levelmin.lt.nlevelmax.or.cost_measured>0d0)then
      if(ilevel==levelmin)then
         if(nremap>0)then
            ! Skip first load balance because it has been performed before file dump

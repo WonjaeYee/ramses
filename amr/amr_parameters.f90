@@ -90,6 +90,8 @@ module amr_parameters
   real(dp)::boxlen=1.0D0                   ! Box length along x direction
   character(len=128)::ordering='hilbert'
   logical::cost_weighting=.true.           ! Activate load balancing according to cpu time
+  real(dp)::cost_measured=0.0d0            ! Weight of the measured cooling cost per cell in the load balance (0..1)
+  integer::cost_ivar=1                     ! Non-advected scalar (unoadvect) that holds that cost
   ! Recursive bisection tree parameters
   integer::nbilevelmax=1                   ! Max steps of bisection partitioning
   integer::nbinodes=3                      ! Max number of internal nodes

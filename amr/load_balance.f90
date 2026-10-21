@@ -284,6 +284,9 @@ subroutine cmp_new_cpu_map
   use pm_commons
   use bisection
   use mpi_mod
+#if NVARNOADVECT>0
+  use hydro_commons, ONLY: unoadvect
+#endif
   implicit none
 #ifndef WITHOUTMPI
   integer::info
@@ -313,6 +316,15 @@ subroutine cmp_new_cpu_map
   integer,dimension(1:nvector),save::dom
   real(qdp),dimension(1:nvector),save::order_min,order_max
   integer,dimension(1:MAXLEVEL),save::niter_cost
+#if NVARNOADVECT>0
+  ! measured cooling cost (cost_measured): per leaf cell, its sub-domain and the calls per coarse step
+  logical::cost_on
+  real(kind=8),allocatable,dimension(:)::wcost
+  integer,allocatable,dimension(:)::isub_cell
+  integer,dimension(1:MAXLEVEL)::ncalls
+  real(kind=8),dimension(1:4)::csum_loc,csum
+  real(kind=8)::vmean,wscale,v
+#endif
 
   real(dp),dimension(1:1,1:ndim),save :: xx_tmp
   integer,dimension(1:1),save :: c_tmp
@@ -337,6 +349,20 @@ subroutine cmp_new_cpu_map
   endif
 
   if(verbose) print *,"Entering cmp_new_cpu_map"
+
+#if NVARNOADVECT>0
+  cost_on=cost_measured>0d0.and.ordering/='bisection'
+  if(cost_on)then
+     allocate(wcost(1:ncoarse+twotondim*ngridmax),isub_cell(1:ncoarse+twotondim*ngridmax))
+     ! the cost is per call: a level is called this many times per coarse step
+     ncalls(levelmin)=1
+     do ilevel=levelmin+1,nlevelmax
+        ncalls(ilevel)=nsubcycle(ilevel-1)*ncalls(ilevel-1)
+     end do
+  end if
+  if(cost_measured>0d0.and.ordering=='bisection'.and.myid==1) &
+       & write(*,*)'Warning load_balance: cost_measured is used with the Hilbert ordering only'
+#endif
 
   if(ordering/='bisection') then      ! begin if not bisection
 
@@ -369,6 +395,12 @@ subroutine cmp_new_cpu_map
         isub=(dom(1)-1)/ncpu+1
         ncell_sub(isub)=ncell_sub(isub)+1
         flag1(ncell)=0
+#if NVARNOADVECT>0
+        if(cost_on)then
+           wcost(ncell)=-1d0
+           isub_cell(ncell)=isub
+        end if
+#endif
         hilbert_key(ncell)=order_max(1)
      end if
   end do
@@ -456,6 +488,14 @@ subroutine cmp_new_cpu_map
                        stop
                     endif
                     flag1(ncell)=flag1(ncell)*niter_cost(ilevel)
+#if NVARNOADVECT>0
+                    if(cost_on)then
+                       ! < 0: not measured yet
+                       wcost(ncell)=unoadvect(ind_cell(i),cost_ivar)
+                       if(wcost(ncell)>=0d0)wcost(ncell)=wcost(ncell)*dble(ncalls(ilevel))
+                       isub_cell(ncell)=isub
+                    end if
+#endif
                     npart_sub(isub)=npart_sub(isub)+flag1(ncell)
                     hilbert_key(ncell)=order_max(ncell_loc)
                  end if
@@ -468,6 +508,45 @@ subroutine cmp_new_cpu_map
      ! End loop over cpus
   end do
   ! End loop over levels
+
+#if NVARNOADVECT>0
+  !--------------------------------------------------------------------
+  ! Measured cost: each cell's weight becomes (1-f) of the usual one plus
+  ! f times its measured cooling time per coarse step, rescaled to the
+  ! same total; cells not measured yet take the mean measured cost
+  !--------------------------------------------------------------------
+  if(cost_on)then
+     csum_loc=0d0
+     do i=1,ncell
+        if(flag1(i)<=0)cycle
+        csum_loc(1)=csum_loc(1)+dble(flag1(i))
+        csum_loc(2)=csum_loc(2)+1d0
+        if(wcost(i)>=0d0)then
+           csum_loc(3)=csum_loc(3)+wcost(i)
+           csum_loc(4)=csum_loc(4)+1d0
+        end if
+     end do
+#ifndef WITHOUTMPI
+     call MPI_ALLREDUCE(csum_loc,csum,4,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,info)
+#else
+     csum=csum_loc
+#endif
+     if(csum(4)>0d0.and.csum(3)>0d0)then
+        vmean=csum(3)/csum(4)
+        wscale=csum(1)/(csum(3)+(csum(2)-csum(4))*vmean)
+        npart_sub=0
+        do i=1,ncell
+           if(flag1(i)>0)then
+              v=wcost(i)
+              if(v<0d0)v=vmean
+              flag1(i)=max(nint((1d0-cost_measured)*dble(flag1(i))+cost_measured*v*wscale),1)
+           end if
+           npart_sub(isub_cell(i))=npart_sub(isub_cell(i))+flag1(i)
+        end do
+     end if
+     deallocate(wcost,isub_cell)
+  end if
+#endif
 
   !------------------------------------------------
   ! Sort ordering key and store new index in flag2
