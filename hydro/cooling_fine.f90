@@ -1432,8 +1432,13 @@ end subroutine ps_frac_to_mass
 subroutine ps_frac_to_mass_uold
   use amr_commons
   use hydro_commons
+#ifndef WITHOUTMPI
+  use mpi_mod
+#endif
   implicit none
   integer::ilevel,igrid,ind,iskip,i,j,k,icell
+  integer::info
+  real(dp)::s,dev_loc,dev
   do ilevel=1,nlevelmax
      do igrid=1,active(ilevel)%ngrid
         do ind=1,twotondim
@@ -1453,6 +1458,31 @@ subroutine ps_frac_to_mass_uold
      end do
      if(simple_boundary)call make_boundary_hydro(ilevel)
   end do
+  ! The restart's ion stages should sum to their element: warn if a file does not
+  dev_loc=0d0
+  do ilevel=1,nlevelmax
+     do igrid=1,active(ilevel)%ngrid
+        do ind=1,twotondim
+           icell=active(ilevel)%igrid(igrid)+ncoarse+(ind-1)*ngridmax
+           do j=1,ps_npar
+              if(uold(icell,ps_par(j))<=0d0)cycle
+              s=0d0
+              do k=ps_cstart(j),ps_cstart(j+1)-1
+                 s=s+uold(icell,ps_child(k))
+              end do
+              dev_loc=max(dev_loc,abs(s/uold(icell,ps_par(j))-1d0))
+           end do
+        end do
+     end do
+  end do
+#ifndef WITHOUTMPI
+  call MPI_ALLREDUCE(dev_loc,dev,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,info)
+#else
+  dev=dev_loc
+#endif
+  if(myid==1.and.dev>passive_tol)write(*,'(A,ES10.3,A,ES10.3,A)') &
+       & ' Warning: restart ion stages differ from their element by up to',dev, &
+       & ' (passive_tol',passive_tol,')'
 end subroutine ps_frac_to_mass_uold
 !###########################################################
 subroutine ps_cma_cell_targets(q,ngrid)
