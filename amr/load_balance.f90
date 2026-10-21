@@ -22,6 +22,7 @@ subroutine load_balance
   !------------------------------------------------
   integer::igrid,ncache,ilevel,i,ind,info
   integer::idim,ivar,icpu,jcpu,kcpu
+  real(kind=8),dimension(1:2)::glob_loc,glob
   integer::nxny,ix,iy,iz,iskip
   integer,dimension(nlevelmax,3)::comm_buffin,comm_buffout
 #endif
@@ -271,6 +272,20 @@ subroutine load_balance
      end do
   end if
 
+  ! With the measured cost the cheap ranks take more cells: report the grids in use per rank
+  if(cost_measured>0d0)then
+     glob_loc(1)=dble(ngridmax-numbf)
+     glob_loc(2)=dble(ngridmax-numbf)
+     call MPI_ALLREDUCE(glob_loc(1),glob(1),1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,info)
+     call MPI_ALLREDUCE(glob_loc(2),glob(2),1,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,info)
+     if(myid==1)then
+        write(*,'(A,F6.2,A,F6.1,A)')' Load balance (cost_measured): grids in use per rank max/mean =', &
+             & glob(1)/max(glob(2)/dble(ncpu),1d0),', max ',100d0*glob(1)/dble(ngridmax),'% of ngridmax'
+        if(glob(1)>0.9d0*dble(ngridmax))write(*,*)'Warning: a rank uses more than 90% of ngridmax; '// &
+             & 'raise ngridmax or lower cost_cell_ratio_max'
+     end if
+  end if
+
 999 format(' Level ',I2,' has ',I10,' grids (',3(I8,','),')')
 #endif
 
@@ -324,6 +339,7 @@ subroutine cmp_new_cpu_map
   integer,dimension(1:MAXLEVEL)::ncalls
   real(kind=8),dimension(1:4)::csum_loc,csum
   real(kind=8)::vmean,wscale,v
+  integer::wfloor
 #endif
 
   real(dp),dimension(1:1,1:ndim),save :: xx_tmp
@@ -534,12 +550,15 @@ subroutine cmp_new_cpu_map
      if(csum(4)>0d0.and.csum(3)>0d0)then
         vmean=csum(3)/csum(4)
         wscale=csum(1)/(csum(3)+(csum(2)-csum(4))*vmean)
+        ! no cell below 1/cost_cell_ratio_max of the mean weight: as every domain takes the same total,
+        ! no rank holds more than ~cost_cell_ratio_max times the mean number of cells (memory)
+        wfloor=max(nint(csum(1)/csum(2)/cost_cell_ratio_max),1)
         npart_sub=0
         do i=1,ncell
            if(flag1(i)>0)then
               v=wcost(i)
               if(v<0d0)v=vmean
-              flag1(i)=max(nint((1d0-cost_measured)*dble(flag1(i))+cost_measured*v*wscale),1)
+              flag1(i)=max(nint((1d0-cost_measured)*dble(flag1(i))+cost_measured*v*wscale),wfloor)
            end if
            npart_sub(isub_cell(i))=npart_sub(isub_cell(i))+flag1(i)
         end do
