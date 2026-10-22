@@ -65,7 +65,7 @@ subroutine backup_hydro(filename, filename_desc)
   end if
 
   write(unit_out) ncpu
-  write(unit_out) nvar+3
+  write(unit_out) nvar+3+nvarnoadvect
   write(unit_out) ndim
   write(unit_out) nlevelmax
   write(unit_out) nboundary
@@ -259,6 +259,17 @@ subroutine backup_hydro(filename, filename_desc)
                  call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
               end do
 #endif
+
+#if NVARNOADVECT>0
+              do ivar=1,nvarnoadvect
+                 do i=1,ncache
+                    xdp(i)=unoadvect(ind_grid(i)+iskip,ivar)
+                 end do
+                 write(field_name, '("non_advected_scalar_", i0.2)') ivar
+                 call generic_dump(field_name, info_var_count, xdp, unit_out, dump_info_flag, unit_info)
+              end do
+#endif
+
               ! We did one output, deactivate dumping of variables
               dump_info_flag = .false.
            end do
