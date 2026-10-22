@@ -20,10 +20,13 @@ subroutine mpi_share_turb_fields(include_last)
 #endif
 #endif
 
-   integer, parameter :: message_length=NDIM*TURB_GS**NDIM
+   ! integer, parameter :: message_length=NDIM*TURB_GS**NDIM
+   integer :: message_length=1
                                                ! Length of flattened arrays
    integer            :: ierr                  ! MPI error variable
-
+   
+   message_length = ndim*TURB_GS**ndim
+   
    ! Share afield_last and afield_next
    if (include_last) then
       call MPI_BCAST(afield_last, message_length, MPI_REAL_DP, 0, &
