@@ -6,7 +6,28 @@ module dust_dynamics
 
     implicit none
 
+#ifdef RT
+    ! Radiation-pressure and drag state of the level cells of one stencil sweep
+    ! (get_dust_courant_dt, dust_push_fine; radpressure_acc_once). It depends only on
+    ! the cell's uold and rtuold, which a sweep does not change, yet every cell is in
+    ! the 6^ndim stencil of 3^ndim grids. Direct-mapped on (grid, son), at most
+    ! RP_NMAX entries; an entry is valid for the sweep that wrote it (rp_stamp).
+    ! Allocated for a sweep and freed after it (rp_new_sweep, rp_end_sweep): with
+    ! ntva = 6, 22-37 MB per rank (1-3D) while the dust is swept, none otherwise.
+    integer, parameter :: RP_NMAX = 131072
+    integer, save :: rp_n = 0, rp_sweep = 0
+    integer, allocatable, save :: rp_key(:), rp_stamp(:)
+    real(dp), allocatable, save :: rp_val(:,:)
+#endif
     logical, save :: tva_rt_checked = .false.   ! check_tva_rt_params done
+    ! Results of draine2011_stopping_time past its linear regime, direct-mapped on the bit
+    ! patterns of its six arguments: a cell's stopping times are evaluated once in each of the
+    ! overlapping stencils that hold it (3^ndim of them in the flux routine), and a hit returns
+    ! what the root search would return, bit for bit.
+    ! 0.9 MB, allocated on the first call (Draine drag runs only)
+    integer, parameter :: TS_MEMO_N = 16384
+    integer(kind=8), allocatable, save :: ts_memo_key(:,:)
+    real(dp), allocatable, save :: ts_memo_val(:)
 
     contains
 
@@ -62,7 +83,8 @@ module dust_dynamics
         real(dp), intent(in) :: a, rho_s, D, nH, T, coul
         real(dp) :: t_s
         real(dp) :: G_target, g0, s_lin, s_lo, s_hi, s_new, f_lo, f_hi, f_new, c0, b, p3, q3, u, s_min
-        integer  :: it, side, m
+        integer  :: it, side, m, h
+        integer(kind=8) :: k(6)
 
         g0       = (8d0 + 4d0*coul) / (3d0*sqrt(pi))          ! dG/ds at s = 0
         G_target = (2d0/3d0) * a * rho_s * abs(D) / (max(nH, 1d-30) * kB * T)
@@ -79,6 +101,19 @@ module dust_dynamics
             ! (in the form without cancellation) is the drift
             s_new = sqrt(2d0*G_target**2 / (c0**2 + sqrt(c0**4 + 4d0*b*c0**2*G_target**2)))
             t_s = s_new * sqrt(2d0*kB*T/mH) / abs(D)
+            return
+        end if
+        ! the root search below, unless these arguments were the last ones in their slot
+        k = (/ transfer(a, 0_8), transfer(rho_s, 0_8), transfer(D, 0_8), &
+               transfer(nH, 0_8), transfer(T, 0_8), transfer(coul, 0_8) /)
+        if (.not. allocated(ts_memo_key)) then
+            allocate(ts_memo_key(6, 0:TS_MEMO_N-1), ts_memo_val(0:TS_MEMO_N-1))
+            ts_memo_key = 0_8
+            ts_memo_val = -1d0
+        end if
+        h = ts_memo_slot(k)
+        if (all(ts_memo_key(:, h) == k) .and. ts_memo_val(h) >= 0d0) then
+            t_s = ts_memo_val(h)
             return
         end if
         ! Bracket the smallest root by stepping out by 1.2 from deep in the linear regime (1e-3 s_lin),
@@ -128,6 +163,8 @@ module dust_dynamics
             end if
         end do
         t_s = 0.5d0 * (s_lo + s_hi) * sqrt(2d0*kB*T/mH) / abs(D)
+        ts_memo_key(:, h) = k
+        ts_memo_val(h) = t_s
     contains
         real(dp) function G_draine(s)
             real(dp), intent(in) :: s
@@ -135,6 +172,20 @@ module dust_dynamics
                      + coul*s/(0.75d0*sqrt(pi) + s**3)
         end function G_draine
     end function draine2011_stopping_time
+
+    pure integer function ts_memo_slot(k)
+        ! slot of draine2011_stopping_time's arguments (their bit patterns) in its memo
+        integer(kind=8), intent(in) :: k(6)
+        integer(kind=8) :: x
+        integer :: i
+        x = 0_8
+        do i = 1, 6
+            x = ieor(ishftc(x, 23), k(i))
+            x = ieor(x, ishft(x, -31))
+        end do
+        x = ieor(x, ishft(x, -12))
+        ts_memo_slot = int(iand(ieor(x, ishft(x, -24)), int(TS_MEMO_N - 1, 8)))
+    end function ts_memo_slot
 
     function grain_relative_velocity(model,T,rho_gas,nH,ne,v_turb&
                                     &,local_mu,inject_L&
@@ -504,6 +555,66 @@ module dust_dynamics
         end if
     end subroutine dust_shock_destruction
 
+#ifdef RT
+    subroutine rp_new_sweep()
+        ! start a sweep: the cache entries of the previous one become invalid
+        use amr_commons, only: ngridmax
+        implicit none
+        if (.not. allocated(rp_key)) then
+            rp_n = min(RP_NMAX, twotondim*ngridmax)
+            allocate(rp_key(rp_n), rp_stamp(rp_n))
+            allocate(rp_val((1 + max(1, ntva))*ndim + max(1, ntva) + ntva + 2, rp_n))
+            rp_key = 0
+            rp_stamp = 0
+        end if
+        rp_sweep = rp_sweep + 1
+    end subroutine rp_new_sweep
+
+    subroutine rp_end_sweep()
+        ! end a sweep: the cache is freed until the next one
+        implicit none
+        if (allocated(rp_key)) deallocate(rp_key, rp_stamp, rp_val)
+    end subroutine rp_end_sweep
+
+    subroutine radpressure_acc_once(icell, cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
+                                    irtrap_share, drag_state)
+        ! compute_gas_dust_radpressure_acc of the level cell icell (uold/rtuold index), computed
+        ! once per sweep and copied for the other stencils that hold the cell; a cache collision
+        ! recomputes, so the outputs are always those of the direct call
+        use amr_commons, only: ncoarse, ngridmax
+        use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
+        implicit none
+        integer, intent(in) :: icell, ilevel
+        real(dp), dimension(:), intent(in) :: cell_state, cell_rt_state
+        real(dp), intent(in) :: dx
+        real(dp), dimension(1:ndim), intent(out) :: gas_acc
+        real(dp), dimension(max(1, ntva), 1:ndim), intent(out) :: tva_acc
+        real(dp), dimension(max(1, ntva)), intent(out) :: irtrap_share
+        real(dp), dimension(1:ntva+2), intent(out) :: drag_state
+        integer :: s, n1, n2, n3
+        ! slot of (grid, son): (grid - 1) 2^ndim + son - 1, modulo the cache size
+        s = mod(mod(icell - ncoarse - 1, ngridmax)*twotondim + (icell - ncoarse - 1)/ngridmax, rp_n) + 1
+        n1 = ndim
+        n2 = n1 + max(1, ntva)*ndim
+        n3 = n2 + max(1, ntva)
+        if (rp_key(s) == icell .and. rp_stamp(s) == rp_sweep) then
+            gas_acc = rp_val(1:n1, s)
+            tva_acc = reshape(rp_val(n1+1:n2, s), (/ max(1, ntva), ndim /))
+            irtrap_share = rp_val(n2+1:n3, s)
+            drag_state = rp_val(n3+1:n3+ntva+2, s)
+            return
+        end if
+        call compute_gas_dust_radpressure_acc(cell_state, cell_rt_state, ilevel, dx, gas_acc, tva_acc, &
+                                              irtrap_share, drag_state)
+        rp_key(s) = icell
+        rp_stamp(s) = rp_sweep
+        rp_val(1:n1, s) = gas_acc
+        rp_val(n1+1:n2, s) = reshape(tva_acc, (/ n2 - n1 /))
+        rp_val(n2+1:n3, s) = irtrap_share
+        rp_val(n3+1:n3+ntva+2, s) = drag_state
+    end subroutine radpressure_acc_once
+#endif
+
     subroutine draine_ts_cells(ngrid, dx, Pg, Ptrap, rho_mix, eps, eps_tot, a_rad_g, a_rad_d, s_IRtrap, &
                                drag_state, do_irtrap, scale_v, scale_t, ts)
         use hydro_parameters, only: smallr, iu1, iu2, ju1, ju2, ku1, ku2
@@ -689,6 +800,9 @@ module dust_dynamics
         ! PART B: Stencil-based CFL using the true face pressure gradient
         ! ----------------------------------------------------------------
         if (.not. use_w_drift_test) then
+#ifdef RT
+            if (dust_radpressure) call rp_new_sweep()
+#endif
             ! Index bounds — identical to dust_upwind_correct1
             i1min=0; i1max=0; i2min=0; i2max=0; i3min=1; i3max=1
             j1min=0; j1max=0; j2min=0; j2max=0; j3min=1; j3max=1
@@ -767,9 +881,9 @@ module dust_dynamics
                                 do i=1,nbuffer; rt_uloc(ind_nexist(i),i3,j3,k3,ivar) = rt_u2(i,ind_son,ivar);     end do
                             end do
 
-                            ! Compute the radiation pressures for each cell
+                            ! Compute the radiation pressures for each cell (level cells: once per sweep)
                             do i=1,nexist
-                                call compute_gas_dust_radpressure_acc(uloc(ind_exist(i),i3,j3,k3,:),&
+                                call radpressure_acc_once(ind_cell(i), uloc(ind_exist(i),i3,j3,k3,:),&
                                                                         rt_uloc(ind_exist(i),i3,j3,k3,:),& 
                                                                         ilevel,dx,& 
                                                                         a_rad_g(ind_exist(i),i3,j3,k3,:),&
@@ -1055,6 +1169,9 @@ module dust_dynamics
                     end do; end do; end do
                 end do
             end do
+#ifdef RT
+            call rp_end_sweep()
+#endif
         end if
         dt_all = dt_loc
         nclip_all = tva_nclip
@@ -1754,6 +1871,7 @@ module dust_dynamics
 
         if (numbtot(1,ilevel)==0) return
         if (verbose) write(*,222) ilevel
+        call rp_new_sweep()
 
         ! Loop over active grids by vector sweeps
         ncache = active(ilevel)%ngrid
@@ -1764,6 +1882,7 @@ module dust_dynamics
             end do
             call dust_upwind_correct2(ind_grid,ngrid,ilevel)
         end do
+        call rp_end_sweep()
 222 format('   Entering dust push for level ',i2)
 
     end subroutine dust_push_fine
@@ -1896,9 +2015,9 @@ module dust_dynamics
                     do i=1,nbuffer; rt_uloc(ind_nexist(i),i3,j3,k3,ivar)=rt_u2(i,ind_son,ivar); end do
                 end do
 
-                ! Compute the radiation pressures for each cell
+                ! Compute the radiation pressures for each cell (level cells: once per sweep)
                 do i=1,nexist
-                    call compute_gas_dust_radpressure_acc(uloc(ind_exist(i),i3,j3,k3,:),&
+                    call radpressure_acc_once(ind_cell(i), uloc(ind_exist(i),i3,j3,k3,:),&
                                                             rt_uloc(ind_exist(i),i3,j3,k3,:),& 
                                                             ilevel,dx,& 
                                                             a_rad_g(ind_exist(i),i3,j3,k3,:),&

@@ -11,7 +11,8 @@ module dust_interface
 
     public :: compute_dust_rad_rates,compute_dust_precool,&
             compute_dust_coolrates,compute_local_anisotropy_factor,&
-            compute_dust_update,rtgroups_reset_warm,store_pah_ion_fraction
+            compute_dust_update,rtgroups_reset_warm,store_pah_ion_fraction,&
+            rtgroups_derivative_calls
 
     ! Cache to avoid automatic array allocations in compute_dust_update
     real(dp), allocatable, save, target :: y_gas_cache(:,:), y_gas_out_cache(:,:)
@@ -30,6 +31,8 @@ module dust_interface
     type(RTGLast), allocatable, save :: rtg_last(:)
     real(dp), allocatable, save :: rtg_Zguess(:)
     real(dp), parameter :: RTG_DLNT = 1d-5, RTG_SERVE = 1.5d-5
+    ! .true. during the cooling solver's T(1 +- 1e-5) calls of an RTZ sub-step (rtgroups_derivative_calls)
+    logical, save :: rtg_dT_calls = .false.
 
 contains
     subroutine store_pah_ion_fraction(dinfo, icell)
@@ -60,6 +63,17 @@ contains
         end if
         if (allocated(rtg_last)) rtg_last(:)%valid = .false.
     end subroutine rtgroups_reset_warm
+
+    subroutine rtgroups_derivative_calls(on)
+        ! WDB06rt: rtz_cool_step brackets the cooling solver's T(1 +- 1e-5) calls with on = .true.
+        ! and .false. They need only dC/dT and have the inputs of the sub-step's precool solve but T
+        ! (and, with rt_isIR, the dust IR emission it added to the IR group in between), so its bins
+        ! are served from that solve's d/d ln T (rtg_served), instead of two more full solves whose
+        ! warm-started roots need not agree.
+        implicit none
+        logical, intent(in) :: on
+        rtg_dT_calls = on
+    end subroutine rtgroups_derivative_calls
 
     subroutine compute_local_anisotropy_factor(dinfo,Fp,Np)
         ! Computes the local radiation anisotropy factor and solid angle 
@@ -504,11 +518,16 @@ contains
     contains
 
         logical function rtg_served(ib)
-            ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T
+            ! same inputs as the last full solve of bin ib but T, within RTG_SERVE in ln T: in the
+            ! sub-step's T(1 +- 1e-5) calls by construction, else checked
             integer, intent(in) :: ib
             rtg_served = .false.
             if (.not. rtg_last(ib)%valid) return
             if (abs(log(Tk/rtg_last(ib)%T)) > RTG_SERVE) return
+            if (rtg_dT_calls) then
+                rtg_served = .true.
+                return
+            end if
             if (ne /= rtg_last(ib)%ne .or. n_Hp /= rtg_last(ib)%n_Hp .or. n_Hep /= rtg_last(ib)%n_Hep .or. &
                 n_Hepp /= rtg_last(ib)%n_Hepp .or. dinfo%G0_background /= rtg_last(ib)%G0 .or. &
                 dinfo%local_c /= rtg_last(ib)%c_red) return
