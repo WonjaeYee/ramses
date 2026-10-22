@@ -138,6 +138,9 @@ module dust_commons
     character(LEN=30)::charging_model='Ibanez2019'     ! Model for the grain charge distribution
     character(LEN=30)::ice_model='Hollenbach2009'     ! Model for ice formation on dust grains
     integer :: nZmix=3                                  ! Number of representative charge points (1: mean, 2: two-point, 3: three-point)
+    logical :: dust_ion_recombination=.false.          ! WDB06rt/WDB06tab: grain-assisted recombination of the singly charged
+                                                       ! ions from the charge balance, used by the RTZ chemistry instead of its
+                                                       ! fit; off: WDB06rt skips it and WDB06tab does not load that part
 
     ! ==== PAH modelling options (read from nml) ====
     character(LEN=30)::photolysis_model='RM2026'         ! Model for UV sublimation of PAHs

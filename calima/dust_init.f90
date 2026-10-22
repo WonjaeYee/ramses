@@ -223,6 +223,11 @@ module dust_init
         ! dust_dynamics:check_tva_rt_params on the first TVA step: this routine runs inside
         ! read_CALIMA_params, before read_rt_params, where rt_isIRtrap and rt_isIR are still at
         ! their defaults (and rt_use_hll is set later, in rt_init)
+        if (dust_ion_recombination .and. trim(charging_model) /= 'WDB06rt' .and. trim(charging_model) /= 'WDB06tab') then
+            if (myid == 1) write(*,*) 'WARNING: dust_ion_recombination needs charging_model WDB06rt or WDB06tab; ', &
+                'it is switched off: the RTZ chemistry keeps its grain recombination fit'
+            dust_ion_recombination = .false.   ! from here on the flag alone decides
+        end if
 #if defined(RT) && !defined(RTZ)
         ! RT + CALIMA without RTZ. The radiative dust coupling is ported into
         ! rt_cooling_module, but the dust<->gas THERMAL coupling is not: it
@@ -1358,12 +1363,34 @@ module dust_init
         if (myid == 1) then
             call print_dust_parameters
         end if
+#ifndef RT
+        ! with RT, the last tables are built in read_rt_groups, which reports
+        call report_calima_memory()
+#endif
 
         ! if (dust_test) then
         !     call run_dust_solver_test()
         ! end if
 
     end subroutine init_CALIMA_dust
+
+    subroutine report_calima_memory()
+        ! The memory of this rank's CALIMA tables, once they are all built: every DustTable (the
+        ! interpolation tables of the grain processes and optics) and the WDB06 charging tables; and
+        ! the per-cell TVA array allocated later, which scales with ngridmax
+        use amr_commons, only: myid, ncoarse
+        use amr_parameters, only: ndim, twotondim, ngridmax
+        use dust_charging_rtgroups, only: rtgroups_table_bytes
+        integer(kind=8) :: b_rtg
+        if (myid /= 1) return
+        b_rtg = rtgroups_table_bytes()
+        write(*,'(A,F9.2,A,F9.2,A,F9.2,A)') ' CALIMA tables: ', (dust_table_bytes + b_rtg)/1048576d0, &
+            ' MB per rank (interpolation tables ', dust_table_bytes/1048576d0, ' MB, WDB06 charging ', &
+            b_rtg/1048576d0, ' MB)'
+        if (dust_tva) write(*,'(A,F10.1,A,I10,A)') ' CALIMA per-cell arrays: tva_wdrift ', &
+            8d0*(ncoarse + twotondim*dble(ngridmax))*ntva*ndim/1048576d0, ' MB per rank at ngridmax = ', &
+            ngridmax, ' (allocated at the first TVA step)'
+    end subroutine report_calima_memory
 
     subroutine read_CALIMA_params(nml_ok,nGroups)
         use amr_commons, only:myid
@@ -1388,6 +1415,7 @@ module dust_init
                 tva_wmax_cs,drag_model,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
+                dust_ion_recombination,&
                 ! PAH modelling options
                 photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
                 cluster_evaporation_model,&
