@@ -8,6 +8,13 @@ module rtz_coolrates_module
   public :: initialize_high_temperature_metal_cooling, initialize_fine_structure_tables
   public :: all_cooling
 
+  ! The terms of all_cooling that do not depend on T (cosmic-ray heating, UVB and G0 photoheating,
+  ! photoheating by the local field). The caller keeps them from its call at T (t_indep_out) and
+  ! passes them to the T(1 +- 1e-5) calls of its dC/dT (t_indep_in), which then skip them
+  type, public :: TIndepHeat
+     real(dp) :: cosmic_ray = 0d0, uvb = 0d0, uvb_G0 = 0d0, local = 0d0
+  end type TIndepHeat
+
   ! Constants
   real(dp):: MIN_METAL_COOL_DENS = 1.d-10 ! minimum number density to calc cooling
   real(dp):: MIN_COOL_ION = 1.d-10 !//minimum number density to calculate cooling for a particular ion
@@ -39,6 +46,10 @@ module rtz_coolrates_module
   ! solver does not have.
   real(dp), allocatable:: high_t_cooling_rates_opt(:,:,:,:)
   real(dp):: fs_cool_tab(27,160,8)  ! Array for fine structure cooling rates  
+  ! the CMB intensities at the lines of each fine-structure species, for the redshift they were last
+  ! computed at (they depend on nothing else); per MPI rank, as the CT rate cache
+  real(dp), save:: cmb3_z(27) = -1d0, cmb3_Bnu(3,27) = 0d0
+  real(dp), save:: cmb2_z(27) = -1d0, cmb2_Bnu(27) = 0d0
 
   real(dp):: G0_heating_rates(26) = (/ &
     0.d0, & ! 1 - Hydrogen
@@ -773,6 +784,14 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     real(dp):: CIE_frac_used, CIE_frac_theo
     real(dp):: x_ne, w_ne, w00, w10, w01, w11
     integer:: ine, ine2
+    real(dp), parameter:: ln10 = 2.302585092994045684d0
+
+    ! below 1000 K the tables are taken at 1000 K and scaled by exp(-(2000/1000)^5) = 1.3e-14:
+    ! negligible, so the ~100 table interpolations are skipped
+    if (T <= 1000.d0) then
+        rate = 1.d-100
+        return
+    end if
 
     loc_T = max(T,1000.d0)
     log_T = log10(loc_T)
@@ -780,7 +799,7 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     t_max = 9.d0
     dt = 0.05d0
     rate = 0.d0
-    t_scale_fac = safe_exp(-1.d0 * ((2000.d0/loc_T)**5.d0))
+    t_scale_fac = safe_exp(-1.d0 * ((2000.d0/loc_T)**5))
 
     ! bounds for temperature --> no cooling
     if (log_T < t_min) then
@@ -838,15 +857,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
           else
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j)))
               if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
                   loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+                     * exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
               end if
           end if
 
@@ -865,15 +884,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
           else
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j)))
               if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
                   loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+                     * exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
               end if
           end if
 
@@ -892,15 +911,15 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
           if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
           else
-              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
-                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              loc_cooling_rate = exp(ln10 * (w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j)))
               if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
                   loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
-                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
-                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+                     * exp(ln10 * (w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j)))
               end if
           end if
 
@@ -1083,9 +1102,15 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     B_21 = (g_1 / g_2) * B_12
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
-    B_nu_20 = (2.d0 * H_PLANCK * (nu_20 * nu_20 * nu_20) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
-    B_nu_21 = (2.d0 * H_PLANCK * (nu_21 * nu_21 * nu_21) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
+    if (z /= cmb3_z(idx_0)) then
+       cmb3_z(idx_0) = z
+       cmb3_Bnu(1,idx_0) = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+       cmb3_Bnu(2,idx_0) = (2.d0 * H_PLANCK * (nu_20 * nu_20 * nu_20) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_20 / (KB * T_cmb)) - 1.d0)
+       cmb3_Bnu(3,idx_0) = (2.d0 * H_PLANCK * (nu_21 * nu_21 * nu_21) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_21 / (KB * T_cmb)) - 1.d0)
+    end if
+    B_nu_10 = cmb3_Bnu(1,idx_0)
+    B_nu_20 = cmb3_Bnu(2,idx_0)
+    B_nu_21 = cmb3_Bnu(3,idx_0)
 
     ! Find temperature index
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -1241,7 +1266,11 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     B_10 = (g_0 / g_1) * B_01
 
     ! CMB black body spectrum
-    B_nu_10 = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    if (z /= cmb2_z(idx_0)) then
+       cmb2_z(idx_0) = z
+       cmb2_Bnu(idx_0) = (2.d0 * H_PLANCK * (nu_10 * nu_10 * nu_10) / (C_CGS*C_CGS)) / (safe_exp(H_PLANCK * nu_10 / (KB * T_cmb)) - 1.d0)
+    end if
+    B_nu_10 = cmb2_Bnu(idx_0)
 
     ! Find temperature index.
     itemp_low = floor((logT - tmin)/delta_temp) + 1
@@ -2152,7 +2181,7 @@ END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
                      nCO, f_shd, local_G0, background_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
-                     saved_cooling_rates, saved_cooling_rates_names)
+                     saved_cooling_rates, saved_cooling_rates_names, t_indep_out, t_indep_in)
     ! Main cooling driver
     ! 
     ! T --> Temperature [K]
@@ -2182,6 +2211,11 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp), intent(inout):: rate
     real(dp), dimension(50), intent(inout)::saved_cooling_rates
     character(len=20), dimension(50), intent(inout)::saved_cooling_rates_names
+    ! t_indep_out: returns the terms that do not depend on T. t_indep_in: those terms from a call
+    ! with every argument but T the same (rtz_cool_step's call at T, for its T(1 +- 1e-5) calls)
+    type(TIndepHeat), intent(out), optional :: t_indep_out
+    type(TIndepHeat), intent(in),  optional :: t_indep_in
+    logical :: reuse
     real(dp):: nH_I, nH_II, nH2, nHe_I, nHe_II, nHe_III, nH, xHI, xHII, xH2
     real(dp):: metal_cool_smooth_f1, metal_cool_smooth_f2
     real(dp):: cooling_HI, cooling_HII, cooling_HeI, cooling_HeII
@@ -2209,6 +2243,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: total_cooling, total_heating
     integer:: save_cooling_counter
 
+    reuse = present(t_indep_in)
     h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
@@ -2468,23 +2503,38 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     saved_cooling_rates(save_cooling_counter) = photoelectric_heat; saved_cooling_rates_names(save_cooling_counter) = 'heat_PE'; save_cooling_counter = save_cooling_counter + 1
 
     ! Cosmic ray heating
-    cosmic_ray_heat = cosmic_ray_heating(xe, nH_I, nHe_I, nH2, &
-                                         ne, xi_h_cr, &
-                                         element_number_densities, &
-                                         element_ion_fractions)
+    if (reuse) then
+       cosmic_ray_heat = t_indep_in%cosmic_ray
+    else
+       cosmic_ray_heat = cosmic_ray_heating(xe, nH_I, nHe_I, nH2, &
+                                            ne, xi_h_cr, &
+                                            element_number_densities, &
+                                            element_ion_fractions)
+       if (present(t_indep_out)) t_indep_out%cosmic_ray = cosmic_ray_heat
+    end if
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = cosmic_ray_heat; saved_cooling_rates_names(save_cooling_counter) = 'heat_CR'; save_cooling_counter = save_cooling_counter + 1
 
     ! Photoheating from the UV background
-    uvb_photoheat = photoheating_UVB(element_number_densities, element_ion_fractions)
-    uvb_photoheat = uvb_photoheat * ss_factor ! Account for self-shielding
+    if (reuse) then
+       uvb_photoheat = t_indep_in%uvb
+    else
+       uvb_photoheat = photoheating_UVB(element_number_densities, element_ion_fractions)
+       uvb_photoheat = uvb_photoheat * ss_factor ! Account for self-shielding
+       if (present(t_indep_out)) t_indep_out%uvb = uvb_photoheat
+    end if
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = uvb_photoheat; saved_cooling_rates_names(save_cooling_counter) = 'heat_UVB'; save_cooling_counter = save_cooling_counter + 1
 
     ! Photoheating from the G0 FUV background
-    uvb_photoheat_G0 = photoheating_UVB_G0(local_G0+background_G0, element_number_densities,element_ion_fractions)
+    if (reuse) then
+       uvb_photoheat_G0 = t_indep_in%uvb_G0
+    else
+       uvb_photoheat_G0 = photoheating_UVB_G0(local_G0+background_G0, element_number_densities,element_ion_fractions)
+       if (present(t_indep_out)) t_indep_out%uvb_G0 = uvb_photoheat_G0
+    end if
 
     ! Save cooling rates
     saved_cooling_rates(save_cooling_counter) = uvb_photoheat_G0; saved_cooling_rates_names(save_cooling_counter) = 'heat_G0'; save_cooling_counter = save_cooling_counter + 1
@@ -2519,7 +2569,12 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Photoheating from the local radiation field
     if (rt_advect) then
-       photoheating = local_photoheating(dNp, element_number_densities, element_ion_fractions, ilevel)
+       if (reuse) then
+          photoheating = t_indep_in%local
+       else
+          photoheating = local_photoheating(dNp, element_number_densities, element_ion_fractions, ilevel)
+          if (present(t_indep_out)) t_indep_out%local = photoheating
+       end if
 
        ! Save cooling rates
        saved_cooling_rates(save_cooling_counter) = photoheating; saved_cooling_rates_names(save_cooling_counter) = 'heat_PH'; save_cooling_counter = save_cooling_counter + 1

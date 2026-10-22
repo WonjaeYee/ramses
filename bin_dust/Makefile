@@ -195,6 +195,9 @@ endif
 ifeq ($(USE_ONLY_MIST), 1)
    DEFINES += -DUSE_ONLY_MIST
 endif
+ifeq ($(DEBUG), 1)
+   DEFINES += -DDEBUG
+endif
 
 #############################################################################
 # Fortran compiler options and directives

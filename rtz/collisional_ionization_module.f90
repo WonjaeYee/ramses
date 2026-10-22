@@ -108,7 +108,7 @@ FUNCTION coll_ion(T, dE, A, X, K, P) result(rate)
        rate = 0.d0
        return
     end if
-    rate = A * (1.D0 + P * sqrt(U)) * U**K * safe_exp(-U) / (X + U)
+    rate = A * (1.D0 + P * sqrt(U)) * safe_exp(K * log(U) - U) / (X + U)
 end FUNCTION coll_ion
 
 FUNCTION collisional_ionization(T, ion, element_idx) result(rate)

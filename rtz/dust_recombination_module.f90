@@ -45,7 +45,7 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
   real(dp), intent(in):: T, G, ne
   real(dp)::rate
   real(dp)::dr_sf, row_sum, phi, loc_T
-  real(dp)::a1, a2, a3
+  real(dp)::a1, a2, a3, lphi, llT
   integer::i
 
   dr_sf = 1.d0;
@@ -83,12 +83,15 @@ FUNCTION dust_recombination(ion, nelem, T, G, ne) result(rate)
   ! Extra fac on the denominator to avoid divide by zero
   phi = (G + 1d-8) * sqrt(loc_T) / (ne + 1d-10) ! units K^1/2 cm^3
 
-  a1 = dust_rec_coefs(2,nelem) * (phi**dust_rec_coefs(3,nelem))
-  a2 = dust_rec_coefs(4,nelem) * (loc_T**dust_rec_coefs(5,nelem))
-  a3 = (-1.d0 * dust_rec_coefs(6,nelem)) - (dust_rec_coefs(7,nelem) * log(loc_T))
+  ! the three powers of the fit as exps of the two logs
+  lphi = log(phi)
+  llT = log(loc_T)
+  a1 = dust_rec_coefs(2,nelem) * exp(dust_rec_coefs(3,nelem) * lphi)
+  a2 = dust_rec_coefs(4,nelem) * exp(dust_rec_coefs(5,nelem) * llT)
+  a3 = (-1.d0 * dust_rec_coefs(6,nelem)) - (dust_rec_coefs(7,nelem) * llT)
 
   rate = 1.d-14 * dust_rec_coefs(1,nelem)
-  rate = rate / (1.d0 + (a1 * (1.d0 + (a2 * (phi**a3)))))
+  rate = rate / (1.d0 + (a1 * (1.d0 + (a2 * exp(a3 * lphi)))))
   rate = rate * dr_sf
 
   ! Rescale the dust recombination rates due to a PAH normalization issue

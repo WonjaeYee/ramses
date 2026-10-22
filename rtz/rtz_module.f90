@@ -4,7 +4,7 @@ module rtz_module
   implicit none
 
   private
-  public:: elements, n_elements, initialize_elements, G0_draine
+  public:: elements, n_elements, initialize_elements, G0_draine, nslot
   public:: getNe, dust_to_gas_scale_RR14, getMu_RTZ, get_rho_rtz, get_n_rtz
 
   ! G0 is in Habing units throughout RTZ and CALIMA (advected_G0 = c u(5.6-13.6 eV) / 1.6e-3, the
@@ -31,6 +31,13 @@ module rtz_module
   ! RTZ STUFF
   
   type(Element) :: elements(n_elements)
+  ! The tracked elements in increasing index, for the per-substep sums (getNe, getMu_RTZ), which
+  ! otherwise test all 27 slots each time; the order of the sums is unchanged
+  integer :: n_active = 0
+  integer :: active(n_elements) = 0
+  ! Number of ion slots in use, max over the tracked elements of n_ions + n_mol: the state
+  ! copies of the substep loop of rtz_solve_cooling run over xion(:, 1:nslot) instead of all 27 x 27
+  integer :: nslot = 0
 
 CONTAINS
 
@@ -191,6 +198,17 @@ SUBROUTINE initialize_elements()
    elements(26)%symbol = "Fe"
 #endif
 
+   n_active = 0
+   nslot = 0
+   do i=1,n_elements
+      if (elements(i)%atomic_number .gt. 0) then
+         n_active = n_active + 1
+         active(n_active) = i
+         nslot = max(nslot, elements(i)%n_ions + elements(i)%n_mol)
+      end if
+   end do
+   nslot = max(nslot, 3)          ! the H2 slot (1,3) is read whenever isH2_rtz
+
 END SUBROUTINE initialize_elements
 
 !************************************************************************
@@ -202,22 +220,21 @@ END SUBROUTINE initialize_elements
       real(dp), intent(in)::xion(1:n_elements,1:n_elements)
       real(dp), intent(in)::nion(1:n_elements)
       real(dp)::ne
-      integer::iIons, iElement, n_ions
+      integer::iIons, iElement, n_ions, ia
 
       ne = 0.d0
 
-      !Loop over all elements
-      do iElement=1,n_elements
-         if (elements(iElement)%atomic_number .gt. 0) then
-            !Get the number of ions
-            n_ions = elements(iElement)%n_ions
+      !Loop over all (tracked) elements
+      do ia=1,n_active
+         iElement = active(ia)
+         !Get the number of ions
+         n_ions = elements(iElement)%n_ions
 
-            !Loop over all ions 
-            !Start loop at 2, no electrons in the ground state
-            do iIons=2,n_ions
-               ne = ne + (nion(iElement) * xion(iElement,iIons) * real(iIons - 1, dp)) 
-            end do
-         end if
+         !Loop over all ions 
+         !Start loop at 2, no electrons in the ground state
+         do iIons=2,n_ions
+            ne = ne + (nion(iElement) * xion(iElement,iIons) * real(iIons - 1, dp)) 
+         end do
       end do
 
    END FUNCTION getNe
@@ -281,18 +298,17 @@ END SUBROUTINE initialize_elements
       real(dp):: mu
       real(dp):: m_bar, n_hat
 
-      integer:: i, j
+      integer:: i, j, ia
 
       m_bar = 0.d0
       n_hat = 0.d0
 
-      do i=1,n_elements
-         if (elements(i)%atomic_number.gt.0) then
-            do j=1,elements(i)%n_ions
-               m_bar = m_bar + (element_number_densities(i) * element_ion_fractions(i,j) * elements(i)%atomic_mass)
-               n_hat = n_hat + element_number_densities(i) * element_ion_fractions(i,j)
-            end do
-         end if
+      do ia=1,n_active
+         i = active(ia)
+         do j=1,elements(i)%n_ions
+            m_bar = m_bar + (element_number_densities(i) * element_ion_fractions(i,j) * elements(i)%atomic_mass)
+            n_hat = n_hat + element_number_densities(i) * element_ion_fractions(i,j)
+         end do
       end do
 
       ! Include electrons

@@ -57,6 +57,11 @@ module rtz_cooling_module
 #ifdef CALIMA
    real(dp), save :: eqm_tau_dust_LW_new = 0.0_dp
 #endif
+   ! The recombination and collisional-ionisation rate of each (ion, element) at the last
+   ! temperature it was evaluated at: at fixed temperature (rt_Tconst) the ion update asks for the
+   ! same rates at every substep and in every cell (as charge_exchange_module does for its rates)
+   real(dp), dimension(27,27), save :: rec_T = -1d0, rec_rate = 0d0
+   real(dp), dimension(27,27), save :: cion_T = -1d0, cion_rate = 0d0
 
   
   ! temporal brutal force trial
@@ -182,24 +187,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    real(dp), intent(in), optional :: ddt_initial, tleft_initial
 !--------------------------------------------------------
    real(dp),dimension(1:nvector):: tLeft, ddt
-   ! Initial-state copies written to crash dump (captured before sub-stepping begins)
-   real(dp),dimension(1:nvector):: T2_init, nCO_init
-   real(dp),dimension(1:n_elements,1:n_elements,1:nvector):: xion_init
-   real(dp),dimension(1:n_elements,1:nvector):: nElement_init
-#ifdef RT
-   real(dp),dimension(1:nGroups,1:nvector):: Np_init, dNpdt_init
-   real(dp),dimension(1:ndim,1:nGroups,1:nvector):: Fp_init, dFpdt_init
-   real(dp),dimension(1:ndim,1:nvector):: p_gas_init
-#endif
-#ifdef CALIMA
-   real(dp),dimension(1:nvector):: sigma_init
-#if NDUST>0
-   real(dp),dimension(1:nvector,1:ndust):: rho_dust_init
-#endif
-#if NPAH>0
-   real(dp),dimension(1:nvector,1:npah):: rho_pah_init
-#endif
-#endif
    logical:: dt_ok
    real(dp):: dt_rec
    real(dp):: dT2
@@ -259,6 +246,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
    integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
    
+   ! the slots above nslot are never read; keep them defined for the whole-array updates of the
+   ! equilibrium mode
+   dXion(:,nslot+1:n_elements) = 0d0
+
    ! get cell size
    nx_loc = (icoarse_max-icoarse_min+1)
    scale = boxlen/dble(nx_loc)
@@ -272,9 +263,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    loopCodes01 = 0
    loopCodes02 = 0
-   loopCodes08 = 0
-   loopCodes09 = 0
-   loopCodes10 = 0
+   ! only the ion slots in use are counted and printed (3 x 27 x 27 int8, 17.7 KB, zeroed in full at
+   ! every call before)
+   loopCodes08(:,1:nslot) = 0
+   loopCodes09(:,1:nslot) = 0
+   loopCodes10(:,0:nslot) = 0
 
 #ifdef RT
    call rtz_updateRTGroups_CoolConstants(ilevel)
@@ -541,6 +534,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       eqm_minutes = int(eqm_elapsed / 60d0)
       eqm_seconds = eqm_elapsed - 60d0 * real(eqm_minutes, dp)
       write(*,'(A,I0,A,F8.3,A)') 'rtz_equilibrium_test total runtime: ', eqm_minutes, ' min ', eqm_seconds, ' s'
+#ifdef DEBUG
       write(*,*) '--- Timing Breakdown ---'
       write(*,'(A,F10.3,A)') '  RT/Radiation update:   ', t_rad, ' s'
       write(*,'(A,F10.3,A)') '  Cooling/all_cooling:   ', t_cool, ' s'
@@ -555,6 +549,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       write(*,'(A,F10.3,A)') '    compute_dust_update:         ', t_dust_update, ' s'
 #endif
       write(*,*) '------------------------'
+#endif
       stop "Program terminated due to equilibrium test"
 
    ! Otherwise perform the normal loop
@@ -577,7 +572,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          T2(i) = MAX(T2(i), T2_min_fix)
 
          ! Make sure the ionization fractions don't go below the min or max
-         xion(1:n_elements,1:n_elements,i) = MIN(MAX(xion(1:n_elements,1:n_elements,i), x_MIN),1d0)
+         xion(1:n_elements,1:nslot,i) = MIN(MAX(xion(1:n_elements,1:nslot,i), x_MIN),1d0)
 
          ! Loop over each element and ensure that the ionization fractions
          ! sum to 1
@@ -615,27 +610,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       end do
 
-      ! Snapshot initial state for crash dump (state after clamping, before any sub-steps)
-      T2_init(1:ncell)                          = T2(1:ncell)
-      xion_init(1:n_elements,1:n_elements,1:ncell) = xion(1:n_elements,1:n_elements,1:ncell)
-      nElement_init(1:n_elements,1:ncell)       = nElement(1:n_elements,1:ncell)
-      nCO_init(1:ncell)                         = nCO(1:ncell)
-#ifdef RT
-      Np_init(1:nGroups,1:ncell)                = Np(1:nGroups,1:ncell)
-      Fp_init(1:ndim,1:nGroups,1:ncell)         = Fp(1:ndim,1:nGroups,1:ncell)
-      p_gas_init(1:ndim,1:ncell)                = p_gas(1:ndim,1:ncell)
-      dNpdt_init(1:nGroups,1:ncell)             = dNpdt(1:nGroups,1:ncell)
-      dFpdt_init(1:ndim,1:nGroups,1:ncell)      = dFpdt(1:ndim,1:nGroups,1:ncell)
-#endif
-#ifdef CALIMA
-      sigma_init(1:ncell)                       = sigma(1:ncell)
-#if NDUST>0
-      rho_dust_init(1:ncell,1:ndust)            = rho_dust(1:ncell,1:ndust)
-#endif
-#if NPAH>0
-      rho_pah_init(1:ncell,1:npah)              = rho_pah(1:ncell,1:npah)
-#endif
-#endif
+      ! (The *_init copies that were made here for the crash dump were never read: the dump writes
+      ! the crash-time state. Removed with their declarations.)
 
       ! Loop until all cells have tleft=0
       ! **********************************************
@@ -802,7 +778,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             last_code = 0   ! successful step
             ! Update the cell state (advance the time by ddt):
             T2(i) = T2(i) + dT2
-            xion(:,:,i) = xion(:,:,i) + dXion(:,:)
+            xion(:,1:nslot,i) = xion(:,1:nslot,i) + dXion(:,1:nslot)
             nElement(:,i) = nElement(:,i) + dnElement(:)
 #ifdef CO
             nCO(i) = nCO(i) + dCO
@@ -905,7 +881,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       use cosmic_ray_ionization_module
       use molecules_module
       ! use auger_ionization_module
-      use rtz_coolrates_module, only: all_cooling
+      use rtz_coolrates_module, only: all_cooling, TIndepHeat
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
                              &ndust_processes,npah_processes
@@ -921,6 +897,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: Crate, Crate_prime, Crate_prime_a, Crate_prime_b, dCdT2, X_nHkb, rate, dRate, cr, de=0d0
       real(dp), dimension(1:50):: prime_cooling_rates            ! the rates of the T(1 +- 1e-5) calls (unsaved)
       character(len=20), dimension(1:50):: prime_cooling_rates_names
+      type(TIndepHeat):: t_indep                                 ! all_cooling's T-independent terms at T, for the dC/dT calls
       real(dp):: ss_factor, f_dust
 #ifdef RT
       integer::igroup,idim
@@ -994,9 +971,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer::g584
 
       ! RTZ variable initialization
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_last)
       end if
+#endif
       rho = get_rho_rtz(nElement(:,icell))
 #ifndef CALIMA
       ! Include dust if we are tracking oxygen
@@ -1073,7 +1052,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       dt_ok=.false.
       ! U contains the original values, dU the updated ones
-      dT2 = T2(icell) ; dXion(:,:) = xion(:,:,icell)
+      dT2 = T2(icell) ; dXion(:,1:nslot) = xion(:,1:nslot,icell)
       dnElement(:) = nElement(:,icell)
 #ifdef CO
       dCO = nCO(icell)
@@ -1211,17 +1190,21 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                dust_helper%csa_pah(:,iIR) = sigP_IR_pah(1:2*npah) * rt_c_cgs(ilevel)
             end if
          end if
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
+#endif
          call compute_dust_rad_rates(dust_helper,advected_G0+UV_background_G0,Tk,ne,&
                                     &dustAbs,dustSc,dustRp,&
                                     &pahAbs,pahSc,pahRp)
          if (npah > 0) call store_pah_ion_fraction(dust_helper, icell)
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_end)
             t_dust_rad_rates = t_dust_rad_rates + (t_sub_end - t_sub_start)
          end if
+#endif
       end if
 #else
       ! Set dust opacities--------------------------------------------------
@@ -1433,10 +1416,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(dUU .gt. 1d0) then
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                if (rtz_equilibrium_test.gt.0) then
                   call cpu_time(t_now)
                   t_rad = t_rad + (t_now - t_last)
                end if
+#endif
                code=1
 
                ! update loop counts under rtz_cool_step
@@ -1477,10 +1462,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if(dUU .gt. 1d0) then
                   dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                   dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                   if (rtz_equilibrium_test.gt.0) then
                      call cpu_time(t_now)
                      t_rad = t_rad + (t_now - t_last)
                   end if
+#endif
                   code=2
 
                   loopCodes02(igroup,idim) = loopCodes02(igroup,idim) + 1
@@ -1540,23 +1527,29 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! -----------------------------------------------------------------
       endif !if(rt)
 #endif
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
          t_rad = t_rad + (t_now - t_last)
          t_last = t_now
       end if
+#endif
 #ifdef CALIMA
       ! Prepare CALIMA variables for cooling rate calculations
       xH2_loc = dXion(1,3) / 2d0
       if (.not. all(dNp .le. dust_helper%smallNp)) then
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
+#endif
          call compute_local_anisotropy_factor(dust_helper, dFp, dNp)
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_end)
             t_dust_anisotropy = t_dust_anisotropy + (t_sub_end - t_sub_start)
          end if
+#endif
       else
          dust_helper%local_rad_ani(:) = 0d0
          dust_helper%local_solid_angle(:) = 0d0
@@ -1587,17 +1580,21 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
       end if
 
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_start)
       end if
+#endif
       call compute_dust_precool(dust_helper, advected_G0+UV_background_G0, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
                                  ,dNp)
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_end)
          t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
       end if
+#endif
       if (rt_isIR) then
          if (ndust > 0) then
             do ii = 1, ndust
@@ -1614,10 +1611,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 #else
                     & )
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_end)
          t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
       end if
+#endif
 #endif
 #endif
       ! UPDATE TEMPERATURE *************************************************
@@ -1632,19 +1631,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
+                           ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names, &
+                           t_indep_out=t_indep)
          prime_cooling_rates = 0.d0
 #ifdef CALIMA
          call rtgroups_derivative_calls(.true.)    ! WDB06rt: served from the precool solve
 #endif
          call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                           ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names)
+                           ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names, &
+                           t_indep_in=t_indep)
          if (rtz_dCdT_central) then
             prime_cooling_rates = 0.d0
             call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                               primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                              ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names)
+                              ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names, &
+                              t_indep_in=t_indep)
          end if
 #ifdef CALIMA
          call rtgroups_derivative_calls(.false.)
@@ -1702,10 +1704,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             !  write(*,*) "Broken Temperature", T2(icell), nH(icell), dT2, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0), Crate, loopcnt, dUU
             dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
             dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
             if (rtz_equilibrium_test.gt.0) then
                call cpu_time(t_now)
                t_cool = t_cool + (t_now - t_last)
             end if
+#endif
             code=3
 
             ! print some before return
@@ -1763,10 +1767,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(dUU .gt. 1.) then
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                if (rtz_equilibrium_test.gt.0) then
                   call cpu_time(t_now)
                   t_cool = t_cool + (t_now - t_last)
                end if
+#endif
                code=4
 
                ! print some before return
@@ -1791,10 +1797,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(dUU .gt. 1.) then                           ! 10% rule for T2
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                if (rtz_equilibrium_test.gt.0) then
                   call cpu_time(t_now)
                   t_cool = t_cool + (t_now - t_last)
                end if
+#endif
                code=5
 
                ! print some before return
@@ -1820,11 +1828,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       endif
 #endif
 
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
          t_cool = t_cool + (t_now - t_last)
          t_last = t_now
       end if
+#endif
 
 #ifdef CALIMA
       !/////////////////////////////////////////
@@ -1849,9 +1859,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dust_helper%has_drift = .true.
       end if
       if (ndust_processes .gt. 0 .or. npah_processes .gt. 0) then
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_start)
          end if
+#endif
          
 #ifdef RTZ_ONE_CELL_TEST
          write(*,"(A14)") 'before update:'
@@ -1873,10 +1885,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          write(*,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
 #endif
 
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_sub_end)
             t_dust_update = t_dust_update + (t_sub_end - t_sub_start)
          end if
+#endif
       else
          dust_step_ok = .true.
          dUU = 0d0
@@ -1894,10 +1908,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
 
       if ((.not. dust_step_ok).or.(dUU>1.0d0)) then
+#ifdef DEBUG
          if (rtz_equilibrium_test.gt.0) then
             call cpu_time(t_now)
             t_dust = t_dust + (t_now - t_last)
          end if
+#endif
          code = 10
 
          ! main reason why dust_step_ok becomes .false.
@@ -1970,11 +1986,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 
 
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
          t_dust = t_dust + (t_now - t_last)
          t_last = t_now
       end if
+#endif
 #endif
       !/////////////////////////////////////////
       !//           UPDATE MOLECULES          //
@@ -2062,10 +2080,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                if (rtz_equilibrium_test.gt.0) then
                   call cpu_time(t_now)
                   t_mol = t_mol + (t_now - t_last)
                end if
+#endif
                code=6
 
                ! print some before return
@@ -2242,10 +2262,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   ! write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
                   dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                   dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                   if (rtz_equilibrium_test.gt.0) then
                      call cpu_time(t_now)
                      t_mol = t_mol + (t_now - t_last)
                   end if
+#endif
                   code=7
 
                   ! print some before return
@@ -2278,11 +2300,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 #endif
 
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
          t_mol = t_mol + (t_now - t_last)
          t_last = t_now
       end if
+#endif
       !/////////////////////////////////////////
       !//       UPDATE IONIZATION STATES      //
       !/////////////////////////////////////////
@@ -2309,15 +2333,20 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! Get the number of ions
             n_ions = elements(iElement)%n_ions
 
-            ! Loop over the ions and get the relevant rates
-            saved_rates = 0.d0
+            ! Loop over the ions and get the relevant rates (rows 1..n_ions, rates 1..3 are the
+            ! ones used: zeroing all 27 x 10 for every element was ~2% of a slab run)
+            saved_rates(1:n_ions,1:3) = 0.d0
             ! ne is summed again at this element's first update (it catches up the renormalisation of
             ! the previous element, and the CO chemistry before the first), then follows its updates
             ne_sync = .true.
 
             ! Initialize collisional ionization before the loop
             ! recombination rates are 0 for ground state
-            saved_rates(1,2) = collisional_ionization(TK, 1, iElement)
+            if (cion_T(1,iElement) /= TK) then
+               cion_rate(1,iElement) = collisional_ionization(TK, 1, iElement)
+               cion_T(1,iElement) = TK
+            end if
+            saved_rates(1,2) = cion_rate(1,iElement)
 
             ! Compute the Auger yields
             !  if (rtz_include_auger_ionization) then 
@@ -2329,12 +2358,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Make sure we have the rates of all next ions
                ! previous ions are already computed
                if (iIon.lt.n_ions) then
-                  saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
+                  if (rec_T(iIon+1,iElement) /= TK) then
+                     rec_rate(iIon+1,iElement) = recombination(TK, iIon+1, iElement)
+                     rec_T(iIon+1,iElement) = TK
+                  end if
+                  saved_rates(iIon+1,1) = rec_rate(iIon+1,iElement)
                   ! OTSA: the He I ground-state photons H0 (or dust) takes do not re-ionize He0
                   if (iElement == 2 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dHe
                   ! OTSA with dust: the share of H's own ground-state photons the grains take
                   if (iElement == 1 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dH
-                  if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
+                  if (iIon.lt.n_ions-1) then
+                     if (cion_T(iIon+1,iElement) /= TK) then
+                        cion_rate(iIon+1,iElement) = collisional_ionization(TK, iIon+1, iElement)
+                        cion_T(iIon+1,iElement) = TK
+                     end if
+                     saved_rates(iIon+1,2) = cion_rate(iIon+1,iElement)
+                  end if
                   ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
                   ! (at the background alone every grain is as in the dark, with its largest rate)
                   if (rtz_include_dust_recombination .and. .not. (dust_ion_recombination .and. iIon == 1)) &
@@ -2612,10 +2651,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      !write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                      if (rtz_equilibrium_test.gt.0) then
                         call cpu_time(t_now)
                         t_ion = t_ion + (t_now - t_last)
                      end if
+#endif
                      code=8 !TODO(code) update this code for each ion
 
                      loopCodes08(iElement,iIon) = loopCodes08(iElement,iIon) + 1
@@ -2662,10 +2703,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      !write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
                      if (rtz_equilibrium_test.gt.0) then
                         call cpu_time(t_now)
                         t_ion = t_ion + (t_now - t_last)
                      end if
+#endif
                      code=9
 
                      loopCodes09(iElement,iIon) = loopCodes09(iElement,iIon) + 1
@@ -2748,11 +2791,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       endif
 
       ! CLEAN UP AND RETURN ************************************************
+#ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_now)
          t_ion = t_ion + (t_now - t_last)
       end if
-      dT2 = dT2-T2(icell) ; dXion(:,:) = dXion(:,:)-xion(:,:,icell)
+#endif
+      dT2 = dT2-T2(icell) ; dXion(:,1:nslot) = dXion(:,1:nslot)-xion(:,1:nslot,icell)
       dnElement(:) = dnElement(:) - nElement(:,icell)
 #ifdef CO
       dCO = dCO - nCO(icell)
@@ -2963,9 +3008,28 @@ SUBROUTINE rtz_updateRTGroups_CoolConstants(ilevel)
    !------------------------------------------------------------------------
    integer, intent(in)::ilevel
    integer::iP, iE, iI
+   logical, save :: zeroed = .false.
    !------------------------------------------------------------------------
-   signc(:,:,:) = group_csn*rt_c_cgs(ilevel)         ! [cm3 s-1]
-   sigec(:,:,:) = group_cse*rt_c_cgs(ilevel)         ! [cm3 s-1]
+   ! This runs at every rtz_solve_cooling call, i.e. per cell with NVECTOR=1, and the whole-array
+   ! products over nGroups x 27 x 27 were ~19% of a slab run. Only the entries the network reads
+   ! are set: the photoionised ions 1..n_ions-1 of each tracked element, and the H2 slot (1,3).
+   ! The rest of signc/sigec/PHrate is never read, and is zeroed once.
+   if (.not. zeroed) then
+      signc = 0d0 ; sigec = 0d0 ; PHrate = 0d0
+      zeroed = .true.
+   end if
+   do iE = 1,n_elements
+      if (elements(iE)%atomic_number.gt.0) then
+         do iI = 1,elements(iE)%n_ions-1
+            signc(:,iE,iI) = group_csn(:,iE,iI)*rt_c_cgs(ilevel)   ! [cm3 s-1]
+            sigec(:,iE,iI) = group_cse(:,iE,iI)*rt_c_cgs(ilevel)   ! [cm3 s-1]
+         end do
+      end if
+   end do
+   if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
+      signc(:,1,3) = group_csn(:,1,3)*rt_c_cgs(ilevel)
+      sigec(:,1,3) = group_cse(:,1,3)*rt_c_cgs(ilevel)
+   end if
    signc_dust(:,:) = group_csn_dust*rt_c_cgs(ilevel) ! [cm3 s-1]
 
    !Photoheating rates for photons on ions
