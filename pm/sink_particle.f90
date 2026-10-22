@@ -641,8 +641,9 @@ subroutine grow_sink(ilevel,on_creation)
   integer::ilevel
   logical::on_creation
   integer::igrid,jgrid,ipart,jpart,next_part
-  integer::ig,ip,npart1,npart2,icpu,isink,lev
+  integer::ig,ip,npart1,npart2,icpu,isink,lev,ipass
   integer,dimension(1:nvector)::ind_grid,ind_part,ind_grid_part
+  logical::request
 #ifdef INDIVIDUAL_SINK_STARS
   real(dp),dimension(1:20)::mist_prop
   real(dp)::star_alpha_over_fe
@@ -689,6 +690,14 @@ subroutine grow_sink(ilevel,on_creation)
   end if
 #endif
 
+  ! Two passes over the cloud particles, so that no cell gives more than c_acc of its mass.
+  ! Pass 1 adds up what the cloud particles of all sinks ask of each cell; pass 2 accretes,
+  ! scaled by the fraction the cell can grant (see sink_acc_budget). The result depends
+  ! neither on the order of the sinks nor on the domain decomposition.
+  call sink_acc_budget(ilevel,.true.)
+  do ipass=1,2
+  request=(ipass==1)
+
   ! Loop over cpus
   do icpu=1,ncpu
      igrid=headl(icpu,ilevel)
@@ -731,7 +740,7 @@ subroutine grow_sink(ilevel,on_creation)
                  ind_grid_part(ip)=ig
               endif
               if(ip==nvector)then
-                 call accrete_sink(ind_grid,ind_part,ind_grid_part,ig,ip,ilevel,on_creation)
+                 call accrete_sink(ind_grid,ind_part,ind_grid_part,ig,ip,ilevel,on_creation,request)
                  ip=0
                  ig=0
               end if
@@ -742,9 +751,13 @@ subroutine grow_sink(ilevel,on_creation)
         igrid=next(igrid)   ! Go to next grid
      end do
      ! End loop over grids
-     if(ip>0)call accrete_sink(ind_grid,ind_part,ind_grid_part,ig,ip,ilevel,on_creation)
+     if(ip>0)call accrete_sink(ind_grid,ind_part,ind_grid_part,ig,ip,ilevel,on_creation,request)
   end do
   ! End loop over cpus
+
+  if(request)call sink_acc_budget(ilevel,.false.)
+  end do
+  ! End loop over passes
   if(nsink>0)then
 #ifndef WITHOUTMPI
      call MPI_ALLREDUCE(msink_new,msink_all,nsinkmax,MPI_DOUBLE_PRECISION,MPI_SUM,MPI_COMM_WORLD,info)
@@ -985,7 +998,7 @@ end subroutine grow_sink
 !##############################################################################
 !##############################################################################
 !##############################################################################
-subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation)
+subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation,request)
   use amr_commons
   use pm_commons
   use hydro_commons
@@ -1010,12 +1023,14 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   ! This routine is called by subroutine grow_sink. It performs accretion
   ! for nvector particles. Routine is not very efficient.
   ! Optimize if taking too long...
+  ! With request=.true. it only adds the mass each cloud particle would
+  ! accrete to acc_budget, and changes nothing else.
   !----------------------------------------------------------------------------
 
   integer::ng,np,ilevel
   integer,dimension(1:nvector)::ind_grid
   integer,dimension(1:nvector)::ind_grid_part,ind_part
-  logical::on_creation
+  logical::on_creation,request
   integer::j,nx_loc,isink,ivar,idim,ind
   real(dp)::d,e,density,volume
 #ifdef SOLVERmhd
@@ -1058,6 +1073,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
   real(dp),dimension(1:NMETALS)::loc_metal_yield
   real(dp)::star_met, star_age_Myr, ms_lifetime, sn_e, injected_mass
   real(dp)::ijm, ije, sn_e_code_units
+  real(dp)::dep_d, dep_ekin
+  real(dp),dimension(1:ndim)::dep_p
   logical::is_hn, is_sn, is_central_cloud_particle
   integer::counter, iElement, pre_accretion_evolution_flag
   real(dp)::star_met_fe
@@ -1189,6 +1206,10 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  m_acc_smbh=0
               end if
            else
+              ! threshold accretion sets only m_acc: without this, m_acc_smbh kept a stale
+              ! (or uninitialised) value and was accreted into msmbh
+              m_acc     =0d0
+              m_acc_smbh=0d0
               if (bondi_accretion.or.flux_accretion)then
                  m_acc      = dMsink_overdt(isink)*dtnew(ilevel)*weight/volume
                  m_acc_smbh = dMsmbh_overdt(isink)*dtnew(ilevel)*weight/volume
@@ -1234,13 +1255,15 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
            m_acc     =max(m_acc,0.0_dp)
            m_acc_smbh=max(m_acc_smbh,0.0_dp)
 
-           if(unew(indp(j,ind),1).le.(m_acc+m_acc_smbh)/vol_loc) then
-              ! temporal trial
-              ! if the sink tries to accrete more than the cell mass, simply make no accretion
-              ! ... this should be sophisticated more
-              m_acc = 0.d0
-              m_acc_smbh = 0.d0
+           ! Pass 1: only record what this cloud particle asks of the cell
+           if(request)then
+              acc_budget(indp(j,ind))=acc_budget(indp(j,ind))+m_acc+m_acc_smbh
+              cycle
            end if
+
+           ! Pass 2: every request on this cell is scaled by the same fraction
+           m_acc     =m_acc     *acc_budget(indp(j,ind))
+           m_acc_smbh=m_acc_smbh*acc_budget(indp(j,ind))
 
            ! Accreted relative center of mass
            x_acc(1:ndim)=(m_acc+m_acc_smbh)*r_rel(1:ndim)
@@ -1270,6 +1293,8 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
            unew(indp(j,ind),1)=unew(indp(j,ind),1)-m_acc/vol_loc
            unew(indp(j,ind),2:ndim+1)=unew(indp(j,ind),2:ndim+1)-m_acc*vv(1:ndim)/vol_loc
            unew(indp(j,ind),neul)=unew(indp(j,ind),neul)-m_acc*e/vol_loc
+           ! the accreted gas takes its internal energy with it, also from enew (pressure_fix)
+           if (pressure_fix) enew(indp(j,ind))=enew(indp(j,ind))-m_acc*(e-0.5d0*sum(vv(1:ndim)**2))/vol_loc
            ! Note that we do not accrete magnetic fields and non-thermal energies.
 
            ! Accrete passive scalars
@@ -1496,12 +1521,32 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  ije = 0.0d0
 #endif
 
+                 ! The cell's state before this deposit: uold plus what has been deposited in it so far
+                 ! (unew holds only the deposits in the cells of another rank, uold plus them otherwise)
+                 if (pressure_fix) then
+                    dep_d = unew(indp(j,ind),1)
+                    dep_p(1:ndim) = unew(indp(j,ind),2:ndim+1)
+                    if (cpu_map(indp(j,ind)) /= myid) then
+                       dep_d = dep_d + uold(indp(j,ind),1)
+                       dep_p(1:ndim) = dep_p(1:ndim) + uold(indp(j,ind),2:ndim+1)
+                    end if
+                    dep_ekin = 0.5d0 * sum(dep_p**2) / max(dep_d, smallr)
+                 end if
+
                  ! Update density, momentum, and internal energy
                  unew(indp(j,ind),1) = unew(indp(j,ind),1) + ijm
                  unew(indp(j,ind),2) = unew(indp(j,ind),2) + ijp(1)
                  unew(indp(j,ind),3) = unew(indp(j,ind),3) + ijp(2)
                  unew(indp(j,ind),4) = unew(indp(j,ind),4) + ijp(3)
                  unew(indp(j,ind),neul) = unew(indp(j,ind),neul) + ije + (sn_e_code_units * (weight/volume) / vol_loc)
+
+                 ! The internal energy the deposit creates (its energy minus the change of the cell's kinetic
+                 ! energy) also goes into enew: where set_uold takes the internal energy from enew (pressure_fix),
+                 ! the heat of the thermalised wind and of the SN would otherwise be lost
+                 if (pressure_fix) then
+                    enew(indp(j,ind)) = enew(indp(j,ind)) + ije + (sn_e_code_units * (weight/volume) / vol_loc) &
+                         & - (0.5d0 * sum((dep_p + ijp)**2) / max(dep_d + ijm, smallr) - dep_ekin)
+                 end if
 
                  ! Update the metals
                  do iElement=1,NMETALS
@@ -1565,6 +1610,66 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
      end do
   end do
 end subroutine accrete_sink
+!##############################################################################
+!##############################################################################
+!##############################################################################
+!##############################################################################
+subroutine sink_acc_budget(ilevel,reset)
+  use amr_commons
+  use pm_commons
+  use hydro_commons
+  implicit none
+  integer::ilevel
+  logical::reset
+  !----------------------------------------------------------------------------
+  ! The accretion budget of the cells of level ilevel, for grow_sink.
+  ! reset=.true.:  zero acc_budget in the cells of this level, own and virtual.
+  ! reset=.false.: after pass 1, acc_budget holds the mass the cloud particles
+  !   of this cpu ask of each cell. Add the virtual cells' requests to their
+  !   owner, turn the total into the fraction the cell grants,
+  !   min(1, c_acc*m_cell/request), and copy it to the virtual cells.
+  !----------------------------------------------------------------------------
+  integer::i,ind,iskip,icpu,icell
+  real(dp)::vol_loc,m_avail
+
+  if(.not.allocated(acc_budget))allocate(acc_budget(1:ncoarse+twotondim*ngridmax))
+
+  if(reset)then
+     do ind=1,twotondim
+        iskip=ncoarse+(ind-1)*ngridmax
+        do i=1,active(ilevel)%ngrid
+           acc_budget(active(ilevel)%igrid(i)+iskip)=0d0
+        end do
+        do icpu=1,ncpu
+           do i=1,reception(icpu,ilevel)%ngrid
+#ifdef LIGHT_MPI_COMM
+              acc_budget(reception(icpu,ilevel)%pcomm%igrid(i)+iskip)=0d0
+#else
+              acc_budget(reception(icpu,ilevel)%igrid(i)+iskip)=0d0
+#endif
+           end do
+        end do
+     end do
+     return
+  end if
+
+  call make_virtual_reverse_dp(acc_budget(1),ilevel)
+  vol_loc=(boxlen/dble(icoarse_max-icoarse_min+1)*0.5d0**ilevel)**ndim
+  do ind=1,twotondim
+     iskip=ncoarse+(ind-1)*ngridmax
+     do i=1,active(ilevel)%ngrid
+        icell=active(ilevel)%igrid(i)+iskip
+        m_avail=max(c_acc*uold(icell,1)*vol_loc,0d0)
+        if(acc_budget(icell)>m_avail)then
+           acc_budget(icell)=m_avail/acc_budget(icell)
+        else
+           acc_budget(icell)=1d0
+        end if
+     end do
+  end do
+  call make_virtual_fine_dp(acc_budget(1),ilevel)
+
+end subroutine sink_acc_budget
 !##############################################################################
 !##############################################################################
 !##############################################################################
@@ -3691,16 +3796,17 @@ subroutine synchronize_sink_info
   !----------------------------------------------------------------------------
   integer::info
 
-  call MPI_BCAST(msink,      nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(msmbh,      nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(dmfsink,    nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(xsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(vsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(lsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(delta_mass, nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(idsink,     nsinkmax, MPI_INTEGER,          1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(tsink,      nsinkmax, MPI_DOUBLE_PRECISION, 1, MPI_COMM_WORLD, info)
-  call MPI_BCAST(new_born,   nsinkmax, MPI_LOGICAL,          1, MPI_COMM_WORLD, info)
+  ! root=0 is the master (myid==1); MPI communicator ranks are 0-indexed
+  call MPI_BCAST(msink,      nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(msmbh,      nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(dmfsink,    nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(xsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(vsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(lsink,    3*nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(delta_mass, nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(idsink,     nsinkmax, MPI_INTEGER,          0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(tsink,      nsinkmax, MPI_DOUBLE_PRECISION, 0, MPI_COMM_WORLD, info)
+  call MPI_BCAST(new_born,   nsinkmax, MPI_LOGICAL,          0, MPI_COMM_WORLD, info)
 
 end subroutine synchronize_sink_info
 #endif

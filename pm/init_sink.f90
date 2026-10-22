@@ -209,6 +209,12 @@ subroutine init_sink
                         svg1,co,svg2,co,svg3,co, &
                         sm2,co,dmf,co,slevel
 #endif
+     ! the per-level sink arrays (vsold, vsnew, fsink_partial) only cover levelmin:nlevelmax
+     if (slevel < levelmin .or. slevel > nlevelmax) then
+        if (myid==1) write(*,'(A,I10,A,I4,A,I4,A,I4)') ' init_sink: sink ', sid, ' is at level ', slevel, &
+             ', outside levelmin:nlevelmax = ', levelmin, ':', nlevelmax
+        call clean_stop
+     end if
      nsink=nsink+1
      idsink(nsink)=sid
      msink(nsink)=sm1
