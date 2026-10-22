@@ -1,22 +1,20 @@
 #!/usr/bin/env python3
 """2D Stromgren test (tests/rt/stromgren2d_rtz_calima: RTZ + CALIMA, 8 groups,
 4e4 K blackbody point source in the corner) with several grain-charging models,
-one run directory each, named after its charging_model: RM2026 (original
-(log gamma, log T) tables), WDB06rt (per-group charge balance) and WDB06tab
-(tables with FUV hardness and EUV axes).
+one run directory each, named after its charging_model: WDB06isrf (uniform-ISRF
+tables at the local G0) and WDB06rt (per-group charge balance).
 
 Per snapshot and run: radial profiles about the source of x_HII, T and n_e.
 At one snapshot, on a random subsample of cells, the grain potential of every
 dust bin and the total PE heating and recombination cooling per H as each
 run's model gives them on its own cell state: WDB06rt = pyCALIMA
-rt_group_charging.solve_cell, WDB06tab = charging_psi_tables.psi_lookup
-(RAMSES computes the same; compare_ramses_rtgroups.py checks that), RM2026 =
-the original tables at G0 of the groups with 5.6 < egy < 13.6 eV (charge only).
+rt_group_charging.solve_cell (RAMSES computes the same; compare_ramses_rtgroups.py
+checks that), WDB06isrf =
+charging_isrf_tables.isrf_lookup at G0 of the groups with 5.6 < egy < 13.6 eV.
 
 The outputs are read directly (read_ramses: leaf cells of the uniform grid);
 yt cannot parse the RTZ info_rt file nor 2D runs with boundary regions.
 """
-import sys
 import argparse
 from pathlib import Path
 
@@ -25,12 +23,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from pycalima.models.dust_charge import charging_psi_tables as cpt
+from pycalima.models.dust_charge import charging_isrf_tables as cit
 from pycalima.models.dust_charge import rt_group_charging as rg
 
 
 HERE = Path.cwd()          # holds the run directories, one per charging_model
-ORIG_TABLES = RTG_TABLES = PSI_TABLES = None   # set from the command line
+ISRF_TABLES = RTG_TABLES = None   # set from the command line
 SOURCE_PC = np.array([0.0, 0.0])
 M_U, KB, C = 1.66054e-24, 1.380649e-16, 2.99792458e10
 M_HION, M_HEION = 1.67262192e-24, 6.6446573e-24
@@ -42,8 +40,7 @@ ELEMENTS = (("HYDROGEN", "H", 1.00794, 2), ("HELIUM", "He", 4.002602, 3), ("CARB
 BINS = ("DustBin_01", "DustBin_02", "DustBin_03", "DustBin_04")
 GRAIN_RHO = (2.2, 2.2, 3.3, 3.3)   # sgrain [g/cm^3]
 BIN_LABEL = ("graphite 0.01 um", "graphite 0.1 um", "silicate 0.005 um", "silicate 0.1 um")
-MODELS = {"RM2026": ("original tables (RM2026)", "#eb6834", "--"), "WDB06rt": ("per-group WDB06rt", "#2a78d6", "-"),
-          "WDB06tab": ("tables WDB06tab (FUV hardness, EUV)", "#3a9a5b", ":")}
+MODELS = {"WDB06isrf": ("uniform-ISRF tables (WDB06isrf)", "#eb6834", "--"), "WDB06rt": ("per-group WDB06rt", "#2a78d6", "-")}
 RUNS = ()                  # (run directory = model, label, color, linestyle), from the command line
 
 
@@ -163,9 +160,9 @@ def radial_median(r, y, edges):
     return np.array([np.median(y[idx == i]) if np.any(idx == i) else np.nan for i in range(edges.size - 1)])
 
 
-def potentials(s, model, tables, psitabs, cells):
+def potentials(s, model, tables, isrftabs, cells):
     """Grain potential [V] per bin, and PE heating and recombination cooling per H per bin
-    [erg/s] (nan for RM2026), on the given cells, as the run's charging model gives them."""
+    [erg/s], on the given cells, as the run's charging model gives them."""
     phi = np.zeros((len(BINS), cells.size))
     heat = np.full_like(phi, np.nan)
     cool = np.full_like(phi, np.nan)
@@ -181,18 +178,14 @@ def potentials(s, model, tables, psitabs, cells):
             Z = [r["Zmean"] for r in res]
             G = [r["Gamma"] for r in res]
             L = [r["Lambda"] + r["Lambda_auto"] for r in res]
-        elif model == "WDB06tab":
-            G_F, h, G_E = cpt.cell_inputs(psitabs[0], s["Np"][c], s["c_red"], G0_bg)
-            res = [cpt.psi_lookup(pt, T, ne, G_F, h, G_E) for pt in psitabs]
+        else:
+            # RTZ passes CALIMA the G0 of these groups plus the (unattenuated) background
+            sel = (s["egy"] > 5.6) & (s["egy"] < 13.6)
+            G0 = float(np.sum(s["Np"][c][sel] * s["c_red"] * s["egy"][sel]) * 1.602176634e-12 / 1.6e-3) + G0_bg
+            res = [cit.isrf_lookup(t, G0, T, ne) for t in isrftabs]
             Z = [r["Zmean"] for r in res]
             G = [r["Gamma"] for r in res]
             L = [r["Lambda"] for r in res]
-        else:
-            sel = (s["egy"] > 5.6) & (s["egy"] < 13.6)
-            G0 = float(np.sum(s["Np"][c][sel] * s["c_red"] * s["egy"][sel]) * 1.602176634e-12 / 1.6e-3)
-            Z = [original_table_charge(ORIG_TABLES / f"dust_charge_Z_vs_T_DustBin_{b + 1:02d}", G0, T, ne)
-                 for b in range(len(BINS))]
-            G = L = [np.nan] * len(BINS)
         for b in range(len(BINS)):
             phi[b, j] = Z[b] * rg.E2_EV_CM / tables[b]["a"]
             heat[b, j] = n_gr[b] * G[b] / s["n_H"][c]
@@ -207,7 +200,7 @@ def main(n_cells=600, phi_snap=3):
         raise SystemExit("need at least two snapshots in each run")
     snaps = sorted({1, max(2, n // 3), max(2, 2 * n // 3), n, phi_snap})
     tables = [rg.read_bin_table(RTG_TABLES / f"dust_charging_rtgroups_{b}.dat") for b in BINS]
-    psitabs = [cpt.read_psi_table(PSI_TABLES / f"dust_charging_psitab_{b}.dat") for b in BINS] if PSI_TABLES else None
+    isrftabs = [cit.read_isrf_table(ISRF_TABLES / f"dust_charging_isrf_{b}.dat") for b in BINS] if ISRF_TABLES else None
     edges = np.linspace(0.0, 1000.0, 41)
     rc = 0.5 * (edges[1:] + edges[:-1])
 
@@ -236,7 +229,7 @@ def main(n_cells=600, phi_snap=3):
     cells = rng.choice(last[m0]["r"].size, size=min(n_cells, last[m0]["r"].size), replace=False)
     for m, label, color, ls in RUNS:
         s = last[m]
-        phi, heat, cool = potentials(s, m, tables, psitabs, cells)
+        phi, heat, cool = potentials(s, m, tables, isrftabs, cells)
         e2 = np.linspace(0, s["r"][cells].max(), 25)
         r2 = 0.5 * (e2[1:] + e2[:-1])
         for b in range(len(BINS)):
@@ -275,17 +268,13 @@ def main(n_cells=600, phi_snap=3):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--pycalima", required=True, help="pyCALIMA checkout (for diagnostics/dust_charge)")
     ap.add_argument("--rtgroups-tables", required=True, help="dir with dust_charging_rtgroups_DustBin_XX.dat")
-    ap.add_argument("--calima-tables", required=True, help="dir with the original dust_charge_Z_vs_T_DustBin_XX")
-    ap.add_argument("--psitab-tables", default=None, help="dir with dust_charging_psitab_DustBin_XX.dat (WDB06tab)")
-    ap.add_argument("--runs", nargs="+", default=["RM2026", "WDB06rt", "WDB06tab"],
+    ap.add_argument("--isrf-tables", default=None, help="dir with dust_charging_isrf_DustBin_XX.dat (WDB06isrf)")
+    ap.add_argument("--runs", nargs="+", default=["WDB06isrf", "WDB06rt"],
                     help="run directories, named after their charging_model")
     ap.add_argument("--phi-snapshot", type=int, default=3, help="snapshot for the grain potentials (3: 2 Myr)")
     args = ap.parse_args()
-    sys.path.insert(0, str(Path(args.pycalima) / "diagnostics" / "dust_charge"))
-    from compare_ramses_rtgroups import original_table_charge  # noqa: E402
-    RTG_TABLES, ORIG_TABLES = Path(args.rtgroups_tables), Path(args.calima_tables)
-    PSI_TABLES = Path(args.psitab_tables) if args.psitab_tables else None
+    RTG_TABLES = Path(args.rtgroups_tables)
+    ISRF_TABLES = Path(args.isrf_tables) if args.isrf_tables else None
     RUNS = tuple((m,) + MODELS[m] for m in args.runs)
     main(phi_snap=args.phi_snapshot)

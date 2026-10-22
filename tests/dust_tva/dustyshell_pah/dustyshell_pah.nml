@@ -124,6 +124,7 @@ dust_radpressure=.true.
 use_w_drift_test=.false.
 !w_drift_test=0.77692,0.0,0.0
 ! Chemtype 1: C
+charging_model='WDB06isrf'   ! no charge-dependent process here (Epstein drag; the 5-10 eV PAH cross sections do not depend on the charge); WDB06rt would need tables for this run's group
 dust_composition(1,6) = 1d0
 
 ! Chemtype 2: O4MgSiFe
@@ -148,7 +149,6 @@ e_escape_length=1d-7,1d-7 ! [cm]
 separate_refractive_index=.true.,.false.
 slope_frag_func=0.4333d0
 
-charging_model='Ibanez2019'   ! no charge-dependent process here (Epstein drag; the 5-10 eV PAH cross sections do not depend on the charge)
 pah_nc = 54,418                ! PAHBin_01..02 (the H II-slab PAHs)
 pah_nc_min = 12,101
 pah_nc_max = 101,29952

@@ -1786,6 +1786,18 @@ module dust_radiation
     use dust_commons
     use hydro_parameters, only:ndust,npah
 
+    ! update_T_dust's solution of one bin (its lin output) and its first-order response to the gas
+    ! temperature and to the recombination and photoelectric terms of the balance, from which
+    ! serve_T_dust gives the cooling solver's T(1 +- 1e-5) calls without solving again
+    type TdustLin
+        real(dp) :: Tg = 0d0, Td = 0d0, coll = 0d0, Prad = 0d0, rec = 0d0, pe = 0d0, Z = 0d0
+        real(dp) :: dH_dTg = 0d0      ! d coll / d T_gas at fixed T_dust (and charge)
+        real(dp) :: dH_dZ = 0d0       ! d coll / d (grain charge) at fixed T_gas, T_dust (dust_coll_charge)
+        real(dp) :: dH_dTd = 0d0      ! d coll / d T_dust (the slope of the solve)
+        real(dp) :: dP_dTd = 0d0      ! d P_emit / d T_dust
+        real(dp) :: dTd_df = 0d0      ! response of T_dust to the balance, -1/(dH_dTd - dP_dTd); 0: T_dust fixed
+    end type TdustLin
+
     contains
 
     function rad_dust_rate(cross_sec,rho_dust)
@@ -1876,39 +1888,31 @@ module dust_radiation
         T0 = max(T0, Tmin)
     end subroutine get_Tdust_radiative_eq
 
-    subroutine solve_Tdust_fast(i_dust,P_abs,ne,nElement,xelem_ions,Coulomb_factor,nH2,&
-                           nCO,Tgas,dust_charge,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin)
+    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin,dHdT)
         ! This subroutine computes the local dust temperature by solving the full energy balance
         ! equation: P_rad + H_coll + recomb_heat = P_emit + pe_heat
         ! i_dust         --> integer of dust bin
         ! P_abs          --> absorbed power by the dust grain [erg/s]
-        ! ne             --> electron density [cm^-3]
-        ! nElement       --> array of elemental densities [cm^-3]
-        ! xelem_ions     --> array of ionisation fractions for each element
-        ! Coulomb_factor --> array of Coulomb factors
-        ! nH2            --> molecular hydrogen density [cm^-3]
-        ! nCO            --> carbon monoxide density [cm^-3]
-        ! Tgas           --> gas temperature [K]
-        ! dust_charge    --> charge of the dust grain (in units of e)
+        ! pre            --> the collisional heating of this bin in this gas (coll_heating_prepare)
         ! coll_heat      <-- heating rate from collisions with gas particles [erg/s]
         ! recomb_heat    --> heating rate from recombination of electrons on dust [erg/s]
         ! pe_heat        --> cooling rate from photoelectric effect [erg/s]
         ! P_rad          <-- emitted power by the dust grain [erg/s]
         ! T              <-- computed dust temperature [K]
         ! Tmin           --> minimum allowed dust temperature (e.g. CMB temp) [K]
+        ! dHdT           <-- (optional) d H_coll / d T of the linearisation used [erg/s/K]
         !-------------------------------------------------------------------------
-        use dust_cooling, only: compute_dust_coll_heating
+        use dust_cooling, only: CollHeatPre, coll_heating_eval
         use dust_commons, only: dust_log_tdust_solver_update
         implicit none
 
         integer,intent(in) :: i_dust
-        real(dp),intent(in) :: P_abs,ne,nH2,nCO,Tgas,dust_charge,Tmin
+        real(dp),intent(in) :: P_abs,Tmin
+        type(CollHeatPre),intent(in) :: pre
         real(dp),intent(inout) :: coll_heat,P_rad
         real(dp),intent(in) :: recomb_heat,pe_heat
-        real(dp),dimension(1:n_elements),intent(in) :: nElement
-        real(dp),dimension(1:n_elements,1:n_elements),intent(in) :: xelem_ions
-        real(dp),dimension(-1:n_elements),intent(in) :: Coulomb_factor
         real(dp),intent(inout) :: T
+        real(dp),intent(out),optional :: dHdT
 
         integer :: iter
         integer :: max_iter=100
@@ -1927,21 +1931,16 @@ module dust_radiation
         ! =========================================================
         if (dust_coll_cooling) then
             dT = max(T0*eps,1e-6)
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0+dT,&
-                                        dust_charge,H2)
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,max(T0-dT,Tmin),&
-                                        dust_charge,H1)
-            call compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,T0,&
-                                        dust_charge,H0)
+            H2 = coll_heating_eval(pre,T0+dT)
+            H1 = coll_heating_eval(pre,max(T0-dT,Tmin))
+            H0 = coll_heating_eval(pre,T0)
             true_dT_low = T0 - max(T0-dT, Tmin)
             dH_dT = (H2 - H1) / (dT + true_dT_low)
         else
             H0 = 0d0
             dH_dT = 0d0
         end if
+        if (present(dHdT)) dHdT = dH_dT
 
         ! =========================================================
         ! 2. Newton iterations (with linearised approximation)
@@ -2115,7 +2114,7 @@ module dust_radiation
                             &recomb_heat,pe_heat,P_rad,T_dust,&
                             &ne,nElement,xelem_ions,Coulomb_factor,&
                             &nH2,nCO,Tgas,dust_charge,&
-                            &Ep,cs_abs)
+                            &Ep,cs_abs,lin)
         ! This subroutine updates the local dust temperatures by considering
         ! the radiation field conditions. The balance between radiative
         ! heating and radiative cooling is only achieved for the larger grains
@@ -2142,9 +2141,10 @@ module dust_radiation
         ! dust_charge    --> charge of the dust grains (in units of e)
         ! Ep            --> radiation energy density [eV/cm3]
         ! cs_abs        --> grain cross section array for dust types [cm3/s] (no PAHs)
+        ! lin           <-- (optional) the solution and its first-order response (serve_T_dust)
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
-        use dust_cooling, only: compute_dust_coll_heating
+        use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -2156,9 +2156,11 @@ module dust_radiation
         real(dp),intent(in) :: ne,nH2,nCO,Tgas
         real(dp),dimension(1:ndust),intent(in) :: dust_charge
         real(dp),intent(in),optional :: Ep(:),cs_abs(:,:)
+        type(TdustLin),dimension(1:ndust),intent(out),optional :: lin
 
         integer :: i,j
-        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas
+        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd
+        type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
@@ -2179,9 +2181,8 @@ module dust_radiation
             ! --- Check collisional heating at Tgas ---
             ! If collisional heating dominates radiation, start closer to Tgas
             if (dust_coll_cooling) then
-                call compute_dust_coll_heating(j,ne,nElement,xelem_ions,&
-                                            Coulomb_factor(j,:),nH2,nCO,Tgas,T0,&
-                                            dust_charge(j),H_coll_at_Tgas)
+                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge(j),pre,deriv=present(lin))
+                H_coll_at_Tgas = coll_heating_eval(pre,T0)
                 coll_heat(j) = H_coll_at_Tgas
                 if (H_coll_at_Tgas > P_abs) then
                     ! Collisional heating dominates the initial guess
@@ -2193,6 +2194,10 @@ module dust_radiation
                     ! Planck power so P_rad is consistent with T_dust.
                     T_dust(j) = max(T0, Tmin)
                     call dust_emission_power(j, T_dust(j), P_rad(j))
+                    if (present(lin)) then
+                        ! T_dust does not respond; H_coll at this T0 moves with Tgas (and the charge)
+                        call lin_state(T0, 0d0, .false.)
+                    end if
                     cycle
                 end if                
             else
@@ -2200,12 +2205,65 @@ module dust_radiation
                 coll_heat(j) = 0d0
             end if
 
-            call solve_Tdust_fast(j,P_abs,ne,nElement,xelem_ions,Coulomb_factor(j,:),&
-                                nH2,nCO,Tgas,dust_charge(j),coll_heat(j),&
-                                recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin)
+            T0_lin = T0
+            call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT)
             T_dust(j) = max(T0, Tmin)
+            if (present(lin)) call lin_state(T0_lin, dHdT, T0 > Tmin)
         end do
+
+    contains
+
+        subroutine lin_state(Tx, slope, free)
+            ! lin(j) of the solution of bin j: H_coll linearised about T_dust = Tx with the given
+            ! slope; free: T_dust follows the balance (else fixed, at Tmin or radiative)
+            real(dp), intent(in) :: Tx, slope
+            logical, intent(in) :: free
+            lin(j)%Tg = Tgas
+            lin(j)%Td = T_dust(j)
+            lin(j)%coll = coll_heat(j)
+            lin(j)%Prad = P_rad(j)
+            lin(j)%rec = recomb_heat(j)
+            lin(j)%pe = pe_heat(j)
+            lin(j)%Z = dust_charge(j)
+            lin(j)%dH_dTg = 0d0
+            lin(j)%dH_dZ = 0d0
+            if (dust_coll_cooling) then
+                ! analytic, from the slopes of the tables (pre prepared with deriv)
+                lin(j)%dH_dTg = coll_heating_dTg(pre,Tx)
+                if (dust_coll_charge) lin(j)%dH_dZ = coll_heating_dZ(pre,Tx)
+            end if
+            lin(j)%dH_dTd = slope
+            lin(j)%dP_dTd = 0d0
+            lin(j)%dTd_df = 0d0
+            if (free) then
+                call dust_emission_with_deriv(j, T_dust(j), Pd, lin(j)%dP_dTd)
+                if (slope - lin(j)%dP_dTd /= 0d0) lin(j)%dTd_df = -1d0/(slope - lin(j)%dP_dTd)
+            end if
+        end subroutine lin_state
+
     end subroutine update_T_dust
+
+    subroutine serve_T_dust(lin,Tgas,recomb_heat,pe_heat,dust_charge,coll_heat,P_rad,T_dust)
+        ! update_T_dust to first order from its solution lin at a nearby gas temperature, with the
+        ! same other inputs but the recombination and photoelectric terms and the grain charge (the
+        ! cooling solver's T(1 +- 1e-5) calls): coll_heat, P_rad [erg/s per grain] and T_dust
+        implicit none
+        type(TdustLin),dimension(1:ndust),intent(in) :: lin
+        real(dp),intent(in) :: Tgas
+        real(dp),dimension(1:ndust),intent(in) :: recomb_heat,pe_heat,dust_charge
+        real(dp),dimension(1:ndust),intent(out) :: coll_heat,P_rad,T_dust
+        integer :: j
+        real(dp) :: dTg, dTd, dH
+        do j = 1, ndust
+            dTg = Tgas - lin(j)%Tg
+            dH = lin(j)%dH_dTg*dTg + lin(j)%dH_dZ*(dust_charge(j) - lin(j)%Z)
+            dTd = lin(j)%dTd_df*(dH + (recomb_heat(j) - lin(j)%rec) - (pe_heat(j) - lin(j)%pe))
+            T_dust(j) = lin(j)%Td + dTd
+            coll_heat(j) = lin(j)%coll + dH + lin(j)%dH_dTd*dTd
+            P_rad(j) = lin(j)%Prad + lin(j)%dP_dTd*dTd
+        end do
+    end subroutine serve_T_dust
 
     function get_dust_band_luminosity(j, T, mass, iband) result(lum)
         implicit none
@@ -2316,332 +2374,11 @@ module dust_photoelectric_heating
 
     implicit none
     private   ! default
-    public:: compute_dust_peh_rate, interpolate_dust_peh_rate,&
-            most_negative_allowed_charge
+    public:: interpolate_dust_peh_rate, most_negative_allowed_charge
 
 
     contains
 
-    ! ====== FUNCTIONS ======
-    function ionisation_potential_valence(W, Z, a) result(IP)
-        ! Calculate the ionisation potential for the valence electron of a dust grain
-        ! Taken from Eq. 2 Weingartner & Draine (2001)
-        ! W --> work function (eV)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! IP <-- ionisation potential in eV
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: W
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        ! Output
-        real(dp) :: IP
-
-        IP = W + e2instatC / a * ((Z + 0.5d0) + (Z + 2d0) * (3d-9 / a)) / eV2erg
-    end function ionisation_potential_valence
-    
-    function electron_afinity(W,E_g,Z,a,use_separate_refractive_index) result(EA)
-        ! Calculate the electron affinity for dust grains
-        ! Taken from Eq. 4 and 5 Weingartner & Draine (2001)
-        ! W --> work function (eV)
-        ! E_g --> band gap (eV)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! use_separate_refractive_index --> .true. for anisotropic (graphite-like), .false. for isotropic (silicate-like)
-        ! EA <-- electron affinity in eV
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: W
-        real(dp), intent(in) :: E_g
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        logical, intent(in) :: use_separate_refractive_index
-        ! Output
-        real(dp) :: EA
-
-        if (use_separate_refractive_index) then
-            EA = W - E_g + e2instatC / a * ((Z - 0.5d0) - 4d-8 / (a + 7d-8)) / eV2erg
-        else
-            EA = W - E_g + e2instatC / a * (Z - 0.5d0) / eV2erg
-        end if
-    end function electron_afinity
-
-    function min_energy_ejection(Z,a) result(E_min)
-        ! Electron energy at which tunneling probability becomes
-        ! significant for electron ejection from a dust grain,
-        ! evaluated using the WKB formalism
-        ! Taken from Eq. 7 Weingartner & Draine (2001)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! E_min <-- minimum energy in eV
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        ! Output
-        real(dp) :: E_min
-
-        if (Z >= 0d0) then
-            E_min = 0d0
-        else
-            E_min = - (Z + 1.0d0) * e2instatC / a / (1.0d0 + (2.7d-7 / a)**0.75d0) / eV2erg
-        end if
-    end function min_energy_ejection
-
-    function photodetachment_energy(W,E_g,Z,a,use_separate_refractive_index) result(hnu_pdt)
-        ! Minimum photon energy required for photodetachment of an electron
-        ! from a negatively charged dust grain
-        ! Taken from Eq. 18 Weingartner & Draine (2001)
-        ! W --> work function (eV)
-        ! E_g --> band gap (eV)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! use_separate_refractive_index --> .true. for anisotropic (graphite-like), .false. for isotropic (silicate-like)
-        ! hnu_pdt <-- minimum photon energy in eV
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: W
-        real(dp), intent(in) :: E_g
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        logical, intent(in) :: use_separate_refractive_index
-        ! Output
-        real(dp) :: hnu_pdt
-
-        ! Local
-        real(dp) :: E_min, EA
-
-        E_min = min_energy_ejection(Z,a)
-        EA = electron_afinity(W,E_g,Z+1,a,use_separate_refractive_index)
-
-        hnu_pdt = EA + E_min
-    end function photodetachment_energy
-
-    function photodetachment_cross_section(E,E_det,Z) result(sigma_pdt)
-        ! Photodetachment cross section for electrons from negatively charged
-        ! dust grains following Eq. 20 in Weingartner & Draine (2001)
-        ! E --> photon energy in eV
-        ! E_det --> photodetachment energy in eV
-        ! Z --> grain charge (in units of e)
-        ! sigma_pdt <-- photodetachment cross section in cm^2
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: E
-        real(dp), intent(in) :: E_det
-        real(dp), intent(in) :: Z
-        ! Output
-        real(dp) :: sigma_pdt
-        ! Local
-        real(dp) :: diffx
-
-        diffx = (E - E_det) / 3.0d0
-        if (diffx .lt. 0d0) then
-            sigma_pdt = 0d0
-        else
-            sigma_pdt = 1.2d-17 * abs(Z) * diffx / (1. + (diffx**2d0)/3d0)**2d0
-        end if        
-    end function photodetachment_cross_section
-
-    function min_photon_energy(IPV,Z,a) result(hnu_min)
-        ! Minimum photon energy required for photoelectric emission
-        ! from a dust grain
-        ! Taken from Eq. 6 Weingartner & Draine (2001)
-        ! IPV --> ionisation potential of valence electron (in eV)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! hnu_min <-- minimum photon energy in eV
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: IPV
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        ! Output
-        real(dp) :: hnu_min
-
-        ! Local
-        real(dp) :: E_min
-
-        if (Z >= -1d0) then
-            hnu_min = IPV
-        else
-            E_min = min_energy_ejection(Z,a)
-            hnu_min = IPV + E_min
-        end if
-    end function min_photon_energy
-
-    function parameter_theta(E,Emin_ej,Z,a) result(theta)
-        ! Parameter theta defined in Eq. 9 Weingartner & Draine (2001)
-        ! This is the parametrisation used for the first part of the
-        ! photoelectric yield functions
-        ! E --> photon energy in eV
-        ! Emin_ej --> minimum energy for electron ejection in eV
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! theta <-- parameter theta (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: E
-        real(dp), intent(in) :: Emin_ej
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        ! Output
-        real(dp) :: theta
-
-        if (Z >= 0) then
-            theta = E - Emin_ej + e2instatC / a * (Z + 1d0) / eV2erg
-        else
-            theta = E - Emin_ej
-        end if
-    end function parameter_theta
-
-    function attempting_electron_integral(hnu,Emin,Emin_ej,Z,a) result(E_avg)
-        ! Average energy of attempting electrons that can escape from a dust grain
-        ! computed by analytical integration of Eq.12 Weingartner & Draine (2001)
-        ! multiplied by the energy of the electron
-        ! See also Eq. 39 in Weingartner & Draine (2001)
-        ! hnu --> photon energy in eV
-        ! Emin --> minimum photon energy for photoelectric emission in eV
-        ! Emin_ej --> minimum energy for electron ejection in eV
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! E_avg <-- average energy in eV
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: hnu
-        real(dp), intent(in) :: Emin
-        real(dp), intent(in) :: Emin_ej
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        ! Output
-        real(dp) :: E_avg
-        ! Local
-        real(dp) :: Ei,Ef
-        real(dp) :: Elow,Ehigh
-        real(dp) :: E_avg_1,E_avg_2
-
-        if (Z < 0d0) then
-            Elow = Emin
-            Ehigh = Emin + hnu - Emin_ej
-            Ei = Emin
-            Ef = Ehigh
-        else
-            Elow = - e2instatC / a * (Z + 1d0) / eV2erg
-            Ehigh = hnu - Emin_ej
-            Ei = 0d0
-            Ef = Ehigh
-        end if
-
-        E_avg_1 = Ef**2d0 * (6d0*Ehigh*Elow - 4d0*Elow*Ef - 4d0*Ehigh*Ef + 3d0*Ef**2d0) / (2d0*(Elow-Ehigh)**3d0)
-        E_avg_2 = Ei**2d0 * (6d0*Ehigh*Elow - 4d0*Elow*Ei - 4d0*Ehigh*Ei + 3d0*Ei**2d0) / (2d0*(Elow-Ehigh)**3d0)
-        E_avg = E_avg_1 - E_avg_2
-    end function attempting_electron_integral
-
-    function escape_fraction_attempting_electrons(hnu,Emin_ej,Z,a) result(f_esc)
-        ! Fraction of attempting electrons that can escape from a dust grain
-        ! after being photo-ejected from their initial bound state
-        ! Taken from Eq. 11 Weingartner & Draine (2001)
-        ! hnu --> photon energy in eV
-        ! Emin_ej --> minimum photon energy for electron ejection in eV
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! f_esc <-- escape fraction (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: hnu
-        real(dp), intent(in) :: Emin_ej
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        ! Output
-        real(dp) :: f_esc
-        ! Local
-        real(dp) :: Elow,Ehigh
-
-        if (Z >= 0d0) then
-            Elow = - e2instatC / a * (Z + 1d0) / eV2erg
-            Ehigh = hnu - Emin_ej
-            f_esc = Ehigh**2d0 * (Ehigh - 3d0 * Elow) / (Ehigh - Elow)**3d0
-        else
-            f_esc = 1d0
-        end if
-
-    end function escape_fraction_attempting_electrons
-
-    function Watson73_y1(a,la,le) result(y1)
-        ! Yield enhancement factor for small grains
-        ! Taken from Draine (1978) which reproduces the
-        ! theoretical results from Watson (1973) based
-        ! in Mie theory
-        ! a --> grain radius in cm
-        ! la --> photon attenuation length in cm
-        ! le --> electron escape length in cm
-        ! y1 <-- yield enhancement factor (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: a
-        real(dp), intent(in) :: la
-        real(dp), intent(in) :: le
-        ! Output
-        real(dp) :: y1
-        ! Local
-        real(dp) :: beta, alpha
-
-        beta = a / la
-        alpha = a / le + a / la
-        y1 = (beta / alpha)**2d0 * (alpha**2d0 - 2d0 * alpha + 2d0 - 2d0 * safe_exp(-alpha)) \
-                / (beta**2d0 - 2d0 * beta + 2d0 - 2d0 * safe_exp(-beta))
-    end function Watson73_y1
-
-    function y0_graphite(theta,W) result(y0)
-        ! Bulk yield for photoelectric emission from a flat surface of graphite
-        ! This is based on the fitting in Bakes & Tielens (1994)
-        ! to the experimental results from Verstraete et al. (1990)
-        ! that approximately reproduces the photoelectric yield of
-        ! coronene. This is particularly larger compared to the bulk
-        ! graphite yields measured by Feuerbacher & Fitton (1972)
-        ! NOTE: These are highly uncertain!!
-        ! theta --> parameter theta (in eV)
-        ! W --> work function (in eV)
-        ! y0 <-- bulk yield (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: theta
-        real(dp), intent(in) :: W
-        ! Output
-        real(dp) :: y0
-
-        y0 = 9d-3 * (theta / W)**5d0 / (1d0 + 3.7d-2*(theta / W)**5d0)
-    end function y0_graphite
-
-    function y0_silicate(theta,W) result(y0)
-        ! Bulk yield for photoelectric emission from a flat surface of silicates
-        ! Taken from Eq. 17 Weingartner & Draine (2001) using a fitting
-        ! to the scaling measured by Feuerbacher et al. (1972)
-        ! NOTE: These are highly uncertain!!
-        ! theta --> parameter theta (in eV)
-        ! W --> work function (in eV)
-        ! y0 <-- bulk yield (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: theta
-        real(dp), intent(in) :: W
-        ! Output
-        real(dp) :: y0
-
-        y0 = 5d-1 * (theta / W) / (1d0 + 5d0 * (theta / W))
-    end function y0_silicate
 
     function autoionisation_potential(a,use_separate_refractive_index) result(AIP)
         ! Autoionisation potential for dust grains
@@ -2685,338 +2422,18 @@ module dust_photoelectric_heating
         Zmin = aint(-U_aip / 14.4d-8 * a) + 1d0
     end function most_negative_allowed_charge
 
-    function DS87_lambda(Z,q,a,T) result(ltilde)
-        ! Dimensionless parameter ltilde defined in Draine & Sutin (1987)
-        ! This is used to compute the sticking coefficient of electrons
-        ! colliding with a dust grain
-        ! Z --> grain charge (in units of e)
-        ! q --> charge of the colliding particle (in units of e)
-        ! a --> grain radius (in cm)
-        ! T --> gas temperature in K
-        ! ltilde <-- dimensionless parameter
-        use cooling_module, only: kB
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: q
-        real(dp), intent(in) :: a
-        real(dp), intent(in) :: T
-        ! Output
-        real(dp) :: ltilde
-        ! Local
-        real(dp) :: nu, tau, theta
-
-        nu = Z / q
-        tau = a * kB * T / q**2d0 / e2instatC
-
-        if (nu .eq. 0d0) then
-            ltilde = 2d0 + 1.5d0 * sqrt(pi/(2d0*tau))
-        else if (nu < 0d0) then
-            ltilde = (2d0 - nu/tau) * (1d0 + 1d0/sqrt(tau - nu))
-        else
-            theta = 1d0 / (1d0 + 1d0/sqrt(nu))
-            ltilde = (2d0 + nu/tau) * (1d0 + 1d0/sqrt(1.5d0/tau + 3d0*nu)) * safe_exp(-theta*nu/tau)
-        end if
-    end function DS87_lambda
-
-    function DS87_J(Z,q,a,T) result(J)
-        ! Dimensionless parameter J defined in Draine & Sutin (1987)
-        ! This is used to compute the collisional rate of electrons
-        ! Z --> grain charge (in units of e)
-        ! q --> charge of the colliding particle (in units of e)
-        ! a --> grain radius (in cm)
-        ! T --> gas temperature in K
-        ! J <-- dimensionless parameter
-        use cooling_module, only: kB
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: q
-        real(dp), intent(in) :: a
-        real(dp), intent(in) :: T
-        ! Output
-        real(dp) :: J
-        ! Local
-        real(dp) :: nu, tau, theta
-
-        nu = Z / q
-        tau = a * kB * T / q**2d0 / e2instatC
-
-        if (nu .eq. 0d0) then
-            J = 1d0 + sqrt(pi/(2d0*tau))
-        else if (nu < 0d0) then
-            J = (1d0 - nu/tau) * (1d0 + sqrt(2d0/(tau - 2d0*nu)))
-        else
-            theta = 1d0 / (1d0 + 1d0/sqrt(nu))
-            J = ((1d0 + 1d0/sqrt(4d0*tau + 3d0*nu))**2d0) * safe_exp(-theta*nu/tau)
-        end if
-    end function DS87_J
-
-    function e_sticking_coeff(Z,a,l_e,use_separate_refractive_index) result(s_e)
-        ! Sticking coefficient for electrons colliding with dust grains
-        ! Taken from Sec. 3 in Weingartner & Draine (2001)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius in cm
-        ! l_e --> electron escape length in cm
-        ! use_separate_refractive_index --> .true. for anisotropic (graphite-like), .false. for isotropic (silicate-like)
-        ! s_e <-- sticking coefficient (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        real(dp), intent(in) :: l_e
-        logical, intent(in) :: use_separate_refractive_index
-        ! Output
-        real(dp) :: s_e
-        ! Local
-        real(dp) :: Nc,Zmin
-        integer :: exp_factor
-
-        if (use_separate_refractive_index) then
-            exp_factor = 20
-        else
-            exp_factor = 25
-        end if
-
-        if (Z == 0d0) then
-            Nc = 468d0 * (a/1d-7)**3d0
-            s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
-        else if (Z < 0d0) then
-            Zmin = most_negative_allowed_charge(a,use_separate_refractive_index)
-            if (Z > Zmin) then
-                Nc = 468d0 * (a/1d-7)**3d0
-                s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
-            else
-                s_e = 0d0
-            end if
-        else
-            s_e = 5d-1 * (1d0 - safe_exp(-a/l_e))
-        end if
-    end function e_sticking_coeff
-
-    ! ======= SUBROUTINES ======
-    subroutine photoelectric_yield(W,E_g,Z,a,E,l_a,l_e,use_separate_refractive_index,Y,y2)
-        ! Photoelectric yield for dust grains
-        ! Taken from Eq. 12 Weingartner & Draine (2001)
-        ! W --> work function (eV)
-        ! E_g --> band gap (eV)
-        ! Z --> grain charge (in units of e)
-        ! a --> grain radius (in cm)
-        ! E --> photon energy (in eV)
-        ! l_a --> photon attenuation length in cm
-        ! l_e --> electron escape length in cm
-        ! use_separate_refractive_index --> .true. for anisotropic (graphite-like), .false. for isotropic (silicate-like)
-        ! Y <-- photoelectric yield (dimensionless)
-        ! y2 <-- fraction of escaping electrons (dimensionless)
-
-        implicit none
-        ! Inputs
-        real(dp), intent(in) :: W
-        real(dp), intent(in) :: E_g
-        real(dp), intent(in) :: Z
-        real(dp), intent(in) :: a
-        real(dp), intent(in) :: E
-        real(dp), intent(in) :: l_a
-        real(dp), intent(in) :: l_e
-        logical, intent(in) :: use_separate_refractive_index
-        ! Output
-        real(dp), intent(out) :: Y,y2
-        ! Local
-        real(dp) :: IPV,Emin_ej,theta,la,y1,y0
-
-        ! 1. Compute IPV, Emin_ej
-        IPV = ionisation_potential_valence(W,Z,a)
-        Emin_ej = min_photon_energy(IPV,Z,a)
-
-        if (E .lt. Emin_ej) then
-            Y = 0d0
-            y2 = 0d0
-            return
-        end if
-
-        ! 2. Compute theta and y0
-        theta = parameter_theta(E,Emin_ej,Z,a)
-        if (use_separate_refractive_index) then
-            y0 = y0_graphite(theta,W)
-        else
-            y0 = y0_silicate(theta,W)
-        end if
-
-        ! 3. Obtain y1 using the radiation averaged l_a
-        y1 = Watson73_y1(a,l_a,l_e)
-
-        ! 4. Obtain y2 using the escape fraction of attempting electrons
-        y2 = escape_fraction_attempting_electrons(E,Emin_ej,Z,a)
-
-        ! 5. Get everything together into the final yield
-        Y = y2 * min(y0 * y1, 1d0)
-
-    end subroutine photoelectric_yield
-
-    subroutine compute_dust_peh_rate(i_dust,csa,l_a,nGroups,local_c,&
-                                    &solid_angle,Np,E,Zdust,Zsigma,&
-                                    &Tgas,ne,Pinj,Prec,debug_flag)
-        ! This subroutine computes the photoelectric heating rate
-        ! and recombination cooling rate for a given dust species
-        ! following the formalism of Weingartner & Draine (2001)
-        ! i_dust   --> index of the dust species
-        ! csa      --> dust absorption cross section (already multiplied by c) [cm^3/s]
-        ! l_a      --> dust photon attenuation length [cm]
-        ! nGroups  --> number of radiation groups
-        ! local_c  --> speed of light in cm/s
-        ! solid_angle --> solid angle subtended by the radiation field in each group [sr]
-        ! Np       --> number density photons in #/cm3
-        ! E        --> photon energy in eV
-        ! Tgas     --> gas temperature in K
-        ! ne       --> electron density in cm^-3
-        ! Zdust    --> dust grain charge in units of e
-        ! Zsigma   --> dust charge distribution sigma
-        ! Pinj     <--> photoelectric heating rate [erg/s]
-        ! Prec     <--> photoelectric recombination cooling rate [erg/s]
-        use cooling_module, only: kB
-        use dust_charging, only: two_point_charge_mix, three_point_charge_mix
-        implicit none
-        ! Inputs
-        integer, intent(in) :: i_dust
-        integer, intent(in) :: nGroups
-        real(dp), dimension(1:nGroups), intent(in) :: csa,l_a,Np,E,solid_angle
-        real(dp), intent(in) :: Zdust,Zsigma,Tgas,ne,local_c
-        logical, intent(in), optional :: debug_flag
-        ! Outputs
-        real(dp), intent(inout) :: Pinj,Prec
-
-        ! Local
-        integer :: i,iq
-        integer :: z1,z2,z3,zmin_mix
-        integer :: nZmix_eff,zlo,zhi
-        real(dp), dimension(1:3) :: Zmix,wmix
-        real(dp) :: asize_cm,W,E_g,l_e,Emin,IPV,Emin_ej
-        real(dp) :: E_avg,E_pdt,sigma_pdt
-        real(dp) :: Y,y2,pinj_charge,prec_charge
-        real(dp) :: w1,w2,w3,wlo,whi,Zcharge
-        real(dp) :: rad_ani,ltilde,s_e,rec_pref
-        real(dp) :: EA,Jtilde
-        real(dp), dimension(1:nGroups) :: pe_pref,pdt_pref
-        logical :: dbg_flag, use_separate_refractive_index, used_two_point
-
-        if (all(Np.eq.0d0)) return
-
-        ! Debug
-        if (.not.present(debug_flag)) then
-            dbg_flag = .false.
-        else
-            dbg_flag = debug_flag
-        end if
-        ! 1. Get fixed dust properties and representative charges
-        asize_cm = dustbins_props(i_dust)%asize_cm
-        W = dustbins_props(i_dust)%work_function
-        E_g = dustbins_props(i_dust)%band_gap
-        l_e = dustbins_props(i_dust)%e_escape_length
-        use_separate_refractive_index = dustbins_props(i_dust)%separate_refractive_index
-        zmin_mix = nint(dustbins_props(i_dust)%Zmin)
-        nZmix_eff = min(max(nZmix,1),3)
-        used_two_point = .false.
-        select case (nZmix_eff)
-        case (1)
-            Zmix = (/Zdust, 0d0, 0d0/)
-            wmix = (/1d0, 0d0, 0d0/)
-        case (2)
-            call two_point_charge_mix(Zdust,zmin_mix,zlo,zhi,wlo,whi)
-            Zmix = (/real(zlo,dp), real(zhi,dp), 0d0/)
-            wmix = (/wlo, whi, 0d0/)
-            used_two_point = .true.
-        case (3)
-            call three_point_charge_mix(Zdust,Zsigma,zmin_mix,z1,z2,z3,w1,w2,w3,used_two_point)
-            Zmix = (/real(z1,dp), real(z2,dp), real(z3,dp)/)
-            wmix = (/w1, w2, w3/)
-        case default
-            call three_point_charge_mix(Zdust,Zsigma,zmin_mix,z1,z2,z3,w1,w2,w3,used_two_point)
-            Zmix = (/real(z1,dp), real(z2,dp), real(z3,dp)/)
-            wmix = (/w1, w2, w3/)
-        end select
-        if (dbg_flag .and. nZmix /= nZmix_eff) print*,'DEBUG: nZmix out of range, clamped to',nZmix_eff,' for i_dust=',i_dust
-        if (dbg_flag .and. used_two_point) print*,'DEBUG: two_point_charge_mix fallback used for i_dust=',i_dust
-
-        ! 2. Precompute factors that do not depend on grain charge.
-        do i = 1, nGroups
-            pe_pref(i) = csa(i) * Np(i) * solid_angle(i)
-            pdt_pref(i) = Np(i) * solid_angle(i) * local_c
-        end do
-        rec_pref = 2.69463707d-10 * asize_cm**2d0 * sqrt(Tgas) * Tgas * ne
-
-        ! 3. Loop over representative charge states and mix contributions
-        do iq = 1, 3
-            if (wmix(iq) .le. 0d0) cycle
-            Zcharge = Zmix(iq)
-
-            Emin = min_energy_ejection(Zcharge,asize_cm)
-            IPV = ionisation_potential_valence(W,Zcharge,asize_cm)
-            Emin_ej = min_photon_energy(IPV,Zcharge,asize_cm)
-
-            pinj_charge = 0.0d0
-            E_pdt = 1d40 ! Initialize to a large value
-            if (Zcharge .lt. 0d0) then
-                E_pdt = photodetachment_energy(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
-            end if
-            do i = 1, nGroups
-                if (E(i) .gt. 13.6d0) cycle ! Ignore ionising photons
-                if (Np(i) .le. 0d0) cycle
-                ! 3.A Compute the photoelectric yield
-                call photoelectric_yield(W,E_g,Zcharge,asize_cm,E(i),l_a(i),l_e,use_separate_refractive_index,Y,y2)
-                if (dbg_flag) print*,'DEBUG: i_dust=',i_dust,'i=',i,' Zdust=',Zcharge,' w=',wmix(iq),' Emin_ej=',Emin_ej,' E=',E(i),' Y=',Y,' y2=',y2
-
-                if (Y .le. 0d0) cycle
-
-                ! 3.B Compute the integral of the photo-electron energy distribution
-                E_avg = attempting_electron_integral(E(i),Emin,Emin_ej,Zcharge,asize_cm)
-                if (E_avg .le. 0d0) cycle
-                E_avg = E_avg / y2
-
-                ! 3.C Compute the injected power from photoemission of valence electrons
-                pinj_charge = pinj_charge + Y * E_avg * pe_pref(i)
-                if (dbg_flag) print*,'DEBUG: i_dust=',i_dust,'i=',i,' Zdust=',Zcharge,' w=',wmix(iq),' E=',E(i),' Y=',Y,' E_avg=',E_avg,' csa=',csa(i),' Np=',Np(i)*E(i)*eV2erg,' contrib=', &
-                      & Y * E_avg * pe_pref(i) * eV2erg
-                ! 3.D Compute the photo-detachment contribution (for negatively charged grains)
-                if (E(i) .lt. E_pdt) cycle
-                sigma_pdt = photodetachment_cross_section(E(i),E_pdt,Zcharge)
-                pinj_charge = pinj_charge + sigma_pdt * (E(i) - E_pdt + Emin) * pdt_pref(i)
-            end do
-            Pinj = Pinj + wmix(iq) * pinj_charge * eV2erg
-
-            ! 4. Compute the recombination cooling rate contribution of this charge
-            prec_charge = 0.0d0
-            s_e = e_sticking_coeff(Zcharge,asize_cm,l_e,use_separate_refractive_index)
-            if (s_e .gt. 0d0) then
-                if (dbg_flag) print*,'DEBUG: i_dust=',i_dust,' Zcharge=',Zcharge,' s_e=',s_e
-                ltilde = DS87_lambda(Zcharge,-1d0,asize_cm,Tgas)
-                ! NOTE: The constant prefactor is precomputed in rec_pref.
-                ! pi * sqrt(8d0 * kB / pi / m_e) * kB = 2.69463707d-10 [cm**3*g/(K**(3/2)*s**3)]
-                prec_charge = rec_pref * s_e * ltilde
-            end if
-            Prec = Prec + wmix(iq) * prec_charge
-
-            ! 5. Compute the contribution from autoionisation if the grain has reached Zmin
-            if (Zcharge .eq. zmin_mix) then
-                EA = electron_afinity(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
-                Jtilde = DS87_J(dble(zmin_mix),-1d0,asize_cm,Tgas)
-                Pinj = Pinj + wmix(iq) * rec_pref / (kB * Tgas) * Jtilde * EA * eV2erg
-            end if
-        end do
-    end subroutine compute_dust_peh_rate
-
     subroutine interpolate_dust_peh_rate(i_dust,G0,ne,Tgas,Pinj,Prec)
-        ! This subroutine interpolates the dust photoelectric heating and 
-        ! electron recombination cooling rates from the equilibrium tables
-        ! computed in Rodriguez Montero et al. (2024) based on the modelling
-        ! of Weingartner & Draine (2001)
+        ! The dust photoelectric heating and net electron recombination cooling of bin i_dust in
+        ! a uniform ISRF of G0 Habing: the WDB06 charge balance with H+ ions at n = n_e, from the
+        ! uniform-ISRF tables (pyCALIMA charging_isrf_tables). The PE heating of WDB06isrf
+        ! (WDB06rt computes its own)
         ! i_dust   --> index of the dust species
         ! G0       --> radiation field in Habing units
         ! ne       --> electron number density [cm^-3]
         ! Tgas     --> gas temperature in K
         ! Pinj     <-- photoelectric heating rate [erg/s]
-        ! Prec     <-- photoelectric recombination cooling rate [erg/s]
-        use amr_commons, only: myid
+        ! Prec     <-- recombination cooling rate [erg/s]
+        use dust_charging, only: isrf_lookup, ISRF_ND
         implicit none
 
         ! Inputs
@@ -3026,34 +2443,9 @@ module dust_photoelectric_heating
         real(dp), intent(out) :: Pinj,Prec
 
         ! Local
-        real(dp) :: gamma,log_gamma,log_T,peh_rate,cool_rate
-        integer :: idx_g, idx_T
+        real(dp) :: Zm, Zs, D(ISRF_ND)
 
-        ! 1. Compute the ionisation parameter
-        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
-        log_gamma = log10(gamma)
-        log_T = log10(Tgas)
-
-        ! 2. Make the interpolation in log-log in 2D using the per-bin tables
-        if ((.not. dustbins_props(i_dust)%peh_tab%initialised) .or. &
-            (.not. dustbins_props(i_dust)%rec_tab%initialised)) then
-            if (myid.eq.1) then
-                write(*,*) 'ERROR in interpolate_dust_peh_rate'
-                write(*,*) 'peh_tab/rec_tab are not initialised for dust bin ', i_dust
-            end if
-            call clean_stop
-        end if
-
-        idx_g = -1
-        idx_T = -1
-
-        call dustbins_props(i_dust)%peh_tab%interpolate(log_gamma, log_T, peh_rate, idx_g, idx_T)
-        Pinj = exp(peh_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
-
-        ! The tables are at G0 = 1 (Mathis) with n_e = sqrt(T)/gamma, so at fixed (gamma, T) the
-        ! recombination cooling scales with n_e, i.e. with G0, as the heating does
-        call dustbins_props(i_dust)%rec_tab%interpolate(log_gamma, log_T, cool_rate, idx_g, idx_T)
-        Prec = exp(cool_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
+        call isrf_lookup(i_dust, G0, Tgas, ne, Zm, Zs, Pinj, Prec, D)
     end subroutine interpolate_dust_peh_rate
     
 

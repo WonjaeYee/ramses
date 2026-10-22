@@ -919,6 +919,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: mu, TK, ne, neInit
       !  real(dp):: xHI,dxHI, xH2=0d0,dXH2=0d0, xHeI,dxHeI
       real(dp):: Crate, Crate_prime, Crate_prime_a, Crate_prime_b, dCdT2, X_nHkb, rate, dRate, cr, de=0d0
+      real(dp), dimension(1:50):: prime_cooling_rates            ! the rates of the T(1 +- 1e-5) calls (unsaved)
+      character(len=20), dimension(1:50):: prime_cooling_rates_names
       real(dp):: ss_factor, f_dust
 #ifdef RT
       integer::igroup,idim
@@ -938,7 +940,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: rho
       !-----------------------------------------------------------------------
       ! Variables specific to RTZ
-      real(dp):: xe, x_eq
+      real(dp):: xe, x_eq, x_old
+      logical:: ne_sync                       ! the next ion update sums ne over all ions again
       real(dp):: dust_effective_number_density, dust_to_gas_mass_ratio_over_mw
       real(dp):: HI_number_density, HII_number_density
       real(dp):: paired_ion_number_density
@@ -1037,8 +1040,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #else
       ! In the case of using CALIMA, we need to add to the
       ! total density the contribution from dust and PAHs
-      ! 1. Reset the dust helper to get ready for this cool step
-      call dust_helper%reset()
+      ! 1. Get the dust helper ready for this cool step. No full reset: each field is written
+      !    before it is read within the step, except Pabs_pah, which the PAH model adds to
+      if (npah > 0) dust_helper%Pabs_pah = 0d0
       dust_helper%icell = icell          ! WDB06rt: warm state of this cell
 
       ! 2. Compute the total density and metallicity
@@ -1589,7 +1593,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       call compute_dust_precool(dust_helper, advected_G0+UV_background_G0, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
-                                 ,dNp, ion_rec=.true.)
+                                 ,dNp)
       if (rtz_equilibrium_test.gt.0) then
          call cpu_time(t_sub_end)
          t_dust_precool = t_dust_precool + (t_sub_end - t_sub_start)
@@ -1619,20 +1623,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! UPDATE TEMPERATURE *************************************************
       !if(c_switch(icell) .and. .not. rt_isTconst .and. .not. rt_T_rad) then
       if(.not. rt_isTconst .and. .not. rt_T_rad) then
-         !HKnote: we call prime first so what we can store the correct cooling rates
-         saved_cooling_rates = 0.d0
-#ifdef CALIMA
-         call rtgroups_derivative_calls(.true.)    ! WDB06rt: served from the precool solve
-#endif
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
-                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                           ss_factor, dNp, ilevel, Crate_prime_a, saved_cooling_rates, saved_cooling_rates_names)
-         call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
-                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
-                           ss_factor, dNp, ilevel, Crate_prime_b, saved_cooling_rates, saved_cooling_rates_names)
-#ifdef CALIMA
-         call rtgroups_derivative_calls(.false.)
-#endif
+         ! C(T) first (CALIMA: the dust of the precool call at T), whose rates are saved; then dC/dT
+         ! from C(T (1 + 1e-5)) by a forward difference, or with rtz_dCdT_central from C(T (1 +- 1e-5))
+         ! by a central one, one all_cooling call more (their difference is of relative order 1e-5)
          saved_cooling_rates = 0.d0
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
@@ -1640,11 +1633,32 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
+         prime_cooling_rates = 0.d0
+#ifdef CALIMA
+         call rtgroups_derivative_calls(.true.)    ! WDB06rt: served from the precool solve
+#endif
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+                           primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
+                           ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names)
+         if (rtz_dCdT_central) then
+            prime_cooling_rates = 0.d0
+            call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+                              primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
+                              ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names)
+         end if
+#ifdef CALIMA
+         call rtgroups_derivative_calls(.false.)
+#endif
          ! the heat the recombination photons deposit beyond their physical energy (above), and under OTSA the
-         ! photoheating of the helium photons that ionize hydrogen on the spot (otsa_he_photons); neither
-         ! depends on T, so the central difference below is unchanged
+         ! photoheating of the helium photons that ionize hydrogen on the spot (otsa_he_photons)
          Crate = Crate - rec_charge + ots_heat
-         Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
+         Crate_prime_a = Crate_prime_a - rec_charge + ots_heat
+         if (rtz_dCdT_central) then
+            Crate_prime_b = Crate_prime_b - rec_charge + ots_heat
+            Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK)
+         else
+            Crate_prime = (Crate_prime_a - Crate) / (1.d-5*TK)
+         end if
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
          X_nHkb = 1.d0/(1.5d0 * (rho/mH) * kB)
@@ -2297,6 +2311,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
             ! Loop over the ions and get the relevant rates
             saved_rates = 0.d0
+            ! ne is summed again at this element's first update (it catches up the renormalisation of
+            ! the previous element, and the CO chemistry before the first), then follows its updates
+            ne_sync = .true.
 
             ! Initialize collisional ionization before the loop
             ! recombination rates are 0 for ground state
@@ -2555,6 +2572,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                else
                   cr = cr + crl * x_low
                end if
+               x_old = dXion(iElement,iIon)
                if (de * ddt(icell) < 1.d-6) then
                   dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
                else
@@ -2564,7 +2582,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
                ! Get the new electron fraction
-               ne = getNe(dXion, nElement_dep(:))
+               if (ne_sync) then
+                  ne = getNe(dXion, nElement_dep(:))
+                  ne_sync = .false.
+               else
+                  ne = ne + nElement_dep(iElement) * (dXion(iElement,iIon) - x_old) * real(iIon - 1, dp)
+               end if
                xe = ne / nElement_dep(1)
                phi_s = secondary_cr_rates(xe)
                total_cosmic_ray_ionization_rate = primary_cosmic_ray_ionization_rate * (1.d0 + phi_s)
