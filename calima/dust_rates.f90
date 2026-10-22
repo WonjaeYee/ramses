@@ -169,7 +169,7 @@ module dust_rates
                                                dustbins_props(kk)%sgrain,pahbins_props(pp)%spah,&
                                                dustbins_props(kk)%mgrain,pahbins_props(pp)%mpah)
                 ! the PAH sticks below the speed of a collision energy of 1 eV
-                reduced_mass = 5d-1 * (pahbins_props(pp)%mpah * dustbins_props(kk)%mgrain) / &
+                reduced_mass = (pahbins_props(pp)%mpah * dustbins_props(kk)%mgrain) / &
                                (pahbins_props(pp)%mpah + dustbins_props(kk)%mgrain)
                 v_stick_thresh = sqrt(2d0 * eV2erg / max(reduced_mass, 1d-99))
                 mu = pair_drift(dust_info, pp, dust_info%npah+kk)
@@ -1581,7 +1581,7 @@ module dust_rates
 
             reduced_mass = 5d-1 * pahbins_props(pp)%mpah
             C_eff = 1d0 / (1d0 + 9.92807181d-7 * (log10(dust_info%local_Tk))**1.37933821d1)
-            dV_thermal = sqrt(8d0 * kB * dust_info%local_Tk / reduced_mass)
+            dV_thermal = sqrt(8d0 * kB * dust_info%local_Tk / (pi * reduced_mass))
             coll_section = 4d0 * pi * (pahbins_props(pp)%apah_cm)**2d0
             rate1 = coll_section * dV_thermal * C_eff * y_dust(pp) / pahbins_props(pp)%mpah
 
