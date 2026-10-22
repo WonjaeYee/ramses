@@ -6,7 +6,7 @@
 !                           module: 21 Feb 2022)
 
 module dust_commons
-    use amr_parameters, only:dp,metal
+    use amr_parameters, only:dp,metal,nvector
     use hydro_parameters, only:n_elements,ndust,ndchemtype,npah,idust,ipah
     use constants, only: amu2g
     use dust_utils
@@ -20,7 +20,8 @@ module dust_commons
 
     ! ==== Flags and logicals (read from nml) ====
     logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
-    logical ::dust_debug=.false.                 ! Activate detailed dust mass-budget logging (per-process dM/dt; heavier overhead)
+    logical ::dust_debug=.false.                 ! Debug diagnostics: the per-process dust mass budget (dM/dt; heavier), the
+                                                 ! TVA drift-clipping report, the test diagnostics (IRTRAP_DIAG)
     integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
     logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
@@ -65,6 +66,57 @@ module dust_commons
     logical ::pah_pe_nolyman=.false.             ! Deactivate the 13.6 eV limit for PAH PE heating
     logical ::H2onpah=.false.                    ! Formation of H2 molecules on PAHs
 
+    ! ==== Dust dynamics (read from nml) ====
+    ! Species that drift in the TVA: the PAH bins, then the dust bins, i.e. uold(:,ipah:ipah+ntva-1)
+    ! (idust = ipah + npah)
+    integer, parameter :: ntva = npah + ndust
+    logical ::dust_tva=.false.                   ! Activate the dust dynamics using the Terminal Velocity Approximation (TVA)
+    logical ::dust_radpressure=.false.           ! Activate the dust dynamics using the radiation pressure force
+    logical ::dust_drift_collisions=.true.       ! With the TVA: the drift difference of two species enters their
+                                                 ! collisions (coagulation, shattering, PAH freezing), as a systematic
+                                                 ! velocity on top of the turbulent one (Guillet et al. 2020, App. C)
+    ! The TVA drift kept for those collisions: per cell (indexed as uold, code units, set by the TVA
+    ! flux step) and for the cells of the cooling_fine batch (cm/s, read in rtz_cool_step)
+    real(dp),dimension(:,:,:),allocatable :: tva_wdrift        ! (cell, ntva, ndim)
+    real(dp),dimension(:,:,:),allocatable :: tva_wdrift_batch  ! (nvector, ntva, ndim)
+    logical ::use_w_drift_test=.false.           ! Override the drift velocity with a constant value for testing
+    real(dp),dimension(1:3)::w_drift_test=0.0_dp ! Constant drift velocity for each dimension (X, Y, Z)
+    real(dp),dimension(1:ndust)::drag_coefficient=1d0 ! Constant drag coefficient for testing
+    real(dp) ::epstein_coef=1d0                  ! sqrt(pi*gamma/8), set once in init_CALIMA_dust.
+                                                 ! Epstein drag uses the MEAN thermal speed
+                                                 ! v_th = sqrt(8kT/(pi mu mH)); written with the
+                                                 ! ADIABATIC c_s used in the solver that is
+                                                 ! v_th = sqrt(8/(pi*gamma))*c_s, hence
+                                                 ! t_s = sqrt(pi*gamma/8)*s*a/(rho_g*c_s).
+                                                 ! (Laibe & Price 2012; Lebreuilly+2019.)
+    character(LEN=20)::drag_model='epstein'      ! Gas-grain drag law for the TVA stopping time:
+                                                 ! 'epstein'    -- linear Epstein drag (above);
+                                                 ! 'draine2011' -- Draine (2011) eq. (24)-(25), after
+                                                 !   Draine & Salpeter (1979): collisional + Coulomb
+                                                 !   drag with the grain charge from charging_model.
+                                                 !   Nonlinear in the drift; needs dust_radpressure.
+    real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.
+                                                 ! TVA assumes Stokes << 1, which fails once the drift
+                                                 ! approaches c_s (typically in hot/diffuse cells, where
+                                                 ! t_s ~ 1/rho_gas blows up). <=0 disables the cap.
+    ! Radius [cm] and material density [g cm^-3] of the species that drift in the TVA, in their uold
+    ! order: the PAH bins, then the dust bins (uold(:,ipah:ipah+ntva-1)). Set once in init_CALIMA_dust.
+    real(dp), dimension(1:ntva) :: tva_a_cm = 0d0, tva_s_cgs = 0d0
+    ! PAH ion fraction (the charge states > 0) of each bin in each cell of the current cooling vector, from
+    ! the chemistry's last sub-step of that cell (store_pah_ion_fraction); -1 where it was not computed.
+    ! The IR trapping optical depth of cooling_fine weights the two PAH charge states with it.
+    real(dp), dimension(1:nvector, 1:max(npah,1)) :: pah_fion_vec = -1d0
+    ! condinit_kind resolved to an integer once in init_CALIMA_dust, so the innermost
+    ! solver loops carry an integer compare instead of a character(60) one -- and so an
+    ! innocently named IC cannot silently switch the physics to a test branch.
+    integer,parameter ::TVA_TEST_NONE=0, TVA_TEST_DIFFUSE=1, TVA_TEST_SHOCK=2, &
+                      & TVA_TEST_BLAST1D=3, TVA_TEST_SPRESS=4, TVA_TEST_GAUSS=5, &
+                      & TVA_TEST_IRTRAP=6
+    integer ::tva_test_mode=TVA_TEST_NONE
+    ! ==== Dust dynamics diagnostics (not in nml) ====
+    integer(kind=8) ::tva_nclip=0                ! Faces/cells whose drift was clipped since last report
+    real(dp) ::tva_wmax_seen=0d0                 ! Largest |w_drift|/c_s seen since last report
+    integer ::tva_last_warn_step=-1              ! Coarse step of the last "TVA sets dt" message
     ! ==== Dust standalone testing (read from nml) ====
     logical ::dust_test=.false.                  ! Activate accretion solver test
     real(dp) ::test_nH=1.0d2                     ! Target test gas hydrogen density [cm-3]

@@ -2051,7 +2051,9 @@ module dust_charging_rtgroups
         ! WDB06rt (the solve's window if discrete, else one evaluated around Z* while it fits
         ! MAX_DISCRETE_STATES), else on a Gaussian of the model's <Z> and sigma_Z. coul needs lnL1.
         use dust_charging, only: compute_mean_dust_charge, compute_dust_charge_sigma
+#ifdef RT
         use rt_parameters, only: smallNp
+#endif
         implicit none
         integer, intent(in) :: ii
         real(dp), intent(in) :: Np(:), egy(:), c_red, G0_bg, G0, T, ne, n_Hp, n_Hep, n_Hepp
@@ -2063,6 +2065,10 @@ module dust_charging_rtgroups
         logical :: exact
         type(RTGState) :: st
         type(RTGResult) :: r
+#ifndef RT
+        ! rt_parameters' floor; without RT, WDB06rt is rejected by check_params_dust
+        real(dp), parameter :: smallNp = 1d-30
+#endif
         exact = .false.
         if (trim(charging_model) == 'WDB06tab') then
             call psitab_inputs(Np, c_red, G0_bg, egy, pin)

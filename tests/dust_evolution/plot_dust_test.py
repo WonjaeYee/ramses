@@ -3,6 +3,22 @@ import re
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
+plt.rcParams.update({
+    'font.family': 'serif',
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'xtick.direction': 'in',
+    'ytick.direction': 'in',
+    'xtick.minor.visible': True,
+    'ytick.minor.visible': True,
+    'axes.linewidth': 0.8,
+    'axes.facecolor': 'none',
+    'figure.facecolor': 'none',
+    'legend.frameon': False,
+    'lines.linewidth': 2.5,
+})
 
 pi = 3.14159265
 
@@ -171,52 +187,49 @@ def interpolate_sputtering_rate(lT, T_grid, rates):
     t = (lT - T_grid[idx]) / (T_grid[idx+1] - T_grid[idx])
     return (1.0 - t) * rates[idx] + t * rates[idx+1]
 
-def OC07_function(x):
-    return 3.2 - (1.0 + x) + 2.0 / (1.0 + x) * (1.0 / 2.6 + (x**3) / (1.6 + x))
-
-def grain_relative_velocity(model, T, rho_gas, nH, v_turb, local_mu, inject_L,
+def grain_relative_velocity(model, T, rho_gas, nH, ne, v_turb, local_mu, inject_L,
                             target_a, target_s, target_m,
                             projectile_a, projectile_s, projectile_m):
     kB = 1.3806490e-16  # erg/K
     mH = 1.6738233e-24  # g
     
-    cs_gas = np.sqrt(5.0 / 3.0 * kB * T / (mH * local_mu))
-    v_th = np.sqrt(8.0 / pi) * cs_gas
+    # Maxwellian mean speed of the gas particles (no adiabatic index)
+    v_th = np.sqrt(8.0 * kB * T / (pi * mH * local_mu))
     
     if model == 'Ormel2007':
-        dV_thermal = np.sqrt(8.0 * kB * T * (target_m + projectile_m) / (target_m * projectile_m))
+        dV_thermal = np.sqrt(8.0 * kB * T * (target_m + projectile_m) / (pi * target_m * projectile_m))
+        if v_turb <= 0.0:
+            return dV_thermal
         
-        e2instatC = 2.3070775e-17
+        # Viscosity of the neutral + ionised (x = ne/nH) mixture: neutral collisions at 2e-15 cm^2,
+        # ion-ion Coulomb collisions with ln Lambda = 20 (as calima/dust_dynamics.f90)
+        e2instatC = 2.3070775e-19  # e^2 [statC^2], as amr/constants.f90 (was 1e-17, 100x too large)
+        x_ion = min(max(ne / nH, 0.0), 1.0)
         rc = e2instatC / (kB * T)
-        mfp = 1.0 / (nH * rc**2)
+        sigma_C = pi * rc**2 * 20.0
+        nu = v_th / (3.0 * nH) * ((1.0 - x_ion) / 2e-15 + x_ion / (x_ion * sigma_C + (1.0 - x_ion) * 2e-15))
         tau_L = inject_L / v_turb
-        Re = 3.0 * v_turb * inject_L / (cs_gas * mfp)
+        Re = max(v_turb * inject_L / nu, 1.0)
         tau_eta = tau_L / np.sqrt(Re)
         
         ts_target = target_s * target_a / (rho_gas * v_th)
         ts_projectile = projectile_s * projectile_a / (rho_gas * v_th)
         
-        # Target must have ts_target >= ts_projectile
-        if ts_target < ts_projectile:
-            ts_target, ts_projectile = ts_projectile, ts_target
-            target_m, projectile_m = projectile_m, target_m
-            target_s, projectile_s = projectile_s, target_s
-            target_a, projectile_a = projectile_a, target_a
-            
-        St_target = ts_target / tau_L
-        St_projectile = ts_projectile / tau_L
+        # St1 >= St2
+        St1 = max(ts_target, ts_projectile) / tau_L
+        St2 = min(ts_target, ts_projectile) / tau_L
         
+        # Full closed form of Ormel & Cuzzi (2007, Eqs. 16-18), t* = 1.6 t_s
         Stmin = tau_eta / tau_L
-        if ts_target < tau_eta:
-            if St_target + St_projectile > 0.0:
-                dV_turb = np.sqrt(1.5) * v_turb * np.sqrt((St_target - St_projectile) / (St_target + St_projectile)) * \
-                          np.sqrt((St_target**2 / (St_target + Stmin)) - (St_projectile**2 / (St_projectile + Stmin)))
-            else:
-                dV_turb = 0.0
-        elif (tau_eta <= ts_target) and (ts_target < tau_L):
-            dV_turb = np.sqrt(1.5) * v_turb * np.sqrt(OC07_function(St_projectile / St_target) * St_target)
+        St_star = min(max(1.6 * St1, Stmin), 1.0) if St1 < 1.0 else 1.0
+        if St1 + St2 > 0.0:
+            dVI2 = (St1 - St2) / (St1 + St2) * (St1**2 / (St_star + St1) - St1**2 / (1.0 + St1)
+                                                - St2**2 / (St_star + St2) + St2**2 / (1.0 + St2))
         else:
-            dV_turb = np.sqrt(1.5) * v_turb * np.sqrt(1.0 / (1.0 + St_target) + 1.0 / (1.0 + St_projectile))
+            dVI2 = 0.0
+        dVII2 = (2.0 * (St_star - Stmin) + St1**2 / (St1 + St_star) - St1**2 / (St1 + Stmin)
+                 + St2**2 / (St2 + St_star) - St2**2 / (St2 + Stmin))
+        dV_turb = np.sqrt(1.5) * v_turb * np.sqrt(max(dVI2 + dVII2, 0.0))
             
         return np.sqrt(dV_thermal**2 + dV_turb**2)
     else:
@@ -394,7 +407,7 @@ def integrate_rk54(t_eval, y0, n_elements, ndust, bin_props, gas_elements, param
             for ii in bin_indices:
                 for kk in bin_indices:
                     v_rel = grain_relative_velocity(
-                        'Ormel2007', Tk, local_rho, nH, local_sigma, local_mu, local_dx,
+                        'Ormel2007', Tk, local_rho, nH, params.get('ne', 0.0), local_sigma, local_mu, local_dx,
                         bin_props[ii]['asize']*1e-4, bin_props[ii]['sgrain'], bin_props[ii]['mgrain'],
                         bin_props[kk]['asize']*1e-4, bin_props[kk]['sgrain'], bin_props[kk]['mgrain']
                     )
@@ -676,10 +689,10 @@ def main():
     ys_python = integrate_rk54(t_yr, y0, n_elements, ndust, bin_props, gas_elements, params, prefactor, nH)
     
     # Plot results
-    fig, axes = plt.subplots(2, 1, figsize=(7, 6), sharex=True)
+    fig, axes = plt.subplots(2, 1, figsize=(5.5, 6.5), sharex=True)
     
     # 1. Plot dust density evolution
-    colors = plt.cm.viridis(np.linspace(0, 0.9, ndust))
+    colors = plt.cm.plasma(np.linspace(0.1, 0.85, ndust))
     y_analytic_final = None
     
     # Only do analytic check if it is pure accretion (no other processes)
@@ -727,15 +740,14 @@ def main():
                     t_sec = t_yr * yr2sec
                     y_analytic = y_tot / (1.0 + ((y_tot - y_dust_0) / y_dust_0) * np.exp(-C_coeff * y_tot * t_sec))
                     
-                    axes[0].plot(t_yr, y_analytic / y_dust_0, ':', color='red', linewidth=2.5, label='Analytic Solution (Logistic)')
+                    axes[0].plot(t_yr, y_analytic / y_dust_0, ':', color='#b71c1c', linewidth=2.5, label='Analytic Solution (Logistic)')
                     y_analytic_final = y_analytic[-1]
                 
     axes[0].set_ylabel(r'Dust Mass Density ($\rho(t)/\rho(0)$)')
     axes[0].set_yscale('log')
     axes[0].set_xscale('log')
     axes[0].legend(loc='lower right',frameon=False)
-    axes[0].set_title('CALIMA Dust Density Evolution (Evolution Test)')
-    axes[0].grid(True, alpha=0.3)
+    axes[0].grid(True, linestyle=':', alpha=0.3, color='#aaaaaa')
     
     # 2. Plot gas metal abundance evolution
     # Dynamically find all elements present in the dust compositions
@@ -749,16 +761,16 @@ def main():
         1: 'H', 2: 'He', 6: 'C', 7: 'N', 8: 'O', 10: 'Ne', 12: 'Mg', 14: 'Si', 16: 'S', 26: 'Fe'
     }
     element_colors = {
-        6: 'black',
-        8: 'red',
-        12: 'green',
-        14: 'blue',
-        26: 'orange',
-        1: 'grey',
-        2: 'purple',
-        7: 'cyan',
-        10: 'magenta',
-        16: 'yellow'
+        6: '#212121',
+        8: '#b71c1c',
+        12: '#1b5e20',
+        14: '#1565c0',
+        26: '#e65100',
+        1: '#616161',
+        2: '#4a148c',
+        7: '#006064',
+        10: '#880e4f',
+        16: '#827717',
     }
     
     for idx, el_idx in enumerate(track_elements):
@@ -777,7 +789,7 @@ def main():
     axes[1].set_xscale('log')
     axes[1].set_ylabel('Gas-Phase Abundance ($n(t)/n(0)$)')
     axes[1].legend(loc='lower left',frameon=False,ncol=2)
-    axes[1].grid(True, alpha=0.3)
+    axes[1].grid(True, linestyle=':', alpha=0.3, color='#aaaaaa')
     
     plt.tight_layout()
     
@@ -790,7 +802,7 @@ def main():
         suffix = 'shattering'
     plot_file = f'dust_{suffix}_test.png'
     
-    plt.savefig(plot_file, dpi=150)
+    plt.savefig(plot_file, dpi=300, transparent=True)
     print(f"Plot saved to {plot_file}")
     
     # Print comparison report

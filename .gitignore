@@ -34,7 +34,11 @@ __pycache__
 *.log
 *.png
 *.list
+# executables built inside test directories
+tests/**/ramses_*
 # IDEs files
 .vscode
 Makefile
 CLAUDE.md
+# run markers the dust_tva plot scripts write (which namelist variant made the outputs)
+tests/**/.variant

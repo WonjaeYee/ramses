@@ -67,6 +67,15 @@ module dust_init
             end do
         end if
 #endif
+        write(*,*) '>>> DUST DYNAMICS ========================================'
+        write(*,*) 'dust_tva             = ',dust_tva,',    dust_radpressure    = ',dust_radpressure
+        if (dust_tva) then
+            write(*,*) 'use_w_drift_test     = ',use_w_drift_test
+            if (use_w_drift_test) write(*,*) '   w_drift_test      = ',w_drift_test
+            write(*,*) 'tva_wmax_cs          = ',tva_wmax_cs,' (cap on |w_drift| / c_s)'
+            write(*,*) 'epstein_coef         = ',epstein_coef,' = sqrt(pi*gamma/8)'
+            write(*,*) 'drag_model           = ',trim(drag_model)
+        end if
         write(*,*) '=============================================================='
     end subroutine print_dust_parameters
 
@@ -75,6 +84,8 @@ module dust_init
         ! This function goes through the hydro and compilation parameters
         ! to make sure that it is compliant with the required dust settings
         use hydro_parameters
+#ifdef RT
+#endif
         implicit none
         logical :: check_params_dust
         integer,intent(in) :: myid
@@ -162,6 +173,74 @@ module dust_init
             end if
         end if
 
+        !-------------------------------------------------
+        ! Check everything is correct to do dust dynamics
+        !-------------------------------------------------
+#ifndef RT
+        if (dust_radpressure) then
+            if(myid==1)write(*,*)'Error: dust_radpressure can only be used with RT'
+            check_params_dust=.false.
+        end if
+#endif
+        if (dust_tva .and. ntva <= 0) then
+            ! with this check dust_tva implies ntva > 0: the TVA code tests dust_tva alone
+            if(myid==1)write(*,*)'Error: dust_tva requires at least one dust or PAH bin (NDUST+NPAH>0)'
+            check_params_dust=.false.
+        end if
+        if (dust_radpressure .and. .not.dust_tva) then
+            if(myid==1)write(*,*)'Error: dust_radpressure has no effect without dust_tva=.true.'
+            check_params_dust=.false.
+        end if
+        if (trim(drag_model).ne.'epstein' .and. trim(drag_model).ne.'draine2011') then
+            if(myid==1)write(*,*)'Error: drag_model must be epstein or draine2011, not ',trim(drag_model)
+            check_params_dust=.false.
+        end if
+        ! The Draine drag needs n_H, T and the grain charge, which the TVA gets
+        ! from the per-cell radiation-pressure call; the pure-drag path has none.
+        if (trim(drag_model).eq.'draine2011' .and. .not.dust_radpressure) then
+            if(myid==1)write(*,*)'Error: drag_model=draine2011 requires dust_radpressure=.true.'
+            check_params_dust=.false.
+        end if
+        if (dust_tva .and. myid==1) then
+            if (use_w_drift_test) then
+                write(*,*)'WARNING: use_w_drift_test=.true. replaces the physical drift ', &
+                          'with the constant w_drift_test. This is a test mode, not physics.'
+            end if
+            if (tva_wmax_cs <= 0d0) then
+                write(*,*)'WARNING: tva_wmax_cs<=0 disables the drift cap. TVA assumes ', &
+                          'Stokes<<1; without a cap dt can collapse in hot/diffuse cells.'
+            end if
+        end if
+        ! The trapped-IR requirements (NENER, rt_isIR, the GLF flux) are checked by
+        ! dust_dynamics:check_tva_rt_params on the first TVA step: this routine runs inside
+        ! read_CALIMA_params, before read_rt_params, where rt_isIRtrap and rt_isIR are still at
+        ! their defaults (and rt_use_hll is set later, in rt_init)
+#if defined(RT) && !defined(RTZ)
+        ! RT + CALIMA without RTZ. The radiative dust coupling is ported into
+        ! rt_cooling_module, but the dust<->gas THERMAL coupling is not: it
+        ! lives in rtz_coolrates_module's all_cooling, which does not exist in
+        ! this build. Warn rather than fail -- the configuration is useful and
+        ! deliberate -- but do not let the limitation pass silently.
+        if (myid == 1) then
+            write(*,*)'------------------------------------------------------------'
+            write(*,*)'WARNING: CALIMA is compiled without RTZ.'
+            write(*,*)'  ACTIVE : per-bin dust temperature, IR Rosseland/Planck'
+            write(*,*)'           opacities, dust radiation pressure, dust drift.'
+            write(*,*)'  MISSING: dust->gas thermal coupling. Dust recombination'
+            write(*,*)'           cooling, photoelectric heating and dust-gas'
+            write(*,*)'           collisional cooling set the grain temperature'
+            write(*,*)'           (its energy balance) but are NOT applied to the'
+            write(*,*)'           gas temperature.'
+            write(*,*)'  MISSING: metal abundances. The gas state handed to the'
+            write(*,*)'           grain physics carries H and He only, so T_dust is'
+            write(*,*)'           biased LOW (no heavy-species collisional heating)'
+            write(*,*)'           and grain charging sees no metal-donated'
+            write(*,*)'           electrons. See rt_calima_gas_state.'
+            write(*,*)'  With rt_kIR_RT15=.true. the one-temperature RT15 closure'
+            write(*,*)'  is used instead and the gas DOES receive IR heating.'
+            write(*,*)'------------------------------------------------------------'
+        end if
+#endif
     end function check_params_dust
 
     subroutine init_dust_depletion(myq,Hfrac,force_zero)
@@ -739,6 +818,7 @@ module dust_init
         ! This is called during init_time.f90
         use hydro_parameters
         use amr_commons, only:myid
+        use amr_parameters, only:condinit_kind
         use dust_photoelectric_heating, only: most_negative_allowed_charge
         use dust_optics, only:getRATCrosssection
         use rk4_mod, only: rk4_step
@@ -755,6 +835,39 @@ module dust_init
         real(dp) :: R
         integer :: iend_chemtype
         ! external :: run_dust_solver_test
+
+        ! Epstein drag coefficient. t_s = rho_s*a/(rho_g*v_th) with v_th the MEAN thermal
+        ! speed sqrt(8kT/(pi mu mH)); the solver's c_s is adiabatic, and
+        ! v_th = sqrt(8/(pi*gamma))*c_s, so the coefficient is sqrt(pi*gamma/8) = 0.809 for
+        ! gamma=5/3. Cf. patch/mrn-scratch/synchro_fine.f90, which carries the isothermal
+        ! form of the same constant, sqrt(pi/8) = 0.62665706865775.
+        epstein_coef = sqrt(pi * gamma / 8d0)
+
+        ! Resolve the TVA test IC once, here, instead of string-comparing condinit_kind
+        ! inside the per-cell/per-face/per-bin solver loops.
+        select case (trim(condinit_kind))
+        case ('dustydiffuse'); tva_test_mode = TVA_TEST_DIFFUSE
+        case ('dustyshock');   tva_test_mode = TVA_TEST_SHOCK
+        case ('dustyblast1d'); tva_test_mode = TVA_TEST_BLAST1D
+        case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
+        case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
+        case ('dustyirtrap');  tva_test_mode = TVA_TEST_IRTRAP
+        case ('dustytrapclump'); tva_test_mode = TVA_TEST_IRTRAP
+        case default;          tva_test_mode = TVA_TEST_NONE
+        end select
+        if (myid == 1 .and. tva_test_mode /= TVA_TEST_NONE) then
+            if (tva_test_mode == TVA_TEST_IRTRAP) then
+                ! This one keeps the real Epstein drag and real thermodynamics;
+                ! it only freezes the analytic trapped-IR profile from condinit
+                ! by skipping the re-partition in cooling_fine.
+                write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                           'branch: the trapped-IR energy is held at its analytic profile ', &
+                           '(no trapped/streaming re-partition). Drag and thermodynamics are physical.'
+            else
+                write(*,*) 'WARNING: condinit_kind="',trim(condinit_kind),'" selects a TVA TEST ', &
+                           'branch: the stopping time and/or thermodynamics are hardcoded, not physical.'
+            end if
+        end if
 
         ! 0. Build the bin-to-chemtype mapping from per-chemtype bin counts
         if (sum(dustbins_per_chemtype) /= ndust) then
@@ -959,6 +1072,16 @@ module dust_init
             end do
         end if
 
+        ! The TVA species, in uold order: the PAH bins, then the dust bins
+        do ii = 1, npah
+            tva_a_cm(ii) = pahbins_props(ii)%apah_cm
+            tva_s_cgs(ii) = pahbins_props(ii)%spah
+        end do
+        do ii = 1, ndust
+            tva_a_cm(npah+ii) = dustbins_props(ii)%asize_cm
+            tva_s_cgs(npah+ii) = dustbins_props(ii)%sgrain
+        end do
+
         ! Allocate the reusable dust chemistry workspace once per rank.
         call dust_helper%init(ndust, npah, nGroups, ncharge_pah_max, n_elements)
         do jj = 1, n_elements
@@ -1090,7 +1213,9 @@ module dust_init
                         & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/6d0) &
                         & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
                         & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
-                    dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
+                    ! times the mean speed of the sticking collisions, v_stick (dust_rates; it carries
+                    ! the sqrt(8/(3 pi)) of the Gaussian relative velocity)
+                    dustbins_props(ii)%k0_coa(1) = 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
                                                 & / dustbins_props(ii)%mgrain ! [cm3/s/g]
                 else if (trim(coagulation_model).eq.'Smoluchowski1916') then
                     ! 5.2 This is the correct treatment of individual grain coagulation
@@ -1129,7 +1254,7 @@ module dust_init
                             & (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**3d0) &
                             & * dustbins_props(ii)%surf_energy**(5d0/6d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
-                        dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
+                        dustbins_props(ii)%k0_coa(kk_loc) = pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
                                                     & / (dustbins_props(ii)%mgrain * dustbins_props(jbin)%mgrain / (dustbins_props(ii)%mgrain + dustbins_props(jbin)%mgrain)) ! [cm3/s/g]
                     end do
                 end if
@@ -1250,6 +1375,9 @@ module dust_init
                 ! PAH physics flags
                 pah_accretion,pah_acc_spu,pah_coalescence,pah_freezing,pah_desorption,pah_photolysis,pah_sn_destruction,pah_cluster_evaporation,&
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
+                ! Dust dynamics flags
+                dust_tva, dust_radpressure, dust_drift_collisions, use_w_drift_test, w_drift_test,drag_coefficient,&
+                tva_wmax_cs,drag_model,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,nZmix,ice_model,&
                 ! PAH modelling options

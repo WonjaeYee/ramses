@@ -51,6 +51,10 @@ module dustbin_types
         real(dp) :: local_vol = 0d0 ! Local cell volume (in cm^3)
         real(dp) :: local_G0 = 0d0 ! Local radiation field in units of Habing field
         real(dp) :: local_ne = 0d0 ! Local electron density (in cm-3)
+        ! TVA drift of every species (PAH bins, then dust bins) in this cell [cm/s], (ntva, ndim);
+        ! has_drift when it is set (dust_tva with dust_drift_collisions)
+        logical :: has_drift = .false.
+        real(dp), dimension(:,:), allocatable :: w_drift
         real(dp) :: local_nCO = 0d0 ! Local CO density (in cm-3)
         real(dp) :: smallNp = 0d0 ! Threshold for small photon number density below which we consider the radiation field to be negligible for processes like photoelectric heating and radiation pressure
         real(dp),dimension(1:n_elements)  :: el_atomic_mass_g ! Element atomic mass [g]
@@ -233,6 +237,11 @@ module dustbin_types
         type(DustTable),dimension(:),allocatable :: fcharge_tab ! Charging states distribution tables for PAHs
         type(DustTable) :: cs_abs_tab_n, cs_scat_tab_n, cs_ext_tab_n ! Absorption, scattering and extinction cross-section tables for neutral PAHs
         type(DustTable) :: cs_abs_tab_i, cs_scat_tab_i, cs_ext_tab_i ! Absorption, scattering and extinction cross-section tables for ionised PAHs
+        ! Rosseland (flux) and Planck (absorption) mean cross sections vs dust
+        ! temperature, per charge state. Used for the IR photon group, where the
+        ! band-weighted group_cs*_pah values are the wrong spectral weight.
+        type(DustTable) :: Rosseland_tab_n, Planck_tab_n ! Mean cross-section tables for neutral PAHs
+        type(DustTable) :: Rosseland_tab_i, Planck_tab_i ! Mean cross-section tables for ionised PAHs
         type(DustTable) :: dissociation_tab ! PAH dissociation tables
     end type PAHBin
 
@@ -418,6 +427,7 @@ contains
         this%local_vol = 0d0
         this%local_ne = 0d0
         this%local_nCO = 0d0
+        this%has_drift = .false.
         this%smallNp = 0d0
 
         if (allocated(this%rho_dust)) deallocate(this%rho_dust)
