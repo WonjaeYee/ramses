@@ -39,7 +39,11 @@ subroutine output_frame()
 
   character(len=5)::istep_str
   character(len=100)::moviedir,moviecmd,infofile,sinkfile,filename
-#if NENER>0
+#if NENER>0 || (defined(RT) && defined(CALIMA))
+  ! Loop index for the NENER radiative-energy block AND for the photon-group
+  ! loop in the CALIMA dust-temperature movie variable (~line 713), which is
+  ! guarded by RT+CALIMA rather than by NENER. Declaring it under #if NENER>0
+  ! alone breaks any RT+CALIMA build with NENER=0.
   integer::irad
 #endif
 #ifdef RT
@@ -107,9 +111,15 @@ subroutine output_frame()
   real(dp),dimension(1:n_elements, 1:n_elements):: xion
   real(dp), dimension(n_elements):: nElement
   real(dp):: electron_density, temperature, mu
-  real(dp):: m_bar, n_hat, vol
+  real(dp):: m_bar, n_hat
   integer:: counter, e_counter, iii, jjj
   integer:: line_id, atomic_num, ion_idx
+#endif
+#if defined(RTZ) || defined(CALIMA)
+  ! vol is used both by the RTZ line-emission block below and by the CALIMA
+  ! dust-mass movie variable (~line 830), which is NOT RTZ-guarded. Declaring it
+  ! inside #ifdef RTZ alone breaks any CALIMA build without RTZ.
+  real(dp):: vol
 #endif
 #ifdef CALIMA
   logical :: has_IR_movie_var

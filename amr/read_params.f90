@@ -153,7 +153,11 @@ subroutine read_params
   call read_hydro_params(nml_ok)
   if(myid==1) write(*,*) 'after read_hydro_params(nml_ok):', nml_ok
 #ifdef CALIMA
+#ifdef RT
   call read_CALIMA_params(nml_ok,nGroups)
+#else
+  call read_CALIMA_params(nml_ok,0)
+#endif
   if(myid==1) write(*,*) 'after read_CALIMA_params(nml_ok):', nml_ok
 #endif
 #ifdef RT
