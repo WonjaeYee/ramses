@@ -9,6 +9,20 @@ module hydro_commons
   real(dp)::mass_tot=0,mass_tot_0=0
   real(dp)::ana_xmi,ana_xma,ana_ymi,ana_yma,ana_zmi,ana_zma
   integer::nbins
+  ! Passive-scalar constraint tree (init_passive_groups, hydro/cooling_fine.f90):
+  ! the ps_ntop "top" slots sum to rho; parent ps_par(j) is the sum of the slots
+  ! ps_child(ps_cstart(j):ps_cstart(j+1)-1); ps_gas are the gas-phase slots (elements,
+  ! CO, ions, H2) that carry the counter-flux of the TVA drift.
+  logical::ps_active=.false.
+  integer::ps_ntop=0,ps_npar=0,ps_ngas=0
+  integer,allocatable,dimension(:)::ps_top,ps_par,ps_cstart,ps_child,ps_gas,ps_gastop
+  integer::ps_ngastop=0
+  ! CMA targets of the cells of the current sweep (ps_cma_cell_targets)
+  real(dp),allocatable,dimension(:,:,:,:)::ps_ttop
+  real(dp),allocatable,dimension(:,:,:,:,:)::ps_rch
+  ! consistency diagnostics accumulated in cooling_fine since the last report
+  integer(kind=8)::ps_nbad_top=0,ps_nbad_child=0,ps_ncheck=0,ps_nrenorm=0
+  real(dp)::ps_maxdev_top=0,ps_maxdev_child=0
   ! The uold slots of the gas-phase metals, set once in read_hydro_params: with RTZ the tracked elements beyond H and
   ! He, without RTZ the metallicity scalars. Used by the metallicity and DTM movie maps and CALIMA's box masses.
   integer::n_metal_idx=0

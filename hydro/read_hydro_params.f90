@@ -56,7 +56,7 @@ subroutine read_hydro_params(nml_ok)
        & ,switch_solv_B,switch_solv_dens,switch_solv_min_dens &
 #endif
        & ,pressure_fix,beta_fix,scheme,riemann &
-       & ,strict_equilibrium
+       & ,strict_equilibrium,passive_cma,passive_renorm,passive_tol
 
   ! Refinement parameters
   namelist/refine_params/x_refine,y_refine,z_refine,r_refine &
@@ -480,9 +480,8 @@ subroutine read_hydro_params(nml_ok)
   inener=nhydro+1
   imetal=inener+nener
   idelay=imetal
-#if NMETALS > 1
-  idelay=imetal+nmetals
 #ifdef RTZ
+  ! element slots (also with a single tracked element, NMETALS=1: hydrogen only)
   counter = 0
   do i=1,n_elements
      if (elements(i)%atomic_number.gt.0) then
@@ -494,10 +493,12 @@ subroutine read_hydro_params(nml_ok)
         counter = counter + 1
      end if
   end do
-#else
+#elif NMETALS > 1
   n_metal_idx = nmetals
   metal_idx(1:nmetals) = (/ (imetal + i, i = 0, nmetals - 1) /)
 #endif
+#if NMETALS > 1
+  idelay=imetal+nmetals
 #else
   if(metal)idelay=imetal+1
 #ifndef RTZ

@@ -371,10 +371,11 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                 * sum(uold(il,2:ndim+1)*flux) * dtnew(ilevel) !         Eq A6
 #else
 #ifdef RTZ
-           ! ixHII is not set in RTZ: hydrogen's ion block starts at iIons
-           ! (H I, then H II), each slot holding x_ion * rho
+           ! ixHII is not set in RTZ: hydrogen's ion block starts at iIons (H I, then H II),
+           ! and the HII slot holds x_HII*rho_H
            xHII = 0d0
-           if (elements(1)%atomic_number.gt.0) xHII = uold(il,iIons+1)/uold(il,1)
+           if (elements(1)%atomic_number.gt.0) &
+                xHII = uold(il,iIons+1)/max(uold(il,elements(1)%u_hydro_idx),smallr)
 #else
            xHII = uold(il,iIons-1+ixHII)/uold(il,1)
 #endif
@@ -506,6 +507,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      if(neq_chem) then
         ! Get the ionization fractions
 #ifdef RTZ
+        ! Consistency of the passive scalars after the hydro step (counted, reported at
+        ! each output; renormalised only with passive_renorm)
+        if(ps_ntop>0) call ps_check_cells(ind_leaf,nleaf)
         counter = 0
         e_counter = 0
         nElement = 0d0
@@ -514,7 +518,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
                  do i=1,nleaf !loop over leaf cells
-                    xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
+                    ! an ion slot holds x_ion*rho_element
+                    if (uold(ind_leaf(i),imetal+e_counter).gt.0d0) then
+                       xion(ii,jj,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),imetal+e_counter)
+                    else if (jj.eq.1) then
+                       xion(ii,jj,i) = 1d0
+                    else
+                       xion(ii,jj,i) = 0d0
+                    end if
                     if (jj.eq.1) then
                        ! This gives us a number density [Atoms/cm^3]
                        elements(ii)%scale_n = scale_d / elements(ii)%atomic_mass_g
@@ -531,7 +542,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         ! deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            do i=1,nleaf !loop over leaf cells
-              xion(1,3,i) = uold(ind_leaf(i),iIons+counter)/uold(ind_leaf(i),1)
+              ! the H2 slot holds the density of the hydrogen in H2
+              xion(1,3,i) = uold(ind_leaf(i),iIons+counter)/max(uold(ind_leaf(i),elements(1)%u_hydro_idx),smallr)
            end do ! end loop over leaf cells
            counter = counter + 1
         endif
@@ -661,11 +673,12 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      ! Check that the total density is consistent with the sum of the species densities (elements,
      ! CO, dust, PAHs). Reported once per rank: it never fired before (the divisor was in code
      ! units), and setups whose mass fractions do not sum to one would otherwise stop at once.
+     ! The tolerance is passive_tol, as in ps_check_cells: with CMA the sum holds to roundoff.
      do i=1,nleaf
-        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / (uold(ind_leaf(i),1)*scale_d) .gt. 1d-3 &
+        if (abs(rho_total_check(i) - uold(ind_leaf(i),1)*scale_d) / (uold(ind_leaf(i),1)*scale_d) .gt. passive_tol &
             .and. .not. density_check_warned) then
            density_check_warned = .true.
-           write(*,*) 'WARNING: total density check failed in cell ', ind_leaf(i), ' on rank ', myid
+           write(*,*) 'WARNING: total density check (passive_tol) failed in cell ', ind_leaf(i), ' on rank ', myid
            write(*,*) '   total density: ', uold(ind_leaf(i),1)*scale_d, ', sum of species: ', rho_total_check(i), &
                       ' (reported once per rank)'
         end if
@@ -927,7 +940,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      if(.not. static) then
         ! Update gas momentum and kinetic energy:
         do i=1,nleaf
-           uold(ind_leaf(i),2:neul-1) = p_gas(:,i) /scale_d /scale_v
+           uold(ind_leaf(i),2:ndim+1) = p_gas(:,i) /scale_d /scale_v   ! the ndim momenta (MHD always has 3)
         end do
         ! Energy update ==================================================
         ! Calculate NEW pressure from updated momentum
@@ -1037,7 +1050,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            if (elements(ii)%atomic_number.gt.0) then
               do jj=1,elements(ii)%n_ions ! loop over ions
                  do i=1,nleaf !loop over leaf cells
-                    uold(ind_leaf(i),iIons+counter) = xion(ii,jj,i)*nH(i)
+                    ! x_ion times the element density written back below (after CO
+                    ! formation and the CALIMA depletion/return), so that the ion
+                    ! stages of every element still sum to it
+                    uold(ind_leaf(i),iIons+counter) = xion(ii,jj,i)*nElement(ii,i)/elements(ii)%scale_n
                  end do ! end loop over leaf cells
                  counter = counter + 1
               end do ! end loop over ions
@@ -1047,7 +1063,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         ! deal with molecules separately
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
            do i=1,nleaf !loop over leaf cells
-              uold(ind_leaf(i),iIons+counter) = xion(1,3,i)*nH(i)
+              uold(ind_leaf(i),iIons+counter) = xion(1,3,i)*nElement(1,i)/elements(1)%scale_n
            end do ! end loop over leaf cells
            counter = counter + 1
         endif
@@ -1276,4 +1292,480 @@ subroutine cmp_Eddington_tensor(Npc,Fp,T_Edd)
   enddo
 
 end subroutine cmp_Eddington_tensor
+#endif
+#ifdef RTZ
+!###########################################################
+!###########################################################
+!###########################################################
+!###########################################################
+! Passive-scalar consistency (RTZ, optionally CALIMA).
+!
+! Storage convention: every passive scalar holds a MASS density.  Elements hold the
+! gas-phase element density, CO, the dust and the PAH bins their own; the slot of an
+! ion stage holds the density of that element in that stage (x_ion * rho_element) and
+! H2 the density of the hydrogen in H2.  Hence the constraint tree
+!     sum(elements) + CO + sum(dust) + sum(PAH) = rho                     ("top")
+!     sum(ion stages of element e) (+ H2 for hydrogen)  = rho_e         ("children")
+! Both sums are linear in the conserved variables, so a flux-form update preserves them
+! exactly if, at every face, the species mass fluxes add up to the mass flux of their
+! parent.  The Riemann solvers give flux_k = F_mass * X_k,face (or a linear combination
+! of the left and right states with species-independent weights), so the condition is
+! sum_top X_k,face = 1 and sum_children X_c,face = X_e,face on BOTH face states.  The
+! slopes are limited independently per scalar, which breaks both sums wherever three or
+! more compositions meet in a stencil; passive_cma restores them by renormalising the
+! face states (Consistent Multi-fluid Advection, Plewa & Mueller 1999, A&A 342, 179),
+! top level first, then each element's ions to the element's renormalised face value.
+! The targets are the sums of the cell the face state belongs to (ps_cma_cell_targets), which
+! are one in a consistent cell; a cell that is not keeps its own sums.
+!
+! These routines live here, in a file that both the hydro and the MHD solver compile
+! (godunov_utils.f90 has a solver-specific copy), so that no Makefile needs a new object.
+!###########################################################
+subroutine init_passive_groups
+  use amr_commons
+  use hydro_commons
+  use rt_parameters, only: iIons
+  use rtz_module, only: elements
+  implicit none
+  integer::ii,jj,k,n,counter,iH2,ipar
+  integer,dimension(1:nvar)::is_top,parent
+
+  is_top=0; parent=0
+  ! top level: elements, CO, PAH and dust bins
+  do ii=1,n_elements
+     if(elements(ii)%atomic_number>0) is_top(elements(ii)%u_hydro_idx)=1
+  end do
+#ifdef CO
+  is_top(iCO)=2
+#endif
+#ifdef CALIMA
+  do k=ipah,ipah+npah+ndust-1
+     is_top(k)=3
+  end do
+#endif
+  ! children: the ion blocks, then the H2 slot(s) of hydrogen
+  counter=0
+  do ii=1,n_elements
+     if(elements(ii)%atomic_number>0)then
+        do jj=1,elements(ii)%n_ions
+           parent(iIons+counter)=elements(ii)%u_hydro_idx
+           counter=counter+1
+        end do
+     end if
+  end do
+  iH2=iIons+counter
+  if(elements(1)%atomic_number>0)then
+     do jj=1,elements(1)%n_mol
+        parent(iH2+jj-1)=elements(1)%u_hydro_idx
+     end do
+  end if
+
+  ps_ntop=count(is_top>0)
+  allocate(ps_top(1:ps_ntop))
+  n=0
+  do k=1,nvar
+     if(is_top(k)>0)then; n=n+1; ps_top(n)=k; end if
+  end do
+  ps_ngastop=count(is_top==1.or.is_top==2)
+  allocate(ps_gastop(1:ps_ngastop))
+  n=0
+  do k=1,nvar
+     if(is_top(k)==1.or.is_top(k)==2)then; n=n+1; ps_gastop(n)=k; end if
+  end do
+  ps_npar=0
+  do k=1,nvar
+     if(any(parent==k))ps_npar=ps_npar+1
+  end do
+  allocate(ps_par(1:ps_npar),ps_cstart(1:ps_npar+1),ps_child(1:count(parent>0)))
+  ipar=0; n=0
+  do k=1,nvar
+     if(any(parent==k))then
+        ipar=ipar+1; ps_par(ipar)=k; ps_cstart(ipar)=n+1
+        do jj=1,nvar
+           if(parent(jj)==k)then; n=n+1; ps_child(n)=jj; end if
+        end do
+     end if
+  end do
+  ps_cstart(ps_npar+1)=n+1
+  ! gas slots carrying the TVA counter-flux: gas-phase top slots and all children
+  ps_ngas=ps_ngastop+n
+  allocate(ps_gas(1:ps_ngas))
+  ps_gas(1:ps_ngastop)=ps_gastop
+  ps_gas(ps_ngastop+1:ps_ngas)=ps_child(1:n)
+  ps_active=passive_cma
+  allocate(ps_ttop(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2))
+  allocate(ps_rch(1:max(ps_npar,1),1:nvector,iu1:iu2,ju1:ju2,ku1:ku2))
+  ps_ttop=1d0; ps_rch=1d0
+
+  ! A restart file holds the ionisation fractions (see output_hydro), which init_hydro
+  ! multiplied by rho like every passive scalar: turn them into ion mass densities
+  if(nrestart>0)call ps_frac_to_mass_uold
+
+  if(myid==1)then
+     write(*,'(A)')' Passive scalars: ion slot = x_ion * rho_element (mass density of the stage)'
+     write(*,'(A,L2,A,L2,A,ES9.2)')' Passive scalars: passive_cma =',passive_cma, &
+          & ', passive_renorm =',passive_renorm,', passive_tol =',passive_tol
+     write(*,'(A,I4,A,I4,A,I4,A)')' Passive scalars:',ps_ntop,' top slots,',ps_npar, &
+          & ' parents with',n,' children'
+  end if
+end subroutine init_passive_groups
+!###########################################################
+subroutine ps_frac_to_mass(u,nn)
+  ! u(:,child) holds x_child*rho on input (condinit, boundana, restart: the ion
+  ! fraction times rho, as for any passive scalar); returns x_child*rho_parent.
+  use amr_parameters
+  use hydro_commons
+  implicit none
+  integer::nn
+  real(dp),dimension(1:nvector,1:nvar)::u
+  integer::i,j,k
+  if(ps_npar==0)return
+  do j=1,ps_npar
+     do k=ps_cstart(j),ps_cstart(j+1)-1
+        do i=1,nn
+           u(i,ps_child(k))=u(i,ps_child(k))*u(i,ps_par(j))/max(u(i,1),smallr)
+        end do
+     end do
+  end do
+end subroutine ps_frac_to_mass
+!###########################################################
+subroutine ps_frac_to_mass_uold
+  use amr_commons
+  use hydro_commons
+#ifndef WITHOUTMPI
+  use mpi_mod
+#endif
+  implicit none
+  integer::ilevel,igrid,ind,iskip,i,j,k,icell
+  integer::info
+  real(dp)::s,dev_loc,dev
+  do ilevel=1,nlevelmax
+     do igrid=1,active(ilevel)%ngrid
+        do ind=1,twotondim
+           iskip=ncoarse+(ind-1)*ngridmax
+           icell=active(ilevel)%igrid(igrid)+iskip
+           do j=1,ps_npar
+              do k=ps_cstart(j),ps_cstart(j+1)-1
+                 uold(icell,ps_child(k))=uold(icell,ps_child(k))*uold(icell,ps_par(j)) &
+                      & /max(uold(icell,1),smallr)
+              end do
+           end do
+        end do
+     end do
+     ! Ghost cells still hold x_ion*rho
+     do k=1,ps_cstart(ps_npar+1)-1
+        call make_virtual_fine_dp(uold(1,ps_child(k)),ilevel)
+     end do
+     if(simple_boundary)call make_boundary_hydro(ilevel)
+  end do
+  ! The restart's ion stages should sum to their element: warn if a file does not
+  dev_loc=0d0
+  do ilevel=1,nlevelmax
+     do igrid=1,active(ilevel)%ngrid
+        do ind=1,twotondim
+           icell=active(ilevel)%igrid(igrid)+ncoarse+(ind-1)*ngridmax
+           do j=1,ps_npar
+              if(uold(icell,ps_par(j))<=0d0)cycle
+              s=0d0
+              do k=ps_cstart(j),ps_cstart(j+1)-1
+                 s=s+uold(icell,ps_child(k))
+              end do
+              dev_loc=max(dev_loc,abs(s/uold(icell,ps_par(j))-1d0))
+           end do
+        end do
+     end do
+  end do
+#ifndef WITHOUTMPI
+  call MPI_ALLREDUCE(dev_loc,dev,1,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,info)
+#else
+  dev=dev_loc
+#endif
+  if(myid==1.and.dev>passive_tol)write(*,'(A,ES10.3,A,ES10.3,A)') &
+       & ' Warning: restart ion stages differ from their element by up to',dev, &
+       & ' (passive_tol',passive_tol,')'
+end subroutine ps_frac_to_mass_uold
+!###########################################################
+subroutine ps_cma_cell_targets(q,ngrid)
+  ! The CMA targets of the cells whose face states the Riemann solvers use (called once per
+  ! sweep, before cmpflxm; q: cell-centred primitive, passive = mass fraction of rho):
+  ! ps_ttop, the cell's top sum, and ps_rch, the ion/element ratio of every parent.  In a
+  ! consistent cell they are one; a cell that is not (a setup whose fractions do not sum
+  ! to one, or a cell an inconsistent process has left off) keeps its own sums, instead of
+  ! having its species fluxes scaled up to them.  cmpflxm uses the faces of the grid's own
+  ! cells only, so the cells needed are those with at most one index outside 1..2.
+  use amr_parameters
+  use hydro_commons
+  implicit none
+  integer::ngrid
+  real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar)::q
+  integer::i,j,k,l,m,n,ilo,ihi,jlo,jhi,klo,khi,nout
+  real(dp)::s,sc
+  ilo=MIN(1,iu1+1); ihi=MAX(1,iu2-1)
+  jlo=MIN(1,ju1+1); jhi=MAX(1,ju2-1)
+  klo=MIN(1,ku1+1); khi=MAX(1,ku2-1)
+  do k=klo,khi
+     do j=jlo,jhi
+        do i=ilo,ihi
+           nout=0
+           if(i<1.or.i>2)nout=nout+1
+           if(ndim>1.and.(j<1.or.j>2))nout=nout+1
+           if(ndim>2.and.(k<1.or.k>2))nout=nout+1
+           if(nout>1)cycle
+           do l=1,ngrid
+              s=0d0
+              do n=1,ps_ntop
+                 s=s+max(q(l,i,j,k,ps_top(n)),0d0)
+              end do
+              ps_ttop(l,i,j,k)=s
+              do n=1,ps_npar
+                 sc=0d0
+                 do m=ps_cstart(n),ps_cstart(n+1)-1
+                    sc=sc+max(q(l,i,j,k,ps_child(m)),0d0)
+                 end do
+                 if(q(l,i,j,k,ps_par(n))>0d0.and.sc>0d0)then
+                    ps_rch(n,l,i,j,k)=sc/q(l,i,j,k,ps_par(n))
+                 else
+                    ps_rch(n,l,i,j,k)=1d0
+                 end if
+              end do
+           end do
+        end do
+     end do
+  end do
+end subroutine ps_cma_cell_targets
+!###########################################################
+subroutine ps_cma_target(q,ld,ngrid,ttop,rch)
+  ! Nested CMA on face states q(1:ngrid,1:nvar) (leading dimension ld: nvector for the
+  ! hydro solver's vectors, 1 for one MHD face): top fractions sum to ttop, the ions of
+  ! parent j to rch(j,:) times the parent's (scaled) face fraction.
+  use amr_parameters
+  use hydro_commons
+  implicit none
+  integer::ld,ngrid
+  real(dp),dimension(1:ld,1:nvar)::q
+  real(dp),dimension(1:ld)::ttop
+  real(dp),dimension(1:max(ps_npar,1),1:ld)::rch
+  integer::i,j,k,n
+  real(dp),dimension(1:nvector)::s
+  ! top level
+  s(1:ngrid)=0d0
+  do k=1,ps_ntop
+     n=ps_top(k)
+     do i=1,ngrid
+        q(i,n)=max(q(i,n),0d0)
+        s(i)=s(i)+q(i,n)
+     end do
+  end do
+  do i=1,ngrid
+     if(s(i)>0d0)then; s(i)=ttop(i)/s(i); else; s(i)=0d0; end if
+  end do
+  do k=1,ps_ntop
+     n=ps_top(k)
+     do i=1,ngrid
+        q(i,n)=q(i,n)*s(i)
+     end do
+  end do
+  ! children: sum to rch times the (scaled) parent fraction
+  do j=1,ps_npar
+     s(1:ngrid)=0d0
+     do k=ps_cstart(j),ps_cstart(j+1)-1
+        n=ps_child(k)
+        do i=1,ngrid
+           q(i,n)=max(q(i,n),0d0)
+           s(i)=s(i)+q(i,n)
+        end do
+     end do
+     do i=1,ngrid
+        if(s(i)>0d0)then
+           s(i)=rch(j,i)*q(i,ps_par(j))/s(i)
+        else
+           ! no ion left in the face state: put the element in its first stage
+           q(i,ps_child(ps_cstart(j)))=rch(j,i)*q(i,ps_par(j))
+           s(i)=1d0
+        end if
+     end do
+     do k=ps_cstart(j),ps_cstart(j+1)-1
+        n=ps_child(k)
+        do i=1,ngrid
+           q(i,n)=q(i,n)*s(i)
+        end do
+     end do
+  end do
+end subroutine ps_cma_target
+!###########################################################
+subroutine ps_prolong(u1,u2,nn)
+  ! Make the children of an AMR prolongation consistent without breaking the
+  ! conservation of each species: interpol_hydro limits every variable on its own, so
+  ! the children of each species average to the father but their sum differs from the
+  ! interpolated rho by e_c.  e_c minus its mean over the children (the mean is the
+  ! father's own defect, round-off for a consistent father) is shared between the species
+  ! in proportion to the father's composition: each species keeps its children average
+  ! exactly and the children sums equal rho_child up to the father's defect.  If that
+  ! would make a child value negative, the father's composition is injected instead
+  ! (child = father * rho_child/rho_father: conservative, consistent, positive).
+  ! The same is then done for the ions of each element, with the corrected element
+  ! values of the children as the target.
+  use amr_parameters
+  use hydro_commons
+  implicit none
+  integer::nn
+  real(dp),dimension(1:nvector,0:twondim  ,1:nvar)::u1
+  real(dp),dimension(1:nvector,1:twotondim,1:nvar)::u2
+  integer::i,j,k,n,ind
+  real(dp)::sfat,ebar,w
+  real(dp),dimension(1:twotondim)::e
+  logical::neg
+  do i=1,nn
+     ! top level
+     sfat=0d0
+     do k=1,ps_ntop
+        sfat=sfat+max(u1(i,0,ps_top(k)),0d0)
+     end do
+     if(sfat<=0d0.or.u1(i,0,1)<=0d0)cycle
+     do ind=1,twotondim
+        e(ind)=u2(i,ind,1)
+        do k=1,ps_ntop
+           e(ind)=e(ind)-u2(i,ind,ps_top(k))
+        end do
+     end do
+     ebar=sum(e)/dble(twotondim)
+     neg=.false.
+     do ind=1,twotondim
+        do k=1,ps_ntop
+           n=ps_top(k)
+           w=max(u1(i,0,n),0d0)/sfat
+           u2(i,ind,n)=u2(i,ind,n)+w*(e(ind)-ebar)
+           if(u2(i,ind,n)<0d0)neg=.true.
+        end do
+     end do
+     if(neg)then
+        do ind=1,twotondim
+           do k=1,ps_ntop
+              n=ps_top(k)
+              u2(i,ind,n)=max(u1(i,0,n),0d0)*u2(i,ind,1)/u1(i,0,1)
+           end do
+        end do
+     end if
+     ! children of each parent
+     do j=1,ps_npar
+        sfat=0d0
+        do k=ps_cstart(j),ps_cstart(j+1)-1
+           sfat=sfat+max(u1(i,0,ps_child(k)),0d0)
+        end do
+        if(sfat<=0d0.or.u1(i,0,ps_par(j))<=0d0)then
+           ! no ion (or no element) in the father: the element's children go to stage 1
+           do ind=1,twotondim
+              do k=ps_cstart(j),ps_cstart(j+1)-1
+                 u2(i,ind,ps_child(k))=0d0
+              end do
+              u2(i,ind,ps_child(ps_cstart(j)))=u2(i,ind,ps_par(j))
+           end do
+           cycle
+        end if
+        do ind=1,twotondim
+           e(ind)=u2(i,ind,ps_par(j))
+           do k=ps_cstart(j),ps_cstart(j+1)-1
+              e(ind)=e(ind)-u2(i,ind,ps_child(k))
+           end do
+        end do
+        ebar=sum(e)/dble(twotondim)
+        neg=.false.
+        do ind=1,twotondim
+           do k=ps_cstart(j),ps_cstart(j+1)-1
+              n=ps_child(k)
+              w=max(u1(i,0,n),0d0)/sfat
+              u2(i,ind,n)=u2(i,ind,n)+w*(e(ind)-ebar)
+              if(u2(i,ind,n)<0d0)neg=.true.
+           end do
+        end do
+        if(neg)then
+           do ind=1,twotondim
+              do k=ps_cstart(j),ps_cstart(j+1)-1
+                 n=ps_child(k)
+                 u2(i,ind,n)=max(u1(i,0,n),0d0)*u2(i,ind,ps_par(j))/u1(i,0,ps_par(j))
+              end do
+           end do
+        end if
+     end do
+  end do
+end subroutine ps_prolong
+!###########################################################
+subroutine ps_check_cells(ind_leaf,nleaf)
+  ! Consistency check of leaf cells (called from cooling_fine before the chemistry):
+  ! count cells beyond passive_tol and, with passive_renorm, renormalise them.
+  use amr_commons
+  use hydro_commons
+  implicit none
+  integer::nleaf
+  integer,dimension(1:nvector)::ind_leaf
+  integer::i,j,k,ic
+  real(dp)::s,dev,f
+  do i=1,nleaf
+     ic=ind_leaf(i)
+     ps_ncheck=ps_ncheck+1
+     s=0d0
+     do k=1,ps_ntop
+        s=s+uold(ic,ps_top(k))
+     end do
+     dev=abs(s/max(uold(ic,1),smallr)-1d0)
+     ps_maxdev_top=max(ps_maxdev_top,dev)
+     if(dev>passive_tol)then
+        ps_nbad_top=ps_nbad_top+1
+        if(passive_renorm.and.s>0d0)then
+           f=uold(ic,1)/s
+           do k=1,ps_ntop
+              uold(ic,ps_top(k))=uold(ic,ps_top(k))*f
+           end do
+           ps_nrenorm=ps_nrenorm+1
+        end if
+     end if
+     do j=1,ps_npar
+        if(uold(ic,ps_par(j))<=0d0)cycle
+        s=0d0
+        do k=ps_cstart(j),ps_cstart(j+1)-1
+           s=s+uold(ic,ps_child(k))
+        end do
+        dev=abs(s/uold(ic,ps_par(j))-1d0)
+        ps_maxdev_child=max(ps_maxdev_child,dev)
+        if(dev>passive_tol)then
+           ps_nbad_child=ps_nbad_child+1
+           if(passive_renorm.and.s>0d0)then
+              f=uold(ic,ps_par(j))/s
+              do k=ps_cstart(j),ps_cstart(j+1)-1
+                 uold(ic,ps_child(k))=uold(ic,ps_child(k))*f
+              end do
+              ps_nrenorm=ps_nrenorm+1
+           end if
+        end if
+     end do
+  end do
+end subroutine ps_check_cells
+!###########################################################
+subroutine ps_report
+  ! Global consistency report (called at each output)
+  use amr_commons
+  use hydro_commons
+#ifndef WITHOUTMPI
+  use mpi_mod
+#endif
+  implicit none
+  integer(kind=8),dimension(4)::nloc,nglob
+  real(dp),dimension(2)::dloc,dglob
+  integer::info
+  nloc=(/ps_ncheck,ps_nbad_top,ps_nbad_child,ps_nrenorm/)
+  dloc=(/ps_maxdev_top,ps_maxdev_child/)
+#ifndef WITHOUTMPI
+  call MPI_ALLREDUCE(nloc,nglob,4,MPI_INTEGER8,MPI_SUM,MPI_COMM_WORLD,info)
+  call MPI_ALLREDUCE(dloc,dglob,2,MPI_DOUBLE_PRECISION,MPI_MAX,MPI_COMM_WORLD,info)
+#else
+  nglob=nloc; dglob=dloc
+#endif
+  if(myid==1.and.nglob(1)>0)then
+     write(*,'(A,I12,A,I10,A,ES9.2,A,I10,A,ES9.2,A,I10)')' passive-scalar check: cells', &
+          & nglob(1),' top>tol',nglob(2),' maxdev',dglob(1),' ions>tol',nglob(3), &
+          & ' maxdev',dglob(2),' renorm',nglob(4)
+  end if
+  ps_ncheck=0; ps_nbad_top=0; ps_nbad_child=0; ps_nrenorm=0
+  ps_maxdev_top=0; ps_maxdev_child=0
+end subroutine ps_report
 #endif

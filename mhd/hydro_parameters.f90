@@ -153,6 +153,11 @@ module hydro_parameters
   character(LEN=10)::scheme='muscl'
   character(LEN=10)::riemann='llf'
   character(LEN=10)::riemann2d='llf'
+
+  ! Passive-scalar consistency (RTZ): see hydro/hydro_parameters.f90
+  logical ::passive_cma=.true.
+  logical ::passive_renorm=.false.
+  real(dp)::passive_tol=1d-10
   logical ::allow_switch_solver=.false.   ! enable on the fly switching 1D riemann solver hll or hlld to llf to prevent numerical crash
   logical ::allow_switch_solver2D=.false. ! switching for 2D riemann solver hlld to llf (checks only minimum density, needed in cosmology)
   real(dp)::switch_solv_B=1d20            ! value of B_tot**2/P above which to switch solver

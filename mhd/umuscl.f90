@@ -32,6 +32,9 @@ subroutine mag_unsplit(uin,gravin,flux,emfx,emfy,emfz,tmp,dx,dy,dz,dt,ngrid)
   use amr_parameters
   use const
   use hydro_parameters
+#ifdef RTZ
+  use hydro_commons, only: ps_active
+#endif
   implicit none
 
   integer ::ngrid
@@ -98,6 +101,11 @@ subroutine mag_unsplit(uin,gravin,flux,emfx,emfy,emfz,tmp,dx,dy,dz,dt,ngrid)
 #endif
 #if NDIM==3
      call trace3d(qin,bf,dq,dbf,qm,qp,qRT,qRB,qLT,qLB,dx,dy,dz,dt,ngrid)
+#endif
+
+#ifdef RTZ
+  ! Consistent multi-fluid advection: the targets of the cells (CMA in cmpflxm)
+  if(ps_active)call ps_cma_cell_targets(qin,ngrid)
 #endif
 
   ! Solve for 1D flux in X direction
@@ -1312,6 +1320,9 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
   use amr_parameters
   use hydro_parameters
   use const
+#ifdef RTZ
+  use hydro_commons, only: ps_active,ps_ttop,ps_rch
+#endif
   implicit none
 
   integer ::ngrid
@@ -1325,7 +1336,7 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
   real(dp),dimension(1:nvector,ip1:ip2,jp1:jp2,kp1:kp2,1:2)::tmp
 
   ! local variables
-  integer ::i, j, k, l, xdim
+  integer ::i, j, k, l, xdim, i0, j0, k0
   real(dp),dimension(1:nvar)::qleft,qright
   real(dp),dimension(1:nvar+1)::fgdnv
   real(dp)::zero_flux, bn_mean, entho
@@ -1336,6 +1347,10 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
 #endif
 
   xdim=ln-1
+  i0=0; j0=0; k0=0                ! the cell of qleft is (i,j,k) minus this
+  if(xdim==1)i0=1
+  if(xdim==2)j0=1
+  if(xdim==3)k0=1
   entho=one/(gamma-one)
 
   do k = klo, khi
@@ -1372,6 +1387,14 @@ subroutine cmpflxm(qm,im1,im2,jm1,jm2,km1,km2, &
                  qleft (n) = qm(l,i,j,k,n,xdim)
                  qright(n) = qp(l,i,j,k,n,xdim)
               end do
+#ifdef RTZ
+              ! Consistent multi-fluid advection (see hydro/umuscl.f90): qleft is the face
+              ! of cell (i,j,k) - e_xdim, qright of cell (i,j,k)
+              if(ps_active)then
+                 call ps_cma_target(qleft ,1,1,ps_ttop(l,i-i0,j-j0,k-k0),ps_rch(1,l,i-i0,j-j0,k-k0))
+                 call ps_cma_target(qright,1,1,ps_ttop(l,i,j,k),ps_rch(1,l,i,j,k))
+              end if
+#endif
 #endif
               ! Solve 1D Riemann problem
               zero_flux = one

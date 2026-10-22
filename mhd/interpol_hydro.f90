@@ -710,6 +710,12 @@ subroutine interpol_hydro(u1,ind1,u2,nn)
   end do
   ! End loop over cell-centered variables
 
+#ifdef RTZ
+  ! Species sums of the children equal to their parent's (rho, element), each
+  ! species still conserved: see ps_prolong (hydro/cooling_fine.f90)
+  if(ps_active)call ps_prolong(u1,u2,nn)
+#endif
+
   ! Update cell centered magnetic field also in redundant array
 #if NDIM<2
   do ind=1,twotondim
