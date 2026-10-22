@@ -95,6 +95,9 @@ module dust_commons
                                                  !   Draine & Salpeter (1979): collisional + Coulomb
                                                  !   drag with the grain charge from charging_model.
                                                  !   Nonlinear in the drift; needs dust_radpressure.
+                                                 ! 'draine2011_pz' -- the same, with the Coulomb term
+                                                 !   averaged over the charge distribution P(Z) of
+                                                 !   charging_model instead of taken at |<Z>|.
     real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.
                                                  ! TVA assumes Stokes << 1, which fails once the drift
                                                  ! approaches c_s (typically in hot/diffuse cells, where
@@ -283,6 +286,8 @@ module dust_commons
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
     logical::carry_gas_ions=.false.       ! Whether to carry the individual ion densities for gas species
+    logical::draine_on=.false.            ! drag_model is a Draine (2011) law (set by check_params_dust)
+    logical::draine_pz=.false.            ! ... and its Coulomb term is averaged over P(Z) ('draine2011_pz')
 
 
     ! ==== Some internal constants ====
