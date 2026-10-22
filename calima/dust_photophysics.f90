@@ -28,6 +28,8 @@ module dust_optics
         character(len=512) :: line
         real(dp) :: wav_ref
         real(dp) :: wav_read,cabs_read,csca_read,crp_read
+        real(dp) :: cs_to_grain   ! factor from the table's cross-sections to cm^2 per grain
+        logical  :: per_gram
         real(dp) :: wav_neu,cabs_neu,csca_neu,crp_neu
         real(dp) :: wav_ion,cabs_ion,csca_ion,crp_ion
 
@@ -88,6 +90,14 @@ module dust_optics
                 call clean_stop
             end if
 
+            ! Units of the cross-sections, from the header: cm^2 per gram of dust (the pyCALIMA
+            ! convention, "C_abs[cm^2/g_dust]"); older tables give cm^2 per grain ("C_abs[cm^2]").
+            ! Internally CALIMA keeps cm^2 per grain (rates use rho_dust/mgrain), so per-gram tables
+            ! are multiplied by the grain mass of the bin.
+            call dust_table_units_per_gram(20, fDust(i), per_gram)
+            cs_to_grain = 1d0
+            if (per_gram) cs_to_grain = dustbins_props(i)%mgrain
+
             call read_next_data_line(20,line,ios)
             if (ios /= 0) then
                 if (myid.eq.1) write(*,*) 'ERROR reading NWAV in file ', trim(fDust(i))
@@ -135,9 +145,9 @@ module dust_optics
                 call clean_stop
             end if
 
-            dustbins_props(i)%Pabs_isrf = dustbins_props(i)%Pabs_isrf * c_cgs * u_Mathis1983
-            dustbins_props(i)%Psc_isrf  = dustbins_props(i)%Psc_isrf  * c_cgs * u_Mathis1983
-            dustbins_props(i)%Prp_isrf  = dustbins_props(i)%Prp_isrf  * c_cgs * u_Mathis1983
+            dustbins_props(i)%Pabs_isrf = dustbins_props(i)%Pabs_isrf * cs_to_grain * c_cgs * u_Mathis1983
+            dustbins_props(i)%Psc_isrf  = dustbins_props(i)%Psc_isrf  * cs_to_grain * c_cgs * u_Mathis1983
+            dustbins_props(i)%Prp_isrf  = dustbins_props(i)%Prp_isrf  * cs_to_grain * c_cgs * u_Mathis1983
 
             do k = 1, nwav
                 call read_next_data_line(20,line,ios)
@@ -154,9 +164,9 @@ module dust_optics
                 dustbins_props(i)%cs_scat_tab%tab1d(k,1) = log10(wav_read)
                 dustbins_props(i)%cs_ext_tab%tab1d(k,1) = log10(wav_read)
 
-                dustbins_props(i)%cs_abs_tab%tab1d(k,2) = log10(cabs_read)
-                dustbins_props(i)%cs_scat_tab%tab1d(k,2) = log10(csca_read)
-                dustbins_props(i)%cs_ext_tab%tab1d(k,2) = log10(crp_read)
+                dustbins_props(i)%cs_abs_tab%tab1d(k,2) = log10(cabs_read * cs_to_grain)
+                dustbins_props(i)%cs_scat_tab%tab1d(k,2) = log10(csca_read * cs_to_grain)
+                dustbins_props(i)%cs_ext_tab%tab1d(k,2) = log10(crp_read * cs_to_grain)
             end do
             close(20)
             call dustbins_props(i)%cs_abs_tab%init()
@@ -353,6 +363,45 @@ module dust_optics
         end if
 
     end subroutine init_dust_efficiency_tables
+
+    subroutine dust_table_units_per_gram(iunit, fname, per_gram)
+        ! Units of a grain cross-section table, from its "# Columns:" header line: .true. for cm^2
+        ! per gram of dust ("[cm^2/g_dust]"), .false. for cm^2 per grain ("[cm^2]", older tables).
+        ! Anything else stops the run. Leaves the file rewound.
+        use amr_commons, only: myid
+        implicit none
+        integer, intent(in) :: iunit
+        character(len=*), intent(in) :: fname
+        logical, intent(out) :: per_gram
+        character(len=512) :: hline
+        integer :: ios
+        logical :: found
+        found = .false.; per_gram = .false.
+        do
+            read(iunit,'(A)',iostat=ios) hline
+            if (ios /= 0) exit
+            hline = adjustl(hline)
+            if (len_trim(hline) > 0 .and. hline(1:1) /= '#') exit
+            if (index(hline, 'Columns:') > 0 .and. index(hline, 'C_abs') > 0) then
+                found = .true.
+                if (index(hline, 'cm^2/g_dust') > 0) then
+                    per_gram = .true.
+                else if (index(hline, 'C_abs[cm^2]') > 0) then
+                    per_gram = .false.
+                    if (myid == 1) write(*,*) 'CALIMA: ', trim(fname), &
+                         ': cross-sections per grain (an older table); per gram of dust is the convention'
+                else
+                    found = .false.
+                end if
+                exit
+            end if
+        end do
+        rewind(iunit)
+        if (.not. found) then
+            if (myid == 1) write(*,*) 'CALIMA: no cross-section units ("# Columns: ... C_abs[cm^2/g_dust] ...") in ', trim(fname)
+            call clean_stop
+        end if
+    end subroutine dust_table_units_per_gram
 
     subroutine init_dust_dielectric_tables
         use amr_commons,only:myid
@@ -1881,7 +1930,9 @@ module dust_radiation
             call dust_emission_power(j,c,P_rad)
             fc = P_abs + H0 + dH_dT*(c-T0) + recomb_heat - P_rad - pe_heat
 
-            if (abs(fc) < 1d-6) then
+            ! converged in T (the Newton test, 1e-3), or on the root; an absolute |fc| < 1e-6 erg/s
+            ! accepted any midpoint, as a grain radiates 1e-15-1e-10 erg/s
+            if (fc == 0d0 .or. (b - a) < 1d-3*c) then
                 T = c
                 return
             end if
@@ -2471,7 +2522,7 @@ module dust_photoelectric_heating
         real(dp) :: U_aip
 
         U_aip = autoionisation_potential(a,use_separate_refractive_index)
-        Zmin = floor(U_aip / 14.4d-8 * a) + 1d0
+        Zmin = aint(-U_aip / 14.4d-8 * a) + 1d0
     end function most_negative_allowed_charge
 
     function DS87_lambda(Z,q,a,T) result(ltilde)
@@ -2572,7 +2623,7 @@ module dust_photoelectric_heating
             Nc = 468d0 * (a/1d-7)**3d0
             s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
         else if (Z < 0d0) then
-            Zmin = most_negative_allowed_charge(a*10d0,use_separate_refractive_index)
+            Zmin = most_negative_allowed_charge(a,use_separate_refractive_index)
             if (Z > Zmin) then
                 Nc = 468d0 * (a/1d-7)**3d0
                 s_e = 5d-1 * (1d0 - safe_exp(-a/l_e)) * 1d0 / (1d0 + safe_exp(real(exp_factor,dp) - Nc))
@@ -2771,7 +2822,7 @@ module dust_photoelectric_heating
                 sigma_pdt = photodetachment_cross_section(E(i),E_pdt,Zcharge)
                 pinj_charge = pinj_charge + sigma_pdt * (E(i) - E_pdt + Emin) * pdt_pref(i)
             end do
-            Pinj = Pinj + wmix(iq) * pinj_charge
+            Pinj = Pinj + wmix(iq) * pinj_charge * eV2erg
 
             ! 4. Compute the recombination cooling rate contribution of this charge
             prec_charge = 0.0d0
@@ -2789,7 +2840,7 @@ module dust_photoelectric_heating
             if (Zcharge .eq. zmin_mix) then
                 EA = electron_afinity(W,E_g,Zcharge,asize_cm,use_separate_refractive_index)
                 Jtilde = DS87_J(dble(zmin_mix),-1d0,asize_cm,Tgas)
-                Pinj = Pinj + wmix(iq) * rec_pref * Jtilde * EA * eV2erg
+                Pinj = Pinj + wmix(iq) * rec_pref / (kB * Tgas) * Jtilde * EA * eV2erg
             end if
         end do
     end subroutine compute_dust_peh_rate
@@ -2839,8 +2890,10 @@ module dust_photoelectric_heating
         call dustbins_props(i_dust)%peh_tab%interpolate(log_gamma, log_T, peh_rate, idx_g, idx_T)
         Pinj = exp(peh_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
 
+        ! The tables are at G0 = 1 (Mathis) with n_e = sqrt(T)/gamma, so at fixed (gamma, T) the
+        ! recombination cooling scales with n_e, i.e. with G0, as the heating does
         call dustbins_props(i_dust)%rec_tab%interpolate(log_gamma, log_T, cool_rate, idx_g, idx_T)
-        Prec = exp(cool_rate * ln10) ! [erg/s]
+        Prec = exp(cool_rate * ln10) * (G0 / 1.13d0) ! [erg/s]
     end subroutine interpolate_dust_peh_rate
     
 
@@ -3086,8 +3139,8 @@ module pah_photoelectric_heating
         implicit none
         integer, intent(in) :: i_pah,nGroups
         real(dp), intent(in) :: local_c, Tgas, ne
-        real(dp), dimension(1:nGroups), intent(in) :: Np, E, solid_angle
-        real(dp), dimension(1:nGroups), intent(in) :: csa_anion, csa_neutral, csa_cation, csa_dication
+        real(dp), dimension(:), intent(in) :: Np, E, solid_angle
+        real(dp), dimension(:), intent(in) :: csa_anion, csa_neutral, csa_cation, csa_dication
         real(dp), dimension(:), intent(out) :: fcharge_pahs
 
         integer :: i, Nc, nstates
@@ -3095,7 +3148,8 @@ module pah_photoelectric_heating
         real(dp) :: k_det, k_att, k_pe_0, k_pe_1, k_rec_1, k_rec_2
         real(dp) :: IP_anion, IP_neutral, IP_cation
         real(dp) :: f_anion, f_neutral, f_1, f_2, f_total
-        real(dp),dimension(1:nGroups) :: yield_anion, yield_neutral, yield_cation
+        real(dp) :: w_n, w_1, w_2
+        real(dp) :: yield
 
         if (all(Np.eq.0d0)) return
 
@@ -3106,8 +3160,8 @@ module pah_photoelectric_heating
         k_det = 0.0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle
-            yield_anion(i) = ionisation_yield(Nc,-1,E(i),IP_anion)
-            k_det = k_det + ionisation_rate(IP_anion,solid_angle(i)*yield_anion(i)*csa_anion(i), &
+            yield = ionisation_yield(Nc,-1,E(i),IP_anion)
+            k_det = k_det + ionisation_rate(IP_anion,solid_angle(i)*yield*csa_anion(i), &
                                             Np(i),E(i))
         end do
 
@@ -3124,8 +3178,8 @@ module pah_photoelectric_heating
         k_pe_0 = 0.0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle
-            yield_neutral(i) = ionisation_yield(Nc,0,E(i),IP_neutral)
-            k_pe_0 = k_pe_0 + ionisation_rate(IP_neutral,solid_angle(i)*yield_neutral(i)*csa_neutral(i), &
+            yield = ionisation_yield(Nc,0,E(i),IP_neutral)
+            k_pe_0 = k_pe_0 + ionisation_rate(IP_neutral,solid_angle(i)*yield*csa_neutral(i), &
                                               Np(i),E(i))
         end do
 
@@ -3151,23 +3205,34 @@ module pah_photoelectric_heating
         k_pe_1 = 0.0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle
-            yield_cation(i) = ionisation_yield(Nc,1,E(i),IP_cation)
-            k_pe_1 = k_pe_1 + ionisation_rate(IP_cation,solid_angle(i)*yield_cation(i)*csa_cation(i), &
+            yield = ionisation_yield(Nc,1,E(i),IP_cation)
+            k_pe_1 = k_pe_1 + ionisation_rate(IP_cation,solid_angle(i)*yield*csa_cation(i), &
                                               Np(i),E(i))
         end do
 
-        f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
-                    k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
-                    k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
+        if (k_det*k_pe_0*k_pe_1 .gt. 0d0) then
+            f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
+                        k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
+                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
 
-        f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
-                        k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
+            f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
+                            k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
 
-        f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
-                    k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
+            f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
+                        k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
 
-        f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_0))
+            f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
+                        k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+        else
+            ! No (or too weak) photo-ionisation: the same equilibrium without 0/0 and x/0
+            w_n = k_det / (k_att*ne)
+            w_1 = w_n * k_pe_0 / (k_rec_1*ne)
+            w_2 = w_1 * k_pe_1 / (k_rec_2*ne)
+            f_anion = 1d0 / (1d0 + w_n + w_1 + w_2)
+            f_neutral = w_n * f_anion
+            f_1 = w_1 * f_anion
+            f_2 = w_2 * f_anion
+        end if
 
         f_total = f_anion + f_neutral + f_1 + f_2
         nstates = pahbins_props(i_pah)%ncharge_states
@@ -3219,6 +3284,7 @@ module pah_photoelectric_heating
         real(dp) :: k_det, k_att, k_pe_0, k_pe_1, k_rec_1, k_rec_2
         real(dp) :: IP_anion, IP_neutral, IP_cation
         real(dp) :: f_anion, f_neutral, f_1, f_2, f_total
+        real(dp) :: w_n, w_1, w_2
         real(dp) :: f_cat, f_dicat
         real(dp) :: Pinj_local, Prad_local, Prec_local
         real(dp),dimension(1:nGroups) :: Pabs_local
@@ -3291,18 +3357,29 @@ module pah_photoelectric_heating
         end do
 
         ! 8. Compute the equilibrium charge distribution
-        f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
-                    k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
-                    k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
+        if (k_det*k_pe_0*k_pe_1 .gt. 0d0) then
+            f_anion = 1d0 / (1d0 + k_det / (k_att*ne) + &
+                        k_det * k_pe_0 / (k_att*k_rec_1*ne**2d0) + &
+                        k_det * k_pe_0 * k_pe_1 / (k_att*k_rec_1*k_rec_2*ne**3d0))
 
-        f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
-                        k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
+            f_neutral = 1d0 / (1d0 + k_att*ne / k_det + k_pe_0 / (k_rec_1*ne) + &
+                            k_pe_0 * k_pe_1 / (k_rec_1*k_rec_2*ne**2d0))
         
-        f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
-                    k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
+            f_1 = 1d0 / (1d0 + k_rec_1*ne / k_pe_0 + k_pe_1 / (k_rec_2*ne) + &
+                        k_att*k_rec_1*ne**2d0 / (k_det*k_pe_0))
         
-        f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
-                    k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_0))
+            f_2 = 1d0 / (1d0 + k_rec_2*ne / k_pe_1 + k_rec_1*k_rec_2*ne**2d0 / (k_pe_0*k_pe_1) + &
+                        k_att*k_rec_1*k_rec_2*ne**3d0/(k_det*k_pe_0*k_pe_1))
+        else
+            ! No (or too weak) photo-ionisation: the same equilibrium without 0/0 and x/0
+            w_n = k_det / (k_att*ne)
+            w_1 = w_n * k_pe_0 / (k_rec_1*ne)
+            w_2 = w_1 * k_pe_1 / (k_rec_2*ne)
+            f_anion = 1d0 / (1d0 + w_n + w_1 + w_2)
+            f_neutral = w_n * f_anion
+            f_1 = w_1 * f_anion
+            f_2 = w_2 * f_anion
+        end if
 
         ! 9. Normalise the fractions
         f_total = f_anion + f_neutral + f_1 + f_2

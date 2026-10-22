@@ -1,6 +1,6 @@
 module dust_surface_chemistry
     use amr_parameters, only:dp
-    use constants, only:twopi,pi,kB,mH,amu2g,mC_amu
+    use constants, only:pi,kB,mH,amu2g,mC_amu
     use dust_commons
 
     implicit none
@@ -130,14 +130,17 @@ module dust_surface_chemistry
 
         ! Formation rate of H2 onto dust grains from Cazaux & Spaans (2004)
         ! (https://iopscience.iop.org/article/10.1086/422087/pdf)
-        vH = sqrt(2D0 * kB * Tgas / mH) ! thermal velocity (assuming Mawell-Boltzmann distribution)
+        ! Mean thermal speed of H atoms, sqrt(8kT/(pi m_H)): the v_H of Cazaux & Spaans (2004),
+        ! 1.45e5 (T/100)^0.5 cm/s
+        vH = sqrt(8D0 * kB * Tgas / (pi * mH))
         F = h_flux(nHI,vH)
         ! Guard: no atomic H flux → no H2 formation on grains (also prevents NaN in high_temp_correction)
         if (F <= 0d0) return
 
         ! Add the contribution from each dust grain
         do j = 1, ndust
-            sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * twopi * (dustbins_props(j)%asize_cm)**2D0 ! in cm-1
+            ! n_d * sigma_d with the geometric cross section pi a^2 (Cazaux & Spaans 2004, eqs. 2 and 4)
+            sdust = (rho_dust(j)/dustbins_props(j)%mgrain) * pi * (dustbins_props(j)%asize_cm)**2D0 ! in cm-1
             R_H2 = sdust * recombination_efficiency(Tgas,T_dust(j),vH,F,dustbins_props(j)%interact_group) ! in cm-1
             grain_h2_formation_rate = grain_h2_formation_rate + R_H2 * h2_sticking_coef(Tgas,T_dust(j)) ! in cm-1
         end do

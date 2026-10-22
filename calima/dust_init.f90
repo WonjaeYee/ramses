@@ -146,14 +146,32 @@ module dust_init
         real(dp) :: dustC,dustPAH,dustMass,Z_interest
         real(dp) :: ftot,metalM
         real(dp),dimension(:),allocatable :: M_el
+        integer :: ie
+        integer,dimension(1:n_elements) :: el_slot
 
         myforce = .false.
         if (present(force_zero)) myforce = force_zero
 
+        ! dustbins_props%el_index is an index into the elements table, i.e. an
+        ! atomic number (H=1, He=2, C=6, O=8, ..., Fe=26), whereas the uold
+        ! element block holds one slot per ACTIVE element (u_hydro_idx, set in
+        ! read_hydro_params). imetal+Z-1 is only right if every element up to Z
+        ! is tracked; el_slot maps an atomic number to its actual column.
+        el_slot(:) = 0
+#ifdef RTZ
+        do ie = 1, n_elements
+            if (elements(ie)%atomic_number .gt. 0) el_slot(ie) = elements(ie)%u_hydro_idx
+        end do
+#else
+        do ie = 1, n_elements
+            el_slot(ie) = imetal + ie - 1
+        end do
+#endif
+
         if (DTMinit.eq.-1d0) then
             ! OPTION A: Initialise based on G/D for the MW
             if (GDinit.eq.-1d0) then
-                GD = GD_RR14(myq(imetal+8-1)/mO_amu, Hfrac/mH_amu)
+                GD = GD_RR14(myq(el_slot(8))/mO_amu, Hfrac/mH_amu)
             else
                 GD = GDinit
             end if
@@ -162,7 +180,7 @@ module dust_init
             do ii = 1, ndchemtype
                 jj1 = istart_chemtype(ii)
                 do jj = 1, dustbins_props(jj1)%nelements
-                    Z_interest = Z_interest + myq(imetal + dustbins_props(jj1)%el_index(jj) - 1)
+                    Z_interest = Z_interest + myq(el_slot(dustbins_props(jj1)%el_index(jj)))
                 end do
             end do
             if (Z_interest .eq. 0d0) then
@@ -177,9 +195,9 @@ module dust_init
                 do jj=1,ndchemtype
                     jj1 = istart_chemtype(jj)
                     if (dustbins_props(jj1)%interact_pah .and. npah>0) then
-                        jj2 = dustbins_props(jj1)%el_index(1) - 1
+                        jj2 = el_slot(dustbins_props(jj1)%el_index(1))
                         ! In the case we follow PAHs and carbonaceous grains
-                        dustC = myq(imetal + jj2) * min(fDust_depletions(6) * GDfactor,1d0 - smallr_dust / myq(imetal + jj2))
+                        dustC = myq(jj2) * min(fDust_depletions(6) * GDfactor,1d0 - smallr_dust / myq(jj2))
                         if (dust_pahs .and. (fpah_ini.eq.-1d0)) then
                             dustPAH = fCDust_inPAH * dustC
                         elseif (dust_pahs) then
@@ -194,13 +212,13 @@ module dust_init
                             end do
                         end if
                         ! Deplete carbon
-                        myq(imetal+jj2) = max(myq(imetal+jj2) - (dustC + dustPAH),0d0)
+                        myq(jj2) = max(myq(jj2) - (dustC + dustPAH),0d0)
                     else
                         ! Now for a general dust chemistry in which we look for the limiting element
                         allocate(M_el(1:dustbins_props(jj1)%nelements))
                         do ii = 1, dustbins_props(jj1)%nelements
                             M_el(ii) = fDust_depletions(dustbins_props(jj1)%el_atomic_number(ii)) * &
-                                        myq(imetal + dustbins_props(jj1)%el_index(ii) - 1)
+                                        myq(el_slot(dustbins_props(jj1)%el_index(ii)))
                         end do
                         call cmp_lim_elem(jj1,dustbins_props(jj1)%nelements,M_el,ilim)
                         dustMass = GDfactor * M_el(ilim) / dustbins_props(jj1)%el_mfractions(ilim)
@@ -209,9 +227,10 @@ module dust_init
                         end do
                         ! Deplete the elements
                         do ii = 1, dustbins_props(jj1)%nelements
-                            myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) = max(myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) - &
+                            myq(el_slot(dustbins_props(jj1)%el_index(ii))) = max(myq(el_slot(dustbins_props(jj1)%el_index(ii))) - &
                                 (dustMass * dustbins_props(jj1)%el_mfractions(ii)),0d0)
                         end do
+                        deallocate(M_el)
                     end if
                 end do
                 if (any(myq(idust:idust+ndust-1) .lt. 0d0)) then
@@ -248,9 +267,9 @@ module dust_init
                 do jj=1,ndchemtype
                     jj1 = istart_chemtype(jj)
                     if (dustbins_props(jj1)%interact_pah .and. npah>0) then
-                        jj2 = dustbins_props(jj1)%el_index(1) - 1
+                        jj2 = el_slot(dustbins_props(jj1)%el_index(1))
                         ! In the case we follow PAHs and carbonaceous grains
-                        dustC = myq(imetal + jj2) * min(fDust_depletions(6) * DTMfactor,1d0 - smallr_dust / myq(imetal + jj2))
+                        dustC = myq(jj2) * min(fDust_depletions(6) * DTMfactor,1d0 - smallr_dust / myq(jj2))
                         if (dust_pahs .and. (fpah_ini.eq.-1d0)) then
                             dustPAH = fCDust_inPAH * dustC
                         elseif (dust_pahs) then
@@ -265,13 +284,13 @@ module dust_init
                             end do
                         end if
                         ! Deplete carbon
-                        myq(imetal+jj2) = max(myq(imetal+jj2) - (dustC + dustPAH),0d0)
+                        myq(jj2) = max(myq(jj2) - (dustC + dustPAH),0d0)
                     else
                         ! Now for a general dust chemistry in which we look for the limiting element
                         allocate(M_el(1:dustbins_props(jj1)%nelements))
                         do ii = 1, dustbins_props(jj1)%nelements
                             M_el(ii) = fDust_depletions(dustbins_props(jj1)%el_atomic_number(ii)) * &
-                                        myq(imetal + dustbins_props(jj1)%el_index(ii) - 1)
+                                        myq(el_slot(dustbins_props(jj1)%el_index(ii)))
                         end do
                         call cmp_lim_elem(jj1,dustbins_props(jj1)%nelements,M_el,ilim)
                         dustMass = DTMfactor * M_el(ilim) / dustbins_props(jj1)%el_mfractions(ilim)
@@ -280,9 +299,10 @@ module dust_init
                         end do
                         ! Deplete the elements
                         do ii = 1, dustbins_props(jj1)%nelements
-                            myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) = max(myq(imetal + dustbins_props(jj1)%el_index(ii) - 1) - &
+                            myq(el_slot(dustbins_props(jj1)%el_index(ii))) = max(myq(el_slot(dustbins_props(jj1)%el_index(ii))) - &
                                 (dustMass * dustbins_props(jj1)%el_mfractions(ii)),0d0)
                         end do
+                        deallocate(M_el)
                     end if
                 end do
             else
@@ -988,7 +1008,8 @@ module dust_init
 
             ! 4.2 Check the fractions of mass in stellar ejecta
             frac_tot = sum(fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1))
-            fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) = fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) / frac_tot
+            if (frac_tot .gt. 0.0d0) &
+                fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) = fmass_ej(istart_chemtype(ii):istart_chemtype(ii)+dustbins_per_chemtype(ii)-1) / frac_tot
         end do
 
         if (dust_pahs) then
@@ -1024,10 +1045,12 @@ module dust_init
                     allocate(dustbins_props(ii)%vthresh_coag(1))
                     allocate(dustbins_props(ii)%k0_coa(1))
                     dustbins_props(ii)%idend_coag(1) = ii + 1
-                    ! Compute the threshold velocity for coagulation (Choski et al. 1993)
+                    ! Compute the threshold velocity for coagulation (Chokshi et al. 1993; Hirashita & Yan
+                    ! 2009 eq. 8): v ~ gamma^(5/6) / (E^(1/3) R^(5/6) s^(1/2)), the only power of the surface
+                    ! energy gamma that gives cm/s
                     R = 0.5d0 * dustbins_props(ii)%asize_cm
                     dustbins_props(ii)%vthresh_coag(1) = &
-                        & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/3d0) &
+                        & 10.7d0 * dustbins_props(ii)%surf_energy**(5d0/6d0) &
                         & / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) &
                         & * R**(5d0/6d0) * sqrt(dustbins_props(ii)%sgrain))
                     dustbins_props(ii)%k0_coa(1) = sqrt(8d0/(3d0*pi)) * 4d0 * pi * dustbins_props(ii)%asize_cm**2d0&
@@ -1059,13 +1082,15 @@ module dust_init
                             end if
                         end do
                         dustbins_props(ii)%idend_coag(kk_loc) = idest
-                        ! Compute the threshold velocity for coagulation (Choski et al. 1993)
+                        ! Compute the threshold velocity for coagulation (Chokshi et al. 1993; Hirashita & Yan
+                        ! 2009 eq. 8): v ~ gamma^(5/6) / (E^(1/3) R^(5/6) s^(1/2)), the only power of the surface
+                        ! energy gamma that gives cm/s
                         R = (dustbins_props(ii)%asize_cm * dustbins_props(jbin)%asize_cm) &
                             & / (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)
                         dustbins_props(ii)%vthresh_coag(kk_loc) = &
                             & 21.4d0 * sqrt((dustbins_props(ii)%asize_cm**3d0+dustbins_props(jbin)%asize_cm**3d0)/&
                             & (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**3d0) &
-                            & * dustbins_props(ii)%surf_energy**(5d0/3d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
+                            & * dustbins_props(ii)%surf_energy**(5d0/6d0) / (dustbins_props(ii)%Youngs_modulus**(1d0/3d0) * R**(5d0/6d0) * &
                             & sqrt(dustbins_props(ii)%sgrain))
                         dustbins_props(ii)%k0_coa(kk_loc) = sqrt(8d0/(3d0*pi)) * pi * (dustbins_props(ii)%asize_cm + dustbins_props(jbin)%asize_cm)**2d0&
                                                     & / (dustbins_props(ii)%mgrain * dustbins_props(jbin)%mgrain / (dustbins_props(ii)%mgrain + dustbins_props(jbin)%mgrain)) ! [cm3/s/g]
@@ -2238,7 +2263,12 @@ module dust_init
                 end do
             end do
 
-            call pahbins_props(ipahbin)%dissociation_tab%init()
+            ! A table with invalid values is left uninitialised: no photolysis for this bin
+            if (any(isnan(pahbins_props(ipahbin)%dissociation_tab%tab2d(:,:,1)))) then
+                if (myid.eq.1) write(*,*) 'WARNING: invalid values in ', trim(f_diss_filename), ', no photolysis for PAH bin ', ipahbin
+            else
+                call pahbins_props(ipahbin)%dissociation_tab%init()
+            end if
             close(111)
         end do
     end subroutine init_pah_dissociation_tables
