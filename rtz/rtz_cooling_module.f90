@@ -477,18 +477,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
          ! Mode 3: write shielding factors at equilibrium
          if (rtz_equilibrium_test .eq. 3) then
-            N_H_col  = nElement(1, i) * dx_SS_H2
-            N_H2_col = 0.5d0 * nElement(1, i) * xion(1, 3, i) * dx_SS_H2
+            N_H_col  = nElement(1, i) * dx_SS_H2(i)
+            N_H2_col = 0.5d0 * nElement(1, i) * xion(1, 3, i) * dx_SS_H2(i)
             tau_shld_old = 2.34d-21 * eqm_dust_to_gas_mw &
-                          * (nElement(1,i)*xion(1,1,i)*dx_SS_H2 + 2d0*N_H2_col)
+                          * (nElement(1,i)*xion(1,1,i)*dx_SS_H2(i) + 2d0*N_H2_col)
 #ifdef CALIMA
             tau_shld_new = eqm_tau_dust_LW_new
 #else
             tau_shld_new = tau_shld_old   ! non-CALIMA: old and new are identical
 #endif
-            f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2)
+            f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i))
             ! f_CO_out = line shielding × dust continuum, consistent with production code
-            f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2) &
+            f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i)) &
                       * safe_exp(-tau_shld_new)
             write(shld_unit, '(*(ES15.7," "))') nElement(1,i), N_H_col, N_H2_col, &
                  xion(1,3,i), xion(1,1,i), nCO(i)/nElement(1,i), TK_to_save(i), eqm_dust_to_gas_mw, &
@@ -1032,19 +1032,19 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_shielding_config .le. 0) then
             tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
                         * (nElement_dep(1)*dXion(1,1) &
-                        +  2.0d0*0.5d0*nElement_dep(1)*dXion(1,3)) * dx_SS_H2
+                        +  2.0d0*0.5d0*nElement_dep(1)*dXion(1,3)) * dx_SS_H2(icell)
          else
             call compute_lw_dust_optical_depth( &
-                 dust_helper%rho_dust, dx_SS_H2, dust_to_gas_mass_ratio_over_mw, &
+                 dust_helper%rho_dust, dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, &
                  nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), tau_dust_LW)
          end if
          if (rtz_equilibrium_test .eq. 3) eqm_tau_dust_LW_new = tau_dust_LW
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * safe_exp(-tau_dust_LW)
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * safe_exp(-tau_dust_LW)
 #else
          ! Non-CALIMA: original fixed MW cross-section formula.
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) * &
+         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * &
                  comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), &
-                         dx_SS_H2, dust_to_gas_mass_ratio_over_mw)
+                         dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw)
 #endif
       end if
       if (isCO_rtz) then
@@ -1052,7 +1052,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! rtz_shielding_config 2: CO line self-shielding only (Lee et al. 1996), no dust
          ! rtz_shielding_config 3: CO line + dust continuum exp(-tau_dust_LW) [default]
          if (rtz_shielding_config .ge. 2) then
-            f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2)
+            f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
             if (rtz_shielding_config .ge. 3) &
                f_shd_CO = f_shd_CO * safe_exp(-tau_dust_LW)
          end if
@@ -1385,10 +1385,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! compute_lw_dust_optical_depth above), bypassing the dynamic RT-derived factor.
       if (isH2_rtz .and. rt_advect .and. rtz_equilibrium_test.le.0) then
          call compute_lw_tau_effective( &
-              dustAbs, dust_helper%local_rad_ani, dust_helper%local_c, dx_SS_H2, &
+              dustAbs, dust_helper%local_rad_ani, dust_helper%local_c, dx_SS_H2(icell), &
               tau_dust_LW, lw_groups_present)
          if (lw_groups_present) then
-            f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2) &
+            f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) &
                   * safe_exp(-tau_dust_LW)
          end if
       end if
@@ -1611,7 +1611,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
       ! Apply dust self-shielding so CALIMA sees the within-cell-attenuated field.
       ! tau_dust_LW is computed above from per-bin grain properties (or the MW fallback).
-      dust_helper%local_G0 = total_G0 * safe_exp(-tau_dust_LW)
+      dust_helper%local_G0 = (advected_G0 + UV_background_G0) * safe_exp(-tau_dust_LW)
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
       if (ndust_processes .gt. 0 .or. npah_processes .gt. 0) then
@@ -1884,7 +1884,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
 
             !! Destruction !!
-            de_CO = beta_CO(total_G0, H2_cosmic_ray_ionization_rate) * f_shd_CO
+            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
 
             ! Compute the initial guess of new nCO (exact exponential integrator)
             if (de_CO * ddt(icell) < 1.d-6) then

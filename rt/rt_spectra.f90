@@ -549,8 +549,12 @@ SUBROUTINE init_SED_table()
   real(kind=8)::dlgA, pL0, pL1, tmp
   integer::nv=3+2*nIons  ! # vars in SED table: L,Lacc,egy,nions*(csn,egy)
   integer,parameter::tag=1132
+  ! counter is assigned in the non-RTZ branch too (the #else at ~:706) and in
+  ! the #ifdef CALIMA block below, so it cannot live inside #ifdef RTZ: an
+  ! RTZ=0 build failed with "Symbol 'counter' has no IMPLICIT type".
+  integer::counter
 #ifdef RTZ
-  integer::counter, jj
+  integer::jj
   real(kind=8),allocatable::tbl_dust(:,:,:), tbl2_dust(:,:,:), reb_tbl_dust(:,:,:)
 #endif
 #ifdef RTZ

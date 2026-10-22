@@ -319,7 +319,7 @@ MODOBJ += poisson_commons.o hydro_parameters.o hydro_commons.o \
           metal_yields_module.o sink_sn_feedback.o
 ifeq ($(CALIMA),1)
    ifeq ($(RTZ),1)
-      MODOBJ += rtz_module.o
+      MODOBJ += rtz_module.o rt_parameters.o molecules_module.o rt_hydro_commons.o
    endif
    MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_cooling.o \
                dust_dynamics.o dust_photophysics.o dust_seeding.o dust_surface_chemistry.o \
@@ -331,13 +331,13 @@ ifeq ($(RT),1)
 endif
 ifeq ($(RTZ),1)
    ifeq ($(CALIMA),0)
-      MODOBJ += rtz_module.o
+      MODOBJ += rtz_module.o rt_parameters.o molecules_module.o rt_hydro_commons.o
    endif
-   MODOBJ += rt_parameters.o rt_hydro_commons.o cross_sections_module.o \
+   MODOBJ += cross_sections_module.o \
              rt_spectra.o rt_flux_module.o \
              collisional_ionization_module.o recombination_module.o \
              cosmic_ray_ionization_module.o photoionization_UVB_module.o \
-             dust_recombination_module.o molecules_module.o charge_exchange_module.o \
+             dust_recombination_module.o charge_exchange_module.o \
              rtz_coolrates_module.o rtz_cooling_module.o movie_lines_module.o
 endif
 ifeq ($(USE_TURB),1)

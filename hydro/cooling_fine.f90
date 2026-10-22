@@ -73,8 +73,12 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use rt_cooling_module, only: rt_solve_cooling,iIR,rt_isIRtrap &
        ,rt_pressBoost,iIRtrapVar,kappaSc,kappaAbs,is_kIR_T,rt_vc
 #endif
-  use constants, only: a_r, Myr2sec, pi, twopi
+#else
+   use cooling_module, only: X, T2_min_fix,solve_cooling
 #endif
+  ! `pi` comes from staging, which imported it inside the #ifdef RT branch; it is
+  ! used unconditionally (the H2 self-shielding length), so it belongs here.
+  use constants, only: a_r, Myr2sec, mH, pi, rhoc, twopi
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb
   use dust_utils, only: cmp_sigma_turb
