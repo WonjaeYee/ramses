@@ -19,11 +19,25 @@ module rtz_coolrates_module
   ! Initialize the relevant arrays
   integer, parameter:: N_HIGH_T_COOLING_TEMP = 121
   real(dp):: high_t_cooling_temp(N_HIGH_T_COOLING_TEMP)
-  real(dp):: high_t_cooling_rates(N_HIGH_T_COOLING_TEMP,27,27)
+  ! log10 Lambda_ion(T, n_e) [erg cm^3 s^-1] per ion and electron, (T, n_e, element, ion stage), from one-zone Cloudy
+  ! models of each ion alone (data_dir/high_T_cooling/<ELEMENT>/all_cool_ne.dat, utils/py/rtz/make_metal_cooling_tables.py).
+  ! The n_e axis: lines with critical densities near the gas density are collisionally de-excited (N III 57 um: 0.62x
+  ! the low-density value at n_e = 300 cm^-3, S III 0.91x); the earlier tables were the n_e = 1 cm^-3 limit only.
+  ! Nothing else matters to Lambda_ion at < 0.1% (the ion's abundance, n(H+), n(H0) in ionized gas, grains), and the
+  ! radiation field <= 2%: see the generator. Outside the n_e grid, clamped (below: the low-density limit).
+  integer:: n_ne_cool = 0
+  real(dp):: lgne_cool_min, dlgne_cool
+  real(dp), allocatable:: high_t_cooling_rates(:,:,:,:)
   integer, parameter:: N_HIGH_T_COOLING_TEMP_CIE = 500
   real(dp):: high_t_cooling_temp_CIE(N_HIGH_T_COOLING_TEMP_CIE)
   real(dp):: high_t_cooling_fracs_CIE(N_HIGH_T_COOLING_TEMP_CIE,27,27)
   logical:: high_t_cooling_rates_tflag(27,27)
+  ! For the ions with a fine-structure solver (high_t_cooling_rates_tflag), the table without its
+  ! ground-term fine-structure lines (log10): the table minus the solver at the table's own
+  ! conditions (each n_e of the grid, no other collider). Below 1e4 K the solver replaces the table for
+  ! these ions, and this keeps the optical/UV forbidden lines ([O III] 5007, [N II] 6584, ...) the
+  ! solver does not have.
+  real(dp), allocatable:: high_t_cooling_rates_opt(:,:,:,:)
   real(dp):: fs_cool_tab(27,160,8)  ! Array for fine structure cooling rates  
 
   real(dp):: G0_heating_rates(26) = (/ &
@@ -199,6 +213,41 @@ FUNCTION collisional_excitation_cooling_HI_seon20(T) result(rate)
 
 END FUNCTION collisional_excitation_cooling_HI_seon20
 
+FUNCTION collisional_excitation_cooling_HI_2s(T) result(rate)
+    ! Collisional excitation H(1s) -> H(2s), which decays by two-photon emission and so is not in
+    ! the Lyman-alpha rate of collisional_excitation_cooling_HI_seon20. Effective collision
+    ! strengths of Anderson et al. (2000, 2002 erratum), as tabulated in Cloudy's h_coll_str.dat,
+    ! interpolated linearly in ln(kT) and held constant outside 0.5-25 eV;
+    ! Lambda = E_12 * 8.629e-6 Upsilon / (g_1 sqrt(T)) exp(-E_12/kT), g_1 = 2, E_12 = 10.199 eV.
+    implicit none
+    real(dp), intent(in):: T
+    real(dp):: rate
+    real(dp), parameter:: kT_tab(8) = (/ 0.5d0, 1.d0, 3.d0, 5.d0, 10.d0, 15.d0, 20.d0, 25.d0 /)
+    real(dp), parameter:: ups_tab(8) = (/ 0.260d0, 0.296d0, 0.326d0, 0.339d0, 0.373d0, 0.406d0, 0.436d0, 0.461d0 /)
+    real(dp), parameter:: E12_K = 118352.d0          ! 10.199 eV / k
+    real(dp), parameter:: E12_erg = 10.199d0 * 1.602176634d-12
+    real(dp):: kT, ups, w
+    integer:: i
+
+    kT = 8.617333d-5 * T
+    if (kT <= kT_tab(1)) then
+        ups = ups_tab(1)
+    else if (kT >= kT_tab(8)) then
+        ups = ups_tab(8)
+    else
+        i = 1
+        do while (kT > kT_tab(i+1))
+            i = i + 1
+        end do
+        w = log(kT / kT_tab(i)) / log(kT_tab(i+1) / kT_tab(i))
+        ups = ups_tab(i) + w * (ups_tab(i+1) - ups_tab(i))
+    end if
+    rate = E12_erg * 8.629d-6 * ups / (2.d0 * sqrt(T)) * safe_exp(-E12_K / T)
+
+    rate = MAX(rate,1.d-100)
+
+END FUNCTION collisional_excitation_cooling_HI_2s
+
 FUNCTION collisional_excitation_cooling_HeII(T) result(rate)
     ! From Cen 1992
     implicit none
@@ -220,8 +269,14 @@ FUNCTION bremmstrahlung(T) result(rate)
     implicit none
     real(dp), intent(in):: T
     real(dp):: rate
+    real(dp):: g_ff
 
-    rate = 1.42d-27 * sqrt(T)
+    ! Frequency-averaged Gaunt factor, Katz, Weinberg & Hernquist (1996).
+    ! Without it this expression is ~24% low: benchmarking against Cloudy for a
+    ! pure-H HII region gives an implied g_ff of 1.32 at 2e4 K, constant with
+    ! depth, which this fit reproduces to 0.4%.
+    g_ff = 1.1d0 + 0.34d0 * safe_exp(-(5.5d0 - log10(T))**2 / 3.d0)
+    rate = 1.42d-27 * g_ff * sqrt(T)
 
 END FUNCTION bremmstrahlung
 
@@ -492,113 +547,15 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
     end do
     close(unit_num)
 
-    ! Initialize high-temeprature cooling table to 0
-    ! We use -50 because it's log
-    high_t_cooling_rates = -50.d0
-
-    ! CARBON
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/CARBON/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling carbon rates'
-        return
-    end if
-
-    do i = 1, 7
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,6,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! NITROGEN
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/NITROGEN/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling nitrogen rates'
-        return
-    end if
-
-    do i = 1, 8
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,7,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! OXYGEN
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/OXYGEN/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling oxygen rates'
-        return
-    end if
-
-    do i = 1, 9
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,8,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! NEON
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/NEON/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling neon rates'
-        return
-    end if
-
-    do i = 1, 11
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,10,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! MAGNESIUM
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/MAGNESIUM/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling magnesium rates'
-        return
-    end if
-
-    do i = 1, 13
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,12,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! SILICON
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/SILICON/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling silicon rates'
-        return
-    end if
-
-    do i = 1, 15
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,14,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! SULFUR
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/SULPHUR/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling sulfur rates'
-        return
-    end if
-
-    do i = 1, 17
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,16,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
-
-    ! IRON
-    open(newunit=unit_num, file=trim(data_dir)//'/high_T_cooling/IRON/all_cool.dat', status='old', action='read', iostat=ios)
-    if (ios /= 0) then
-        if(myid==1) write(*,*) 'Error: Could not open high temperature cooling iron rates'
-        return
-    end if
-
-    do i = 1, 27
-        read(unit_num, *, iostat=ios) high_t_cooling_rates(:,26,i)
-        if (ios /= 0) exit
-    end do
-    close(unit_num)
+    ! The per-ion tables on the (T, n_e) grid, -50 (log) where an element has no table
+    call read_metal_cooling_ne('CARBON', 6)
+    call read_metal_cooling_ne('NITROGEN', 7)
+    call read_metal_cooling_ne('OXYGEN', 8)
+    call read_metal_cooling_ne('NEON', 10)
+    call read_metal_cooling_ne('MAGNESIUM', 12)
+    call read_metal_cooling_ne('SILICON', 14)
+    call read_metal_cooling_ne('SULPHUR', 16)
+    call read_metal_cooling_ne('IRON', 26)
 
     ! Set all of the fine structure lines to true
     ! prob a better way of doing this but fine for now
@@ -749,6 +706,58 @@ SUBROUTINE initialize_high_temperature_metal_cooling()
 
 END SUBROUTINE initialize_high_temperature_metal_cooling
 
+SUBROUTINE read_metal_cooling_ne(elname, iz)
+    ! data_dir/high_T_cooling/<elname>/all_cool_ne.dat: '#' lines, "n_ne lg_ne_min dlg_ne", then n_ne blocks (n_e
+    ! increasing) of iz+1 rows (ion stages) of the N_HIGH_T_COOLING_TEMP log10 Lambda. The first file read sets the
+    ! n_e grid and allocates the tables; the others must have the same grid.
+    use amr_commons, only: myid
+    use hydro_parameters, only: data_dir
+    implicit none
+    character(len=*), intent(in):: elname
+    integer, intent(in):: iz
+    integer:: u, ios, k, j, n
+    real(dp):: lg0, dlg
+    character(len=512):: fname, line
+
+    fname = trim(data_dir)//'/high_T_cooling/'//trim(elname)//'/all_cool_ne.dat'
+    open(newunit=u, file=trim(fname), status='old', action='read', iostat=ios)
+    if (ios /= 0) then
+        if (myid == 1) write(*,*) 'Error: cannot open '//trim(fname)//' (metal-line cooling on (T, n_e), made by '// &
+             'utils/py/rtz/make_metal_cooling_tables.py; it belongs in the RTZ data directory)'
+        call clean_stop
+    end if
+    do
+        read(u, '(A)', iostat=ios) line
+        if (ios /= 0) exit
+        if (line(1:1) /= '#') then
+            backspace(u)
+            exit
+        end if
+    end do
+    if (ios == 0) read(u, *, iostat=ios) n, lg0, dlg
+    if (ios == 0) then
+        if (n_ne_cool == 0) then
+            n_ne_cool = n ; lgne_cool_min = lg0 ; dlgne_cool = dlg
+            allocate(high_t_cooling_rates(N_HIGH_T_COOLING_TEMP, n_ne_cool, 27, 27))
+            allocate(high_t_cooling_rates_opt(N_HIGH_T_COOLING_TEMP, n_ne_cool, 27, 27))
+            high_t_cooling_rates = -50.d0
+        else if (n /= n_ne_cool .or. abs(lg0 - lgne_cool_min) > 1d-6 .or. abs(dlg - dlgne_cool) > 1d-6) then
+            if (myid == 1) write(*,*) 'Error: '//trim(fname)//' has another n_e grid than the other elements'
+            call clean_stop
+        end if
+        do k = 1, n_ne_cool
+            do j = 1, iz + 1
+                if (ios == 0) read(u, *, iostat=ios) high_t_cooling_rates(:, k, iz, j)
+            end do
+        end do
+    end if
+    close(u)
+    if (ios /= 0) then
+        if (myid == 1) write(*,*) 'Error: cannot read '//trim(fname)
+        call clean_stop
+    end if
+END SUBROUTINE read_metal_cooling_ne
+
 FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_fractions, temp_smooth) result(rate)
     ! Computes the high-temperature cooling rates
     ! derived from Harley's custom cloudy models
@@ -762,6 +771,8 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
     real(dp):: frac_high, frac_low, loc_cooling_rate, loc_temp_smooth
     integer:: idx_low, i, j, CIE_Tidx
     real(dp):: CIE_frac_used, CIE_frac_theo
+    real(dp):: x_ne, w_ne, w00, w10, w01, w11
+    integer:: ine, ine2
 
     loc_T = max(T,1000.d0)
     log_T = log10(loc_T)
@@ -794,6 +805,16 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
         frac_low = 0.0
     end if
 
+    ! and linear in log n_e on the table's n_e grid, clamped at its ends
+    x_ne = (log10(max(ne, 1.d-30)) - lgne_cool_min) / dlgne_cool + 1.d0
+    ine = min(max(int(x_ne), 1), max(n_ne_cool - 1, 1))
+    ine2 = min(ine + 1, n_ne_cool)
+    w_ne = min(max(x_ne - real(ine, dp), 0.d0), 1.d0)
+    if (ine2 == ine) w_ne = 0.d0
+    ! the four weights of the bilinear interpolation in (log T, log n_e), once per call
+    w00 = frac_low * (1.d0 - w_ne) ; w10 = frac_high * (1.d0 - w_ne)
+    w01 = frac_low * w_ne         ; w11 = frac_high * w_ne
+
     ! Use NGP interpolation for CIE --> temperature spacing is very fine so ok
     CIE_Tidx = 1 + NINT((log_T - LOG10(high_t_cooling_temp_CIE(1))) / (LOG10(high_t_cooling_temp_CIE(2)) - LOG10(high_t_cooling_temp_CIE(1))))
     CIE_Tidx = MAX(MIN(CIE_Tidx,N_HIGH_T_COOLING_TEMP_CIE),1) ! Clamp
@@ -813,14 +834,20 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
        ! Loop over 1 fewer than n_ions to handle untracked ionization states if needed
        do j = 1, elements(i)%n_ions - 1
           ! Interpolate the cooling rate for the ion
-          loc_cooling_rate = frac_low * high_t_cooling_rates(idx_low,i,j)
-          loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
-          loc_cooling_rate = 10.d0**loc_cooling_rate
-
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
-          if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+          if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          else
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
+                  loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              end if
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -834,14 +861,20 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
           j = elements(i)%n_ions
 
           ! Interpolate the cooling rate for the ion
-          loc_cooling_rate = frac_low * high_t_cooling_rates(idx_low,i,j)
-          loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
-          loc_cooling_rate = 10.d0**loc_cooling_rate
-
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
-          if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+          if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          else
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
+                  loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              end if
           end if
 
          ! Multiply cooling rate by ion and electron number densities
@@ -855,14 +888,20 @@ FUNCTION get_high_t_cooling_rates(T, ne, element_number_densities, element_ion_f
          do j = elements(i)%n_ions, elements(i)%atomic_number+1
 
           ! Interpolate the cooling rate for the ion
-          loc_cooling_rate = frac_low * high_t_cooling_rates(idx_low,i,j)
-          loc_cooling_rate = loc_cooling_rate + (frac_high * high_t_cooling_rates(idx_low+1,i,j)) 
-          loc_cooling_rate = 10.d0**loc_cooling_rate
-
-          ! Smooth with temeprature if necessary
+          ! Below 1e4 K the fine-structure solver takes over the ground-term lines of these ions;
+          ! the rest of their table (the optical lines) stays. A table weighted by exactly 0 is skipped
           loc_temp_smooth = 1.d0
-          if (high_t_cooling_rates_tflag(i,j)) then
-              loc_temp_smooth = temp_smooth
+          if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth == 0.d0) then
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+          else
+              loc_cooling_rate = 10.d0**(w00 * high_t_cooling_rates(idx_low,ine,i,j) + w10 * high_t_cooling_rates(idx_low+1,ine,i,j) &
+                                       + w01 * high_t_cooling_rates(idx_low,ine2,i,j) + w11 * high_t_cooling_rates(idx_low+1,ine2,i,j))
+              if (high_t_cooling_rates_tflag(i,j) .and. temp_smooth /= 1.d0) then
+                  loc_cooling_rate = temp_smooth * loc_cooling_rate + (1.d0 - temp_smooth) &
+                     * 10.d0**(w00 * high_t_cooling_rates_opt(idx_low,ine,i,j) + w10 * high_t_cooling_rates_opt(idx_low+1,ine,i,j) &
+                               + w01 * high_t_cooling_rates_opt(idx_low,ine2,i,j) + w11 * high_t_cooling_rates_opt(idx_low+1,ine2,i,j))
+              end if
           end if
 
           rate = rate + ((CIE_frac_used / CIE_frac_theo) * element_number_densities(i) * high_t_cooling_fracs_CIE(CIE_Tidx,i,j) * ne * loc_cooling_rate * loc_temp_smooth)
@@ -914,8 +953,62 @@ SUBROUTINE initialize_fine_structure_tables()
         close(unit_num)
 
     end do
+
+    call build_optical_metal_tables()
     
 END SUBROUTINE initialize_fine_structure_tables
+
+SUBROUTINE build_optical_metal_tables()
+    ! high_t_cooling_rates_opt: see its declaration. The Cloudy tables are per ion and electron, one
+    ! zone of the ion alone at each n_e of the grid (n_ion = 1 cm^-3), so the fine-structure solver is
+    ! evaluated with n_ion = 1, that n_e and no other collider, at z = 0, and divided by n_e.
+    use amr_commons, only: myid
+    implicit none
+    integer:: i, j, k, m, nclamp
+    real(dp):: T, tab, fs, ne
+    high_t_cooling_rates_opt = high_t_cooling_rates
+    nclamp = 0
+    do i = 1, 27
+       do j = 1, 27
+          if (.not. high_t_cooling_rates_tflag(i,j)) cycle
+          do m = 1, n_ne_cool
+             ne = 10.d0**(lgne_cool_min + (m - 1) * dlgne_cool)
+             do k = 1, N_HIGH_T_COOLING_TEMP
+                if (high_t_cooling_temp(k) > 4.95d0) exit          ! the solver's table ends at 10^4.975 K
+                T = 10.d0**high_t_cooling_temp(k)
+                fs = fine_structure_ion(i, j, T, 1.d0, 0.d0, 0.d0, ne, 0.d0, 0.d0, 0.d0, 0.d0, 0.d0) / ne
+                tab = 10.d0**high_t_cooling_rates(k,m,i,j)
+                if (tab - fs <= 0.d0 .and. T > 3.d3) nclamp = nclamp + 1   ! the solver above the table's total
+                high_t_cooling_rates_opt(k,m,i,j) = log10(max(tab - fs, 1.d-50))
+             end do
+          end do
+       end do
+    end do
+    if (myid == 1) write(*,'(A,I0,A,I0,A)') ' Built the optical metal-line tables (table minus fine structure) on ', &
+         n_ne_cool, ' n_e; above 3000 K the solver exceeds the table at ', nclamp, ' (T, n_e, ion) points'
+END SUBROUTINE build_optical_metal_tables
+
+FUNCTION fine_structure_ion(i, j, T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z) result(rate)
+    ! The fine-structure solver of element i, ion stage j (0 if there is none)
+    implicit none
+    integer, intent(in):: i, j
+    real(dp), intent(in):: T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z
+    real(dp):: rate
+    rate = 0.d0
+    select case (100*i + j)
+    case (601);  rate = CI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (602);  rate = CII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (702);  rate = NII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (801);  rate = OI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (803);  rate = OIII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1002); rate = NeII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1401); rate = SiI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1402); rate = SiII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (1601); rate = SI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (2601); rate = FeI_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    case (2602); rate = FeII_fine_structure(T, n_ion, nH, nHp, ne, nH2, nHe, nHep, nHepp, z)
+    end select
+END FUNCTION fine_structure_ion
 
 FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
                      A_10, A_20, A_21, z, T, n_ion, ne, nH, &
@@ -2145,7 +2238,8 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     metal_cool_smooth_f2 = 0.5d0 * (tanh( (5.d-3) * ( (-1.d0 * T) + 1.d4 ) ) + 1.d0 )
 
     ! Cooling from primordial species
-    cooling_HI = (collisional_ionization_cooling_HI(T) + collisional_excitation_cooling_HI_seon20(T)) * ne * nH_I
+    cooling_HI = (collisional_ionization_cooling_HI(T) + collisional_excitation_cooling_HI_seon20(T) &
+                  + collisional_excitation_cooling_HI_2s(T)) * ne * nH_I
     cooling_HII = recombination_cooling_case_B_HII(T) * ne * nH_II
     cooling_HeI = collisional_ionization_cooling_HeI(T) * ne * nHe_I
     cooling_HeII = (collisional_ionization_cooling_HeII(T) + collisional_excitation_cooling_HeII(T) + recombination_cooling_case_B_HeII(T) + dielectronic_recombination_cooling_HeII(T)) * ne * nHe_II

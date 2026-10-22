@@ -29,10 +29,11 @@ module rtz_cooling_module
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
-   real(dp),parameter::T_min=0.1, T_frac=0.1
-   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6, x_frac=0.1
-   real(dp),parameter::Np_min=1d-13, Np_frac=0.2
-   real(dp),parameter::Fp_frac=0.5
+   real(dp),parameter::T_min=0.1
+   real(dp),parameter::x_MIN=1d-20, x_fm=1d-6
+   real(dp),parameter::Np_min=1d-13
+   ! The substep tolerances T_frac, x_frac, Np_frac, Fp_frac are namelist parameters now
+   ! (rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac in &RT_PARAMS, rt_parameters.f90)
    real(dp),dimension(nGroups, 3)::signc_dust
    real(dp), save :: t_rad = 0.0_dp
    real(dp), save :: t_cool = 0.0_dp
@@ -273,11 +274,11 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    call rtz_updateRTGroups_CoolConstants(ilevel)
 #endif
    ! Store some temporary variables reduce computations
-   one_over_T_FRAC = 1d0 / T_FRAC
-   one_over_x_FRAC = 1d0 / x_FRAC
+   one_over_T_FRAC = 1d0 / rtz_T_frac
+   one_over_x_FRAC = 1d0 / rtz_x_frac
 #ifdef RT
-   one_over_Np_FRAC = 1d0 / Np_FRAC
-   one_over_Fp_FRAC = 1d0 / Fp_FRAC
+   one_over_Np_FRAC = 1d0 / rtz_Np_frac
+   one_over_Fp_FRAC = 1d0 / rtz_Fp_frac
    one_over_rt_c_cgs = 1d0 / rt_c_cgs(ilevel)
    group_egy_erg(1:nGroups) = group_egy(1:nGroups) * eV2erg
    if(rt_isIR) then
@@ -929,6 +930,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer:: atomic_number, n_ions, i_other_Element, i_other_Ion, i_current_Element
       integer:: i_current_Ion
       real(dp):: Zsolar, advected_G0
+      ! Zsolar below is log10(Z/Zsun).  Z_over_Zsun is the LINEAR ratio, needed
+      ! wherever a metallicity multiplies an opacity.  dust_to_metal_over_mw is
+      ! the dust-to-METAL ratio relative to the MW, which is what the depletion
+      ! formula needs; dust_to_gas_mass_ratio_over_mw is dust-to-GAS, and the two
+      ! differ by Z/Zsun (see the comment at the depletion loop below).
+      real(dp):: Z_over_Zsun, dust_to_metal_over_mw
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
       real(dp):: tau_dust_LW
       logical :: lw_groups_present
@@ -956,6 +963,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       !-----------------------------------------------------------------------
       real(dp)::alpha
+      real(dp),dimension(nGroups)::recrad_f, recrad_g, recrad_fe, recrad_ge, recE
+      real(dp)::rec_charge, aN_g, aE_g
+      real(dp)::ots_PH, ots_heat, ots_dHe, ots_Hrate   ! rt_otsa: the He photons that ionize H, on the spot
+      real(dp)::ots_dH, kd136, capH                    ! rt_otsa: H's own ground-state photons the dust takes; the H cap
+      real(dp)::x_low                                   ! the less ionized state in the ion update's creation terms
+      real(dp)::crl
+      real(dp)::kd584
+      integer::g584
 
       ! RTZ variable initialization
       if (rtz_equilibrium_test.gt.0) then
@@ -966,18 +981,38 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! Include dust if we are tracking oxygen
       if (elements(8)%atomic_number .lt. 1) then
          dust_to_gas_mass_ratio_over_mw = 0.d0
+         dust_to_metal_over_mw = 0.d0
          Zsolar = 1.d-40
+         Z_over_Zsun = 0.d0
          nElement_dep(1:n_elements) = nElement(1:n_elements,icell)
       else
          Zsolar = 12.d0 + log10((nElement(8, icell)+nCO(icell)+1.d-20)/(nElement(1, icell)+1.d-20))
          dust_to_gas_mass_ratio_over_mw = dust_to_gas_scale_RR14(Zsolar)
          Zsolar = Zsolar - 8.69d0
+         Z_over_Zsun = 10.d0**Zsolar
+         ! dust_to_gas_scale_RR14 returns (D/G)/(D/G)_MW, which is what the dust
+         ! OPACITY needs.  The depletion formula below, 1 - (1-f_MW)*x, returns MW
+         ! depletion at x=1 and none at x=0, so its argument is the fraction of the
+         ! MW's per-metal lock-up that is realised -- the dust-to-METAL ratio.  The
+         ! two differ by Z/Zsun, so passing the dust-to-gas value under-depletes by
+         ! that factor: harmless at solar, a factor 10 at 0.1 Zsun.  Above the RR14
+         ! knee alpha_H = 1, so D/G is proportional to Z and this correctly returns 1.
+         dust_to_metal_over_mw = max(min(dust_to_gas_mass_ratio_over_mw &
+                                         / max(Z_over_Zsun, 1.d-30), 1.d0), 0.d0)
+         ! Diagnostic switch: run the metals with no dust at all.  Zeroing both
+         ! ratios removes the grain opacity (dustAbs/dustSc/dustRp below) and,
+         ! consistently, the depletion of metals onto those grains -- in this
+         ! model they are the same quantity, so they must be turned off together.
+         if (.not. rtz_include_dust) then
+            dust_to_gas_mass_ratio_over_mw = 0.d0
+            dust_to_metal_over_mw = 0.d0
+         end if
          do iElement=1,n_elements
 ! we don't need to distinguish C and O from other elements...?
 !            if (iElement .eq. 6 .or. iElement .eq. 8) then
 !               nElement_dep(iElement) = (nElement(iElement,icell) + nCO(icell)) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw)) - nCO(icell)
 !            else
-               nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_gas_mass_ratio_over_mw))
+               nElement_dep(iElement) = nElement(iElement,icell) * (1.d0 - ((1.d0 - elements(iElement)%depletion) * dust_to_metal_over_mw))
 !            end if
          end do
       end if
@@ -995,6 +1030,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_to_gas_mass_ratio_over_mw = rho_dust_tot / rho * GD_solar
       Zsolar = 12.d0 + log10((nElement(8, icell)+nCO(icell)+1.d-20)/(nElement(1, icell)+1.d-20))
       Zsolar = Zsolar - 8.69d0
+      Z_over_Zsun = 10.d0**Zsolar
+      ! CALIMA carries the dust explicitly, so no depletion factor is applied here
+      dust_to_metal_over_mw = 0.d0
       do iElement=1,n_elements
          nElement_dep(iElement) = nElement(iElement,icell)
       end do
@@ -1174,38 +1212,98 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
 
       ! UPDATE PHOTON DENSITY AND FLUX *************************************
+      rec_charge = 0d0     ! set below when recombination photons are emitted
+      ots_heat = 0d0 ; ots_dHe = 0d0 ; ots_Hrate = 0d0 ; ots_dH = 0d0
       if(rt_advect) then
          recRad(1:nGroups)=0. ; phAbs(1:nGroups)=0.
          ! Scattering rate; reduce the photon flux, but not photon density:
          phSc(1:nGroups)=0.
 
-         ! HKnote: OTSA is required with RTZ (for now)
+         ! With rt_OTSA the ground-state recombination photons are not emitted here, and
+         ! recombination() returns the case-B rate instead (the on-the-spot approximation).
 
-         ! try to mimic emission from gas under rt_solve_cooling
-         if (.not.rt_OTSA .and. rt_advect) then ! actually rt_advect does not need to be checked
-            do igroup=1,nGroups
-               ! photons from recombination should be spreaded on multiple radiation bins
-               ! but... at this moment dump on one bin
+         ! Emission from recombining gas, re-entering the radiation field.
+         !
+         ! The emission is spread over the groups using the table built at
+         ! startup (recombination_module::init_recrad_table): recombinations
+         ! straight to the ground state give a photon at the ionization edge,
+         ! the rest cascade and fluoresce to lower energies.  Some of the
+         ! helium fluorescence (He I 584 A at 21.2 eV, He II Ly-alpha at
+         ! 40.8 eV, the He II n=2 continuum at 13.6 eV) lands above the
+         ! hydrogen edge and ionizes hydrogen; the previous single-bin
+         ! treatment discarded all of it.
+         !
+         ! The rate is the case-A total, the same alpha the chemistry uses, so
+         ! emission and destruction are consistent by construction.
+         recE(1:nGroups) = 0d0    ! the physical energy of the emitted photons [eV cm-3 s-1]
+         if (.not.rt_OTSA .and. rt_advect) then
+            call recrad_fractions(TK, 1, nGroups, recrad_f, recrad_fe)
+            alpha = recombination(TK, 2, 1)                     ! H II -> H I
+            recRad(1:nGroups) = recRad(1:nGroups) &
+                 + alpha * nElement_dep(1)*dXion(1,2) * ne * recrad_f(1:nGroups)
+            recE(1:nGroups) = recE(1:nGroups) &
+                 + alpha * nElement_dep(1)*dXion(1,2) * ne * recrad_fe(1:nGroups)
 
-               ! H II -> H I
-               if ((groupL0(igroup) <= 13.60).and.(13.60 < groupL1(igroup))) then
-                  alpha = old_recombination_HII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(1)*dXion(1,2) * ne
-               end if
+            if (elements(2)%atomic_number > 0) then
+               call recrad_fractions(TK, 2, nGroups, recrad_f, recrad_fe)
+               ! the He I case-B cascade: 19.8 eV, 584 A and two-photon photons, from the
+               ! cell's T, n_e and its H0 and He0 (the 584 A photons survive the resonance
+               ! scattering on He0 only if H0 or dust destroys them first)
+               kd584 = 0d0
+               g584 = 0
+               do igroup = 1, nGroups
+                  if (groupL0(igroup) <= 21.22d0 .and. (21.22d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) g584 = igroup
+               end do
+               if (g584 > 0) kd584 = dustAbs(g584)/rt_c_cgs(ilevel)
+               call heI_recrad_cell(TK, ne, nElement_dep(1)*dXion(1,1), nElement_dep(2)*dXion(2,1), kd584, &
+                    groupL0, groupL1, nGroups, recrad_g, recrad_ge)
+               alpha = recombination(TK, 2, 2)                  ! He II -> He I
+               recRad(1:nGroups) = recRad(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * (recrad_f(1:nGroups) + recrad_g(1:nGroups))
+               recE(1:nGroups) = recE(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,2) * ne * (recrad_fe(1:nGroups) + recrad_ge(1:nGroups))
 
-               ! He II -> He I
-               if ((groupL0(igroup) <= 24.590).and.(24.590 < groupL1(igroup))) then
-                  alpha = old_recombination_HeII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,2) * ne
-               end if
+               call recrad_fractions(TK, 3, nGroups, recrad_f, recrad_fe)
+               alpha = recombination(TK, 3, 2)                  ! He III -> He II
+               recRad(1:nGroups) = recRad(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_f(1:nGroups)
+               recE(1:nGroups) = recE(1:nGroups) &
+                    + alpha * nElement_dep(2)*dXion(2,3) * ne * recrad_fe(1:nGroups)
+            end if
+         end if
 
-               ! He III -> He II
-               if ((groupL0(igroup) <= 54.420).and.(54.420 < groupL1(igroup))) then
-                  alpha = old_recombination_HeIII(TK)
-                  recRad(igroup) = recRad(igroup) + alpha * nElement_dep(2)*dXion(2,3) * ne
-               end if
-
+         ! Under OTSA the helium recombination photons that ionize hydrogen (the He I case-B cascade, the
+         ! H0 share of the He I ground-state photons, the He II case-B ones) are absorbed where they are made
+         ! (recombination_module::otsa_he_photons), as the ground-state photons are by recombination()
+         ! and H's own ground-state photons go to the dust by its share of the opacity at 13.6 eV
+         ! (recombination_module::otsa_h_dust_alpha)
+         if (rt_OTSA) then
+            kd136 = 0d0
+            do igroup = 1, nGroups
+               if (groupL0(igroup) <= 13.598d0 .and. (13.598d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) &
+                    kd136 = dustAbs(igroup)/rt_c_cgs(ilevel)
             end do
+            ots_dH = otsa_h_dust_alpha(TK, nElement_dep(1)*dXion(1,1), kd136)
+         end if
+         if (rt_OTSA .and. elements(2)%atomic_number > 0) then
+            kd584 = 0d0
+            do igroup = 1, nGroups
+               if (groupL0(igroup) <= 21.22d0 .and. (21.22d0 < groupL1(igroup) .or. groupL1(igroup) == 0d0)) &
+                    kd584 = dustAbs(igroup)/rt_c_cgs(ilevel)
+            end do
+            call otsa_he_photons(TK, ne, nElement_dep(1)*dXion(1,1), nElement_dep(2)*dXion(2,1), &
+                 nElement_dep(2)*dXion(2,2), nElement_dep(2)*dXion(2,3), kd584, groupL0, groupL1, nGroups, &
+                 ots_PH, ots_heat, ots_dHe)
+            ! On the spot, H can take at most what it can absorb in the step: its recombinations plus its neutral
+            ! atoms. In gas where hydrogen is only a trace (a pure-He slab) the helium photons are ~1e4 times that,
+            ! and giving them all to the trace H0 broke the ion update; the excess escapes. Never reached where H
+            ! dominates (there the helium photons are ~10% of H's recombinations).
+            capH = recombination(TK, 2, 1) * ne * nElement_dep(1)*dXion(1,2) + nElement_dep(1)*dXion(1,1)/ddt(icell)
+            if (ots_PH > capH) then
+               ots_heat = ots_heat * capH/ots_PH
+               ots_PH = capH
+            end if
+            if (nElement_dep(1)*dXion(1,1) > 0d0) ots_Hrate = ots_PH / (nElement_dep(1)*dXion(1,1))
          end if
 
          ! ABSORPTION/SCATTERING OF PHOTONS BY GAS
@@ -1227,6 +1325,35 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                end if
             end if
          end do
+         ! The recombination photons heat, where they are absorbed, with their group's mean energy
+         ! (group_egy sigec/signc - the absorber's edge, PHrate) instead of their own (the edge, a line,
+         ! or the edge + kT; recrad_efrac). The difference is charged to the gas here, for the cell's own
+         ! absorbers (gas by n signc, dust by its absorption, which does not heat the gas): a reabsorbed
+         ! photon then deposits its physical energy, and the electron's kinetic energy of a ground-state
+         ! recombination, absent from the case-B recombination cooling, is returned exactly. Without it,
+         ! the H ground-state photons heat 0.73 eV each and the He I ones 3.8 eV (He0) or 3.4 eV (H0) too
+         ! much: 11-13% of the heating of a self-T H+He H II region (RAMSES_dev/studies/heI_heating).
+         rec_charge = 0d0
+         if (.not.rt_OTSA .and. rt_advect) then
+            do igroup=1,nGroups
+               ! the H-ionizing groups only: there H0, He0 and He+ absorb the photons in the nebula. Below
+               ! 13.6 eV the only gas absorbers are trace metals, and most photons leave the region.
+               if (recRad(igroup) <= 0d0 .or. groupL0(igroup) < 13.55d0) cycle
+               aN_g = 0d0 ; aE_g = 0d0
+               do i_current_Element=1,n_elements
+                  if (elements(i_current_Element)%atomic_number.gt.0) then
+                     do i_current_Ion=1,elements(i_current_Element)%n_ions-1
+                        aN_g = aN_g + nElement_dep(i_current_Element)*dXion(i_current_Element,i_current_Ion) &
+                                      * signc(igroup,i_current_Element,i_current_Ion)
+                        aE_g = aE_g + nElement_dep(i_current_Element)*dXion(i_current_Element,i_current_Ion) &
+                                      * sigec(igroup,i_current_Element,i_current_Ion)
+                     end do
+                  end if
+               end do
+               if (aN_g > 0d0) rec_charge = rec_charge + eV2erg &
+                    * (recRad(igroup)*group_egy(igroup)*aE_g - recE(igroup)*aN_g) / (aN_g + dustAbs(igroup))
+            end do
+         end if
 #ifndef CALIMA
          ! IR, optical and UV depletion by dust absorption: ----------------
          ! IR scattering/abs on dust (abs after T update)
@@ -1459,6 +1586,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, & 
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names)
+         ! the heat the recombination photons deposit beyond their physical energy (above), and under OTSA the
+         ! photoheating of the helium photons that ionize hydrogen on the spot (otsa_he_photons); neither
+         ! depends on T, so the central difference below is unchanged
+         Crate = Crate - rec_charge + ots_heat
          Crate_prime = (Crate_prime_a - Crate_prime_b) / (2.d-5*TK) ! Central difference should be more stable
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
@@ -1541,7 +1672,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             one_over_C_v = mH*mu*(gamma-1d0) / (rho*kB)
             E_rad = group_egy_erg(iIR) * dNp(iIR)
             dE_T = (rt_c_cgs(ilevel) * E_rad - c_cgs*a_r*TK**4)                    &
-                  /(1d0/(kAbs_loc(iIR) * Zsolar * rho * ddt(icell))  &
+                  ! Z_over_Zsun, not Zsolar: the latter is log10(Z/Zsun), which is
+                  ! negative below solar and exactly zero at solar.
+                  /(1d0/(kAbs_loc(iIR) * Z_over_Zsun * rho * ddt(icell))  &
                   +4d0*c_cgs * one_over_C_v *a_r*TK**3+rt_c_cgs(ilevel))
             dT2 = dT2 + 1d0/mu * one_over_C_v * dE_T
             dNp(iIR) = dNp(iIR) - dE_T * one_over_egy_IR_erg
@@ -2110,6 +2243,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! previous ions are already computed
                if (iIon.lt.n_ions) then
                   saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
+                  ! OTSA: the He I ground-state photons H0 (or dust) takes do not re-ionize He0
+                  if (iElement == 2 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dHe
+                  ! OTSA with dust: the share of H's own ground-state photons the grains take
+                  if (iElement == 1 .and. iIon == 1) saved_rates(2,1) = saved_rates(2,1) + ots_dH
                   if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
                   ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
                   ! (at the background alone every grain is as in the dark, with its largest rate)
@@ -2119,11 +2256,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Initialize the change to zero
                dUU = 0.d0
 
+               ! The less ionized state of the creation terms (H and He: see the implicit form before the update)
+               x_low = 0d0
+               if (iIon > 1) then
+                  x_low = dXion(iElement,iIon-1)
+               end if
                !/////////////////////////
                !//       Creation      //
                !/////////////////////////
                cr = 0.d0
-
+               crl = 0.d0     ! the creation rate coefficients of the less ionized state (times x_low below)
                ! Account for molecular hydrogen
                if (iElement.eq.1 .and. iIon.eq.1 .and. isH2_rtz) then
                   ! Note: no factor of 2 needed since is 2*xH2
@@ -2140,35 +2282,35 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (rtz_include_collisional_ionization) then
                   if (iIon.gt.1) then 
                      ! cr = cr + (collisional_ionization(TK, iIon-1, iElement) * ne * dXion(iElement,iIon-1))
-                     cr = cr + (saved_rates(iIon-1,2) * ne * dXion(iElement,iIon-1))
+                     crl = crl + (saved_rates(iIon-1,2) * ne)
                   end if
                end if
 
                ! UVB Photoionization of the less excited state
                if (rtz_include_HM12_UVB) then 
                   if (iIon.gt.1) then 
-                     cr = cr + (HM12_UVB_z(iElement,iIon-1,1) * ss_factor * dXion(iElement,iIon-1))
+                     crl = crl + (HM12_UVB_z(iElement,iIon-1,1) * ss_factor)
                   end if
                end if
 
                ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
                if (rtz_include_photoionization) then 
                   if (iIon.eq.2) then 
-                     cr = cr + (UV_background_G0 * elements(iElement)%G0_photo_rate * dXion(iElement,iIon-1))
+                     crl = crl + (UV_background_G0 * elements(iElement)%G0_photo_rate)
                   end if
                end if
 
                ! Cosmic ray ionization of the less excited state
                if (rtz_include_cosmic_ray_ionization) then 
                   if (iIon > 1) then 
-                     cr = cr + (cosmic_ray_ionization_rates(iElement,iIon-1) * total_cosmic_ray_ionization_rate * dXion(iElement,iIon-1))
+                     crl = crl + (cosmic_ray_ionization_rates(iElement,iIon-1) * total_cosmic_ray_ionization_rate)
                   end if
                end if
 
                ! Cosmic ray ionization of the less excited state from induced UV
                if (rtz_include_cosmic_ray_ionization) then 
                   if (iIon.eq.2) then 
-                     cr = cr + (cosmic_ray_ionization_rates_induced_UV(iElement) * cosmic_ray_scale_factor * dXion(iElement,iIon-1))
+                     crl = crl + (cosmic_ray_ionization_rates_induced_UV(iElement) * cosmic_ray_scale_factor)
                   end if
                end if
 
@@ -2194,7 +2336,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      !        end do ! End loop over lesser ions
                      !    end do ! End loop over groups
                      !  else
-                        cr = cr + (dXion(iElement,iIon-1) * SUM(signc(:,iElement,iIon-1)*dNp))
+                        crl = crl + (SUM(signc(:,iElement,iIon-1)*dNp))
+                        ! OTSA: H0 photoionized on the spot by helium recombination photons
+                        if (iElement == 1 .and. iIon == 2) crl = crl + ots_Hrate
                      !end if
                   end if
                end if
@@ -2265,6 +2409,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (rtz_include_photoionization.and.rt_advect) then
                   if (iIon .lt. n_ions) then 
                      de = de + SUM(signc(:,iElement,iIon)*dNp)
+                     if (iElement == 1 .and. iIon == 1) de = de + ots_Hrate
                   end if
                end if
 #endif
@@ -2320,6 +2465,17 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                !/////////////////////////
                !//       Update        //
                !/////////////////////////
+               ! The creation from the less ionized state. For H and He the first ion is solved implicitly against
+               ! the neutral fraction 1 - x(ion) - x(others) (the value the fractions are reset to after this loop,
+               ! and the one the photon absorption uses): the ionizations booked equal the photons absorbed, and the
+               ! fraction stays in [0, 1]. This loop's own neutral update gave an intermediate value that booked ~0.7%
+               ! fewer ionizations than photons absorbed (1D H+He slab, T = 1e4 K).
+               if (iElement <= 2 .and. iIon == 2) then
+                  cr = cr + crl * max(0d0, 1d0 - sum(dXion(iElement,3:elements(iElement)%n_ions + elements(iElement)%n_mol)))
+                  de = de + crl
+               else
+                  cr = cr + crl * x_low
+               end if
                if (de * ddt(icell) < 1.d-6) then
                   dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
                else
