@@ -1,0 +1,288 @@
+! stromgren2d_rtz_calima: a cheap 2D Stromgren test of the RTZ + CALIMA
+! dust charging, photoelectric heating and recombination cooling, in particular
+! charging_model='WDB06rt' (charge from the local RT groups). Same chemistry,
+! dust (4 bins) and PAHs (2 bins) as the 3D RAMSES_dev/stromgren/calima_cooling
+! run, but 2D, 64^2 cells, static gas and one point source in the corner that
+! emits a 4e4 K blackbody into the 8 groups (Q(>13.6 eV) = 2.5e29 in RAMSES 2D
+! source units). Build: RTZ=1 CALIMA=1 NDIM=2 NGROUPS=8 NDUST=4 NPAH=2 CO=1.
+&RUN_PARAMS
+hydro=.true.
+rt=.true.
+static_gas=.true.
+ncontrol=10
+/
+&AMR_PARAMS
+levelmin=6
+levelmax=6
+ngridtot=20000
+boxlen=1.0                        ! 1 kpc
+/
+&INIT_PARAMS
+nregion=1
+region_type(1)='square'
+x_center=0.5
+y_center=0.5
+length_x=100.0
+length_y=100.0
+exp_region=10.0
+d_region=1.366432d-01             ! n_H = 0.1 cm^-3
+p_region=9.407578d-08             ! 100 K, neutral
+var_region(1,1) = 0.73738783
+var_region(1,2) = 0.24924204
+var_region(1,3) = 0.001185171360493
+var_region(1,4) = 0.00069290468
+var_region(1,5) = 0.004368967456866697
+var_region(1,6) = 0.0012564824
+var_region(1,7) = 0.00019008186820957437
+var_region(1,8) = 6.649475599999996d-05
+var_region(1,9) = 0.00030926749
+var_region(1,10) = 0.00010160610667013232
+var_region(1,11) = 0.0
+var_region(1,12) = 0.00015829471616183943
+var_region(1,13) = 0.00015829471616183943
+var_region(1,14) = 0.0005106243116725803
+var_region(1,15) = 0.0005106243116725803
+var_region(1,16) = 0.0018350887061267984
+var_region(1,17) = 0.0018350887061267984
+var_region(1,18) = 0.999999
+var_region(1,19) = 0.000001
+var_region(1,20) = 0.999990
+var_region(1,21) = 0.000009
+var_region(1,22) = 0.000001
+var_region(1,23) = 0.999994
+var_region(1,24) = 0.000001
+var_region(1,25) = 0.000001
+var_region(1,26) = 0.000001
+var_region(1,27) = 0.000001
+var_region(1,28) = 0.000001
+var_region(1,29) = 0.000001
+var_region(1,30) = 0.999995
+var_region(1,31) = 0.000001
+var_region(1,32) = 0.000001
+var_region(1,33) = 0.000001
+var_region(1,34) = 0.000001
+var_region(1,35) = 0.000001
+var_region(1,36) = 0.999995
+var_region(1,37) = 0.000001
+var_region(1,38) = 0.000001
+var_region(1,39) = 0.000001
+var_region(1,40) = 0.000001
+var_region(1,41) = 0.000001
+var_region(1,42) = 0.999995
+var_region(1,43) = 0.000001
+var_region(1,44) = 0.000001
+var_region(1,45) = 0.000001
+var_region(1,46) = 0.000001
+var_region(1,47) = 0.000001
+var_region(1,48) = 0.999995
+var_region(1,49) = 0.000001
+var_region(1,50) = 0.000001
+var_region(1,51) = 0.000001
+var_region(1,52) = 0.000001
+var_region(1,53) = 0.000001
+var_region(1,54) = 0.999995
+var_region(1,55) = 0.000001
+var_region(1,56) = 0.000001
+var_region(1,57) = 0.000001
+var_region(1,58) = 0.000001
+var_region(1,59) = 0.000001
+var_region(1,60) = 0.999995
+var_region(1,61) = 0.000001
+var_region(1,62) = 0.000001
+var_region(1,63) = 0.000001
+var_region(1,64) = 0.000001
+var_region(1,65) = 0.000001
+var_region(1,66) = 0.999995
+var_region(1,67) = 0.000001
+var_region(1,68) = 0.000001
+var_region(1,69) = 0.000001
+var_region(1,70) = 0.000001
+var_region(1,71) = 0.000001
+var_region(1,72) = 0.0
+/
+&OUTPUT_PARAMS
+noutput=4
+tout=1.0,2.0,3.0,5.0              ! Myr (output_00002..00005)
+/
+&HYDRO_PARAMS
+gamma=1.6666667
+courant_factor=0.8
+scheme='muscl'
+riemann='hllc'
+pressure_fix=.true.
+beta_fix=0.5
+data_dir='../../../rtzdata_for_public_ramses/'
+/
+&COOLING_PARAMS
+cooling=.true.
+metal=.true.
+/
+&UNITS_PARAMS
+units_length=3.09d21              ! 1 kpc
+units_density=1.66000d-24
+units_time=3.1556926d13           ! 1 Myr
+/
+&BOUNDARY_PARAMS
+nboundary=4
+ibound_min=-1,+1,-1,-1
+ibound_max=-1,+1,+1,+1
+jbound_min= 0, 0,+1,-1
+jbound_max= 0, 0,+1,-1
+bound_type= 1, 2, 2, 1            ! mirror at x=0 and y=0 (source corner), outflow elsewhere
+/
+&RT_PARAMS
+X=0.73738783
+Y=0.24924204
+rt_flux_scheme='glf'
+rt_courant_factor=0.8
+rt_c_fraction=0.001
+rt_smooth=.true.
+rt_nsubcycle=10
+rt_otsa=.true.
+rt_is_init_xion=.false.
+rt_output_coolstats=.true.
+rtz_cooling=.true.
+rtz_include_collisional_ionization=.true.
+rtz_include_photoionization=.true.
+rtz_include_cosmic_ray_ionization=.true.
+rtz_include_charge_exchange=.true.
+rtz_include_dust_recombination=.true.
+rtz_include_HM12_UVB=.false.
+isH2_rtz=.true.
+isCO_rtz=.true.
+rtz_UV_background_G0=1.0d-40
+rtz_primary_cosmic_ray_ionization_rate=1.0d-40
+rt_nsource=8
+rt_source_type=8*'point'
+rt_src_x_center=8*0.0
+rt_src_y_center=8*0.0
+rt_src_length_x=8*0.0
+rt_src_length_y=8*0.0
+rt_src_group=1,2,3,4,5,6,7,8
+! 4e4 K blackbody, photons/s per group, normalised to Q(>13.6 eV) = 2.5e29
+rt_n_source=1.9018e+28,3.5673e+29,4.5729e+29,1.2811e+29,6.3669e+28,1.5933e+29,2.6981e+28,1.9819e+25
+/
+&RT_GROUPS
+groupL0 = 0.1, 1.0, 5.6, 11.2, 13.6, 15.2, 24.59, 54.42
+groupL1 = 1.0, 5.6, 11.2, 13.6, 15.2, 24.59, 54.42, 500.0
+/
+&CALIMA_PARAMS
+!----------- Global CALIMA parameters -----------!
+dust_log=.true. ! Activate the logging of dust evolution
+dust_eq_test=.false. ! Whether we are running the equilibrium tests
+
+!----------- Dust evolution switches -----------!
+dust_SNdest=.false. ! Dust destruction in SN (II and Ia) shocks
+dust_inSN=.false.  ! Dust injection in SNII ejecta
+dust_inSNIa=.false. ! Dust injection in SNIa ejecta
+dust_inSW=.false. ! Dust in stellar winds
+dust_coagulation=.false. ! Activate dust coagulation
+dust_coagulation_boost=.false. ! Boost coagulation rate based on subgrid turbulence
+dust_shattering=.false. ! Activate dust shattering
+dust_shattering_SN=.false. ! Allow for shattering in SN (II and Ia) shocks
+dust_accretion=.false. ! Allow gas-phase accretion
+dust_sputtering=.false. ! Allow dust sputtering
+dust_sputtering_charge=.false. ! Add the dependence on grain charge to sputtering efficiency
+dust_acc_coulomb=.false. ! Coulomb enhancement of gas-phase accretion
+dust_ratd=.false. ! Activate RAT-d
+dust_coll_cooling=.true. ! Activate dust collisional cooling
+dust_coll_lowT=.true. ! Extend collisional cooling to low T based on Hollenbach and McKee
+dust_coll_charge=.false. ! Coulomb effects on cooling efficiency
+dust_pe_heating=.true. ! Activate the grain-assisted PEH and recombination cooling
+dust_pe_heating_isrf=.true. ! PEH and recombination using ISRF-averaged tables
+ratd_only_rtadv=.false. ! RAT-D only with rt_advect=.true.
+poppe_ice_enhancement=.false. ! Enhancement of v_thres in coagulation due to ice formation
+H2ondust=.true. ! Activate H2 formation on dust grains
+dust_turbulent_model=.false. ! Activate the turbulent model for all dust-related processes
+
+!----------- PAH evolution switches -----------!
+pah_accretion=.false. ! Activate direct C-accretion onto PAHs
+pah_acc_spu=.false. ! Activate PAH destruction due to C-accretion
+pah_coalescence=.false. ! Activate clustering of small PAHs to form large PAHs
+pah_freezing=.false. ! Activate the freezing of PAHs on carbonaceous grains
+! pah_desorption=.false. ! Activate the desorption of PAHs from carbonaceous grains (not implemented yet)
+pah_photolysis=.false. ! Destruction of PAHs by UV photons
+pah_sn_destruction=.false. ! Destruction of PAHs in SN (II and Ia) shocks
+pah_cluster_evaporation=.false. ! Photo-evaporation of PAH clusters
+pah_AGBwinds=.false. ! PAH injection in AGB winds
+pah_sputtering=.false. ! PAH destruction in hot gas
+pah_pe_heating=.true. ! PAH PEH and recombination
+pah_pe_heating_isrf=.true. ! Use the ISRF-averaged PEH model for PAHs
+pah_pe_nolyman=.false. ! Do not consider PEH contribution from photons above the Lyman limit
+H2onpah=.false. ! Allow the formation of H2 on PAHs
+
+!----------- Dust modelling choices -----------!
+sputtering_model='RM2026'
+accretion_model='LeBourlot2012'
+shattering_model='Smoluchowski1916'
+coagulation_model='Smoluchowski1916'
+dust_velocity_model='Hirashita2019'
+charging_model='WDB06rt'  ! 'RM2026' for the original tables
+nZmix=3 ! Number of representative charges to reconstruct grain-ion interactions
+
+!----------- PAH modelling choices -----------!
+photolysis_model='RM2026'
+peh_attach_model='Berne'
+coalescence_model='Totton2012'
+pah_h2_model='RM2026'
+pah_growth_model='Omont2025_sg'
+pah_sputtering_model='RM2026'
+cluster_evaporation_model='Montillaud2014'
+
+!----------- Efficiency parameters -----------!
+Sconstant=0.333333333d0
+nh_coa=1d1,1d1
+nhmax_acc=1d4,1d4
+nhmax_coa=1d10,1d10
+nhmax_sha=1d10,1d10
+dust_SNdest_eff=0.15d0,0.10d0
+dust_SNsha_eff=0.1d0,0.1d0
+dust_SNII_cond_eff=0.5d0,0.5d0
+dust_SNIa_cond_eff=0.0d0,0.0d0
+dust_AGB_cond_eff=0.5d0,0.5d0
+Coulomb_enhance=1d0,1d0
+
+!----------- Grain material parameters -----------!
+tensile_strength=2d8,1.5d9
+Youngs_modulus=1.0d11,5.4d11
+Poisson_ratio=0.32,0.17
+surf_energy=75d0,25d0 
+work_function=4.4d0,8.0d0 ! [eV]
+band_gap=0.0d0,5.0d0 ! [eV]
+e_escape_length=1d-7,1d-7 ! [cm]
+separate_refractive_index=.true.,.false.
+slope_frag_func=0.4333d0
+
+!----------- Initialisation parameters -----------!
+DTMinit=0.4d0
+fpah_ini=0.1d0
+
+!----------- DustBin properties -----------!
+! Chemtype 1: C
+dust_composition(1,6) = 1d0
+
+! Chemtype 2: O4MgSiFe
+dust_composition(2,8)  = 4d0
+dust_composition(2,12) = 1d0
+dust_composition(2,14) = 1d0
+dust_composition(2,26) = 1d0
+dustbins_per_chemtype=2,2
+asize=0.01d0,0.1d0,0.005d0,0.1d0 ! Grain size bin centre [microns]
+sgrain=2.2d0,2.2d0,3.3d0,3.3d0 ! Grain material density [g/cm^3]
+amin = 4d-3,3d-2,1d-3,2d-2 ! Minimum size grain bin [microns]
+amax = 3d-2,1d0,2d-2,1d0 ! Maximum size grain bin [microns]
+fmass_ej = 0.1,0.9,0.1,0.9 ! Fraction of mass in dust ejecta for each bin
+
+!----------- PAHBin properties -----------!
+pah_nc = 54,418 ! [C]
+pah_nc_min = 12,101 ! [C]
+pah_nc_max = 101,29952 ! [C]
+spah = 2d0,2d0 ! PAH molecule material density [g/cm^3]
+pah_SNdest_eff = 1d0,1d0 ! Destruction efficiency by SN shocks
+fpah_inwind = 0.1,0.1d0 ! Injection in AGB winds
+pah_ncharge_states = 4, 4 ! Number of charge states
+pah_is_cluster = .false.,.true.
+
+!----------- Data files -----------!
+dust_tables_dir='tables/'   ! relative: CALIMA builds some table names in character(len=128)
+/

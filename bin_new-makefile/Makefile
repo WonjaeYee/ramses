@@ -340,7 +340,7 @@ ifeq ($(CALIMA),1)
    ifeq ($(RTZ),1)
       MODOBJ += safe_math_module.o rtz_module.o
    endif
-   MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_cooling.o \
+   MODOBJ += dust_utils.o dustbin_types.o dust_commons.o dust_charging.o dust_charging_rtgroups.o dust_cooling.o \
                dust_dynamics.o dust_photophysics.o dust_seeding.o dust_surface_chemistry.o \
                dust_rates.o dust_solver.o dust_init.o dust_interface.o
 endif

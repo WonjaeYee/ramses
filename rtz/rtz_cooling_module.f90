@@ -149,6 +149,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !-------------------------------------------------------------------------
 #ifdef CALIMA
    use dust_commons, only: dust_log, dust_log_tdust_solver_print_reset
+   use dust_interface, only: rtgroups_reset_warm
 #endif
    implicit none
    real(dp):: aexp
@@ -553,6 +554,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
    ! Otherwise perform the normal loop
    else
+#ifdef CALIMA
+      call rtgroups_reset_warm(ncell)    ! WDB06rt: a new vector of cells
+#endif
       tleft(1:ncell) = dt                !       Time left in dt for each cell
       ddt(1:ncell) = dt                  ! First guess at sub-timestep lengths
       if (present(ddt_initial)) ddt(1:ncell) = ddt_initial
@@ -818,6 +822,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end do ! end loop over active cells
          nAct=nAct_next
       end do ! end iterative loop
+#ifdef CALIMA
+      dust_helper%icell = 0              ! WDB06rt: past this vector, no cell's warm state applies
+#endif
 
       ! loop statistics
       max_cool_loopcnt=max(max_cool_loopcnt,loopcnt)
@@ -1021,6 +1028,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! total density the contribution from dust and PAHs
       ! 1. Reset the dust helper to get ready for this cool step
       call dust_helper%reset()
+      dust_helper%icell = icell          ! WDB06rt: warm state of this cell
 
       ! 2. Compute the total density and metallicity
       rho_dust_tot = 0.d0
