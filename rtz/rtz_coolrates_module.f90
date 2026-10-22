@@ -2180,7 +2180,7 @@ FUNCTION CO_cooling_koyama_00(n, nH2, nHI, nCO, T) result(rate)
 END FUNCTION CO_cooling_koyama_00
 
 SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fractions, &
-                     nCO, f_shd, local_G0, background_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
+                     nCO, f_shd, trans_dust, local_G0, background_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, dNp, ilevel, rate, &
                      saved_cooling_rates, saved_cooling_rates_names, t_indep_out, t_indep_in)
     ! Main cooling driver
     ! 
@@ -2190,6 +2190,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     ! element_number_densities --> vector with element number densities [cm^-3]
     ! element_ion_fractions --> 2D array with ion fractions
     ! G0 --> habing band radiation field (MW units)
+    ! trans_dust --> transmission of the advected field through the dust inside the cell (as in f_shd)
     ! f_dg --> dust to gas mass ratio normalized by MW value
     ! xe --> electron fraction i.e. ne / (rho/mH)
     ! xi_h_cr --> cosmic ray ionization rate
@@ -2203,7 +2204,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     use dust_interface, only: compute_dust_coolrates
 #endif
     implicit none
-    real(dp), intent(in):: T, ne, aexp, f_shd, local_G0, background_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, nCO
+    real(dp), intent(in):: T, ne, aexp, f_shd, trans_dust, local_G0, background_G0, f_dg, xe, xi_h_cr, xi_h2_cr, ss_factor, nCO
     real(dp), intent(in):: element_number_densities(27)
     real(dp), intent(in):: element_ion_fractions(27,27)
     real(dp), dimension(nGroups), intent(in):: dNp
@@ -2237,6 +2238,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     real(dp):: uvb_photoheat
     real(dp):: uvb_photoheat_G0
     real(dp):: h2_heat,h2_formation_dust,k_pd_H2
+    real(dp):: G0_shd
     integer:: ig
     real(dp):: charge_transfer_heat_cool
     real(dp):: photoheating
@@ -2244,6 +2246,11 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     integer:: save_cooling_counter
 
     reuse = present(t_indep_in)
+    ! The FUV field the grains and the sub-ionising photoheating see: the advected field through the
+    ! dust inside the cell, as the H2 (f_shd) and CALIMA's charging see it, plus the unattenuated background
+    G0_shd = local_G0*trans_dust + background_G0
+    ! mode 3: the background is the field of the test, through the same dust (rtz_cool_step, bg_dust)
+    if (rtz_equilibrium_test .eq. 3) G0_shd = (local_G0 + background_G0)*trans_dust
     h2_formation_dust = -1.d0
     save_cooling_counter = 1
     saved_cooling_rates_names = ''
@@ -2468,24 +2475,24 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
 
     ! Dust cooling
 #ifndef CALIMA
-    dust_rec_cooling_rate = dust_recombination_cooling(T, local_G0+background_G0, ne, f_dg, element_number_densities(1))
-    ! dust_rec_cooling = dust_recombination_cooling_WD01(T, local_G0+background_G0, ne, f_dg, element_number_densities(1))
-    dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, local_G0+background_G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+    dust_rec_cooling_rate = dust_recombination_cooling(T, G0_shd, ne, f_dg, element_number_densities(1))
+    ! dust_rec_cooling = dust_recombination_cooling_WD01(T, G0_shd, ne, f_dg, element_number_densities(1))
+    dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, G0_shd, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
     
     ! Photoelectric heating --> note factor of 1.7 is because IUV
-    photoelectric_heat = photoelectric_heating(T, local_G0+background_G0, ne, f_dg, element_number_densities(1))
-    ! photoelectric_heat = photoelectric_heating_WD01(T, local_G0+background_G0, ne, f_dg, element_number_densities(1))
+    photoelectric_heat = photoelectric_heating(T, G0_shd, ne, f_dg, element_number_densities(1))
+    ! photoelectric_heat = photoelectric_heating_WD01(T, G0_shd, ne, f_dg, element_number_densities(1))
 
 #else
-    call compute_dust_coolrates(dust_helper, local_G0+background_G0, T, ne, element_number_densities(:),&
+    call compute_dust_coolrates(dust_helper, G0_shd, T, ne, element_number_densities(:),&
                                 element_ion_fractions(:,:),nH2,nCO,dust_rec_cooling_rate,&
                                 photoelectric_heat,dust_coll_cooling_rate,h2_formation_dust,dNp)
     if ((.not.dust_pe_heating).and.(.not.pah_pe_heating)) then
-        dust_rec_cooling_rate = dust_recombination_cooling(T, local_G0+background_G0, ne, f_dg, element_number_densities(1))
-        photoelectric_heat = photoelectric_heating(T, local_G0+background_G0, ne, f_dg, element_number_densities(1))
+        dust_rec_cooling_rate = dust_recombination_cooling(T, G0_shd, ne, f_dg, element_number_densities(1))
+        photoelectric_heat = photoelectric_heating(T, G0_shd, ne, f_dg, element_number_densities(1))
     end if
     if (.not.dust_coll_cooling) then
-        dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, local_G0+background_G0, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
+        dust_coll_cooling_rate =  dust_gas_collisional_cooling(T, G0_shd, xH2*2.d0, aexp, element_number_densities(1), f_dg) 
     end if
 #endif
     dust_cooling = dust_rec_cooling_rate + dust_coll_cooling_rate
@@ -2532,7 +2539,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
     if (reuse) then
        uvb_photoheat_G0 = t_indep_in%uvb_G0
     else
-       uvb_photoheat_G0 = photoheating_UVB_G0(local_G0+background_G0, element_number_densities,element_ion_fractions)
+       uvb_photoheat_G0 = photoheating_UVB_G0(G0_shd, element_number_densities,element_ion_fractions)
        if (present(t_indep_out)) t_indep_out%uvb_G0 = uvb_photoheat_G0
     end if
 
@@ -2555,7 +2562,7 @@ SUBROUTINE all_cooling(T, ne, aexp, element_number_densities, element_ion_fracti
        end if
     end if
     ! h2_heat = H2_heating(G0, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, xi_h2_cr)
-    h2_heat = H2_heating_bialy(local_G0*f_shd+background_G0, k_pd_H2, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, &
+    h2_heat = H2_heating_bialy(local_G0*f_shd+background_G0*merge(f_shd, 1d0, rtz_equilibrium_test .eq. 3), k_pd_H2, nH2, nH, T, xH2, xHI, xHII, xe, f_dg, &
                                xi_h2_cr, h2_formation_dust)
 
     ! Save cooling rates

@@ -611,6 +611,7 @@ SUBROUTINE read_rt_groups()
   call initialize_cross_sections_from_blackbody_dust_pah(1.d5, groupL0, groupL1, nGroups)
 #endif
   call init_dust_mean_cross_sections(sed_dir)
+  call init_dust_band_cross_sections()          ! the in-cell dust shielding of the FUV, LW and CO bands
   ! Local-field grain charging tables (charging_model='WDB06rt')
   if (trim(charging_model) == 'WDB06rt') call init_dust_charging_rtgroups(groupL0, groupL1, nGroups)
   ! all CALIMA tables are built: their memory per rank

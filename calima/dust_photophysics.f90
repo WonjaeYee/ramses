@@ -1675,108 +1675,61 @@ module dust_optics
         fRpLambda_dust = f * lambda * getRpCrosssection(lambda,isize)
     END FUNCTION fRpLambda_dust
 
-    subroutine compute_lw_dust_optical_depth(rho_dust_cell, dx, dust_to_gas_mw, nHI, nH2, tau_LW)
-        ! Compute the LW-band dust optical depth for a single cell.
-        !
-        ! Under CALIMA the per-bin grain cross-sections from the evolved dust model
-        ! are used; if no LW RT groups are defined (isLW all zero) the result falls
-        ! back to the fixed MW formula so that non-RT runs are unchanged.
-        !
-        ! Arguments
-        ! ---------
-        ! rho_dust_cell(ndust) : dust mass density per bin  [g cm^-3]
-        ! dx                   : cell size for column density estimate  [cm]
-        ! dust_to_gas_mw       : dust-to-gas mass ratio normalised to MW (Z_eff)
-        ! nHI                  : HI number density  [cm^-3]  -- fallback only
-        ! nH2                  : H2 molecule number density  [cm^-3]  -- fallback only
-        ! tau_LW               : output LW optical depth  [dimensionless]
-#ifdef RT
-        use rt_parameters, only: isLW
-#endif
+    subroutine init_dust_band_cross_sections()
+        ! Per bin, the dust and PAH effective attenuation cross-sections, C_abs + (1-g) C_sca (the
+        ! radiation-pressure ones, as group_csr_*: forward-scattered light is not removed, the convention
+        ! of Draine & Bertoldi 1996), averaged over the bands of the in-cell shielding (shield_band_E0/E1)
+        ! with the photon spectrum of the Draine (1978) field,
+        !   F(E) = 1.658e6 E - 2.152e5 E^2 + 6.919e3 E^3  [photons cm^-2 s^-1 sr^-1 eV^-1, E in eV].
+        ! Unlike the group ones they do not depend on the RT groups, so the shielding uses the local
+        ! grains whether or not a group covers the band.
+        use constants, only: c_cgs, hplanck, eV2erg
+        use amr_commons, only: myid
         implicit none
-        real(dp), intent(in)  :: rho_dust_cell(ndust)
-        real(dp), intent(in)  :: dx, dust_to_gas_mw, nHI, nH2
-        real(dp), intent(out) :: tau_LW
-        integer :: i, ig
+        integer, parameter :: nl = 1000
+        real(kind=8) :: lambda(nl), f(nl), lmin, lmax, E, norm
+        integer :: ib, ii, isize
 
-        tau_LW = 0d0
-#ifdef RT
-        do i = 1, ndust
-            if (dustbins_props(i)%mgrain > 0d0) then
-                do ig = 1, size(group_csa_dust, 2)
-                    if (isLW(ig) .eq. 1) then
-                        tau_LW = tau_LW + group_csa_dust(i, ig) &
-                               * (rho_dust_cell(i) / dustbins_props(i)%mgrain) * dx
-                    end if
-                end do
-            end if
-        end do
-#endif
-        ! Fall back to fixed cross-section when no LW groups are present.
-        ! sigma_eff = 2.34e-21 cm^2/H (bare graphite-silicate, Gnedin & Kravtsov 2009).
-        if (tau_LW .eq. 0d0) then
-            tau_LW = 2.34d-21 * dust_to_gas_mw * (nHI + 2d0*nH2) * dx
+        if (.not. allocated(band_csr_dust)) allocate(band_csr_dust(ndust, nshield_band))
+        band_csr_dust = 0d0
+        if (npah > 0) then
+            if (.not. allocated(band_csr_pah)) allocate(band_csr_pah(2*npah, nshield_band))
+            band_csr_pah = 0d0
         end if
-    end subroutine compute_lw_dust_optical_depth
-
-    subroutine compute_lw_tau_effective(dustAbs_in, rad_ani, local_c, dx, tau_LW, has_lw_groups)
-        ! Compute the effective LW-band optical depth accounting for radiation anisotropy.
-        !
-        ! Uses the M1-RT anisotropy closure:  α_geom(f) = 2 - f,
-        ! where f = |Fp| / (c Np) ∈ [0, 1] is the local flux-to-photon-density ratio.
-        !
-        !   Free-streaming beam (f → 1): α_geom = 1   (ray travels perpendicular distance dx)
-        !   Isotropic / diffuse field (f → 0): α_geom = 2  (flux-weighted ⟨1/μ⟩ = 2)
-        !
-        ! Only absorption (not scattering) enters τ, because RAMSES-RT's M1 sub-step
-        ! already damps Fp toward isotropy as photons scatter.
-        !
-        !   τ_abs(ig) = dustAbs(ig) / local_c × dx      [absorption coeff × path length]
-        !   τ_eff(ig) = (2 - f_ig) × τ_abs(ig)
-        !   τ_LW      = Σ_{ig: isLW} τ_eff(ig)
-        !
-        ! Arguments
-        ! ---------
-        ! dustAbs_in(nGroups) : dust+PAH absorption rate per RT group  [s^-1]
-        !                       (from compute_dust_rad_rates; valid only when rt_advect=.true.)
-        ! rad_ani(nGroups)    : anisotropy factor f per group  [0, 1]
-        !                       (from compute_local_anisotropy_factor; stored in dinfo%local_rad_ani)
-        ! local_c             : reduced speed of light  [cm/s]  (rt_c_cgs at the current level)
-        ! dx                  : cell path length for the column density estimate  [cm]
-        ! tau_LW (out)        : effective LW optical depth  [dimensionless]
-        !                       Set to 0 when local_c ≤ 0 or no LW groups are defined.
-        ! has_lw_groups (out) : .true. if at least one RT group has isLW=1.
-        !                       When .false., the caller should retain the result of
-        !                       compute_lw_dust_optical_depth (grain cross-section formula).
-#ifdef RT
-        use rt_parameters, only: isLW
-#endif
-        implicit none
-        real(dp), intent(in)  :: dustAbs_in(:)   ! [s^-1], size nGroups
-        real(dp), intent(in)  :: rad_ani(:)       ! [0,1],  size nGroups
-        real(dp), intent(in)  :: local_c          ! [cm/s]
-        real(dp), intent(in)  :: dx               ! [cm]
-        real(dp), intent(out) :: tau_LW
-        logical,  intent(out) :: has_lw_groups
-        real(dp) :: f_ani, tau_abs
-        integer  :: ig
-
-        tau_LW       = 0d0
-        has_lw_groups = .false.
-
-        if (local_c <= 0d0) return
-
-#ifdef RT
-        do ig = 1, size(dustAbs_in)
-            if (isLW(ig) .eq. 1) then
-                has_lw_groups = .true.
-                f_ani   = min(max(rad_ani(ig), 0d0), 1d0)   ! clamp to [0, 1]
-                tau_abs = dustAbs_in(ig) / local_c * dx
-                tau_LW  = tau_LW + (2.0d0 - f_ani) * tau_abs
-            end if
+        do ib = 1, nshield_band
+            lmax = hplanck * c_cgs / (shield_band_E0(ib) * eV2erg)   ! [cm]
+            lmin = hplanck * c_cgs / (shield_band_E1(ib) * eV2erg)
+            do ii = 1, nl
+                lambda(ii) = lmin + (lmax - lmin) * dble(ii - 1) / dble(nl - 1)
+                E = hplanck * c_cgs / (lambda(ii) * eV2erg)
+                ! photons per unit wavelength, F(E) hc/lambda^2, as f*lambda (the integrators' weight)
+                f(ii) = (1.658d6*E - 2.152d5*E**2 + 6.919d3*E**3) / lambda(ii)**3
+            end do
+            norm = integrate_spectrum_lambda(lambda, f, nl)
+            do isize = 1, ndust
+                band_csr_dust(isize, ib) = integrate_dust_radpressure(lambda, f, nl, &
+                                               dustbins_props(isize)%cs_ext_tab) / norm
+            end do
+            do isize = 1, npah
+                band_csr_pah(2*isize-1, ib) = integrate_pah_radpressure(lambda, f, nl, &
+                                                  pahbins_props(isize)%cs_ext_tab_n) / norm
+                band_csr_pah(2*isize,   ib) = integrate_pah_radpressure(lambda, f, nl, &
+                                                  pahbins_props(isize)%cs_ext_tab_i) / norm
+            end do
         end do
-#endif
-    end subroutine compute_lw_tau_effective
+        if (myid == 1) then
+            write(*,'(A)') ' CALIMA in-cell shielding: band attenuation cross-sections per gram of grains '// &
+                           '[cm^2/g] (FUV 5.6-13.6, LW 11.2-13.6, CO 11.09-13.6 eV)'
+            do isize = 1, ndust
+                write(*,'(A,I3,3ES11.3)') '   dust bin', isize, band_csr_dust(isize,:) / dustbins_props(isize)%mgrain
+            end do
+            do isize = 1, npah
+                write(*,'(A,I3,3ES11.3,A,3ES11.3)') '   PAH bin ', isize, &
+                    band_csr_pah(2*isize-1,:) / pahbins_props(isize)%mpah, '   cation', &
+                    band_csr_pah(2*isize,:) / pahbins_props(isize)%mpah
+            end do
+        end if
+    end subroutine init_dust_band_cross_sections
 
 end module dust_optics
 
@@ -1821,6 +1774,34 @@ module dust_radiation
             rad_dust_rate = rad_dust_rate + cross_sec(i) * (rho_dust(i) / dustbins_props(i)%mgrain)
         end do
     end function rad_dust_rate
+
+    subroutine dust_band_tau(rho_dust, rho_pah, f_ion_pah, dx, tau)
+        ! The dust and PAH optical depths over dx in the bands of the in-cell shielding (nshield_band:
+        ! SHB_FUV, SHB_LW, SHB_CO), from the local grains: sum over the bins of n sigma_band dx, the PAHs
+        ! weighted by their ion fraction. Needs init_dust_band_cross_sections (the optical tables, read
+        ! with RT); tau < 0 when they are not there, for the caller's MW fallback.
+        ! rho_dust(ndust), rho_pah(npah) : grain mass densities  [g cm^-3]
+        ! f_ion_pah(npah)                : fraction of each PAH bin in a cation state
+        ! dx                             : shielding length  [cm]
+        implicit none
+        real(dp), intent(in)  :: rho_dust(:), rho_pah(:), f_ion_pah(:), dx
+        real(dp), intent(out) :: tau(nshield_band)
+        integer :: ib, i
+
+        tau = -1d0
+        if (.not. allocated(band_csr_dust)) return
+        tau = 0d0
+        do ib = 1, nshield_band
+            do i = 1, ndust
+                tau(ib) = tau(ib) + band_csr_dust(i, ib) * rho_dust(i) / dustbins_props(i)%mgrain
+            end do
+            do i = 1, npah
+                tau(ib) = tau(ib) + ((1d0 - f_ion_pah(i)) * band_csr_pah(2*i-1, ib) &
+                                    + f_ion_pah(i) * band_csr_pah(2*i, ib)) * rho_pah(i) / pahbins_props(i)%mpah
+            end do
+            tau(ib) = tau(ib) * dx
+        end do
+    end subroutine dust_band_tau
 
     function rad_pah_rate(cross_sec,rho_pah,fcharge_pahs)
         ! Obtain the total local interaction rate given by the PAH densities

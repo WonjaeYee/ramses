@@ -7,10 +7,21 @@ module molecules_module
 
   private  ! everything is private by default
   public :: alpha_H2, beta_H2_umist, beta_H2, beta_H2_krome, alpha_CO, beta_CO, alpha_H2_prim, alpha_H2_dust
-  public :: comp_SH2, comp_Sd, comp_SCO, initialize_SCO_table
+  public :: comp_SH2, comp_Sd, comp_SCO, initialize_SCO_table, lw_transmission, tau_dust_lw_mw, co_dust_to_lw
+  public :: fuv_dust_to_lw
 
   real(dp), dimension(52, 2):: sco_table ! self shielding coefficient vs. CO column density
   real(dp), dimension(43, 2):: sh2_table ! self shielding coefficient vs. H2 column density
+
+  ! Dust attenuation in the Lyman-Werner band (1000 A) per H nucleus, for MW dust (R_V = 3.1), on the
+  ! total hydrogen column N(H) + 2N(H2) + N(H+): Draine & Bertoldi (1996, Sect. 2.4), an effective
+  ! attenuation cross-section (~0.76 of the extinction one, as forward-scattered light is not removed)
+  real(dp), parameter :: sigma_dust_lw_mw = 2.0d-21
+  ! CO and H2 dust attenuation in units of A_V: CO exp(-3.53 A_V) (Visser et al. 2009; van Dishoeck
+  ! et al. 2006), H2 sigma_dust_lw_mw N_H = 3.74 A_V for N_H/A_V = 1.87e21 cm^-2 mag^-1
+  real(dp), parameter :: co_dust_to_lw = 3.53d0 / 3.74d0
+  ! The FUV (6-13.6 eV) field's dust attenuation, exp(-1.8 A_V) (Tielens & Hollenbach 1985), for MW dust
+  real(dp), parameter :: fuv_dust_to_lw = 1.8d0 / 3.74d0
 
 CONTAINS
 
@@ -282,19 +293,78 @@ FUNCTION beta_CO(G0, xi_cr_H2) result(rate)
 
 END FUNCTION beta_CO
 
-FUNCTION comp_Sd(nHI, nH2, dx_SS, Z) result(ss_factor)
-  ! Returns the dust LW self-shielding factor.
-  ! Uses a fixed MW grain cross-section; with CALIMA the caller should use
-  ! compute_lw_dust_optical_depth (dust_photophysics.f90) instead.
-  ! see section 2.2 http://iopscience.iop.org/0004-637X/697/1/55/pdf/apj_697_1_55.pdf
+FUNCTION tau_dust_lw_mw(nH_tot, dx_SS, Z) result(tau)
+  ! Dust optical depth in the Lyman-Werner band over dx_SS for MW dust scaled by Z (the dust-to-gas
+  ! ratio in MW units), on the total hydrogen column (Draine & Bertoldi 1996)
+  ! nH_tot : hydrogen nuclei number density, all states [cm^-3]
   implicit none
-  real(dp), intent(in) :: nHI, nH2, dx_SS, Z
-  real(dp)             :: ss_factor
-  real(dp)             :: Sdeff, cNHI, cNH2
-  Sdeff = 2.34d-21    ! dust cross section cm^2 — bare graphite-silicate at MW
-  cNHI = nHI * dx_SS
-  cNH2 = nH2 * dx_SS
-  ss_factor = safe_exp(-Sdeff * Z * (cNHI + (2.d0 * cNH2)))
+  real(dp), intent(in) :: nH_tot, dx_SS, Z
+  real(dp) :: tau
+  tau = sigma_dust_lw_mw * Z * nH_tot * dx_SS
+END FUNCTION tau_dust_lw_mw
+
+FUNCTION lw_transmission(tau, f_ani) result(trans)
+  ! Mean-intensity transmission of a slab of normal optical depth tau for a field that is a beam
+  ! (fraction f_ani, at normal incidence) plus an isotropic part: f e^-tau + (1-f) E2(tau). Exact in
+  ! both limits, where exp(-(2-f) tau) only holds for tau << 1 (it is 4x too small at tau = 3).
+  implicit none
+  real(dp), intent(in) :: tau, f_ani
+  real(dp) :: trans, f
+  f = min(max(f_ani, 0d0), 1d0)
+  trans = f * safe_exp(-tau) + (1d0 - f) * expint_E2(tau)
+END FUNCTION lw_transmission
+
+FUNCTION expint_E2(x) result(e2)
+  ! Exponential integral E2(x) = exp(-x) - x E1(x), x >= 0; E1 by its series (x <= 1) or continued
+  ! fraction (x > 1), to ~1e-12 (Numerical Recipes, expint)
+  implicit none
+  real(dp), intent(in) :: x
+  real(dp) :: e2, e1, b, c, d, h, a, term, fact
+  real(dp), parameter :: euler = 0.5772156649015329d0, eps = 1d-14
+  integer :: k
+  if (x <= 0d0) then
+     e2 = 1d0
+     return
+  end if
+  if (x > 700d0) then
+     e2 = 0d0
+     return
+  end if
+  if (x <= 1d0) then
+     e1 = -euler - log(x)
+     fact = 1d0
+     do k = 1, 100
+        fact = -fact * x / k
+        term = -fact / k
+        e1 = e1 + term
+        if (abs(term) < eps * abs(e1)) exit
+     end do
+  else
+     b = x + 1d0
+     c = 1d0 / 1d-300
+     d = 1d0 / b
+     h = d
+     do k = 1, 200
+        a = -dble(k) * dble(k)
+        b = b + 2d0
+        d = 1d0 / (a * d + b)
+        c = b + a / c
+        h = h * c * d
+        if (abs(c * d - 1d0) < eps) exit
+     end do
+     e1 = h * exp(-x)
+  end if
+  e2 = exp(-x) - x * e1
+END FUNCTION expint_E2
+
+FUNCTION comp_Sd(nH_tot, dx_SS, Z) result(ss_factor)
+  ! Dust shielding of the Lyman-Werner band for MW dust scaled by Z, isotropic field
+  ! (lw_transmission with f = 0); with CALIMA the per-bin grain cross-sections are used instead
+  ! (compute_lw_dust_optical_depth in dust_photophysics.f90)
+  implicit none
+  real(dp), intent(in) :: nH_tot, dx_SS, Z
+  real(dp) :: ss_factor
+  ss_factor = lw_transmission(tau_dust_lw_mw(nH_tot, dx_SS, Z), 0d0)
 END FUNCTION comp_Sd
 
 FUNCTION comp_SH2(nH2, dx_SS) result(ss_factor)

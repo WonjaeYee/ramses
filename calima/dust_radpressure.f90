@@ -28,7 +28,8 @@ module dust_radpressure_module
 #ifdef RTZ
     use rt_parameters, only: isH2_rtz, rtz_UV_background_G0
     use rtz_module, only: elements, getNe, getMu_RTZ
-    use molecules_module, only: comp_Sd, comp_SH2
+    use molecules_module, only: comp_Sd, comp_SH2, lw_transmission
+    use dust_radiation, only: dust_band_tau
 #else
     ! Plain RT: no element network, no RTZ H2/CO chemistry, no packed metal block.
     ! mu and ne are formed inline below from the H/He ionisation fractions rather
@@ -40,7 +41,8 @@ module dust_radpressure_module
 #ifdef CO
     use hydro_parameters, only: iCO
 #endif
-    use dust_commons, only: draine_on, draine_pz, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar
+    use dust_commons, only: draine_on, draine_pz, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar, &
+                            nshield_band, SHB_LW
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
     use dust_optics, only: get_IR_mean_cross_sections
 
@@ -80,6 +82,9 @@ contains
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
         real(dp) :: scale_Np, scale_Fp
         real(dp) :: dtg_mw
+        real(dp) :: tau_band(nshield_band), trans_lw
+        real(dp), dimension(max(1, npah)) :: f_ion_lw
+        real(dp), dimension(ncharge_pah_max) :: fq_lw
         real(dp) :: Tk, ne, G0, f_shd
         real(dp), dimension(n_elements) :: nElement
         real(dp), dimension(n_elements, 27) :: xion
@@ -196,21 +201,7 @@ contains
         end if
 #endif
 
-        ! 3. H2 shielding
-        f_shd = 1.d0
-#ifdef RTZ
-        if (isH2_rtz) then
-           dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
-           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3),dx) * &
-                   comp_Sd(nElement(1)*xion(1,1),0.5d0*nElement(1)*xion(1,3),dx,dtg_mw)
-        end if
-#else
-        ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
-        ! LW-band gas opacity in _force, which is inert unless isH2 and some
-        ! group is flagged LW.
-#endif
-
-        ! 4. Electron density
+        ! 3. Electron density
 #ifdef RTZ
         ne = getNe(xion, nElement)
 #else
@@ -218,7 +209,7 @@ contains
         if (isHe) ne = ne + nHe_loc*(xHeII_loc + 2d0*xHeIII_loc)
 #endif
 
-        ! 5. Temperature
+        ! 4. Temperature
         ! (gamma-1)(E - E_kin - E_rad), as ctoprim: the non-thermal energies are part of E, so they
         ! come off before the gas's (gamma-1), not with their own (gamma_rad-1), which left
         ! (gamma-gamma_rad) E_rad in the gas pressure (P_trap/P_gas too hot in trapped-IR cells)
@@ -247,7 +238,7 @@ contains
 #endif
         Tk = P_gas / rho_loc * scale_T2 * mu
 
-        ! 6. Habing band radiation field G0
+        ! 5. Habing band radiation field G0
 #ifdef RTZ
         G0 = rtz_UV_background_G0
 #else
@@ -260,6 +251,35 @@ contains
               end if
            end do
         end if
+
+        ! H2 shielding over the cell, as rtz_cool_step, isotropic: Gnedin et al. (2009), and the dust
+        ! inside the cell in the LW band from the local dust and PAHs (dust_band_tau; the PAHs at their
+        ! charge equilibrium in this field); MW dust of Draine & Bertoldi (1996) on the total hydrogen
+        ! column without the optical tables. dx is in code units, the columns in cm^-2.
+        f_shd = 1.d0
+#ifdef RTZ
+        if (isH2_rtz) then
+           f_ion_lw = 0d0
+           do id = 1, npah
+              call interpolate_pah_charge_equilibrium(id, G0, ne, Tk, fq_lw)
+              if (pahbins_props(id)%cation_start_idx <= pahbins_props(id)%ncharge_states) &
+                 f_ion_lw(id) = sum(fq_lw(pahbins_props(id)%cation_start_idx:pahbins_props(id)%ncharge_states))
+           end do
+           call dust_band_tau(rho_dust(1:ndust)*scale_d, rho_pah(1:npah)*scale_d, f_ion_lw(1:npah), &
+                              dx*scale_l, tau_band)
+           if (tau_band(SHB_LW) >= 0d0) then
+              trans_lw = lw_transmission(tau_band(SHB_LW), 0d0)
+           else
+              dtg_mw = sum(rho_dust(1:ndust)) / rho_loc * GD_solar
+              trans_lw = comp_Sd(nElement(1), dx*scale_l, dtg_mw)
+           end if
+           f_shd = comp_SH2(0.5d0*nElement(1)*xion(1,3), dx*scale_l) * trans_lw
+        end if
+#else
+        ! No RTZ H2 network, so no self-shielding factor. f_shd only enters the
+        ! LW-band gas opacity in _force, which is inert unless isH2 and some
+        ! group is flagged LW.
+#endif
 
         ! 6b. Total IR energy density [erg/cm^3], streaming + trapped, on the
         ! same footing as dNp in rtz_cooling_module (i.e. the code value, still
@@ -293,14 +313,14 @@ contains
                                            sig_R_pah,  sig_P_pah, T_rad_loc)
         end if
 
-        ! 7. Call compute_gas_dust_radpressure_force
+        ! 6. Call compute_gas_dust_radpressure_force
         f_ion_pah = 0.5d0
         call compute_gas_dust_radpressure_force(cell_rt_state, ilevel, sig_R_dust, sig_R_pah, &
             gas_force, dust_force, pah_force, &
             nElement, xion, rho_dust, rho_pah, &
             Tk, ne, G0, f_shd, f_ion_pah)
 
-        ! 8. Calculate accelerations. The PAHs drift as TVA species, so the gas phase is the
+        ! 7. Calculate accelerations. The PAHs drift as TVA species, so the gas phase is the
         ! mixture without the dust and the PAHs
         rho_gas_tva = rho_gas
 #if NPAH>0

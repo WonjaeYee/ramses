@@ -12,7 +12,7 @@ module rtz_cooling_module
    use constants
    use rtz_module
    use safe_math, only: safe_exp
-   use molecules_module, only: comp_SH2, comp_SCO
+   use molecules_module, only: comp_SH2, comp_SCO, lw_transmission, tau_dust_lw_mw, co_dust_to_lw
 #ifdef CALIMA
    use dust_commons, only: dust_helper,tva_wdrift_batch,ntva,dust_ion_recombination,sigca_dust,sigcs_dust,sigcr_dust,&
                            sigcrat_dust,sigca_pah,sigcs_pah,sigcr_pah,&
@@ -55,7 +55,7 @@ module rtz_cooling_module
    ! Mode 3 shielding test: last rtz_cool_step call values for output comparison
    real(dp), save :: eqm_dust_to_gas_mw = 1.0_dp
 #ifdef CALIMA
-   real(dp), save :: eqm_tau_dust_LW_new = 0.0_dp
+   real(dp), save :: eqm_tau_dust_LW_new = 0.0_dp, eqm_tau_dust_CO_new = 0.0_dp
 #endif
    ! The recombination and collisional-ionisation rate of each (ion, element) at the last
    ! temperature it was evaluated at: at fixed temperature (rt_Tconst) the ion update asks for the
@@ -480,22 +480,28 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_equilibrium_test .eq. 3) then
             N_H_col  = nElement(1, i) * dx_SS_H2(i)
             N_H2_col = 0.5d0 * nElement(1, i) * xion(1, 3, i) * dx_SS_H2(i)
-            tau_shld_old = 2.34d-21 * eqm_dust_to_gas_mw &
-                          * (nElement(1,i)*xion(1,1,i)*dx_SS_H2(i) + 2d0*N_H2_col)
+            ! "old": MW dust (Draine & Bertoldi 1996); "new": the run's (per-bin CALIMA) dust
+            tau_shld_old = tau_dust_lw_mw(nElement(1,i), dx_SS_H2(i), eqm_dust_to_gas_mw)
 #ifdef CALIMA
             tau_shld_new = eqm_tau_dust_LW_new
 #else
             tau_shld_new = tau_shld_old   ! non-CALIMA: old and new are identical
 #endif
             f_SH2_out = comp_SH2(0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i))
-            ! f_CO_out = line shielding × dust continuum, consistent with production code
+            ! f_CO_out = line shielding × dust continuum (isotropic), as in rtz_cool_step
+#ifdef CALIMA
             f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i)) &
-                      * safe_exp(-tau_shld_new)
+                      * lw_transmission(eqm_tau_dust_CO_new, 0d0)
+#else
+            f_CO_out  = comp_SCO(nCO(i), 0.5d0*nElement(1,i)*xion(1,3,i), dx_SS_H2(i)) &
+                      * lw_transmission(co_dust_to_lw * tau_shld_new, 0d0)
+#endif
             write(shld_unit, '(*(ES15.7," "))') nElement(1,i), N_H_col, N_H2_col, &
                  xion(1,3,i), xion(1,1,i), nCO(i)/nElement(1,i), TK_to_save(i), eqm_dust_to_gas_mw, &
                  tau_shld_old, tau_shld_new, f_SH2_out, &
-                 f_SH2_out*safe_exp(-tau_shld_old), f_SH2_out*safe_exp(-tau_shld_new), &
-                 f_CO_out, rtz_UV_background_G0*safe_exp(-tau_shld_old), rtz_UV_background_G0*safe_exp(-tau_shld_new)
+                 f_SH2_out*lw_transmission(tau_shld_old, 0d0), f_SH2_out*lw_transmission(tau_shld_new, 0d0), &
+                 f_CO_out, rtz_UV_background_G0*lw_transmission(tau_shld_old, 0d0), &
+                 rtz_UV_background_G0*lw_transmission(tau_shld_new, 0d0)
          end if
 
          ! Write data to file
@@ -885,7 +891,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
       use dust_commons, only: GD_solar,H2ondust,dust_ratd,dust_pe_heating,dust_solver_type,&
                              &ndust_processes,npah_processes
-      use dust_optics,  only: compute_lw_dust_optical_depth, compute_lw_tau_effective
       use dust_interface
 #endif
       implicit none
@@ -934,15 +939,26 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! formula needs; dust_to_gas_mass_ratio_over_mw is dust-to-GAS, and the two
       ! differ by Z/Zsun (see the comment at the depletion loop below).
       real(dp):: Z_over_Zsun, dust_to_metal_over_mw
-      real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO
-      real(dp):: tau_dust_LW
-      logical :: lw_groups_present
+      real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO, sh2_loc
+      real(dp):: tau_dust_FUV, tau_dust_LW, tau_dust_CO, sco_loc
+      real(dp) :: trans_dust
+      real(dp) :: bg_dust, bg_CO   ! mode 3: the background's shielding for the grains and metals, and for CO
+#ifdef CALIMA
+      integer :: n_lw, n_fuv
+      logical :: in_fuv
+      real(dp) :: trans_fuv, trans_lw, trans_co, trans_g
+      real(dp) :: sum_lw, wsum_lw, mean_lw, sum_fuv, wsum_fuv, mean_fuv
+#endif
       real(dp):: nElement_dep(n_elements)
 #ifdef CO
-      real(dp):: cr_CO, de_CO, delta_CO, max_delta_CO, min_delta_CO
-      real(dp):: n_C_og, n_O_og, n_CII, n_H2, n_OI, nCII_new, nCO_new, nOI_new
-      real(dp):: tot_C, tot_O
+      real(dp):: cr_CO, de_CO, f_CO_Cp, delta_CO, n_H2, n_OI, nCO_new, tot_O
+      ! the C0/C+/CO block of the carbon ion update (co_implicit)
+      real(dp):: L0_C, krec_C, kout_C, S_C, nC_gas, nC_new, N0_new, N1_new, NCO_old, dtb
+      real(dp):: a_co, b_co, c_co, d_co
+      logical :: co_implicit
+      integer :: jIon
 #endif
+      logical :: carbon_block
       real(dp),dimension(1:27,10):: saved_rates
       real(dp),dimension(1:27,1:10,1:NGROUPS)::auger_yields
       real(dp)::loc_auger_prob
@@ -1079,40 +1095,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 #endif
 
-      f_shd = 1.d0 ; f_shd_CO = 1.d0 ; tau_dust_LW = 0d0
-      if (isH2_rtz) then
-#ifdef CALIMA
-         ! rtz_shielding_config 0: fixed MW cross-section (old behaviour, same as non-CALIMA path)
-         ! rtz_shielding_config 1,2,3: per-bin CALIMA tau (falls back to MW when no LW groups)
-         if (rtz_shielding_config .le. 0) then
-            tau_dust_LW = 2.34d-21 * dust_to_gas_mass_ratio_over_mw &
-                        * (nElement_dep(1)*dXion(1,1) &
-                        +  2.0d0*0.5d0*nElement_dep(1)*dXion(1,3)) * dx_SS_H2(icell)
-         else
-            call compute_lw_dust_optical_depth( &
-                 dust_helper%rho_dust, dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, &
-                 nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), tau_dust_LW)
-         end if
-         if (rtz_equilibrium_test .eq. 3) eqm_tau_dust_LW_new = tau_dust_LW
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * safe_exp(-tau_dust_LW)
-#else
-         ! Non-CALIMA: original fixed MW cross-section formula.
-         f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) * &
-                 comp_Sd(nElement_dep(1)*dXion(1,1), 0.5d0*nElement_dep(1)*dXion(1,3), &
-                         dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw)
-#endif
-      end if
-      if (isCO_rtz) then
-         ! rtz_shielding_config 0,1: no CO shielding applied (f_shd_CO stays 1)
-         ! rtz_shielding_config 2: CO line self-shielding only (Lee et al. 1996), no dust
-         ! rtz_shielding_config 3: CO line + dust continuum exp(-tau_dust_LW) [default]
-         if (rtz_shielding_config .ge. 2) then
-            f_shd_CO = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
-            if (rtz_shielding_config .ge. 3) &
-               f_shd_CO = f_shd_CO * safe_exp(-tau_dust_LW)
-         end if
-      end if
-
 #ifdef RT
       dNp(:) = Np(:,icell) ; dFp(:,:) = Fp(:,:,icell)
       dp_gas(:) = p_gas(:,icell)
@@ -1130,6 +1112,49 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       TK = dT2 * mu                                        !      Temperature
       if(rt_isTconst) TK=rt_Tconst                         ! Force constant T
+
+      ! Dust shielding inside the cell, of the advected field only (the UV background stays
+      ! unattenuated), over dx_SS_H2 = min(Jeans length, cell size): the RT already removes the
+      ! photons absorbed between cells. In three bands (dust_shield_tau): FUV (5.6-13.6 eV, the band of
+      ! G0) for the grains' processes (grain recombination, PE heating, dust cooling, CALIMA's field),
+      ! LW for the H2 and the CO photodissociation band, from the local dust and PAHs under CALIMA.
+      ! The field is isotropic here (lw_transmission with f = 0); with RT groups in a band the
+      ! transmission is recomputed below from the groups. Line shielding: H2, Gnedin et al. (2009);
+      ! CO, Lee et al. (1996), in N(CO) and N(H2).
+      f_shd = 1.d0 ; f_shd_CO = 1.d0
+      call dust_shield_tau(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, icell, &
+                           tau_dust_FUV, tau_dust_LW, tau_dust_CO)
+#ifdef CALIMA
+      if (rtz_equilibrium_test .eq. 3) then
+         eqm_tau_dust_LW_new = tau_dust_LW ; eqm_tau_dust_CO_new = tau_dust_CO
+      end if
+#endif
+      ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0 (times bg_dust in mode 3)
+      trans_dust = lw_transmission(tau_dust_FUV, 0d0)
+      ! local H2 line self-shielding
+      sh2_loc = 1d0
+      if (isH2_rtz) &
+         sh2_loc = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
+      if (isH2_rtz) f_shd = sh2_loc * lw_transmission(tau_dust_LW, 0d0)
+      sco_loc = 1d0
+      if (isCO_rtz) then
+         ! rtz_shielding_config 0,1: no CO shielding (f_shd_CO stays 1); 2: CO line shielding only;
+         ! 3 [default]: line shielding and dust in the CO band
+         if (rtz_shielding_config .ge. 2) then
+            sco_loc = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
+            f_shd_CO = sco_loc
+            if (rtz_shielding_config .ge. 3) f_shd_CO = sco_loc * lw_transmission(tau_dust_CO, 0d0)
+         end if
+      end if
+      ! Mode 3: the background is the field of the test and is shielded as the rest is: through the dust
+      ! for the grains and the metals' photoionization, through f_shd_CO for CO (the H2 through f_shd)
+      bg_dust = 1d0 ; bg_CO = 1d0
+      if (rtz_equilibrium_test .eq. 3) then
+         bg_dust = trans_dust ; bg_CO = f_shd_CO
+#ifdef CALIMA
+         dust_helper%G0_background = UV_background_G0 * bg_dust
+#endif
+      end if
       fracMax = 0d0 ! Max fractional update, to check if dt can be increased
       ss_factor = 1d0                  ! UV background self_shielding factor
       if (rtz_equilibrium_test.lt.0) then 
@@ -1555,29 +1580,52 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          dust_helper%local_solid_angle(:) = 0d0
       end if
 
-      ! Refine τ_dust_LW with the anisotropy-corrected absorption-only formula.
-      !
-      ! τ_eff(ig) = (2 - f_ig) × (dustAbs(ig) / local_c) × dx_SS_H2
-      !
-      ! α_geom(f) = 2 - f interpolates between the isotropic diffuse-field limit
-      ! (f=0, α_geom=2, ⟨1/μ⟩=2) and the free-streaming beam limit (f=1, α_geom=1).
-      ! Only absorption (not scattering) enters τ; M1 RT handles scattering by
-      ! damping the flux toward isotropy each sub-step.
-      !
-      ! Requires rt_advect=.true. (so dustAbs has been set by compute_dust_rad_rates)
-      ! and at least one RT group tagged as LW.  When those conditions are not met,
-      ! the grain cross-section result from compute_lw_dust_optical_depth (above)
-      ! is kept unchanged.
-      ! Equilibrium tests always use a fixed isotropic anisotropy (f=0 → τ_abs from
-      ! compute_lw_dust_optical_depth above), bypassing the dynamic RT-derived factor.
-      if (isH2_rtz .and. rt_advect .and. rtz_equilibrium_test.le.0) then
-         call compute_lw_tau_effective( &
-              dustAbs, dust_helper%local_rad_ani, dust_helper%local_c, dx_SS_H2(icell), &
-              tau_dust_LW, lw_groups_present)
-         if (lw_groups_present) then
-            f_shd = comp_SH2(0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell)) &
-                  * safe_exp(-tau_dust_LW)
+      ! With RT, the dust transmission of each group from its attenuation rate dustRp (C_abs + (1-g) C_sca
+      ! of the dust and of the PAHs at this substep's charges) and the local anisotropy f = |Fp|/(c Np):
+      !   T = f e^-tau + (1 - f) E2(tau),  tau = (dustRp / local_c) dx_SS_H2,
+      ! exact in the beam (f = 1) and isotropic (f = 0) limits. A band's transmission is that of its
+      ! groups weighted by their share of the field: their photons for the LW groups (the H2, and the
+      ! CO, whose band the groups do not separate from the LW one), their G0 for the FUV groups (those
+      ! of advected_G0). A band without a group keeps the isotropic value, now from the PAH charges of
+      ! this substep. Needs rt_advect (dustRp from compute_dust_rad_rates); the equilibrium tests
+      ! keep the isotropic values above.
+      if (rt_advect .and. rtz_equilibrium_test.le.0 .and. dust_helper%local_c > 0d0) then
+         call dust_shield_tau(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, 0, &
+                              tau_dust_FUV, tau_dust_LW, tau_dust_CO)
+         trans_fuv = lw_transmission(tau_dust_FUV, 0d0)
+         trans_lw  = lw_transmission(tau_dust_LW, 0d0)
+         trans_co  = lw_transmission(tau_dust_CO, 0d0)
+         n_lw = 0 ; n_fuv = 0
+         sum_lw = 0d0 ; wsum_lw = 0d0 ; mean_lw = 0d0
+         sum_fuv = 0d0 ; wsum_fuv = 0d0 ; mean_fuv = 0d0
+         do igroup = 1, nGroups
+            in_fuv = group_egy(igroup).gt.5.6d0 .and. group_egy(igroup).lt.13.6d0
+            if (isLW(igroup).ne.1 .and. .not. in_fuv) cycle
+            trans_g = lw_transmission(dustRp(igroup) / dust_helper%local_c * dx_SS_H2(icell), &
+                                      dust_helper%local_rad_ani(igroup))
+            if (isLW(igroup).eq.1) then
+               n_lw = n_lw + 1 ; mean_lw = mean_lw + trans_g
+               wsum_lw = wsum_lw + dNp(igroup) ; sum_lw = sum_lw + dNp(igroup) * trans_g
+            end if
+            if (in_fuv) then
+               n_fuv = n_fuv + 1 ; mean_fuv = mean_fuv + trans_g
+               wsum_fuv = wsum_fuv + dNp(igroup) * group_egy(igroup)
+               sum_fuv = sum_fuv + dNp(igroup) * group_egy(igroup) * trans_g
+            end if
+         end do
+         ! no photons in the band: the plain mean over its groups
+         if (n_lw > 0) then
+            trans_lw = mean_lw / n_lw
+            if (wsum_lw > 0d0) trans_lw = sum_lw / wsum_lw
+            trans_co = trans_lw
          end if
+         if (n_fuv > 0) then
+            trans_fuv = mean_fuv / n_fuv
+            if (wsum_fuv > 0d0) trans_fuv = sum_fuv / wsum_fuv
+         end if
+         trans_dust = trans_fuv
+         if (isH2_rtz) f_shd = sh2_loc * trans_lw
+         if (isCO_rtz .and. rtz_shielding_config .ge. 3) f_shd_CO = sco_loc * trans_co
       end if
 
 #ifdef DEBUG
@@ -1585,7 +1633,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          call cpu_time(t_sub_start)
       end if
 #endif
-      call compute_dust_precool(dust_helper, advected_G0+UV_background_G0, TK, ne, nElement_dep, &
+      call compute_dust_precool(dust_helper, advected_G0*trans_dust+UV_background_G0*bg_dust, TK, ne, nElement_dep, &
                                  dXion,  xH2_loc * nElement_dep(1), nCO(icell)&
 #ifdef RT
                                  ,dNp)
@@ -1629,7 +1677,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
          dust_helper%use_precomp = .true.
 #endif
-         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK, ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate, saved_cooling_rates, saved_cooling_rates_names, &
                            t_indep_out=t_indep)
@@ -1637,13 +1685,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
          call rtgroups_derivative_calls(.true.)    ! WDB06rt: served from the precool solve
 #endif
-         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+         call all_cooling(TK + (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                            primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                            ss_factor, dNp, ilevel, Crate_prime_a, prime_cooling_rates, prime_cooling_rates_names, &
                            t_indep_in=t_indep)
          if (rtz_dCdT_central) then
             prime_cooling_rates = 0.d0
-            call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
+            call all_cooling(TK - (1.d-5*TK), ne, aexp, nElement_dep(1:n_elements), dXion, nCO(icell), f_shd, trans_dust, advected_G0, UV_background_G0, dust_to_gas_mass_ratio_over_mw, xe, &
                               primary_cosmic_ray_ionization_rate, H2_cosmic_ray_ionization_rate, &
                               ss_factor, dNp, ilevel, Crate_prime_b, prime_cooling_rates, prime_cooling_rates_names, &
                               t_indep_in=t_indep)
@@ -1846,9 +1894,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       dust_helper%local_dx = dx_loc*scale_l ! dx_SS_H2(icell)
       dust_helper%local_vol = (dx_loc*scale_l)**3 ! (dx_SS_H2(icell)*dx_SS_H2(icell)) * dx_SS_H2(icell)
       dust_helper%local_Jeans = 4.81973044d19 * sqrt(Tk/nH(icell)) ! Prefactor is sqrt(kB*pi/(G*mH**2))
-      ! Apply dust self-shielding so CALIMA sees the within-cell-attenuated field.
-      ! tau_dust_LW is computed above from per-bin grain properties (or the MW fallback).
-      dust_helper%local_G0 = (advected_G0 + UV_background_G0) * safe_exp(-tau_dust_LW)
+      ! CALIMA's field: the advected FUV through the dust inside the cell, as the rest of the grains'
+      ! processes see it (trans_dust), plus the unattenuated background
+      dust_helper%local_G0 = advected_G0 * trans_dust + UV_background_G0 * bg_dust
       dust_helper%local_ne = ne
       dust_helper%local_nCO = nCO(icell)
       ! TVA drift of every species in this cell, for the grain-grain collisions
@@ -2011,15 +2059,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CALIMA
          if (H2ondust) then
             alpha_H2_loc = alpha_H2(TK, 0d0, xe, H2_cosmic_ray_ionization_rate, &
-                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
+                           advected_G0*f_shd + UV_background_G0*bg_dust, dXion(1,1), dXion(1,2), nElement_dep(1)) 
             alpha_H2_loc = alpha_H2_loc + dust_helper%H2_formation_rate * dXion(1,1) * nElement_dep(1)
          else
             alpha_H2_loc = alpha_H2(TK, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionization_rate, &
-                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1))
+                           advected_G0*f_shd + UV_background_G0*bg_dust, dXion(1,1), dXion(1,2), nElement_dep(1))
          end if
 #else 
          alpha_H2_loc = alpha_H2(TK, dust_to_gas_mass_ratio_over_mw, xe, H2_cosmic_ray_ionization_rate, &
-                           advected_G0*f_shd + UV_background_G0, dXion(1,1), dXion(1,2), nElement_dep(1)) 
+                           advected_G0*f_shd + UV_background_G0*bg_dust, dXion(1,1), dXion(1,2), nElement_dep(1)) 
 #endif
          cr_H2 = cr_H2 + alpha_H2_loc
 
@@ -2126,176 +2174,20 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #ifdef CO
       cr_CO = 0.d0
       de_CO = 0.d0
-      dUU = 0.d0
+      f_CO_Cp = 0.d0
+      co_implicit = .false.
       if (isCO_rtz) then
-         if (update_COspecies) then 
-            n_C_og = n_CII + nCO(icell)
-            n_O_og = n_OI + nCO(icell)
-            n_CII = nElement_dep(6) * dXion(6,2)
+         if (update_COspecies) then
+            ! CO is updated with C0 and C+ in the carbon ion update below (co_implicit); here its
+            ! formation rate per C+ [s-1] (Nelson & Langer 1997) and its destruction rate [s-1]
             n_OI  = nElement_dep(8) * dXion(8,1)
             n_H2  = 0.5d0 * nElement_dep(1) * dXion(1,3)
-
-            !! Creation !!
-            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate, n_CII, n_H2, n_OI)
-
-            !! Destruction !!
-            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0, H2_cosmic_ray_ionization_rate)
-
-            ! Compute the initial guess of new nCO (exact exponential integrator)
-            if (de_CO * ddt(icell) < 1.d-6) then
-               nCO_new = (nCO(icell) + cr_CO * ddt(icell)) / (1.d0 + de_CO * ddt(icell))
-            else
-               nCO_new = (cr_CO / de_CO) + (nCO(icell) - (cr_CO / de_CO)) * exp(-de_CO * ddt(icell))
-            end if
-
-            ! Tentative update
-            delta_CO = nCO_new - nCO(icell)
-
-            ! Enforce positivity floors: don't destroy more CO than exists,
-            ! and don't create more than allowed by available CII and OI
-            max_delta_CO = max(min(n_CII, n_OI) - 1.d-30, 0.d0)
-            min_delta_CO = min(-nCO(icell) + 1.d-30, 0.d0)
-
-            ! Clip delta_CO to enforce physical bounds
-            delta_CO = max(min(delta_CO, max_delta_CO), min_delta_CO)
-
-            ! Apply updates
-            nCO_new  = nCO(icell) + delta_CO
-            nCII_new = n_CII - delta_CO
-            nOI_new  = n_OI  - delta_CO
-         
-            ! if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
-            !    write(*,*) 'dXion(6,1:7):', dXion(6,1:7)
-            !    write(*,*) 'sum(dXion(6,1:7)):', sum(dXion(6,1:7))
-            ! end if
-
-            ! Now update the ion fractions for C and O
-            ! tot_C = sum(nElement_dep(6) * dXion(6,1:elements(6)%n_ions)) - n_CII
-            tot_C = nElement_dep(6) - n_CII
-            tot_C = tot_C + nCII_new
-            ! even though we are using the names `n_CII` and `nCII_new`,
-            ! tot_C is essentially nElement_dep(6) - delta_CO
-            do iIon = 1, elements(6)%n_ions
-               ! trial 1:
-               ! - if CO created, take from C II
-               ! - if CO destroyed, dump on C I
-               ! -> add delta_CO (negative) on dXion(6, 1)
-
-               ! trial 2:
-               ! - if CO created, take from C Ii
-               ! - if CO destroyed, dump on all C
-               ! -> no update of dXion
-               if (delta_CO > 0.0_dp) then
-                  if (iIon.ne.2) then 
-                     dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-                     ! xion(6,iIon, icell) = nElement_dep(6) * xion(6,iIon, icell) / tot_C
-                  else
-                     dXion(6,iIon) = nCII_new / tot_C
-                     ! xion(6,iIon, icell) = nCII_new / tot_C
-                  end if
-               else
-                  ! if (iIon.ne.1) then
-                  !    dXion(6,iIon) = nElement_dep(6) * dXion(6,iIon) / tot_C
-                  ! else
-                  !    dXion(6,iIon) = (nElement_dep(6)*dXion(6,iIon) - delta_CO) / tot_C
-                  ! end if
-               end if
-            end do
-
-            ! tot_O = sum(nElement_dep(8) * dXion(8,1:elements(8)%n_ions)) - n_OI
-            tot_O = nElement_dep(8) - n_OI
-            tot_O = tot_O + nOI_new
-            do iIon = 1, elements(8)%n_ions
-               if (delta_CO > 0.0_dp) then
-                  if (iIon.ne.1) then 
-                     dXion(8,iIon) = nElement_dep(8) * dXion(8,iIon) / tot_O
-                  else
-                     dXion(8,iIon) = nOI_new / tot_O
-                  end if
-               else
-                  ! doing nothing in this case means
-                  ! oxygen from destroyed CO goes to all ionization status equally;
-                  ! we don't adjust dXion, but only change nElement_dep
-               end if
-            end do
-
-            if (loopcnt>=loopcnt_limit.and.rtz_equilibrium_test.lt.0) then
-            ! if (rtz_single_cell_test) then
-            ! if (.false.) then
-            ! if (nElement_dep(6)<0.0) then
-               write(*,*) "     loopcnt:", loopcnt
-               write(*,*) '         nCO:', nCO(icell)
-               write(*,*) '     nCO_new:', nCO_new
-               write(*,*) '    delta_CO:', delta_CO
-
-               write(*,*) ' dust_to_gas:', dust_to_gas_mass_ratio_over_mw
-
-               write(*,*) "for Carbon"
-               write(*,*) "    nElement:", nElement(6, icell)
-               write(*,*) 'nElement_dep:', nElement_dep(6)
-               write(*,*) '        xion:', xion(6,1:elements(6)%n_ions,icell)
-               write(*,*) '       dXion:', dXion(6,1:elements(6)%n_ions)
-               write(*,*) '  sum(dXion):', sum(dXion(6,1:elements(6)%n_ions))
-               write(*,*) '       tot_C:', tot_C
-               write(*,*) '       n_CII:', n_CII
-               write(*,*) '    nCII_new:', nCII_new
-               
-               ! write(*,*) "for Oxygen"
-               ! write(*,*) "    nElement:", nElement(8, icell)
-               ! write(*,*) 'nElement_dep:', nElement_dep(8)
-               ! write(*,*) '        xion:', xion(8,1:elements(8)%n_ions,icell)
-               ! write(*,*) '       dXion:', dXion(8,1:elements(8)%n_ions)
-               ! write(*,*) '  sum(dXion):', sum(dXion(8,1:elements(8)%n_ions))
-               ! write(*,*) '       tot_O:', tot_O
-               ! write(*,*) '        n_OI:', n_OI
-               ! write(*,*) '     nOI_new:', nOI_new
-
-               ! write(*,*) '   loopCodes:',loopCodes
-            end if
-
-            ! Check for convergence
-            if (nCO(icell).gt.1.d-10) then 
-               dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-               dUU = dUU * one_over_x_FRAC
-               fracMax=MAX(fracMax,dUU)
-               if(dUU .gt. 1.d0) then
-                  ! write(*,*) "Broken CO", TK, nCO_new, nCO, ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM))
-                  dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
-                  dt_rec = min(dt_rec,0.5d0*ddt(icell))
-#ifdef DEBUG
-                  if (rtz_equilibrium_test.gt.0) then
-                     call cpu_time(t_now)
-                     t_mol = t_mol + (t_now - t_last)
-                  end if
-#endif
-                  code=7
-
-                  ! print some before return
-                  if (loopcnt>=loopcnt_limit .and. rtz_equilibrium_test<0) then
-                     write(*,*) 'This is raised in `rtz_cool_step`'
-                     write(*,*) 'icell:', icell
-                     write(*,*) ' code:', code
-                     write(*,*) '-> from CO update'
-                     
-                     write(*,*) '     nCO:', nCO(i)
-                     write(*,*) ' nCO_new:', nCO_new
-                     write(*,*) 'delta_CO:', delta_CO
-                     write(*,*) '   cr_CO:', cr_CO
-                     write(*,*) '   de_CO:', de_CO
-                     ! write(*,*) ':', 
-                  end if
-                  
-                  RETURN
-               end if
-            end if
-
-
-            ! Update species number densities --> need to fix this in case other species fail
-            dCO = nCO_new
-            dnElement(6) = dnElement(6) - delta_CO
-            nElement_dep(6) = nElement_dep(6) - delta_CO
-            dnElement(8) = dnElement(8) - delta_CO
-            nElement_dep(8) = nElement_dep(8) - delta_CO
+            cr_CO = alpha_CO(advected_G0*f_shd_CO + UV_background_G0*bg_CO, H2_cosmic_ray_ionization_rate, 1d0, n_H2, n_OI)
+            de_CO = beta_CO(advected_G0*f_shd_CO + UV_background_G0*bg_CO, H2_cosmic_ray_ionization_rate)
+            ! the share of the destruction that gives C+: the cosmic-ray term, for He+ + CO -> C+ + O + He,
+            ! the main channel in shielded gas (Gong+17); the FUV photodissociation gives C + O
+            f_CO_Cp = beta_CO(0d0, H2_cosmic_ray_ionization_rate) / de_CO
+            co_implicit = .true.
          end if
       end if
 #endif
@@ -2375,9 +2267,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      saved_rates(iIon+1,2) = cion_rate(iIon+1,iElement)
                   end if
                   ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
-                  ! (at the background alone every grain is as in the dark, with its largest rate)
+                  ! (at the background alone every grain is as in the dark, with its largest rate);
+                  ! the local field through the dust inside the cell, as for the H2
                   if (rtz_include_dust_recombination .and. .not. (dust_ion_recombination .and. iIon == 1)) &
-                     saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0 + UV_background_G0, ne)
+                     saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0*trans_dust + UV_background_G0*bg_dust, ne)
                end if
 
                ! Initialize the change to zero
@@ -2423,7 +2316,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
                if (rtz_include_photoionization) then 
                   if (iIon.eq.2) then 
-                     crl = crl + (UV_background_G0 * elements(iElement)%G0_photo_rate)
+                     crl = crl + (UV_background_G0 * bg_dust * elements(iElement)%G0_photo_rate)
                   end if
                end if
 
@@ -2503,7 +2396,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                ! Photoionization by sub-ionizing ISRF --> only impacts lowest ionization states
                if (rtz_include_photoionization) then 
                   if (iIon .eq. 1) then
-                     de = de + (UV_background_G0 * elements(iElement)%G0_photo_rate)
+                     de = de + (UV_background_G0 * bg_dust * elements(iElement)%G0_photo_rate)
                   end if
                end if
 
@@ -2612,11 +2505,101 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   cr = cr + crl * x_low
                end if
                x_old = dXion(iElement,iIon)
-               if (de * ddt(icell) < 1.d-6) then
-                  dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
-               else
-                  x_eq = cr / de
-                  dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
+               carbon_block = .false.
+#ifdef CO
+               if (co_implicit .and. iElement == 6 .and. iIon == 1) then
+                  ! C0 is updated with C+ and CO (iIon = 2): its destruction rate, and the C+ -> C0 rate
+                  ! (every creation term of C0 is a recombination of C+)
+                  L0_C = de
+                  krec_C = cr / max(dXion(6,2), x_MIN)
+                  cycle
+               end if
+               if (co_implicit .and. iElement == 6 .and. iIon == 2) then
+                  ! C0, C+ and CO by backward Euler, rates frozen over the substep: CO forms from C+ and its
+                  ! destruction gives C0 and C+ (f_CO_Cp); C+ also exchanges with the higher ions. CO formed from
+                  ! the C+ of the start of the substep oscillated with period 2 for ddt above ~1/cr_CO in cold dense gas
+                  carbon_block = .true.
+                  nC_gas = nElement_dep(6)
+                  NCO_old = nCO(icell)
+                  S_C = max(cr - L0_C*dXion(6,1), 0d0) * nC_gas   ! into C+ from the higher ions [cm-3 s-1]
+                  kout_C = max(de - krec_C, 0d0)                   ! C+ to C2+ and above [s-1]
+                  dtb = ddt(icell)
+                  a_co = NCO_old / (1d0 + dtb*de_CO)
+                  b_co = dtb*cr_CO / (1d0 + dtb*de_CO)
+                  c_co = (dXion(6,1)*nC_gas + dtb*(1d0-f_CO_Cp)*de_CO*a_co) / (1d0 + dtb*L0_C)
+                  d_co = dtb*(krec_C + (1d0-f_CO_Cp)*de_CO*b_co) / (1d0 + dtb*L0_C)
+                  N1_new = (dXion(6,2)*nC_gas + dtb*S_C + dtb*L0_C*c_co + dtb*f_CO_Cp*de_CO*a_co) &
+                         / (1d0 + dtb*(krec_C + kout_C + cr_CO) - dtb*L0_C*d_co - dtb*f_CO_Cp*de_CO*b_co)
+                  N0_new = c_co + d_co*N1_new
+                  nCO_new = a_co + b_co*N1_new
+                  delta_CO = nCO_new - NCO_old
+                  ! no more CO than the atomic O allows (the carbon left over stays in C+)
+                  if (delta_CO > max(n_OI - 1d-30, 0d0)) then
+                     N1_new = N1_new + delta_CO - max(n_OI - 1d-30, 0d0)
+                     delta_CO = max(n_OI - 1d-30, 0d0)
+                     nCO_new = NCO_old + delta_CO
+                  end if
+                  ! the fractions are of the carbon outside CO; the higher ions keep their densities
+                  nC_new = nC_gas - delta_CO
+                  dXion(6,3:n_ions) = dXion(6,3:n_ions) * nC_gas / nC_new
+                  dXion(6,1) = min(max(N0_new / nC_new, x_MIN), 1.d0)
+                  dXion(iElement,iIon) = N1_new / nC_new
+                  ! CO formed takes O from O0; the O of destroyed CO goes back to every O state
+                  if (delta_CO > 0.0_dp) then
+                     tot_O = nElement_dep(8) - delta_CO
+                     do jIon = 2, elements(8)%n_ions
+                        dXion(8,jIon) = nElement_dep(8) * dXion(8,jIon) / tot_O
+                     end do
+                     dXion(8,1) = (n_OI - delta_CO) / tot_O
+                  end if
+                  dCO = nCO_new
+                  dnElement(6) = dnElement(6) - delta_CO
+                  nElement_dep(6) = nC_new
+                  dnElement(8) = dnElement(8) - delta_CO
+                  nElement_dep(8) = nElement_dep(8) - delta_CO
+                  ! Check for convergence -- fractional change in CO and C0 (C+ below)
+                  if (nCO(icell).gt.1.d-10) then
+                     dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)) * one_over_x_FRAC
+                     fracMax = MAX(fracMax,dUU)
+                     if (dUU .gt. 1.d0) then
+                        dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                        dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
+                        if (rtz_equilibrium_test.gt.0) then
+                           call cpu_time(t_now)
+                           t_ion = t_ion + (t_now - t_last)
+                        end if
+#endif
+                        code=7
+                        RETURN
+                     end if
+                  end if
+                  if (xion(6,1,icell).gt.1.d-10) then
+                     dUU = ABS((dXion(6,1)-xion(6,1,icell))/(xion(6,1,icell)+x_FM)) * one_over_x_FRAC
+                     fracMax = MAX(fracMax,dUU)
+                     if (dUU .gt. 1.d0) then
+                        dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                        dt_rec = min(dt_rec,0.5d0*ddt(icell))
+#ifdef DEBUG
+                        if (rtz_equilibrium_test.gt.0) then
+                           call cpu_time(t_now)
+                           t_ion = t_ion + (t_now - t_last)
+                        end if
+#endif
+                        code=8
+                        loopCodes08(6,1) = loopCodes08(6,1) + 1
+                        RETURN
+                     end if
+                  end if
+               end if
+#endif
+               if (.not. carbon_block) then
+                  if (de * ddt(icell) < 1.d-6) then
+                     dXion(iElement,iIon) = (dXion(iElement,iIon) + cr * ddt(icell)) / (1.d0 + de * ddt(icell))
+                  else
+                     x_eq = cr / de
+                     dXion(iElement,iIon) = x_eq + (dXion(iElement,iIon) - x_eq) * exp(-de * ddt(icell))
+                  end if
                end if
                dXion(iElement,iIon) = min(max(dXion(iElement,iIon),x_MIN),1.d0)
 
@@ -2859,6 +2842,55 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       fred = sqrt(sum(Fp**2))/cNp
       if(fred .gt. 1d0) Fp = Fp/fred
    END SUBROUTINE reduce_flux
+
+   !=========================================================================
+   SUBROUTINE dust_shield_tau(nH_tot, dx_SS, d2g_mw, icell, tau_fuv, tau_lw, tau_co)
+   ! The dust optical depths over dx_SS of the in-cell shielding, in the FUV (5.6-13.6 eV), LW and CO
+   ! bands. Under CALIMA (rtz_shielding_config >= 1), from the local dust and PAH bins and their band
+   ! cross-sections (dust_band_tau), the PAHs weighted by their ion fraction: with icell > 0 that of
+   ! the cell's last charge solve (pah_fion_vec; neutral before the first), with icell = 0 that of the
+   ! charges just computed (dust_helper, compute_dust_rad_rates). Otherwise (no CALIMA, no optical
+   ! tables, or rtz_shielding_config 0) MW dust scaled by the dust-to-gas ratio: Draine & Bertoldi
+   ! (1996) in the LW (tau_dust_lw_mw), and in units of A_V exp(-1.8 A_V) in the FUV and exp(-3.53 A_V)
+   ! for CO (fuv_dust_to_lw, co_dust_to_lw).
+   ! nH_tot : hydrogen nuclei number density, all states [cm^-3]; dx_SS : shielding length [cm];
+   ! d2g_mw : dust-to-gas mass ratio in MW units
+   !-------------------------------------------------------------------------
+     use molecules_module, only: tau_dust_lw_mw, co_dust_to_lw, fuv_dust_to_lw
+#ifdef CALIMA
+     use dust_commons, only: dust_helper, pah_fion_vec, pahbins_props, nshield_band, SHB_FUV, SHB_LW, SHB_CO
+     use dust_radiation, only: dust_band_tau
+     use hydro_parameters, only: npah
+#endif
+     implicit none
+     real(dp), intent(in) :: nH_tot, dx_SS, d2g_mw
+     integer, intent(in) :: icell
+     real(dp), intent(out) :: tau_fuv, tau_lw, tau_co
+#ifdef CALIMA
+     real(dp) :: tau(nshield_band), f_ion(max(npah,1))
+     integer :: ii
+
+     if (rtz_shielding_config .ge. 1) then
+        f_ion = 0d0
+        do ii = 1, npah
+           if (icell > 0) then
+              f_ion(ii) = max(pah_fion_vec(icell, ii), 0d0)
+           else if (pahbins_props(ii)%cation_start_idx <= pahbins_props(ii)%ncharge_states) then
+              f_ion(ii) = sum(dust_helper%fcharge_pah(pahbins_props(ii)%cation_start_idx: &
+                                                      pahbins_props(ii)%ncharge_states, ii))
+           end if
+        end do
+        call dust_band_tau(dust_helper%rho_dust, dust_helper%rho_pah, f_ion, dx_SS, tau)
+        if (tau(1) >= 0d0) then
+           tau_fuv = tau(SHB_FUV) ; tau_lw = tau(SHB_LW) ; tau_co = tau(SHB_CO)
+           return
+        end if
+     end if
+#endif
+     tau_lw  = tau_dust_lw_mw(nH_tot, dx_SS, d2g_mw)
+     tau_fuv = fuv_dust_to_lw * tau_lw
+     tau_co  = co_dust_to_lw * tau_lw
+   END SUBROUTINE dust_shield_tau
 #endif
 
 !***********************************************************************
