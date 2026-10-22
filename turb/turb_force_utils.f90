@@ -504,13 +504,20 @@ subroutine power_rms_norm(power_in, P)
    real(kind=dp), intent(in)  :: power_in(0:TGRID_X,&
                                          &0:TGRID_Y,0:TGRID_Z)
    real(kind=dp), intent(out) :: P  ! Normalization constant
-   complex(kind=cdp)           :: complex_field(1:NDIM, 0:TGRID_X,&
-                                               &0:TGRID_Y, 0:TGRID_Z)
-                                                 ! Complex field to transform
-   real(kind=dp)              :: real_field(1:NDIM, 0:TGRID_X,&
-                                           &0:TGRID_Y, 0:TGRID_Z)
-                                                 ! Result of transforms
+   complex(kind=cdp),allocatable::complex_field(:,:,:,:)
+   !! Complex field to transform
+   real(kind=dp),allocatable::real_field(:,:,:,:)
+   !! Result of transforms
    integer                    :: d               ! Dimension counter
+
+   ! Now, grid size is taken as a namelist variable,
+   ! not as a parameter decided in compile time.
+   ! But then the shapes of these two arrays are not known in compile time
+   ! and without explicit allocation, program will try to put them in stack.
+   ! With large size (e.g., TURB_GS=64), they can exceed the available space in stack
+   ! causing a segmentation fault error, so allocate and deallocate explicitly here.
+   allocate(complex_field(1:NDIM,0:TGRID_X,0:TGRID_Y,0:TGRID_Z))
+   allocate(real_field(1:NDIM,0:TGRID_X,0:TGRID_Y,0:TGRID_Z))
 
    do d=1,NDIM
       complex_field(d,:,:,:) = cmplx(power_in, kind=cdp)
@@ -525,6 +532,9 @@ subroutine power_rms_norm(power_in, P)
 #endif
 
    P = sqrt(sum(real_field**2)/size(real_field))
+
+   deallocate(complex_field)
+   deallocate(real_field)
 
 end subroutine power_rms_norm
 

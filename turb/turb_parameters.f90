@@ -18,23 +18,18 @@ module turb_parameters
 #endif
 
   ! Turbulence variables
-#ifdef TURB_GRID_SIZE
-  integer,parameter :: TURB_GS=TURB_GRID_SIZE
-#else
-  integer, parameter  :: TURB_GS=64                    ! Turbulent grid size
-#endif
-  integer, parameter  :: TGRID_X=TURB_GS-1             ! Limit of grid, x dimension
-#if NDIM>1
-  integer, parameter  :: TGRID_Y=TURB_GS-1             ! Limit of grid, x dimension
-#else
-  integer, parameter  :: TGRID_Y=0                     ! Limit of grid, x dimension
-#endif
-#if NDIM>2
-  integer, parameter  :: TGRID_Z=TURB_GS-1             ! Limit of grid, x dimension
-#else
-  integer, parameter  :: TGRID_Z=0                     ! Limit of grid, x dimension
-#endif
-  real(dp), parameter :: turb_gs_real=real(TURB_GS,dp) ! real(TURB_GS, dp)
+
+  ! Take turbulence grid size as a namelist variable,
+  ! not as preprocessor definition
+  integer :: TURB_GS=64
+  !! Turbulent grid size
+  integer :: TGRID_X=0
+  !! Limit of grid along x-axis
+  integer :: TGRID_Y=0
+  !! Limit of grid along y-axis
+  integer :: TGRID_Z=0
+  !! Limit of grid along z-axis
+  real(dp) :: turb_gs_real=0.0_dp
 
   logical  :: turb=.FALSE.        ! Use turbulence?
   integer  :: turb_type=1         ! Turbulence type

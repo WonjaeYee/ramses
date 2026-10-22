@@ -7,7 +7,7 @@ subroutine read_turb_params(nml_ok)
   !--------------------------------------------------
   ! Namelist definitions
   !--------------------------------------------------
-  namelist/turb_params/turb, turb_seed, turb_type, instant_turb, comp_frac,&
+  namelist/turb_params/turb, turb_gs, turb_seed, turb_type, instant_turb, comp_frac,&
        & forcing_power_spectrum, turb_T, turb_Ndt, turb_rms, turb_min_rho,&
        & turb_cut_k, k_mag_min, k_mag_max, k_mag_slope
 

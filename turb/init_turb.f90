@@ -26,6 +26,16 @@ subroutine init_turb
                                          ! Display percentage at this interval
    real(kind=dp)      :: cur_percent     ! Percentage currently tracking
 
+   ! Now, take turbulence grid size as a namelist variable
+   TGRID_X = TURB_GS-1
+#if NDIM>1
+   TGRID_Y = TURB_GS-1
+#endif
+#if NDIM>2
+   TGRID_Z = TURB_GS-1
+#endif
+   turb_gs_real = real(TURB_GS,dp)
+
    ! Tasks to always be done (including MPI non-root tasks)
    ! ---------------------------------------------------------------------------
 
