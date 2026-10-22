@@ -428,7 +428,10 @@ SUBROUTINE read_rt_groups()
   ! Initialize the ionization energies
   ! Loop over elements
   ionEvs(1,1) = ionEv_HII
-  ionEvs(1,3) = 15.2d0 ! TODO(code): check this
+  ! A molecule's slot starts absorbing at its lowest threshold, not its ionisation energy: H2
+  ! at LW photodissociation (ionEv_HI = 11.2 eV), its photoionisation (15.4 eV) is in the
+  ! cross section. getSEDcsn/getSEDcse cut the slot's groups below this energy.
+  ionEvs(1,3) = ionEv_HI
   ionEvs(2,1) = ionEv_HeII
   ionEvs(2,2) = ionEv_HeIII
   do iElement=1, n_elements
@@ -489,7 +492,11 @@ SUBROUTINE read_rt_groups()
      print*,'========================================================='
   endif
 
+#ifdef RTZ
+  if(isH2 .or. isH2_rtz) then
+#else
   if(isH2) then
+#endif
      do i=1,nGroups
         if((groupL0(i) .ge. 11.2) .and. (groupL1(i) .le. 13.6)          &
            .and. (groupL0(i) .le. 13.6) .and. (groupL1(i) .ge. 11.2))then

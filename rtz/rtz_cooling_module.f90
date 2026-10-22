@@ -248,8 +248,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    integer::loopCode_idx1,loopCode_idx2
    integer*8,dimension(1:nGroups):: loopCodes01
    integer*8,dimension(1:nGroups,1:ndim):: loopCodes02
-   integer*8,dimension(1:n_elements,1:7):: loopCodes08,loopCodes09
-   integer*8,dimension(1:n_elements,0:7):: loopCodes10
+   ! Indexed by ion stage, 1..n_ions, and n_ions reaches 27 (Fe) with the full networks
+   integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
+   integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
    
    ! get cell size
    nx_loc = (icoarse_max-icoarse_min+1)
@@ -631,9 +632,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       nAct=nCell                                      ! Currently active cells
       cellcnt(1:nCell) = 0
       last_code = 0
-      loopcnt=0 !; n_cool_cells=n_cool_cells+nCell     !             Statistics
+      loopcnt=0 ; n_cool_cells=n_cool_cells+nCell     !             Statistics
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
-         loopcnt=loopcnt+1 !  ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
+         loopcnt=loopcnt+1   ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
          ! if (rtz_single_cell_test .and. mod(loopcnt,50)==0) then
          if (rtz_single_cell_test) then
             i = indAct(1)
@@ -768,8 +769,18 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             if(.not. dt_ok) then
                ddt(i)=ddt(i)/2.                    ! Try again with smaller dt
                ! ddt(i) = dt_rec              ! Potentially optimized approach
-               ! Guard: ddt underflow to IEEE zero — can't make progress, bail
-               if (ddt(i) < 0d0) then
+               ! Guard: ddt underflow to IEEE zero — can't make progress, bail.
+               ! Halving never makes ddt negative, so the test must catch zero (and NaN): with
+               ! "ddt < 0" a cell that fails at any substep length spun to loopcnt_limit.
+               if (.not. (ddt(i) > 0d0)) then
+                  write(*,*) 'rtz_solve_cooling: the substep of cell', i, 'underflowed to zero, code', code
+                  write(*,*) '  n_H =', nH(i), 'cm^-3, T2 =', T2(i), 'K'
+                  ! With no hydrogen every rate is 0/0 (x_e = n_e/n_H): the clamp in the ion update
+                  ! turns the NaN into x_MIN and the step fails (code 8) whatever its length. This
+                  ! is what initial conditions without element mass fractions (var_region(1,:)=0)
+                  ! give once the network is on.
+                  if (.not. (nH(i) > 0d0)) write(*,*) '  no hydrogen: RTZ needs the element (and ion)', &
+                     ' mass fractions in the initial conditions, e.g. var_region'
                   err_idx = i
                   return
                end if
@@ -1645,6 +1656,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
       else
          dust_step_ok = .true.
+         dUU = 0d0
       end if
 
       ! Scale dUU from a raw fractional change (returned by compute_dust_update in
@@ -1785,9 +1797,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          ! Photodissociation (mode 3: apply H2 shielding so equilibrium is self-consistent)
          if (rtz_include_photoionization) then
             if (rtz_equilibrium_test .eq. 3) then
-               de_H2 = de_H2 + (UV_background_G0 * 5.68d-11 * f_shd)
+               de_H2 = de_H2 + (UV_background_G0 / G0_draine * 5.68d-11 * f_shd)
             else
-               de_H2 = de_H2 + (UV_background_G0 * 5.68d-11)
+               de_H2 = de_H2 + (UV_background_G0 / G0_draine * 5.68d-11)
             end if
          end if
 
@@ -2091,7 +2103,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (iIon.lt.n_ions) then
                   saved_rates(iIon+1,1) = recombination(TK, iIon+1, iElement)
                   if (iIon.lt.n_ions-1) saved_rates(iIon+1,2) = collisional_ionization(TK, iIon+1, iElement)
-                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, UV_background_G0, ne)
+                  ! the WD01b fit depends on G0 sqrt(T)/ne: the local field as well as the background
+                  ! (at the background alone every grain is as in the dark, with its largest rate)
+                  saved_rates(iIon+1,3) = dust_recombination(iIon+1, iElement, TK, advected_G0 + UV_background_G0, ne)
                end if
 
                ! Initialize the change to zero

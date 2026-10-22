@@ -699,11 +699,12 @@ SUBROUTINE init_SED_table()
            end if
         end do
         
-        ! Deal with molecules separately
+        ! Deal with molecules separately (3+counter, as the atoms above and as read back in
+        ! update_SED_group_props and the zero-age branch)
         if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-           tbl(ia,iz,2+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
+           tbl(ia,iz,3+counter) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
            counter = counter + 1
-           tbl(ia,iz,2+counter) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
+           tbl(ia,iz,3+counter) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,1,3)
            counter = counter + 1
         end if
 #else
@@ -2133,6 +2134,22 @@ FUNCTION blackbody(T, lambda) result(B_lam)
 
 END FUNCTION blackbody
 
+FUNCTION bb_lambda_min(L0, L1, T) result(lambda_min)
+  ! Shortest wavelength [A] of a group's blackbody integration grid.  L1 = 0
+  ! marks an unbounded top group (rt_init: "Upper bound=infinity"), for which
+  ! hc/L1 is a division by zero; the grid then ends at L0 + 50 kT instead,
+  ! where the Wien tail is below ~1e-17 of its value at L0.
+  use constants, only: c_cgs, hplanck, kB, eV2erg
+  implicit none
+  real(kind=8), intent(in):: L0, L1, T
+  real(kind=8):: lambda_min, E1
+
+  E1 = L1
+  if (L1 .eq. 0d0) E1 = L0 + 50d0 * kB * T / eV2erg
+  lambda_min = (hplanck * c_cgs / (E1*eV2erg)) * 1d8 ! [A]
+
+END FUNCTION bb_lambda_min
+
 #ifdef RTZ
 SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group_csn, group_cse, group_csn_dust, isH2_rtz)
 #else
@@ -2164,7 +2181,7 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
 
      ! Fill out the X and Y arrays for integration
      lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-     lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+     lambda_min = bb_lambda_min(group_L0(ip), group_L1(ip), T) ! [A]
      delta_lambda = (lambda_max - lambda_min) / 999.d0
 
      ! Initialize X and Y arrays and fill them out
@@ -2181,22 +2198,29 @@ SUBROUTINE initialize_cross_sections_from_blackbody(T, group_L0, group_L1, group
         if (elements(ii)%atomic_number.gt.0) then 
            ! Loop over ionization states
            do jj=1,elements(ii)%n_ions-1 !loop over ionization states
-              group_csn(ip,ii,jj) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
-              group_cse(ip,ii,jj) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
+              ! Only fill entries the rt_groups namelist left at zero: the
+              ! blackbody is a default, not an override.
+              if (group_csn(ip,ii,jj) .eq. 0d0) &
+                   & group_csn(ip,ii,jj) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
+              if (group_cse(ip,ii,jj) .eq. 0d0) &
+                   & group_cse(ip,ii,jj) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), ii, jj)
            end do ! End loop over ionization states
         end if
      end do ! End loop over elements
 
      ! Deal with molecules separately
      if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) then
-        group_csn(ip,1,3) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
-        group_cse(ip,1,3) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
+        if (group_csn(ip,1,3) .eq. 0d0) &
+             & group_csn(ip,1,3) = getSEDcsn(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
+        if (group_cse(ip,1,3) .eq. 0d0) &
+             & group_cse(ip,1,3) = getSEDcse(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 3)
      end if
 
 #ifdef RTZ
-     group_csn_dust(ip,1) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 1, 0)
-     group_csn_dust(ip,2) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 2, 0)
-     group_csn_dust(ip,3) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), 3, 0)
+     do ii=1,3
+        if (group_csn_dust(ip,ii) .eq. 0d0) &
+             & group_csn_dust(ip,ii) = getSEDcsn_dust(X, Y, 1000, group_L0(ip), group_L1(ip), ii, 0)
+     end do
 #endif
 
   end do ! End loop over groups
@@ -2226,7 +2250,7 @@ SUBROUTINE initialize_group_energies_from_blackbody(T, group_L0, group_L1, group
 
      ! Fill out the X and Y arrays for integration
      lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-     lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+     lambda_min = bb_lambda_min(group_L0(ip), group_L1(ip), T) ! [A]
      delta_lambda = (lambda_max - lambda_min) / 1000.0
 
      ! Initialize X and Y arrays and fill them out
@@ -2237,7 +2261,9 @@ SUBROUTINE initialize_group_energies_from_blackbody(T, group_L0, group_L1, group
         Y(ii) = blackbody(T, X(ii))
      end do
 
-     group_egy(ip) = getSEDEgy(X, Y, 1000, group_L0(ip), group_L1(ip))
+     ! Only fill groups the rt_groups namelist left at zero
+     if (group_egy(ip) .eq. 0d0) &
+          & group_egy(ip) = getSEDEgy(X, Y, 1000, group_L0(ip), group_L1(ip))
 
   end do
 
@@ -2289,7 +2315,7 @@ SUBROUTINE init_popII_table(group_L0, group_L1)
 
            ! Fill out the X and Y arrays for integration
            lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-           lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+           lambda_min = bb_lambda_min(group_L0(ip), group_L1(ip), 10.d0**mist_stellar_props(i,j,2)) ! [A]
            delta_lambda = (lambda_max - lambda_min) / 100000.0
 
            ! Initialize X and Y arrays and fill them out
@@ -2343,7 +2369,7 @@ SUBROUTINE init_popIII_table(group_L0, group_L1)
 
         ! Fill out the X and Y arrays for integration
         lambda_max = (hplanck * c_cgs / (group_L0(ip)*eV2erg)) * 1d8 ! [A]
-        lambda_min = (hplanck * c_cgs / (group_L1(ip)*eV2erg)) * 1d8 ! [A]
+        lambda_min = bb_lambda_min(group_L0(ip), group_L1(ip), larkin_temp(i)) ! [A]
         delta_lambda = (lambda_max - lambda_min) / 100000.0
 
         ! Initialize X and Y arrays and fill them out
