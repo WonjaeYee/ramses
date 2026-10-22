@@ -1581,7 +1581,7 @@ module dust_rates
 
             reduced_mass = 5d-1 * pahbins_props(pp)%mpah
             C_eff = 1d0 / (1d0 + 9.92807181d-7 * (log10(dust_info%local_Tk))**1.37933821d1)
-            dV_thermal = sqrt(8d0 * kB * dust_info%local_Tk / reduced_mass)
+            dV_thermal = sqrt(8d0 * kB * dust_info%local_Tk / (pi * reduced_mass))
             coll_section = 4d0 * pi * (pahbins_props(pp)%apah_cm)**2d0
             rate1 = coll_section * dV_thermal * C_eff * y_dust(pp) / pahbins_props(pp)%mpah
 
