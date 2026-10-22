@@ -9,6 +9,9 @@ module hydro_commons
   real(dp)::e_tot_0=0d0,e_tot=0d0
   real(dp)::mom_tot_0=0d0,mom_tot=0d0
   real(dp)::lor_max=1d0
+  ! The uold slots of the gas-phase metals (hydro/hydro_commons.f90): here the single metallicity scalar at imetal
+  integer::n_metal_idx=1
+  integer,dimension(1:1)::metal_idx=6
 end module hydro_commons
 
 module const

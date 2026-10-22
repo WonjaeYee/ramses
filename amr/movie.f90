@@ -21,7 +21,7 @@ subroutine output_frame()
   use constants, only: eV2erg
   use dust_commons, only: ndust, sigca_dust
   use dust_radiation, only: get_Tdust_radiative_eq, get_dust_band_luminosity
-  use hydro_parameters, only: idust
+  use hydro_parameters, only: idust, ipah, npah
 #endif
   implicit none
 #if NDIM > 1
@@ -126,6 +126,7 @@ subroutine output_frame()
   integer :: j_band
   real(dp), dimension(1:ndust) :: T_dust_cell
   real(dp) :: Tmin, P_abs, Np_val, mass_g
+  real(dp) :: rho_metal_loc, rho_dust_loc
 #endif
 
  nh_temp = nh_frame
@@ -781,10 +782,11 @@ subroutine output_frame()
                                      uvar = uold(ind_cell(i),4) / max(uold(ind_cell(i),1),smallr)
 #endif
 
-                                     ! Metallicity map
+                                     ! Metallicity map: the gas-phase metals (metal_idx, set in
+                                     ! read_hydro_params; with RTZ the elements beyond H and He)
                                   else if(movie_vars(kk).eq.i_mv_metallicity)then
                                      ok_frame=.true.
-                                     uvar = uold(ind_cell(i),imetal)/max(uold(ind_cell(i),1),smallr)
+                                     uvar = sum(uold(ind_cell(i),metal_idx(1:n_metal_idx)))/max(uold(ind_cell(i),1),smallr)
 
                                      ! Any scalars map
                                   else if(movie_vars(kk).eq.i_mv_var)then
@@ -843,6 +845,21 @@ subroutine output_frame()
                                      end do
                                   endif
 #endif
+#endif
+#ifdef CALIMA
+                                  if(movie_vars(kk).eq.i_mv_DTM)then
+                                     ok_frame=.true.
+                                     ! Gas-phase metal density (metal_idx: not H, not He)
+                                     rho_metal_loc = sum(uold(ind_cell(i),metal_idx(1:n_metal_idx)))
+                                     ! Total dust includes the PAH bins, as in
+                                     ! rtz_cooling_module.f90:909-910
+                                     rho_dust_loc = sum(uold(ind_cell(i),idust:idust+ndust-1))
+                                     if (npah > 0) rho_dust_loc = rho_dust_loc &
+                                          & + sum(uold(ind_cell(i),ipah:ipah+npah-1))
+                                     ! Metals locked in grains are no longer in the gas
+                                     ! phase, so they must be added back to the denominator
+                                     uvar = rho_dust_loc / max(rho_metal_loc + rho_dust_loc, smallr)
+                                  endif
 #endif
 #ifdef RTZ
 
@@ -1334,6 +1351,16 @@ subroutine set_movie_vars()
         ! Find which photon group to show
         read( movie_vars_txt(kk)(3:4), '(i1)' ) ivar
         movie_var_number(kk) = ivar
+
+#ifdef CALIMA
+     ! DTM is a plain named variable, so it stays in the `else if` chain.  The
+     ! dust IR bands it used to sit next to are handled in the `else` block
+     ! below instead, along with the RTZ line variables.
+     else if (movie_vars_txt(kk) .eq. 'DTM') then
+        if (i_mv_DTM .eq. -1) i_mv_DTM = kk
+        movie_vars(kk) = i_mv_DTM
+#endif
+
      else
 
 ! escape from the `else if` part
