@@ -90,6 +90,14 @@ module amr_parameters
   real(dp)::boxlen=1.0D0                   ! Box length along x direction
   character(len=128)::ordering='hilbert'
   logical::cost_weighting=.true.           ! Activate load balancing according to cpu time
+  real(dp)::cost_measured=0.0d0            ! Weight of the measured cooling cost per cell in the load balance (0..1)
+  integer::cost_ivar=1                     ! Non-advected scalar (unoadvect) that holds that cost
+  real(dp)::cost_cell_ratio_max=4.0d0      ! cost_measured: at most ~this times the mean number of cells per rank
+  logical::cool_stats=.false.              ! Print per coarse step the cooling time per call, max and mean over ranks
+  integer::cool_queue=0                    ! RTZ cooling solve: 0 in coolfine1, 1 from per-cell records, 2 records shared on the node (MPI-3)
+  real(dp)::cool_queue_chunk=2d-4           ! cool_queue = 2: predicted cost of a chunk of records [s] (at most 64 records)
+  integer::cool_queue_zguess_ivar=0        ! cool_queue >= 1: first of ndust non-advected scalars that keep each cell's grain-charge roots (0: cold)
+  integer::cool_queue_debug=0              ! cool_queue tests: 1 solves the records in reverse order, 2 resets the warm starts in place
   ! Recursive bisection tree parameters
   integer::nbilevelmax=1                   ! Max steps of bisection partitioning
   integer::nbinodes=3                      ! Max number of internal nodes

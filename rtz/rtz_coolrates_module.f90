@@ -34,7 +34,7 @@ module rtz_coolrates_module
   ! radiation field <= 2%: see the generator. Outside the n_e grid, clamped (below: the low-density limit).
   integer:: n_ne_cool = 0
   real(dp):: lgne_cool_min, dlgne_cool
-  real(dp), allocatable:: high_t_cooling_rates(:,:,:,:)
+  real(dp), pointer, contiguous:: high_t_cooling_rates(:,:,:,:) => null()   ! node-shared with shared_tables
   integer, parameter:: N_HIGH_T_COOLING_TEMP_CIE = 500
   real(dp):: high_t_cooling_temp_CIE(N_HIGH_T_COOLING_TEMP_CIE)
   real(dp):: high_t_cooling_fracs_CIE(N_HIGH_T_COOLING_TEMP_CIE,27,27)
@@ -44,7 +44,7 @@ module rtz_coolrates_module
   ! conditions (each n_e of the grid, no other collider). Below 1e4 K the solver replaces the table for
   ! these ions, and this keeps the optical/UV forbidden lines ([O III] 5007, [N II] 6584, ...) the
   ! solver does not have.
-  real(dp), allocatable:: high_t_cooling_rates_opt(:,:,:,:)
+  real(dp), pointer, contiguous:: high_t_cooling_rates_opt(:,:,:,:) => null()
   real(dp):: fs_cool_tab(27,160,8)  ! Array for fine structure cooling rates  
   ! the CMB intensities at the lines of each fine-structure species, for the redshift they were last
   ! computed at (they depend on nothing else); per MPI rank, as the CT rate cache
@@ -720,17 +720,23 @@ END SUBROUTINE initialize_high_temperature_metal_cooling
 SUBROUTINE read_metal_cooling_ne(elname, iz)
     ! data_dir/high_T_cooling/<elname>/all_cool_ne.dat: '#' lines, "n_ne lg_ne_min dlg_ne", then n_ne blocks (n_e
     ! increasing) of iz+1 rows (ion stages) of the N_HIGH_T_COOLING_TEMP log10 Lambda. The first file read sets the
-    ! n_e grid and allocates the tables; the others must have the same grid.
+    ! n_e grid and allocates the tables; the others must have the same grid. With shared_tables, node rank 0 reads
+    ! the file into the node's shared tables; every rank of the node takes part in the allocation.
     use amr_commons, only: myid
     use hydro_parameters, only: data_dir
+    use node_shared, only: node_reader, node_bcast_i, node_bcast_r8, node_alloc_r8_4
     implicit none
     character(len=*), intent(in):: elname
     integer, intent(in):: iz
     integer:: u, ios, k, j, n
     real(dp):: lg0, dlg
+    integer:: ibuf(2)
+    real(dp):: rbuf(2)
     character(len=512):: fname, line
 
     fname = trim(data_dir)//'/high_T_cooling/'//trim(elname)//'/all_cool_ne.dat'
+    n = 0 ; lg0 = 0.d0 ; dlg = 0.d0 ; ios = 0
+    if (node_reader()) then
     open(newunit=u, file=trim(fname), status='old', action='read', iostat=ios)
     if (ios /= 0) then
         if (myid == 1) write(*,*) 'Error: cannot open '//trim(fname)//' (metal-line cooling on (T, n_e), made by '// &
@@ -746,23 +752,30 @@ SUBROUTINE read_metal_cooling_ne(elname, iz)
         end if
     end do
     if (ios == 0) read(u, *, iostat=ios) n, lg0, dlg
+    end if
+    ibuf = (/n, ios/) ; rbuf = (/lg0, dlg/)
+    call node_bcast_i(ibuf, 2)
+    call node_bcast_r8(rbuf, 2)
+    n = ibuf(1) ; ios = ibuf(2) ; lg0 = rbuf(1) ; dlg = rbuf(2)
     if (ios == 0) then
         if (n_ne_cool == 0) then
             n_ne_cool = n ; lgne_cool_min = lg0 ; dlgne_cool = dlg
-            allocate(high_t_cooling_rates(N_HIGH_T_COOLING_TEMP, n_ne_cool, 27, 27))
-            allocate(high_t_cooling_rates_opt(N_HIGH_T_COOLING_TEMP, n_ne_cool, 27, 27))
-            high_t_cooling_rates = -50.d0
+            call node_alloc_r8_4(high_t_cooling_rates, N_HIGH_T_COOLING_TEMP, n_ne_cool, 27, 27)
+            call node_alloc_r8_4(high_t_cooling_rates_opt, N_HIGH_T_COOLING_TEMP, n_ne_cool, 27, 27)
+            if (node_reader()) high_t_cooling_rates = -50.d0
         else if (n /= n_ne_cool .or. abs(lg0 - lgne_cool_min) > 1d-6 .or. abs(dlg - dlgne_cool) > 1d-6) then
             if (myid == 1) write(*,*) 'Error: '//trim(fname)//' has another n_e grid than the other elements'
             call clean_stop
         end if
+        if (node_reader()) then
         do k = 1, n_ne_cool
             do j = 1, iz + 1
                 if (ios == 0) read(u, *, iostat=ios) high_t_cooling_rates(:, k, iz, j)
             end do
         end do
+        end if
     end if
-    close(u)
+    if (node_reader()) close(u)
     if (ios /= 0) then
         if (myid == 1) write(*,*) 'Error: cannot read '//trim(fname)
         call clean_stop
@@ -982,11 +995,13 @@ SUBROUTINE build_optical_metal_tables()
     ! zone of the ion alone at each n_e of the grid (n_ion = 1 cm^-3), so the fine-structure solver is
     ! evaluated with n_ion = 1, that n_e and no other collider, at z = 0, and divided by n_e.
     use amr_commons, only: myid
+    use node_shared, only: node_reader, node_publish
     implicit none
     integer:: i, j, k, m, nclamp
     real(dp):: T, tab, fs, ne
-    high_t_cooling_rates_opt = high_t_cooling_rates
     nclamp = 0
+    if (node_reader()) then
+    high_t_cooling_rates_opt = high_t_cooling_rates
     do i = 1, 27
        do j = 1, 27
           if (.not. high_t_cooling_rates_tflag(i,j)) cycle
@@ -1003,6 +1018,8 @@ SUBROUTINE build_optical_metal_tables()
           end do
        end do
     end do
+    end if
+    call node_publish()   ! the node's shared tables are filled: the other ranks may read them
     if (myid == 1) write(*,'(A,I0,A,I0,A)') ' Built the optical metal-line tables (table minus fine structure) on ', &
          n_ne_cool, ' n_e; above 3000 K the solver exceeds the table at ', nclamp, ' (T, n_e, ion) points'
 END SUBROUTINE build_optical_metal_tables

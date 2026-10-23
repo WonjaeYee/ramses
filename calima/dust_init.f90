@@ -1494,9 +1494,11 @@ module dust_init
         ! NOTE: Keep in mind that these tables are already in log10, such that easy
         ! linear interpolation in log-log space can be computed on the fly!
         use amr_commons, only: myid
+        use node_shared, only: node_reader, node_tables, node_bcast_i, node_bcast_r8, node_alloc_r8_3, node_publish
         implicit none
 
         logical :: ok, ok_all
+        integer :: nbuf(2)
         integer :: nT, nphi, istat, i, j, ii, Zi, nmax, iphi0, n
         character(len=20) :: dustlabel
         character(len=7) :: Zi_str
@@ -1546,6 +1548,8 @@ module dust_init
                 write(collisional_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
                     'cooling_', trim(dustlabel), '_Z_', trim(Zi_str)
 
+                ! With shared_tables, node rank 0 reads the file and the node shares the table
+                if (node_reader()) then
                 open(25, file=trim(collisional_filename), status='old', action='read', iostat=istat)
                 if (istat /= 0) then
                     write(*, *) 'Error opening file: ', trim(collisional_filename)
@@ -1559,6 +1563,10 @@ module dust_init
 
                 ! Read the number of temperature points and number of phi values
                 read(25, *) nT, nphi
+                end if
+                nbuf = (/nT, nphi/)
+                call node_bcast_i(nbuf, 2)
+                nT = nbuf(1) ; nphi = nbuf(2)
 
                 ! Allocate the DustTable structure
                 if (allocated(dustbins_props(ii)%collisional_tab(i)%npts)) then
@@ -1582,10 +1590,10 @@ module dust_init
                 end if
                 allocate(dustbins_props(ii)%collisional_tab(i)%tab1d(1:nmax, 1:2))
                 dustbins_props(ii)%collisional_tab(i)%tab1d = 0d0
-                if (allocated(dustbins_props(ii)%collisional_tab(i)%tab2d)) then
+                if (associated(dustbins_props(ii)%collisional_tab(i)%tab2d) .and. .not. node_tables()) then
                     deallocate(dustbins_props(ii)%collisional_tab(i)%tab2d)
                 end if
-                allocate(dustbins_props(ii)%collisional_tab(i)%tab2d(1:nT, 1:nphi, 1:1))
+                call node_alloc_r8_3(dustbins_props(ii)%collisional_tab(i)%tab2d, nT, nphi, 1)
 
                 ! Allocate temporary arrays for phi and temperature grids
                 if (allocated(phi_grid)) deallocate(phi_grid)
@@ -1593,21 +1601,23 @@ module dust_init
                 allocate(phi_grid(1:nphi))
                 allocate(T_grid(1:nT))
 
-                ! Read the phi grid (line 2)
+                ! Read the phi grid (line 2), then the temperature values and collisional rates
+                if (node_reader()) then
                 read(25, *) phi_grid(1:nphi)
-                dustbins_props(ii)%collisional_tab(i)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
-                iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
-                dustbins_props(ii)%collisional_tab(i)%ipos_zero(2) = iphi0
-
-                ! Read the temperature values and collisional rates
                 do j = 1, nT
                     read(25, *) T_grid(j), dustbins_props(ii)%collisional_tab(i)%tab2d(j, 1:nphi, 1)
                 end do
+                end if
+                call node_bcast_r8(phi_grid, nphi)
+                call node_bcast_r8(T_grid, nT)
+                dustbins_props(ii)%collisional_tab(i)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
+                iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
+                dustbins_props(ii)%collisional_tab(i)%ipos_zero(2) = iphi0
                 dustbins_props(ii)%collisional_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 call dustbins_props(ii)%collisional_tab(i)%init()
 
-                close(25)
+                if (node_reader()) close(25)
 
                 deallocate(phi_grid, T_grid)
             end do
@@ -1625,6 +1635,7 @@ module dust_init
                 stop 1
             end if
 
+            if (node_reader()) then
             open(25, file=trim(collisional_filename), status='old', action='read', iostat=istat)
             if (istat /= 0) then
                 write(*,*) 'ERROR: could not open electron collisional file for', trim(dustlabel)
@@ -1643,6 +1654,10 @@ module dust_init
                 close(25)
                 stop 1
             end if
+            end if
+            nbuf = (/nT, nphi/)
+            call node_bcast_i(nbuf, 2)
+            nT = nbuf(1) ; nphi = nbuf(2)
 
             if (allocated(dustbins_props(ii)%collisional_tab(0)%npts)) then
                 deallocate(dustbins_props(ii)%collisional_tab(0)%npts)
@@ -1662,22 +1677,19 @@ module dust_init
             end if
             allocate(dustbins_props(ii)%collisional_tab(0)%tab1d(1:nmax, 1:2))
             dustbins_props(ii)%collisional_tab(0)%tab1d = 0d0
-            if (allocated(dustbins_props(ii)%collisional_tab(0)%tab2d)) then
+            if (associated(dustbins_props(ii)%collisional_tab(0)%tab2d) .and. .not. node_tables()) then
                 deallocate(dustbins_props(ii)%collisional_tab(0)%tab2d)
             end if
-            allocate(dustbins_props(ii)%collisional_tab(0)%tab2d(1:nT, 1:nphi, 1:1))
+            call node_alloc_r8_3(dustbins_props(ii)%collisional_tab(0)%tab2d, nT, nphi, 1)
             allocate(phi_grid(1:nphi)); allocate(T_grid(1:nT))
 
+            if (node_reader()) then
             read(25, *, iostat=istat) phi_grid(1:nphi)
             if (istat /= 0) then
                 write(*,*) 'ERROR: failed reading phi grid from', trim(collisional_filename), ' iostat=', istat
                 close(25)
                 stop 1
             end if
-
-            dustbins_props(ii)%collisional_tab(0)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
-            iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
-            dustbins_props(ii)%collisional_tab(0)%ipos_zero(2) = iphi0
 
             do j = 1, nT
                 read(25, *, iostat=istat) T_grid(j), dustbins_props(ii)%collisional_tab(0)%tab2d(j, 1:nphi, 1)
@@ -1687,14 +1699,22 @@ module dust_init
                     stop 1
                 end if
             end do
+            end if
+            call node_bcast_r8(phi_grid, nphi)
+            call node_bcast_r8(T_grid, nT)
+
+            dustbins_props(ii)%collisional_tab(0)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
+            iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
+            dustbins_props(ii)%collisional_tab(0)%ipos_zero(2) = iphi0
 
             dustbins_props(ii)%collisional_tab(0)%tab1d(1:nT, 1) = T_grid(1:nT)
 
             call dustbins_props(ii)%collisional_tab(0)%init()
-            close(25)
+            if (node_reader()) close(25)
             if (allocated(phi_grid)) deallocate(phi_grid)
             if (allocated(T_grid)) deallocate(T_grid)
         end do
+        call node_publish()   ! the node's shared tables are filled
 
     end subroutine init_dust_collisional_tables
 
@@ -1710,9 +1730,11 @@ module dust_init
         ! NOTE: Keep in mind that these yields are already in log10, such that easy
         ! linear interpolation in log-log space can be computed on the fly!
         use amr_commons, only: myid
+        use node_shared, only: node_reader, node_tables, node_bcast_i, node_bcast_r8, node_alloc_r8_3, node_publish
         implicit none
 
         logical :: ok, ok_all
+        integer :: nbuf(2)
         integer :: nT, nphi, istat, i, j, ii, Zi, nmax, iphi0, n
         character(len=20) :: dustlabel
         character(len=7) :: Zi_str
@@ -1762,6 +1784,8 @@ module dust_init
                 write(sputtering_filename, '(A,A,A,A,A,A)') trim(dust_tables_dir), &
                     'sputtering_', trim(dustlabel), '_Z_', trim(Zi_str)
 
+                ! With shared_tables, node rank 0 reads the file and the node shares the table
+                if (node_reader()) then
                 open(25, file=trim(sputtering_filename), status='old', action='read', iostat=istat)
                 if (istat /= 0) then
                     write(*, *) 'Error opening file: ', trim(sputtering_filename)
@@ -1775,6 +1799,10 @@ module dust_init
 
                 ! Read the number of temperature points and number of phi values
                 read(25, *) nT, nphi
+                end if
+                nbuf = (/nT, nphi/)
+                call node_bcast_i(nbuf, 2)
+                nT = nbuf(1) ; nphi = nbuf(2)
 
                 ! Allocate the DustTable structure
                 if (allocated(dustbins_props(ii)%sputtering_tab(i)%npts)) then
@@ -1798,10 +1826,10 @@ module dust_init
                 end if
                 allocate(dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nmax, 1:2))
                 dustbins_props(ii)%sputtering_tab(i)%tab1d = 0d0
-                if (allocated(dustbins_props(ii)%sputtering_tab(i)%tab2d)) then
+                if (associated(dustbins_props(ii)%sputtering_tab(i)%tab2d) .and. .not. node_tables()) then
                     deallocate(dustbins_props(ii)%sputtering_tab(i)%tab2d)
                 end if
-                allocate(dustbins_props(ii)%sputtering_tab(i)%tab2d(1:nT, 1:nphi, 1:1))
+                call node_alloc_r8_3(dustbins_props(ii)%sputtering_tab(i)%tab2d, nT, nphi, 1)
 
                 ! Allocate temporary arrays for phi and temperature grids
                 if (allocated(phi_grid)) deallocate(phi_grid)
@@ -1809,24 +1837,27 @@ module dust_init
                 allocate(phi_grid(1:nphi))
                 allocate(T_grid(1:nT))
 
-                ! Read the phi grid (line 2)
+                ! Read the phi grid (line 2), then the temperature values and sputtering yields
+                if (node_reader()) then
                 read(25, *) phi_grid(1:nphi)
-                dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
-                iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
-                dustbins_props(ii)%sputtering_tab(i)%ipos_zero(2) = iphi0
-
-                ! Read the temperature values and sputtering yields
                 do j = 1, nT
                     read(25, *) T_grid(j), dustbins_props(ii)%sputtering_tab(i)%tab2d(j, 1:nphi, 1)
                 end do
+                end if
+                call node_bcast_r8(phi_grid, nphi)
+                call node_bcast_r8(T_grid, nT)
+                dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nphi, 2) = phi_grid(1:nphi)
+                iphi0 = minloc(abs(phi_grid(1:nphi)), 1)
+                dustbins_props(ii)%sputtering_tab(i)%ipos_zero(2) = iphi0
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 call dustbins_props(ii)%sputtering_tab(i)%init()
 
-                close(25)
+                if (node_reader()) close(25)
                 deallocate(phi_grid, T_grid)
             end do
         end do
+        call node_publish()   ! the node's shared tables are filled
 
     end subroutine init_thermal_sputtering_tables
 
@@ -2167,7 +2198,7 @@ module dust_init
             if (allocated(pahbins_props(ipahbin)%dissociation_tab%tab1d)) deallocate(pahbins_props(ipahbin)%dissociation_tab%tab1d)
             allocate(pahbins_props(ipahbin)%dissociation_tab%tab1d(1:nmax,1:2))
             pahbins_props(ipahbin)%dissociation_tab%tab1d = 0d0
-            if (allocated(pahbins_props(ipahbin)%dissociation_tab%tab2d)) deallocate(pahbins_props(ipahbin)%dissociation_tab%tab2d)
+            if (associated(pahbins_props(ipahbin)%dissociation_tab%tab2d)) deallocate(pahbins_props(ipahbin)%dissociation_tab%tab2d)
             allocate(pahbins_props(ipahbin)%dissociation_tab%tab2d(1:n_G0,1:n_nH,1:1))
 
             ! Read the G0 array
