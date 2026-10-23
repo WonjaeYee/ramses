@@ -38,6 +38,7 @@ recursive subroutine amr_step(ilevel,icount)
   ! unless you check all consequences first.                          !
   !-------------------------------------------------------------------!
   integer::i,idim,ivar
+  real(kind=8)::wallclock,t_cool0
   logical::ok_defrag,output_now_all
   logical,save::first_step=.true.
 
@@ -490,7 +491,9 @@ recursive subroutine amr_step(ilevel,icount)
      ! actually doing radiative transfer (i.e. rt==false):
                                call timer('cooling','start')
 #ifndef SKIP_RTZ_COOLING
+     if(cool_stats)t_cool0=wallclock()
      if(hydro .and. (neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos))call cooling_fine(ilevel)
+     if(cool_stats)call cool_stats_call(wallclock()-t_cool0,0d0)
      ! to temporarily disable RTZ cooling, comment line one above
 #endif
   endif
@@ -513,7 +516,9 @@ recursive subroutine amr_step(ilevel,icount)
                                call timer('cooling','start')
   if((hydro).and.(.not.static_gas)) then
 #ifndef SKIP_RTZ_COOLING
+    if(cool_stats)t_cool0=wallclock()
     if(neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos)call cooling_fine(ilevel)
+    if(cool_stats)call cool_stats_call(wallclock()-t_cool0,0d0)
     ! to temporarily disable RTZ cooling, comment line one above
 #endif
   endif
@@ -646,7 +651,7 @@ end subroutine amr_step
 
 #ifdef RT
 subroutine rt_step(ilevel)
-  use amr_parameters, only: dp
+  use amr_parameters, only: dp, cool_stats
   use amr_commons,    only: t, dtnew, myid, levelmin
   use rt_hydro_commons
 #ifndef RTZ
@@ -667,6 +672,7 @@ subroutine rt_step(ilevel)
 
   real(dp) :: dt_hydro, t_left, dt_rt, t_save
   integer  :: i_substep, ivar
+  real(kind=8) :: wallclock, t_cool0, t_cool1
 
   ! RT15 sec. 3.7 light-speed ramp: advance it once per RHD step, at the
   ! coarsest active level. A no-op unless rt_c_ramp_nstep > 0.
@@ -708,15 +714,19 @@ subroutine rt_step(ilevel)
      call rt_set_uold(ilevel)
 
                                call timer('cooling','start')
+     if(cool_stats)t_cool0=wallclock()
 #ifndef SKIP_RTZ_COOLING
      if(neq_chem.or.cooling.or.T2_star>0.0.or.barotropic_eos)call cooling_fine(ilevel)
      ! to temporarily disable RTZ cooling, comment line one above
 #endif
                                call timer('radiative transfer','start')
+     if(cool_stats)t_cool1=wallclock()
 
      do ivar=1,nrtvar
         call make_virtual_fine_dp(rtuold(1,ivar),ilevel)
      end do
+     ! the cooling time of this call and the halo exchange after it (which waits for the slowest neighbour)
+     if(cool_stats)call cool_stats_call(t_cool1-t_cool0,wallclock()-t_cool1)
      if(simple_boundary)call rt_make_boundary_hydro(ilevel)
 
      t_left = t_left - dtnew(ilevel)

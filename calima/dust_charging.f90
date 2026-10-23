@@ -16,7 +16,7 @@ module dust_charging
     integer, parameter, dimension(ISRF_ND) :: ISRF_DCHARGE = (/-1, 1, 2, 3/)  ! impactor charges of the D planes
     integer :: isrf_nT = 0, isrf_nX = 0, isrf_nqload = 0
     real(dp) :: isrf_lT0 = 0d0, isrf_lT1 = 0d0, isrf_dlT = 1d0, isrf_lX0 = 0d0, isrf_lX1 = 0d0, isrf_dlX = 1d0
-    real(dp), allocatable :: isrf_q(:,:,:,:)         ! (isrf_nqload, nT, nX, ndust): ISRF_NQ_CHARGE or ISRF_NQ planes
+    real(dp), pointer, contiguous :: isrf_q(:,:,:,:) => null()   ! (isrf_nqload, nT, nX, ndust): ISRF_NQ_CHARGE or ISRF_NQ planes; node-shared with shared_tables
 
     ! ======================================================== charging_model = 'WDB06rt'
     ! Grain charging, photoelectric heating, recombination cooling and grain-assisted
@@ -101,8 +101,11 @@ module dust_charging
         integer :: material = 0, nG = 0, nU = 0, nTs = 0, nTh = 0, nZ = 0
         real(dp) :: a = 0d0, W = 0d0, Zmin = 0d0, Zmax = 0d0, x0 = 0d0, dx = 0d0
         real(dp), allocatable :: L0(:), L1(:), U(:), lTs(:), egy(:,:)        ! egy(nTs,nG)
-        real(dp), allocatable :: K(:,:,:), H(:,:,:)                          ! (nU,nTs,nG)
-        real(dp), allocatable :: lTh(:), delta(:,:), Ptr(:,:), fcool(:,:), Ebar(:,:)  ! (nU,nTh)
+        ! the kernels and hot-electron tables: node-shared with shared_tables (read-only after init)
+        real(dp), pointer, contiguous :: K(:,:,:) => null(), H(:,:,:) => null()  ! (nU,nTs,nG)
+        real(dp), allocatable :: lTh(:)
+        real(dp), pointer, contiguous :: delta(:,:) => null(), Ptr(:,:) => null(), &
+                                         fcool(:,:) => null(), Ebar(:,:) => null()  ! (nU,nTh)
         real(dp), allocatable :: KgT(:,:), HgT(:,:), mKT(:,:), mHT(:,:)      ! (nG,nU) kernels, PCHIP slopes
         real(dp), allocatable :: egy_used(:)
         real(dp), allocatable :: Kbg(:), Hbg(:), mKb(:), mHb(:)              ! (nU) Mathis ISRF, G0 = 1
@@ -219,8 +222,10 @@ module dust_charging
         ! of its bin; see isrf_lookup. The ln alpha_i planes only for dust_ion_recombination with
         ! WDB06isrf (WDB06rt computes its own)
         use amr_commons, only: myid
+        use node_shared, only: node_reader, node_tables, node_bcast_i, node_bcast_r8, node_alloc_r8_4, node_publish
         implicit none
         integer :: ii, k, i, nver, nT, nX, nQ, istat
+        integer :: nbuf(2)
         real(dp) :: a_tab
         integer, parameter :: u = 31
         character(len=40) :: dustlabel
@@ -231,6 +236,9 @@ module dust_charging
             write(dustlabel, '(A,I2.2)') 'DustBin_', ii
             if (len_trim(charging_table_label(ii)) > 0) dustlabel = charging_table_label(ii)
             fname = trim(dust_tables_dir)//'dust_charging_isrf_'//trim(dustlabel)//'.dat'
+            ! With shared_tables, node rank 0 reads the file and the node shares isrf_q
+            nT = 0 ; nX = 0
+            if (node_reader()) then
             open(u, file=trim(fname), status='old', action='read', iostat=istat)
             if (istat /= 0) then
                 if (myid == 1) write(*,*) 'ERROR: cannot open ', trim(fname), ' (pyCALIMA export_dust_charging_isrf: ', &
@@ -252,9 +260,17 @@ module dust_charging
                     ' cm, bin ', ii, ' has asize = ', dustbins_props(ii)%asize_cm, ' cm'
                 call clean_stop
             end if
+            end if
+            nbuf = (/nT, nX/)
+            call node_bcast_i(nbuf, 2)
+            nT = nbuf(1) ; nX = nbuf(2)
             allocate(lT(nT), lX(nX))
+            if (node_reader()) then
             read(u, *) lT
             read(u, *) lX
+            end if
+            call node_bcast_r8(lT, nT)
+            call node_bcast_r8(lX, nX)
             if (ii == 1) then
                 isrf_nT = nT
                 isrf_nX = nX
@@ -265,21 +281,24 @@ module dust_charging
                 isrf_lX1 = lX(nX)
                 isrf_dlX = lX(2) - lX(1)
                 isrf_nqload = merge(ISRF_NQ, ISRF_NQ_CHARGE, dust_ion_recombination .and. trim(charging_model) == 'WDB06isrf')
-                if (allocated(isrf_q)) deallocate(isrf_q)
-                allocate(isrf_q(isrf_nqload, nT, nX, ndust))
+                if (associated(isrf_q) .and. .not. node_tables()) deallocate(isrf_q)
+                call node_alloc_r8_4(isrf_q, isrf_nqload, nT, nX, ndust)
             else if (nT /= isrf_nT .or. nX /= isrf_nX .or. lT(1) /= isrf_lT0 .or. lX(1) /= isrf_lX0 &
                      .or. lT(nT) /= isrf_lT1 .or. lX(nX) /= isrf_lX1) then
                 if (myid == 1) write(*,*) 'ERROR: ', trim(fname), ' is not on the grid of DustBin_01'
                 call clean_stop
             end if
+            if (node_reader()) then
             do k = 1, isrf_nqload
                 do i = 1, nT
                     read(u, *) isrf_q(k, i, :, ii)
                 end do
             end do
             close(u)
+            end if
             deallocate(lT, lX)
         end do
+        call node_publish()   ! the node's shared table is filled
         if (myid == 1) write(*,'(A,I4,A,I4,A)') ' CALIMA: uniform-ISRF charging tables read (', isrf_nT, ' x ', &
             isrf_nX, ' nodes per bin)'
     end subroutine init_dust_charging_isrf
@@ -530,11 +549,14 @@ module dust_charging
         ! Read the tables of every dust bin and check them against the run's
         ! photon groups and grain sizes. Called from rt_init once groups exist.
         use amr_commons, only: myid
+        use node_shared, only: node_reader, node_bcast_i, node_bcast_r8, node_alloc_r8_2, node_alloc_r8_3, node_publish
         implicit none
         type(CellState) :: cell
         integer, intent(in) :: nGroups
         real(dp), intent(in) :: groupL0(nGroups), groupL1(nGroups)
         integer :: ii, g, it, istat, ver, iu, k, nzmax
+        integer :: ibuf(6)
+        real(dp) :: rbuf(4)
         character(len=40) :: dustlabel
         character(len=256) :: fname
         character(len=512) :: line
@@ -548,6 +570,9 @@ module dust_charging
             if (len_trim(charging_table_label(ii)) > 0) dustlabel = charging_table_label(ii)
             fname = trim(dust_tables_dir)//'dust_charging_rtgroups_'//trim(dustlabel)//'.dat'
             iu = 27
+            ! With shared_tables, node rank 0 reads the file: the node shares K, H and the hot-electron
+            ! tables; the axes and the small arrays are broadcast
+            if (node_reader()) then
             open(iu, file=trim(fname), status='old', action='read', iostat=istat)
             if (istat /= 0) then
                 if (myid == 1) write(*,*) 'WDB06rt: cannot open ', trim(fname), &
@@ -560,17 +585,29 @@ module dust_charging
             end do
             read(line, *) ver, t%material, t%a, t%W, t%Zmin, t%Zmax
             read(iu, *) t%nG, t%nU, t%nTs, t%nTh
+            end if
+            ibuf = (/ver, t%material, t%nG, t%nU, t%nTs, t%nTh/)
+            rbuf = (/t%a, t%W, t%Zmin, t%Zmax/)
+            call node_bcast_i(ibuf, 6)
+            call node_bcast_r8(rbuf, 4)
+            ver = ibuf(1) ; t%material = ibuf(2) ; t%nG = ibuf(3) ; t%nU = ibuf(4) ; t%nTs = ibuf(5) ; t%nTh = ibuf(6)
+            t%a = rbuf(1) ; t%W = rbuf(2) ; t%Zmin = rbuf(3) ; t%Zmax = rbuf(4)
             if (t%nG /= nGroups) then
                 if (myid == 1) write(*,*) 'WDB06rt: ', trim(fname), ' has ', t%nG, &
                     ' groups, the run has ', nGroups
                 call clean_stop
             end if
             allocate(t%L0(t%nG), t%L1(t%nG), t%U(t%nU), t%lTs(t%nTs), t%egy(t%nTs,t%nG))
-            allocate(t%K(t%nU,t%nTs,t%nG), t%H(t%nU,t%nTs,t%nG))
-            allocate(t%lTh(t%nTh), t%delta(t%nU,t%nTh), t%Ptr(t%nU,t%nTh), &
-                     t%fcool(t%nU,t%nTh), t%Ebar(t%nU,t%nTh))
+            call node_alloc_r8_3(t%K, t%nU, t%nTs, t%nG)
+            call node_alloc_r8_3(t%H, t%nU, t%nTs, t%nG)
+            allocate(t%lTh(t%nTh))
+            call node_alloc_r8_2(t%delta, t%nU, t%nTh)
+            call node_alloc_r8_2(t%Ptr, t%nU, t%nTh)
+            call node_alloc_r8_2(t%fcool, t%nU, t%nTh)
+            call node_alloc_r8_2(t%Ebar, t%nU, t%nTh)
             allocate(t%KgT(t%nG,t%nU), t%HgT(t%nG,t%nU), t%mKT(t%nG,t%nU), t%mHT(t%nG,t%nU), t%egy_used(t%nG))
             allocate(t%Kbg(t%nU), t%Hbg(t%nU), t%mKb(t%nU), t%mHb(t%nU), t%edge0(t%nG), t%edge1(t%nG))
+            if (node_reader()) then
             read(iu, *) t%L0
             read(iu, *) t%L1
             read(iu, *) t%U
@@ -611,6 +648,16 @@ module dust_charging
             end if
             if (ver >= 3) read(iu, *) t%Zth
             close(iu)
+            end if
+            call node_bcast_r8(t%L0, t%nG)
+            call node_bcast_r8(t%L1, t%nG)
+            call node_bcast_r8(t%U, t%nU)
+            call node_bcast_r8(t%lTs, t%nTs)
+            call node_bcast_r8(t%egy, t%nTs*t%nG)
+            call node_bcast_r8(t%lTh, t%nTh)
+            call node_bcast_r8(t%Kbg, t%nU)
+            call node_bcast_r8(t%Hbg, t%nU)
+            call node_bcast_r8(t%Zth, RTG_NRI)
 
             ! consistency with the run
             do g = 1, nGroups
@@ -636,8 +683,10 @@ module dust_charging
             t%nZ = nint(t%Zmax - t%Zmin) + 1
             nzmax = max(nzmax, t%nZ)
             rtg(ii) = t
-            deallocate(t%L0, t%L1, t%U, t%lTs, t%egy, t%K, t%H, t%lTh, t%delta, t%Ptr, &
-                       t%fcool, t%Ebar, t%KgT, t%HgT, t%mKT, t%mHT, t%egy_used, t%Kbg, t%Hbg, t%mKb, t%mHb, &
+            ! the tables behind the pointers now belong to rtg(ii)
+            nullify(t%K, t%H, t%delta, t%Ptr, t%fcool, t%Ebar)
+            deallocate(t%L0, t%L1, t%U, t%lTs, t%egy, t%lTh, &
+                       t%KgT, t%HgT, t%mKT, t%mHT, t%egy_used, t%Kbg, t%Hbg, t%mKb, t%mHb, &
                        t%edge0, t%edge1)
 
             ! charges where IP(a, Z) crosses the group edges / Mathis breaks (kinks of g), the
@@ -666,6 +715,7 @@ module dust_charging
         ri_hlnm = 0.5d0*log(RI_MASS)
         allocate(f_Zn(nzmax + 2), f_lnP(nzmax + 2), f_lnA(nzmax + 2), f_v(nzmax + 2), f_ps(0:nzmax + 2))
         allocate(f_row(maxval(rtg(:)%nU)))
+        call node_publish()   ! the node's shared tables are filled
     end subroutine init_dust_charging_rtgroups
 
     subroutine pchip_slopes(y, m, n)
@@ -2613,17 +2663,22 @@ module dust_charging
         ! bytes of this rank's WDB06rt and WDB06isrf tables and work arrays (the memory report);
         ! the uniform-background table of a bin is built on first use and counted as if it were
         use dust_utils, only: alloc_bytes
+        use node_shared, only: node_reader
         implicit none
         integer :: ii
         integer(kind=8) :: b
-        b = alloc_bytes(isrf_q) + alloc_bytes(f_Zn) + alloc_bytes(f_lnP) + alloc_bytes(f_lnA) &
+        b = alloc_bytes(f_Zn) + alloc_bytes(f_lnP) + alloc_bytes(f_lnA) &
           + alloc_bytes(f_v) + alloc_bytes(f_ps) + alloc_bytes(f_row)
+        ! isrf_q: in node-shared memory with shared_tables, counted on the rank that holds it
+        if (associated(isrf_q) .and. node_reader()) b = b + size(isrf_q, kind=8) * 8
         if (allocated(rtg)) then
             do ii = 1, size(rtg)
                 associate (t => rtg(ii))
+                    ! K, H and the hot-electron tables: node-shared with shared_tables, counted on the rank that holds them
+                    if (associated(t%K) .and. node_reader()) b = b + 8 * (size(t%K, kind=8) + size(t%H, kind=8) &
+                          + size(t%delta, kind=8) + size(t%Ptr, kind=8) + size(t%fcool, kind=8) + size(t%Ebar, kind=8))
                     b = b + alloc_bytes(t%L0) + alloc_bytes(t%L1) + alloc_bytes(t%U) + alloc_bytes(t%lTs) &
-                          + alloc_bytes(t%egy) + alloc_bytes(t%K) + alloc_bytes(t%H) + alloc_bytes(t%lTh) &
-                          + alloc_bytes(t%delta) + alloc_bytes(t%Ptr) + alloc_bytes(t%fcool) + alloc_bytes(t%Ebar) &
+                          + alloc_bytes(t%egy) + alloc_bytes(t%lTh) &
                           + alloc_bytes(t%KgT) + alloc_bytes(t%HgT) + alloc_bytes(t%mKT) + alloc_bytes(t%mHT) &
                           + alloc_bytes(t%egy_used) + alloc_bytes(t%Kbg) + alloc_bytes(t%Hbg) + alloc_bytes(t%mKb) &
                           + alloc_bytes(t%mHb) + alloc_bytes(t%edge0) + alloc_bytes(t%edge1) + alloc_bytes(t%iuz) &
