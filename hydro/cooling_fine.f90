@@ -1,6 +1,529 @@
+!################################################################
+! Cooling balance diagnostics (cool_stats): the wall time of every cooling_fine call on this rank, and of the halo
+! exchange after it in rt_step, reduced over the ranks once per coarse step. Every rank calls cooling_fine the same
+! number of times (the calls follow the global level and RT-subcycle loops), so call k is the same on all ranks.
+!################################################################
+module cool_queue_m
+  use mpi_mod
+#if defined(RT) && defined(RTZ)
+  use amr_parameters, only: dp, ndim, nvector
+#ifdef CALIMA
+  use hydro_parameters, only: ndust, npah
+#endif
+  use rt_parameters, only: nGroups, isH2_rtz, rt_smooth
+  use rtz_module, only: n_elements, elements
+#endif
+  implicit none
+  integer,parameter::CF_LEGACY=0,CF_PRE=1,CF_POST=2   ! coolfine1: as always, gather and pack, unpack and scatter
+  integer::cs_ncall=0
+  real(kind=8),allocatable,dimension(:)::cs_tc,cs_tw
+  real(kind=8)::cs_twall_last=0d0
+  real(kind=8),dimension(4)::cs_cum=0d0        ! cooling sum of max, sum of mean, wait sum of mean, wall
+#if defined(RT) && defined(RTZ)
+  !--------------------------------------------------------------------------------------------------------------
+  ! Records (cool_queue >= 1): coolfine1 packs the solver inputs of each leaf cell into a record (CF_PRE), the
+  ! record is solved on its own (cq_solve_record), and coolfine1 unpacks the outputs and does the scatter
+  ! (CF_POST). A record's result depends only on the record and on the call's globals (ilevel, dtcool, aexp),
+  ! not on the rank that solves it or on the order.
+  !--------------------------------------------------------------------------------------------------------------
+  logical::cq_lay_set=.false.
+  integer::cq_nrec                                ! reals per record
+  integer::cq_nion,cq_nel                         ! tracked ion slots (with H2) and elements
+  integer,allocatable,dimension(:)::cq_ion_ii,cq_ion_jj,cq_el_ii
+  integer::o_T2,o_ion,o_el,o_CO,o_Np,o_Fp,o_pg,o_dNp,o_dFp,o_dx,o_sig,o_dust,o_pah,o_hwd,o_wd,o_fion,o_zg
+  integer::o_stat,o_cost,o_rank
+  integer::cq_nhome                               ! T2, nH, ekk, err, emag, T2min, Zsolar, the rt_vc boosts
+  real(kind=8),pointer,contiguous,dimension(:,:)::cq_rec=>null()   ! (cq_nrec, cell): this rank's records
+  real(kind=8),allocatable,dimension(:,:)::cq_home                 ! (cq_nhome, cell): kept by the owner
+  integer::cq_ncell=0                             ! records packed in this call
+  integer::cq_iunpack=0                           ! records unpacked in this call
+  integer::cq_ilevel                              ! the call's globals
+  real(kind=8)::cq_dtcool,cq_aexp
+  real(kind=8),allocatable,dimension(:)::cq_pred  ! predicted cost of each record [s]
+  real(kind=8)::cq_cost_mean=1d-5                 ! mean measured cost per cell of this rank's last call [s]
+  real(kind=8),dimension(6)::cq_st=0d0            ! per coarse step: s solving other ranks' cells, s waiting, chunks stolen, s solving,
+                                                  ! s gathering (CF_PRE), s scattering (CF_POST)
+  !--------------------------------------------------------------------------------------------------------------
+  ! The node queue (cool_queue = 2). Each rank of the node owns a segment of one MPI_Win_allocate_shared window:
+  !   w(1) next chunk to claim (MPI_Fetch_and_op), w(2) chunks, w(3) records, w(4) capacity, w(5) ilevel, w(6) dtcool,
+  !   then perm(cap) (the records in claim order: most expensive first), the chunk starts cst(cap+1) in perm,
+  !   the predicted cost before each chunk ccum(cap+1), and the records (cq_nrec, cap).
+  ! Integers are held as reals (exact). Every rank packs its records, then a node barrier; ranks claim chunks of
+  ! their own queue, then of the rank with the most predicted cost left, solving the records in place in the owner's
+  ! segment; when no queue has chunks left, a node barrier, then each rank unpacks its own records.
+  !--------------------------------------------------------------------------------------------------------------
+  integer,parameter::cq_nhead=16
+#ifdef CALIMA
+  integer,parameter,private::cq_ndust=ndust,cq_npah=npah
+#else
+  integer,parameter,private::cq_ndust=0,cq_npah=0
+#endif
+  type cq_seg_t
+     real(kind=8),pointer,contiguous,dimension(:)::w=>null()
+  end type cq_seg_t
+  type(cq_seg_t),allocatable,dimension(:)::cq_seg  ! (0:node_size-1)
+  integer::cq_win=-1
+  integer::cq_cap=0                               ! records this rank's segment holds
+  logical::cq_node_queue=.false.                  ! cool_queue = 2 with more than one rank on the node
+contains
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_layout
+    ! Offsets in a record, the same on every rank (they depend only on the build and the namelist)
+    integer::ii,jj,n
+    allocate(cq_ion_ii(n_elements*n_elements+1),cq_ion_jj(n_elements*n_elements+1),cq_el_ii(n_elements))
+    cq_nion=0; cq_nel=0
+    do ii=1,n_elements
+       if(elements(ii)%atomic_number.gt.0)then
+          cq_nel=cq_nel+1; cq_el_ii(cq_nel)=ii
+          do jj=1,elements(ii)%n_ions
+             cq_nion=cq_nion+1; cq_ion_ii(cq_nion)=ii; cq_ion_jj(cq_nion)=jj
+          end do
+       end if
+    end do
+    if(elements(1)%atomic_number.gt.0.and.isH2_rtz)then
+       cq_nion=cq_nion+1; cq_ion_ii(cq_nion)=1; cq_ion_jj(cq_nion)=3
+    end if
+    n=0
+    o_T2=n+1;   n=n+1
+    o_ion=n+1;  n=n+cq_nion
+    o_el=n+1;   n=n+cq_nel
+    o_CO=n+1;   n=n+1
+    o_Np=n+1;   n=n+nGroups
+    o_Fp=n+1;   n=n+ndim*nGroups
+    o_pg=n+1;   n=n+ndim
+    o_dNp=n+1;  if(rt_smooth)n=n+nGroups
+    o_dFp=n+1;  if(rt_smooth)n=n+ndim*nGroups
+    o_dx=n+1;   n=n+1
+    o_sig=n+1;  n=n+1
+    o_dust=n+1; n=n+cq_ndust
+    o_pah=n+1;  n=n+cq_npah
+    o_hwd=n+1;  n=n+1
+    o_wd=n+1;   n=n+(cq_ndust+cq_npah)*ndim
+    o_fion=n+1; n=n+cq_npah
+    o_zg=n+1;   n=n+cq_ndust
+    o_stat=n+1; n=n+1
+    o_cost=n+1; n=n+1
+    o_rank=n+1; n=n+1
+    cq_nrec=n
+    cq_nhome=7+nGroups*(1+ndim)
+    cq_lay_set=.true.
+  end subroutine cq_layout
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_reserve(n)
+    ! Room for n records of this rank (local storage)
+    integer,intent(in)::n
+    real(kind=8),pointer,contiguous,dimension(:,:)::tmp
+    real(kind=8),allocatable,dimension(:,:)::tmph
+    integer::m
+    if(cq_node_queue)then
+       ! the records are in the node window (cq_window); only the owner's arrays here
+       if(allocated(cq_home))then
+          if(size(cq_home,2)>=n)return
+          m=max(n,2*size(cq_home,2))
+          allocate(tmph(cq_nhome,m)); tmph(:,1:size(cq_home,2))=cq_home; call move_alloc(tmph,cq_home)
+       else
+          m=max(n,1024)
+          allocate(cq_home(cq_nhome,m))
+       end if
+       call cq_grow_pred(m)
+       return
+    end if
+    if(associated(cq_rec))then
+       if(size(cq_rec,2)>=n)return
+       m=max(n,2*size(cq_rec,2))
+       allocate(tmp(cq_nrec,m)); tmp(:,1:size(cq_rec,2))=cq_rec; deallocate(cq_rec); cq_rec=>tmp
+       allocate(tmph(cq_nhome,m)); tmph(:,1:size(cq_home,2))=cq_home; call move_alloc(tmph,cq_home)
+    else
+       m=max(n,1024)
+       allocate(cq_rec(cq_nrec,m),cq_home(cq_nhome,m))
+    end if
+    call cq_grow_pred(m)
+  end subroutine cq_reserve
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_grow_pred(m)
+    integer,intent(in)::m
+    real(kind=8),allocatable,dimension(:)::tmp
+    if(.not.allocated(cq_pred))then
+       allocate(cq_pred(m))
+    else if(size(cq_pred)<m)then
+       allocate(tmp(m)); tmp(1:size(cq_pred))=cq_pred; call move_alloc(tmp,cq_pred)
+    end if
+  end subroutine cq_grow_pred
+#ifndef WITHOUTMPI
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_window(nneed)
+    ! Collective on node_comm: (re)allocate the node window when a rank needs room for more records
+    use node_shared
+    use iso_c_binding
+    integer,intent(in)::nneed
+    integer::grow,grow_any,ierr,info,du,r
+    integer(kind=MPI_ADDRESS_KIND)::wsize,qsize,baseptr,model
+    logical::flag
+    type(c_ptr)::cp
+    grow=0
+    if(nneed>cq_cap)grow=1
+    call MPI_ALLREDUCE(grow,grow_any,1,MPI_INTEGER,MPI_MAX,node_comm,ierr)
+    if(grow_any==0)return
+    if(cq_win/=-1)then
+       call MPI_WIN_UNLOCK_ALL(cq_win,ierr)
+       call MPI_WIN_FREE(cq_win,ierr)
+    end if
+    if(grow==1)cq_cap=max(1024,nneed+nneed/4)
+    call MPI_INFO_CREATE(info,ierr)
+    call MPI_INFO_SET(info,'alloc_shared_noncontig','true',ierr)
+    wsize=8_MPI_ADDRESS_KIND*(cq_nhead+3*int(cq_cap,MPI_ADDRESS_KIND)+2+int(cq_nrec,MPI_ADDRESS_KIND)*cq_cap)
+    call MPI_WIN_ALLOCATE_SHARED(wsize,8,info,node_comm,baseptr,cq_win,ierr)
+    call MPI_INFO_FREE(info,ierr)
+    call MPI_WIN_GET_ATTR(cq_win,MPI_WIN_MODEL,model,flag,ierr)
+    if(.not.flag .or. model/=MPI_WIN_UNIFIED)then
+       write(*,*)'cool_queue = 2 needs the unified memory model of MPI-3 shared windows'
+       call clean_stop
+    end if
+    if(.not.allocated(cq_seg))allocate(cq_seg(0:node_size-1))
+    do r=0,node_size-1
+       call MPI_WIN_SHARED_QUERY(cq_win,r,qsize,du,baseptr,ierr)
+       cp=transfer(baseptr,cp)
+       call c_f_pointer(cp,cq_seg(r)%w,(/qsize/8/))
+    end do
+    call MPI_WIN_LOCK_ALL(MPI_MODE_NOCHECK,cq_win,ierr)
+    cq_seg(node_rank)%w(4)=dble(cq_cap)
+    cp=c_loc(cq_seg(node_rank)%w(cq_nhead+3*cq_cap+3))
+    call c_f_pointer(cp,cq_rec,(/cq_nrec,cq_cap/))
+    call MPI_WIN_SYNC(cq_win,ierr)
+    call MPI_BARRIER(node_comm,ierr)
+    call MPI_WIN_SYNC(cq_win,ierr)
+  end subroutine cq_window
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_publish(chunk_cost)
+    ! Order this rank's records by predicted cost (most expensive first), cut them into chunks of about
+    ! chunk_cost seconds (at most 64 records), and write the queue's header; then the node barrier
+    use node_shared
+    real(kind=8),intent(in)::chunk_cost
+    real(kind=8),allocatable,dimension(:)::key
+    integer,allocatable,dimension(:)::order
+    real(kind=8),pointer,contiguous,dimension(:)::w
+    integer::n,p,nch,ncap,ierr
+    real(kind=8)::acc,cum
+    integer::ninc
+    w=>cq_seg(node_rank)%w
+    n=cq_ncell
+    ncap=cq_cap
+    nch=0
+    if(n>0)then
+       allocate(key(n),order(n))
+       key=-cq_pred(1:n)
+       call quick_sort_dp(key,order,n)
+       cum=0d0; acc=0d0; ninc=0
+       do p=1,n
+          if(ninc==0)then
+             nch=nch+1
+             w(cq_nhead+ncap+nch)=dble(p)              ! cst(nch)
+             w(cq_nhead+2*ncap+1+nch)=cum             ! ccum(nch)
+          end if
+          w(cq_nhead+p)=dble(order(p))                 ! perm(p)
+          acc=acc+cq_pred(order(p)); cum=cum+cq_pred(order(p)); ninc=ninc+1
+          if(acc>=chunk_cost .or. ninc>=64)then
+             acc=0d0; ninc=0
+          end if
+       end do
+    end if
+    w(cq_nhead+ncap+nch+1)=dble(n+1)                    ! cst(nch+1)
+    w(cq_nhead+2*ncap+1+nch+1)=cum                      ! ccum(nch+1)
+    w(1)=0d0
+    w(2)=dble(nch)
+    w(3)=dble(n)
+    w(5)=dble(cq_ilevel)
+    w(6)=cq_dtcool
+    call MPI_WIN_SYNC(cq_win,ierr)
+    call MPI_BARRIER(node_comm,ierr)
+    call MPI_WIN_SYNC(cq_win,ierr)
+  end subroutine cq_publish
+  !--------------------------------------------------------------------------------------------------------------
+  logical function cq_claim(tgt,ich)
+    ! Claim the next chunk (0-based) of rank tgt's queue
+    integer,intent(in)::tgt
+    integer,intent(out)::ich
+    real(kind=8)::one=1d0,old
+    integer::ierr
+    integer(kind=MPI_ADDRESS_KIND)::disp0=0
+    call MPI_FETCH_AND_OP(one,old,MPI_DOUBLE_PRECISION,tgt,disp0,MPI_SUM,cq_win,ierr)
+    call MPI_WIN_FLUSH(tgt,cq_win,ierr)
+    ich=nint(old)
+    cq_claim=(ich<nint(cq_seg(tgt)%w(2)))
+  end function cq_claim
+  !--------------------------------------------------------------------------------------------------------------
+  integer function cq_victim()
+    ! The node rank with the most predicted cost left in its queue, or -1 if no queue has chunks left
+    use node_shared
+    integer::r,nxt,nch,ierr,cap
+    real(kind=8)::rem,best
+    call MPI_WIN_SYNC(cq_win,ierr)
+    cq_victim=-1
+    best=-1d0
+    do r=0,node_size-1
+       nxt=nint(cq_seg(r)%w(1)); nch=nint(cq_seg(r)%w(2))
+       if(nxt>=nch)cycle
+       cap=nint(cq_seg(r)%w(4))
+       rem=cq_seg(r)%w(cq_nhead+2*cap+1+nch+1)-cq_seg(r)%w(cq_nhead+2*cap+1+nxt+1)
+       if(rem>best)then
+          best=rem; cq_victim=r
+       end if
+    end do
+  end function cq_victim
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_work
+    ! Solve the node's chunks: own queue first, then the other ranks', until no queue has chunks left
+    use node_shared
+    use amr_commons, only: myid
+    real(kind=8),pointer,contiguous,dimension(:)::w
+    real(kind=8)::wallclock,t0
+    integer::tgt,ich,p,k,cap,ierr,o_rec
+    tgt=node_rank
+    do
+       if(.not.cq_claim(tgt,ich))then
+          tgt=cq_victim()
+          if(tgt<0)exit
+          cycle
+       end if
+       w=>cq_seg(tgt)%w
+       if(tgt/=node_rank)then
+          if(nint(w(5))/=cq_ilevel .or. w(6)/=cq_dtcool)then
+             write(*,*)'cool_queue: rank',myid,'found node rank',tgt,'in another cooling call'
+             call clean_stop
+          end if
+          t0=wallclock()
+       end if
+       cap=nint(w(4))
+       o_rec=cq_nhead+3*cap+2
+       do p=nint(w(cq_nhead+cap+ich+1)),nint(w(cq_nhead+cap+ich+2))-1
+          k=nint(w(cq_nhead+p))
+          call cq_solve_record(w(o_rec+(k-1)*cq_nrec+1:o_rec+k*cq_nrec))
+       end do
+       if(tgt/=node_rank)then
+          cq_st(1)=cq_st(1)+wallclock()-t0
+          cq_st(3)=cq_st(3)+1d0
+       end if
+    end do
+    t0=wallclock()
+    call MPI_WIN_SYNC(cq_win,ierr)
+    call MPI_BARRIER(node_comm,ierr)
+    call MPI_WIN_SYNC(cq_win,ierr)
+    cq_st(2)=cq_st(2)+wallclock()-t0
+  end subroutine cq_work
+#endif
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_check_mode
+    ! At the first call: the record path covers the RTZ non-equilibrium solve only
+    use amr_commons, only: myid
+    use amr_parameters, only: cool_queue, neq_chem, cool_queue_zguess_ivar, cost_ivar
+    use hydro_parameters, only: nvarnoadvect
+    use node_shared, only: node_size
+    use rt_parameters, only: rtz_cooling, rtz_equilibrium_test, rtz_single_cell_test
+    logical,save::checked=.false.
+    if(checked)return
+    checked=.true.
+#ifndef RTZ_ONE_CELL_TEST
+    if(neq_chem.and.rtz_cooling.and.rtz_equilibrium_test<=0.and..not.rtz_single_cell_test)then
+       if(.not.cq_lay_set)call cq_layout
+       if(cool_queue_zguess_ivar>0 .and. (cool_queue_zguess_ivar+cq_ndust-1>nvarnoadvect .or. &
+            & (cost_ivar>=cool_queue_zguess_ivar .and. cost_ivar<=cool_queue_zguess_ivar+cq_ndust-1)))then
+          if(myid==1)write(*,*)'cool_queue_zguess_ivar needs ndust non-advected scalars apart from cost_ivar: '// &
+               & 'starting the charge roots cold'
+          cool_queue_zguess_ivar=0
+       end if
+#ifndef WITHOUTMPI
+       cq_node_queue=(cool_queue==2 .and. node_size>1)
+#endif
+       if(myid==1)write(*,'(" cool_queue =",I2,": records of",I4," reals per cell, node queue ",L1, &
+            & " (",I4," ranks on the first node)")')cool_queue,cq_nrec,cq_node_queue,node_size
+       return
+    end if
+#endif
+    if(myid==1)write(*,*)'cool_queue needs neq_chem, rtz_cooling and no equilibrium or single-cell test: cool_queue = 0'
+    cool_queue=0
+  end subroutine cq_check_mode
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_set_call(ilevel)
+    ! The globals of this call, computed as coolfine1 does
+    use amr_commons, only: dtnew, aexp, aexp_ini, cosmo, haardt_madau
+    integer,intent(in)::ilevel
+    real(dp)::scale_nH,scale_T2,scale_l,scale_d,scale_t,scale_v
+    call units(scale_l,scale_t,scale_d,scale_v,scale_nH,scale_T2)
+    cq_ilevel=ilevel
+    cq_dtcool=dtnew(ilevel)*scale_t
+    cq_aexp=aexp
+    if(.not. cosmo .and. haardt_madau .and. aexp_ini .le. 1.) cq_aexp = aexp_ini
+  end subroutine cq_set_call
+  !--------------------------------------------------------------------------------------------------------------
+  subroutine cq_solve_record(r)
+    ! Solve one record in place: the inputs are replaced by the outputs, the status, the solve time and the rank
+    use amr_commons, only: myid
+    use rtz_cooling_module, only: rtz_solve_cooling
+#ifdef CALIMA
+    use dust_commons, only: tva_wdrift_batch,ntva,pah_fion_vec
+    use dust_interface, only: reset_cell_warm_starts, get_cell_zguess
+#endif
+    real(kind=8),dimension(:),intent(inout)::r
+    real(dp),dimension(1:nvector)::T2_new,nCO,dx_SS_H2
+    real(dp),dimension(1:n_elements,1:n_elements,1:nvector)::xion
+    real(dp),dimension(1:n_elements,1:nvector)::nElement
+    real(dp),dimension(1:nGroups,1:nvector)::Np,dNpdt
+    real(dp),dimension(1:ndim,1:nGroups,1:nvector)::Fp,dFpdt
+    real(dp),dimension(1:ndim,1:nvector)::p_gas
+#ifdef CALIMA
+    real(dp),dimension(1:nvector)::sigma
+    real(dp),dimension(1:nvector,1:ndust)::rho_dust
+    real(dp),dimension(1:nvector,1:npah)::rho_pah
+#endif
+    real(kind=8)::wallclock,t0
+    integer::k,err_idx
+    xion=0d0; nElement=0d0; dNpdt=0d0; dFpdt=0d0
+    T2_new(1)=r(o_T2)
+    do k=1,cq_nion
+       xion(cq_ion_ii(k),cq_ion_jj(k),1)=r(o_ion+k-1)
+    end do
+    do k=1,cq_nel
+       nElement(cq_el_ii(k),1)=r(o_el+k-1)
+    end do
+    nCO(1)=r(o_CO)
+    Np(:,1)=r(o_Np:o_Np+nGroups-1)
+    Fp(:,:,1)=reshape(r(o_Fp:o_Fp+ndim*nGroups-1),(/ndim,nGroups/))
+    p_gas(:,1)=r(o_pg:o_pg+ndim-1)
+    if(rt_smooth)then
+       dNpdt(:,1)=r(o_dNp:o_dNp+nGroups-1)
+       dFpdt(:,:,1)=reshape(r(o_dFp:o_dFp+ndim*nGroups-1),(/ndim,nGroups/))
+    end if
+    dx_SS_H2(1)=r(o_dx)
+#ifdef CALIMA
+    sigma(1)=r(o_sig)
+    rho_dust(1,:)=r(o_dust:o_dust+ndust-1)
+    rho_pah(1,:)=r(o_pah:o_pah+npah-1)
+    if(r(o_hwd)>0d0)then
+       if(.not.allocated(tva_wdrift_batch))allocate(tva_wdrift_batch(1:nvector,1:ntva,1:ndim))
+       tva_wdrift_batch(1,:,:)=reshape(r(o_wd:o_wd+ntva*ndim-1),(/ntva,ndim/))
+    end if
+    if(npah>0)pah_fion_vec=-1d0
+    call reset_cell_warm_starts(r(o_zg:o_zg+ndust-1))   ! this cell's own charge roots, or a cold start
+#endif
+    err_idx=0
+    t0=wallclock()
+    call rtz_solve_cooling(T2_new, cq_aexp, xion, nElement, nCO, Np, Fp   &
+                          ,p_gas, dNpdt, dFpdt, cq_ilevel, cq_dtcool, 1    &
+                          ,dx_SS_H2, err_idx &
+#ifdef CALIMA
+                          ,sigma=sigma, rho_dust=rho_dust, rho_pah=rho_pah &
+#endif
+                          )
+    r(o_cost)=wallclock()-t0
+    cq_st(4)=cq_st(4)+r(o_cost)
+    r(o_T2)=T2_new(1)
+    do k=1,cq_nion
+       r(o_ion+k-1)=xion(cq_ion_ii(k),cq_ion_jj(k),1)
+    end do
+    do k=1,cq_nel
+       r(o_el+k-1)=nElement(cq_el_ii(k),1)
+    end do
+    r(o_CO)=nCO(1)
+    r(o_Np:o_Np+nGroups-1)=Np(:,1)
+    r(o_Fp:o_Fp+ndim*nGroups-1)=reshape(Fp(:,:,1),(/ndim*nGroups/))
+    r(o_pg:o_pg+ndim-1)=p_gas(:,1)
+#ifdef CALIMA
+    r(o_dust:o_dust+ndust-1)=rho_dust(1,:)
+    r(o_pah:o_pah+npah-1)=rho_pah(1,:)
+    if(npah>0)r(o_fion:o_fion+npah-1)=pah_fion_vec(1,:)
+    call get_cell_zguess(r(o_zg:o_zg+ndust-1))
+#endif
+    r(o_stat)=dble(err_idx)
+    r(o_rank)=dble(myid)
+  end subroutine cq_solve_record
+#endif
+end module cool_queue_m
+!################################################################
+subroutine cool_stats_call(tc,tw)
+  use cool_queue_m
+  implicit none
+  real(kind=8),intent(in)::tc,tw
+  real(kind=8),allocatable,dimension(:)::tmp
+  if(.not.allocated(cs_tc))then
+     allocate(cs_tc(64),cs_tw(64))
+  else if(cs_ncall==size(cs_tc))then
+     allocate(tmp(2*cs_ncall))
+     tmp(1:cs_ncall)=cs_tc; call move_alloc(tmp,cs_tc)
+     allocate(tmp(2*cs_ncall))
+     tmp(1:cs_ncall)=cs_tw; call move_alloc(tmp,cs_tw)
+  end if
+  cs_ncall=cs_ncall+1
+  cs_tc(cs_ncall)=tc
+  cs_tw(cs_ncall)=tw
+end subroutine cool_stats_call
+!################################################################
+subroutine cool_stats_report
+  use amr_commons, only: myid,ncpu,nstep_coarse
+  use amr_parameters, only: cool_queue
+  use cool_queue_m
+  use mpi_mod
+  implicit none
+  real(kind=8)::wallclock,twall,cmax,cmean,wmean,wmax
+  real(kind=8),dimension(6)::qsum=0d0,qmax=0d0
+  real(kind=8),allocatable,dimension(:)::buf,bmax,bsum
+  integer::n,nmin,nmax,info
+  twall=wallclock()
+  n=cs_ncall
+  allocate(buf(2*max(n,1)),bmax(2*max(n,1)),bsum(2*max(n,1)))
+  buf=0d0
+  if(n>0)then
+     buf(1:n)=cs_tc(1:n)
+     buf(n+1:2*n)=cs_tw(1:n)
+  end if
+#ifndef WITHOUTMPI
+  call MPI_ALLREDUCE(n,nmin,1,MPI_INTEGER,MPI_MIN,MPI_COMM_WORLD,info)
+  call MPI_ALLREDUCE(n,nmax,1,MPI_INTEGER,MPI_MAX,MPI_COMM_WORLD,info)
+  if(nmin/=nmax)then
+     if(myid==1)write(*,*)'cool_stats: the ranks made different numbers of cooling calls',nmin,nmax
+     cs_ncall=0
+     return
+  end if
+  call MPI_REDUCE(buf,bmax,2*max(n,1),MPI_DOUBLE_PRECISION,MPI_MAX,0,MPI_COMM_WORLD,info)
+  call MPI_REDUCE(buf,bsum,2*max(n,1),MPI_DOUBLE_PRECISION,MPI_SUM,0,MPI_COMM_WORLD,info)
+#else
+  bmax=buf
+  bsum=buf
+#endif
+  if(myid==1.and.n>0)then
+     cmax=sum(bmax(1:n))
+     cmean=sum(bsum(1:n))/dble(ncpu)
+     wmean=sum(bsum(n+1:2*n))/dble(ncpu)
+     wmax=sum(bmax(n+1:2*n))
+     cs_cum=cs_cum+(/cmax,cmean,wmean,twall-cs_twall_last/)
+     write(*,'(" Cooling balance step",I7,": calls",I5,", cooling max/mean",2ES10.3," s, wait after mean/max", &
+          & 2ES10.3," s, step wall",ES10.3," s; so far: cooling max/mean",2ES10.3,", wait mean",ES10.3,", wall",ES10.3)') &
+          & nstep_coarse,n,cmax,cmean,wmean,wmax,twall-cs_twall_last,cs_cum
+  end if
+#if defined(RT) && defined(RTZ)
+  if(cool_queue>=1)then
+#ifndef WITHOUTMPI
+     call MPI_REDUCE(cq_st,qsum,6,MPI_DOUBLE_PRECISION,MPI_SUM,0,MPI_COMM_WORLD,info)
+     call MPI_REDUCE(cq_st,qmax,6,MPI_DOUBLE_PRECISION,MPI_MAX,0,MPI_COMM_WORLD,info)
+#else
+     qsum=cq_st
+     qmax=cq_st
+#endif
+     if(myid==1)write(*,'(" Cooling queue step",I7,": solving mean/max",2ES10.3," s, of which other ranks'' cells", &
+          & 2ES10.3," s, waiting at the end mean/max",2ES10.3," s, chunks taken",I9, &
+          & ", gather mean/max",2ES10.3," s, scatter mean/max",2ES10.3," s")') &
+          & nstep_coarse,qsum(4)/dble(ncpu),qmax(4),qsum(1)/dble(ncpu),qmax(1),qsum(2)/dble(ncpu),qmax(2),nint(qsum(3)), &
+          & qsum(5)/dble(ncpu),qmax(5),qsum(6)/dble(ncpu),qmax(6)
+     cq_st=0d0
+  end if
+#endif
+  cs_twall_last=twall
+  cs_ncall=0
+end subroutine cool_stats_report
+!################################################################
 subroutine cooling_fine(ilevel)
   use amr_commons
   use hydro_commons
+  use cool_queue_m
   use cooling_module
 #ifdef grackle
   use grackle_parameters
@@ -13,17 +536,79 @@ subroutine cooling_fine(ilevel)
   !-------------------------------------------------------------------
   integer::ncache,i,igrid,ngrid
   integer,dimension(1:nvector),save::ind_grid
-#if NVARNOADVECT>0
   integer::ind,icell,nleaf
+  real(kind=8)::wallclock,t_ph
+#if NVARNOADVECT>0
   real(kind=8)::t0,dt_cell
 #endif
 
   if(numbtot(1,ilevel)==0)return
   if(verbose)write(*,111)ilevel
 
+  ncache=active(ilevel)%ngrid
+#if defined(RT) && defined(RTZ)
+  if(cool_queue>=1)call cq_check_mode
+  if(cool_queue>=1)then
+     ! Gather and pack every leaf cell, solve the records, then unpack and scatter
+     call cq_set_call(ilevel)
+#ifndef WITHOUTMPI
+     if(cq_node_queue)then
+        ! room for this rank's leaf cells in the node window (collective on the node)
+        nleaf=0
+        do igrid=1,ncache
+           do ind=1,twotondim
+              if(son(ncoarse+(ind-1)*ngridmax+active(ilevel)%igrid(igrid))==0)nleaf=nleaf+1
+           end do
+        end do
+        call cq_window(nleaf)
+     end if
+#endif
+     cq_ncell=0
+     t_ph=wallclock()
+     do igrid=1,ncache,nvector
+        ngrid=MIN(nvector,ncache-igrid+1)
+        do i=1,ngrid
+           ind_grid(i)=active(ilevel)%igrid(igrid+i-1)
+        end do
+        call coolfine1(ind_grid,ngrid,ilevel,CF_PRE)
+     end do
+     cq_st(5)=cq_st(5)+wallclock()-t_ph
+     if(cq_node_queue)then
+#ifndef WITHOUTMPI
+        call cq_publish(cool_queue_chunk)
+        call cq_work
+#endif
+     else if(cool_queue_debug==1)then
+        do i=cq_ncell,1,-1
+           call cq_solve_record(cq_rec(:,i))
+        end do
+     else
+        do i=1,cq_ncell
+           call cq_solve_record(cq_rec(:,i))
+        end do
+     end if
+     if(cq_ncell>0)cq_cost_mean=sum(cq_rec(o_cost,1:cq_ncell))/dble(cq_ncell)
+     cq_iunpack=0
+     t_ph=wallclock()
+     do igrid=1,ncache,nvector
+        ngrid=MIN(nvector,ncache-igrid+1)
+        do i=1,ngrid
+           ind_grid(i)=active(ilevel)%igrid(igrid+i-1)
+        end do
+        call coolfine1(ind_grid,ngrid,ilevel,CF_POST)
+     end do
+     cq_st(6)=cq_st(6)+wallclock()-t_ph
+     return
+  end if
+#else
+  if(cool_queue>=1)then
+     if(myid==1)write(*,*)'cool_queue needs an RT + RTZ build: cool_queue = 0'
+     cool_queue=0
+  end if
+#endif
+
   ! Operator splitting step for cooling source term
   ! by vector sweeps
-  ncache=active(ilevel)%ngrid
   do igrid=1,ncache,nvector
      ngrid=MIN(nvector,ncache-igrid+1)
      do i=1,ngrid
@@ -32,7 +617,7 @@ subroutine cooling_fine(ilevel)
 #if NVARNOADVECT>0
      if(cost_measured>0d0)t0=wall_seconds()
 #endif
-     call coolfine1(ind_grid,ngrid,ilevel)
+     call coolfine1(ind_grid,ngrid,ilevel,CF_LEGACY)
 #if NVARNOADVECT>0
      if(cost_measured>0d0)then
         ! The wall time of this call shared by its leaf cells, the cost per cell and call of this
@@ -97,8 +682,9 @@ end subroutine cooling_fine
 !###########################################################
 !###########################################################
 !###########################################################
-subroutine coolfine1(ind_grid,ngrid,ilevel)
+subroutine coolfine1(ind_grid,ngrid,ilevel,iphase)
   use amr_commons
+  use cool_queue_m
   use hydro_commons
 #ifdef grackle
   use grackle_parameters
@@ -132,13 +718,14 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                           tva_test_mode,TVA_TEST_IRTRAP,tva_wdrift,tva_wdrift_batch,ntva,pah_fion_vec
   use dust_utils, only: cmp_sigma_turb
   use dust_optics, only: get_IR_mean_cross_sections
+  use dust_interface, only: reset_cell_warm_starts
 #endif
   use mpi_mod
   implicit none
 #if defined(grackle) && !defined(WITHOUTMPI)
   integer::info
 #endif
-  integer::ilevel,ngrid
+  integer::ilevel,ngrid,iphase
   integer,dimension(1:nvector)::ind_grid
   !-------------------------------------------------------------------
   !-------------------------------------------------------------------
@@ -186,6 +773,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   logical,dimension(1:n_elements),save:: el_writeback
   logical,save:: el_writeback_set=.false., el_change_warned=.false.
   integer:: k
+  integer:: n
 #endif
 #ifdef CALIMA
   real(dp) :: sigma2
@@ -288,6 +876,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      end do
 #endif
 
+     ! The gather and the changes made before the solve: not when unpacking a solved record (CF_POST)
+     if(iphase/=CF_POST)then
      ! Compute rho
      do i=1,nleaf
         nH(i)=MAX(uold(ind_leaf(i),1),smallr)
@@ -809,11 +1399,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      endif
 #endif
 #endif
+     end if ! iphase/=CF_POST
 
 #ifdef RT
      if(neq_chem) then
         T2_new(1:nleaf) = T2(1:nleaf)
 #ifdef RTZ
+        if(iphase/=CF_POST)then
         if (rtz_equilibrium_test.eq.2) then 
            nElement(1:n_elements,1:nleaf)  = 0.d0  ! Initialize to zero
            nElement(1,1:nleaf)  = 1.d-1                          ! Hydrogen      
@@ -896,19 +1488,123 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
         write(*,*) " dx_SS_H2:", dx_SS_H2
         write(*,*) "   dtcool:", dtcool
 #endif
+        end if ! iphase/=CF_POST
 
        ! for static test, temporarily disable RTZ solver
         if (rtz_cooling) then
-           call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
-                              ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
-                              ,dx_SS_H2, err_idx &
+           select case(iphase)
+           case(CF_PRE)
+              ! Pack the solver inputs into records; they are solved after this pass (cooling_fine)
+              do i=1,nleaf
+                 cq_ncell=cq_ncell+1
+                 n=cq_ncell
+                 call cq_reserve(n)
+                 cq_rec(o_T2,n)=T2_new(i)
+                 do k=1,cq_nion
+                    cq_rec(o_ion+k-1,n)=xion(cq_ion_ii(k),cq_ion_jj(k),i)
+                 end do
+                 do k=1,cq_nel
+                    cq_rec(o_el+k-1,n)=nElement(cq_el_ii(k),i)
+                 end do
+                 cq_rec(o_CO,n)=nCO(i)
+                 cq_rec(o_Np:o_Np+nGroups-1,n)=Np(:,i)
+                 cq_rec(o_Fp:o_Fp+ndim*nGroups-1,n)=reshape(Fp(:,:,i),(/ndim*nGroups/))
+                 cq_rec(o_pg:o_pg+ndim-1,n)=p_gas(:,i)
+                 if(rt_smooth)then
+                    cq_rec(o_dNp:o_dNp+nGroups-1,n)=dNpdt(:,i)
+                    cq_rec(o_dFp:o_dFp+ndim*nGroups-1,n)=reshape(dFpdt(:,:,i),(/ndim*nGroups/))
+                 end if
+                 cq_rec(o_dx,n)=dx_SS_H2(i)
 #ifdef CALIMA
-                              ,sigma=sigma &
-                              ,rho_dust=rho_dust &
-                              ,rho_pah=rho_pah &
+                 cq_rec(o_sig,n)=sigma(i)
+                 cq_rec(o_dust:o_dust+ndust-1,n)=rho_dust(i,:)
+                 cq_rec(o_pah:o_pah+npah-1,n)=rho_pah(i,:)
+                 cq_rec(o_zg:o_zg+ndust-1,n)=-huge(1d0)     ! no stored root: a cold search
+#if NVARNOADVECT>0
+                 if(cool_queue_zguess_ivar>0)cq_rec(o_zg:o_zg+ndust-1,n)= &
+                      & unoadvect(ind_leaf(i),cool_queue_zguess_ivar:cool_queue_zguess_ivar+ndust-1)
 #endif
-                              )
+                 cq_rec(o_hwd,n)=0d0
+                 if(allocated(tva_wdrift))then
+                    cq_rec(o_hwd,n)=1d0
+                    cq_rec(o_wd:o_wd+ntva*ndim-1,n)=reshape(tva_wdrift_batch(i,:,:),(/ntva*ndim/))
+                 end if
+#endif
+                 cq_pred(n)=cq_cost_mean
+#if NVARNOADVECT>0
+                 if(cost_ivar>=1.and.cost_ivar<=nvarnoadvect)then
+                    if(unoadvect(ind_leaf(i),cost_ivar)>=0d0)cq_pred(n)=unoadvect(ind_leaf(i),cost_ivar)
+                 end if
+#endif
+                 cq_home(1:7,n)=(/T2(i),nH(i),ekk(i),err(i),emag(i),T2min(i),Zsolar(i)/)
+                 cq_home(8:7+nGroups,n)=Np_boost(:,i)
+                 cq_home(8+nGroups:cq_nhome,n)=reshape(Fp_boost(:,:,i),(/ndim*nGroups/))
+              end do
+           case(CF_POST)
+              ! Unpack the solved records and what the gather kept, as they were after the solve
+              dtcool = dtnew(ilevel)*scale_t
+              err_idx = 0
+              do i=1,nleaf
+                 cq_iunpack=cq_iunpack+1
+                 n=cq_iunpack
+                 T2_new(i)=cq_rec(o_T2,n)
+                 do k=1,cq_nion
+                    xion(cq_ion_ii(k),cq_ion_jj(k),i)=cq_rec(o_ion+k-1,n)
+                 end do
+                 nElement(:,i)=0d0
+                 do k=1,cq_nel
+                    nElement(cq_el_ii(k),i)=cq_rec(o_el+k-1,n)
+                 end do
+                 nCO(i)=cq_rec(o_CO,n)
+                 Np(:,i)=cq_rec(o_Np:o_Np+nGroups-1,n)
+                 Fp(:,:,i)=reshape(cq_rec(o_Fp:o_Fp+ndim*nGroups-1,n),(/ndim,nGroups/))
+                 p_gas(:,i)=cq_rec(o_pg:o_pg+ndim-1,n)
+#ifdef CALIMA
+                 rho_dust(i,:)=cq_rec(o_dust:o_dust+ndust-1,n)
+                 rho_pah(i,:)=cq_rec(o_pah:o_pah+npah-1,n)
+                 if(npah>0)pah_fion_vec(i,:)=cq_rec(o_fion:o_fion+npah-1,n)
+#if NVARNOADVECT>0
+                 if(cool_queue_zguess_ivar>0)unoadvect(ind_leaf(i),cool_queue_zguess_ivar:cool_queue_zguess_ivar+ndust-1)= &
+                      & cq_rec(o_zg:o_zg+ndust-1,n)
+#endif
+#endif
+                 T2(i)=cq_home(1,n); nH(i)=cq_home(2,n); ekk(i)=cq_home(3,n); err(i)=cq_home(4,n)
+                 emag(i)=cq_home(5,n); T2min(i)=cq_home(6,n); Zsolar(i)=cq_home(7,n)
+                 Np_boost(:,i)=cq_home(8:7+nGroups,n)
+                 Fp_boost(:,:,i)=reshape(cq_home(8+nGroups:cq_nhome,n),(/ndim,nGroups/))
+                 if(cq_rec(o_stat,n)>0d0)then
+                    err_idx=i
+                    write(*,*)'cool_queue: rank',myid,'cell',ind_leaf(i),'failed, solved on rank',nint(cq_rec(o_rank,n))
+                 end if
+#if NVARNOADVECT>0
+                 ! the measured solve time, for the queue's order and the load balance (cost_measured)
+                 if(cost_ivar>=1.and.cost_ivar<=nvarnoadvect)then
+                    if(unoadvect(ind_leaf(i),cost_ivar)<0d0)then
+                       unoadvect(ind_leaf(i),cost_ivar)=cq_rec(o_cost,n)
+                    else
+                       unoadvect(ind_leaf(i),cost_ivar)=0.5d0*(unoadvect(ind_leaf(i),cost_ivar)+cq_rec(o_cost,n))
+                    end if
+                 end if
+#endif
+              end do
+              counter = cq_nion
+              e_counter = cq_nel
+           case default
+#ifdef CALIMA
+              if(cool_queue_debug==2)call reset_cell_warm_starts()   ! test: the cold start of the record path, in place
+#endif
+              call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
+                                 ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
+                                 ,dx_SS_H2, err_idx &
+#ifdef CALIMA
+                                 ,sigma=sigma &
+                                 ,rho_dust=rho_dust &
+                                 ,rho_pah=rho_pah &
+#endif
+                                 )
+           end select
         end if
+        if(iphase==CF_PRE)cycle   ! the solve and the scatter of these cells come later
 
 #ifdef CALIMA
         do i=1,nleaf

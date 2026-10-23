@@ -373,6 +373,7 @@ end subroutine make_virtual_coarse_int
 subroutine make_virtual_fine_dp(xx,ilevel)
   use amr_commons
   use mpi_mod
+  use timer_m, only: itimer, labels
   implicit none
 #ifndef WITHOUTMPI
   integer,dimension(MPI_STATUS_SIZE,ncpu)::statuses
@@ -401,6 +402,7 @@ subroutine make_virtual_fine_dp(xx,ilevel)
 #endif
 
   character(len=2)::temp_char
+  character(len=72)::caller_label
 
   if(numbtot(1,ilevel)==0)return
   ! if (myid==1) then
@@ -409,6 +411,9 @@ subroutine make_virtual_fine_dp(xx,ilevel)
   ! end if
   if(verbose)write(*,111)ilevel
 
+  ! restore the caller's timer on exit (without a running timer, 'temp_else' as before)
+  caller_label='temp_else'
+  if(itimer>0)caller_label=labels(itimer)
   call timer('make_virtual_fine_dp', 'start')
 
 #ifndef WITHOUTMPI
@@ -548,7 +553,7 @@ subroutine make_virtual_fine_dp(xx,ilevel)
 
 111 format('   Entering make_virtual_fine for level ',I2)
 
-  call timer('temp_else', 'start')
+  call timer(trim(caller_label), 'start')
 
 end subroutine make_virtual_fine_dp
 !################################################################

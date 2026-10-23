@@ -19,7 +19,7 @@ module dustbin_types
         integer, dimension(:), allocatable :: ipos_zero ! Position of the zero value along each dimension (for interpolation purposes)
         integer, dimension(:), allocatable :: npts ! Number of points along each dimension
         real(dp), dimension(:,:), allocatable :: tab1d ! 1D table values
-        real(dp), dimension(:,:,:), allocatable :: tab2d ! 2D table values
+        real(dp), dimension(:,:,:), pointer, contiguous :: tab2d => null() ! 2D table values (node-shared with shared_tables)
         real(dp), dimension(:,:,:,:), allocatable :: tab3d ! 3D table values
         real(dp), dimension(:), allocatable :: dx ! Grid spacing along each dimension
         real(dp), dimension(:), allocatable :: inv_dx ! Inverse grid spacing along each dimension
@@ -426,6 +426,7 @@ contains
     end subroutine interpolate_3d
 
     subroutine initialise_dust_table(this)
+        use node_shared, only: node_reader
         implicit none
         class(DustTable), intent(inout) :: this
         integer :: d, i
@@ -473,8 +474,10 @@ contains
         ! 4. Set the table as initialised, and count its memory
         this%initialised = .true.
         dust_table_bytes = dust_table_bytes + alloc_bytes(this%ipos_zero) + alloc_bytes(this%npts) &
-                         + alloc_bytes(this%tab1d) + alloc_bytes(this%tab2d) + alloc_bytes(this%tab3d) &
+                         + alloc_bytes(this%tab1d) + alloc_bytes(this%tab3d) &
                          + alloc_bytes(this%dx) + alloc_bytes(this%inv_dx)
+        ! tab2d: in node-shared memory with shared_tables, counted on the rank that holds it
+        if (associated(this%tab2d) .and. node_reader()) dust_table_bytes = dust_table_bytes + size(this%tab2d, kind=8) * 8
     end subroutine initialise_dust_table
 
     subroutine init_dust_chemistry_info(this, ndust, npah, nGroups, ncharge_pah_max, nion_charges)
