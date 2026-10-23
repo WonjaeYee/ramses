@@ -6,6 +6,10 @@ subroutine cooling_fine(ilevel)
   use grackle_parameters
 #endif
   use mpi_mod
+#ifdef CALIMA
+  use dust_commons, only: comp_sigma_turb
+  use dust_utils, only: cmp_sigma_turb
+#endif
   implicit none
   integer::ilevel
   !-------------------------------------------------------------------
@@ -13,6 +17,11 @@ subroutine cooling_fine(ilevel)
   !-------------------------------------------------------------------
   integer::ncache,i,igrid,ngrid
   integer,dimension(1:nvector),save::ind_grid
+#ifdef CALIMA
+  integer::ind,ivar,icell
+  real(dp)::sigma2
+  real(dp),allocatable,dimension(:,:)::sigma_turb
+#endif
 
   if(numbtot(1,ilevel)==0)return
   if(verbose)write(*,111)ilevel
@@ -20,13 +29,44 @@ subroutine cooling_fine(ilevel)
   ! Operator splitting step for cooling source term
   ! by vector sweeps
   ncache=active(ilevel)%ngrid
+#ifdef CALIMA
+  ! The turbulent velocity dispersion of every leaf cell, from one state: the one before
+  ! this call. coolfine1 updates the momenta cell by cell (radiation pressure), and the
+  ! ghost cells still hold the state before this step's hydro (or the previous RT
+  ! substep's cooling), so refresh their density and momenta first; otherwise sigma
+  ! depends on the cell order and the domain decomposition.
+  allocate(sigma_turb(1:twotondim,1:ncache))
+  if(comp_sigma_turb)then
+     do ivar=1,ndim+1
+        call make_virtual_fine_dp(uold(1,ivar),ilevel)
+     end do
+     do igrid=1,ncache
+        do ind=1,twotondim
+           icell=ncoarse+(ind-1)*ngridmax+active(ilevel)%igrid(igrid)
+           if(son(icell)/=0)cycle
+#ifdef RTZ_ONE_CELL_TEST
+           icell=1   ! coolfine1 reads the first row for every cell
+#endif
+           call cmp_sigma_turb(icell,sigma2,ilevel)
+           sigma_turb(ind,igrid)=sqrt(sigma2)   ! code velocity units
+        end do
+     end do
+  end if
+#endif
   do igrid=1,ncache,nvector
      ngrid=MIN(nvector,ncache-igrid+1)
      do i=1,ngrid
         ind_grid(i)=active(ilevel)%igrid(igrid+i-1)
      end do
+#ifdef CALIMA
+     call coolfine1(ind_grid,ngrid,ilevel,sigma_turb(1,igrid))
+#else
      call coolfine1(ind_grid,ngrid,ilevel)
+#endif
   end do
+#ifdef CALIMA
+  deallocate(sigma_turb)
+#endif
 
 #ifndef RTZ
   if((cooling.and..not.neq_chem.and..not.cooling_ism).and.ilevel==levelmin.and.cosmo)then
@@ -49,7 +89,11 @@ end subroutine cooling_fine
 !###########################################################
 !###########################################################
 !###########################################################
+#ifdef CALIMA
+subroutine coolfine1(ind_grid,ngrid,ilevel,sigma_grid)
+#else
 subroutine coolfine1(ind_grid,ngrid,ilevel)
+#endif
   use amr_commons
   use hydro_commons
 #ifdef grackle
@@ -82,7 +126,6 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #ifdef CALIMA
   use dust_commons, only: dust,comp_sigma_turb,dustbins_props,pahbins_props, &
                           tva_test_mode,TVA_TEST_IRTRAP,tva_wdrift,tva_wdrift_batch,ntva,pah_fion_vec
-  use dust_utils, only: cmp_sigma_turb
   use dust_optics, only: get_IR_mean_cross_sections
 #endif
   use mpi_mod
@@ -92,6 +135,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
   integer::ilevel,ngrid
   integer,dimension(1:nvector)::ind_grid
+#ifdef CALIMA
+  real(dp),dimension(1:twotondim,1:ngrid)::sigma_grid   ! from cooling_fine, if comp_sigma_turb
+#endif
   !-------------------------------------------------------------------
   !-------------------------------------------------------------------
   integer::i,ind,iskip,idim,nleaf,nx_loc
@@ -140,11 +186,10 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   integer:: k
 #endif
 #ifdef CALIMA
-  real(dp) :: sigma2
   real(dp),dimension(1:nvector) :: sigma
   real(dp),dimension(1:nvector,1:ndust) :: rho_dust
   real(dp),dimension(1:nvector,1:npah) :: rho_pah
-  integer :: jbin
+  integer :: jbin, ileaf
   ! IR trapping from the actual CALIMA Rosseland extinction
   real(dp) :: chi_R_IR, E_IR_loc, T_rad_loc, f_ion_pah
   real(dp),dimension(max(1,ndust))  :: sigR_IR_dust, sigP_IR_dust
@@ -618,12 +663,16 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 
 #ifdef CALIMA
       ! Get the quantities necessary for CALIMA dust modelling
-      ! Compute the local velocity dispersion sigma in cm/s
+      ! The local velocity dispersion sigma in cm/s, computed in cooling_fine for all the
+      ! leaf cells before any of them is cooled (in the order of the leaf gather above)
       sigma(1:nvector) = 0.0d0
       if (comp_sigma_turb) then
-         do i=1,nleaf
-            call cmp_sigma_turb(ind_leaf(i), sigma2,ilevel)
-            sigma(i) = sqrt(sigma2) * scale_v   ! cmp_sigma_turb works in code velocity units
+         ileaf = 0
+         do i=1,ngrid
+            if(son(ind_cell(i))==0)then
+               ileaf = ileaf + 1
+               sigma(ileaf) = sigma_grid(ind,i) * scale_v   ! sigma_grid is in code velocity units
+            end if
          end do
       endif
       ! The TVA drift of every species in these cells [cm/s], kept by this step's TVA fluxes,
