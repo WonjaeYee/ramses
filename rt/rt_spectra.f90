@@ -566,15 +566,15 @@ SUBROUTINE init_SED_table()
   real(kind=8),allocatable::tbl_dust(:,:,:), tbl2_dust(:,:,:), reb_tbl_dust(:,:,:)
 #endif
 #ifdef RTZ
-  nv=3+2
+  ! L, Lacc, egy, then csn, cse of each ionisation stage (n_ions-1 per element) and of H2,
+  ! as filled below
+  nv=3
   do i=1,n_elements
      if (elements(i)%atomic_number.gt.0) then 
-        nv = nv + (2 * elements(i)%n_ions)
-     end if
-     if (isH2_rtz) then
-        nv = nv + 2
+        nv = nv + 2 * (elements(i)%n_ions - 1)
      end if
   end do
+  if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) nv = nv + 2
 #endif
 #ifdef CALIMA
    if (ndust > 0) then
@@ -721,7 +721,7 @@ SUBROUTINE init_SED_table()
            tbl(ia,iz,2+ii*2) = getSEDcsn(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
            tbl(ia,iz,3+ii*2) = getSEDcse(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,ii,1)
         end do ! End species loop
-        counter = 1 + 2*nIonsUsed
+        counter = 1 + 2*nIons   ! the CALIMA columns follow the 2*nIons of nv
 #endif
 #ifdef CALIMA
          counter = counter + 3
@@ -746,13 +746,14 @@ SUBROUTINE init_SED_table()
             counter = counter + ndust
          end if
          if (npah > 0) then
-            ! Store both charge states for each PAH size: neutral (odd) and ionized (even).
+            ! Store both charge states for each PAH size: neutral (odd) and ionized (even),
+            ! in the order the readers expect: csa n, i; css n, i; csr n, i.
             do ii = 1, npah
                tbl(ia,iz,counter+6*(ii-1)) = getSEDcsa_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
-               tbl(ia,iz,counter+6*(ii-1)+1) = getSEDcss_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
-               tbl(ia,iz,counter+6*(ii-1)+2) = getSEDcsr_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
-               tbl(ia,iz,counter+6*(ii-1)+3) = getSEDcsa_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
-               tbl(ia,iz,counter+6*(ii-1)+4) = getSEDcss_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
+               tbl(ia,iz,counter+6*(ii-1)+1) = getSEDcsa_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
+               tbl(ia,iz,counter+6*(ii-1)+2) = getSEDcss_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
+               tbl(ia,iz,counter+6*(ii-1)+3) = getSEDcss_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
+               tbl(ia,iz,counter+6*(ii-1)+4) = getSEDcsr_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii-1,1)
                tbl(ia,iz,counter+6*(ii-1)+5) = getSEDcsr_pah(Ls,SEDs(:,ia,iz),nLs,pL0,pL1,2*ii,2)
             end do
             counter = counter + 6*npah
@@ -1037,8 +1038,9 @@ SUBROUTINE update_SED_group_props()
         call inp_SED_table(age, Z, 3+counter, .true., cse_star(1:nGroups,1,3))! [cm^2]
         counter = counter + 1
      end if
+     counter = counter + 2   ! the last gas column: the CALIMA ones follow (init_SED_table)
 #else
-     counter = 1 + 2*nIons + 3
+     counter = 3 + 2*nIons   ! the last gas column: the CALIMA ones follow (init_SED_table)
      do ii=1,nIons
         call inp_SED_table(age, Z, 2+2*ii, .true., csn_star(:,ii))! [cm^2]
         call inp_SED_table(age, Z, 3+2*ii, .true., cse_star(:,ii))! [cm^2]
@@ -1248,6 +1250,7 @@ SUBROUTINE update_SED_group_props()
            group_cse(ip,1,3) = SED_table(1,1,ip,3+counter)
            counter = counter + 1
         end if
+        counter = counter + 2   ! the last gas column: the CALIMA ones follow (init_SED_table)
 
 #ifdef CALIMA
      if (ndust > 0) then
@@ -1286,7 +1289,7 @@ SUBROUTINE update_SED_group_props()
         group_csn(ip,ii) = SED_table(1,1,ip,2+2*ii)
         group_cse(ip,ii) = SED_table(1,1,ip,3+2*ii)
      enddo
-     counter = 1 + 2*nIons + 3
+     counter = 3 + 2*nIons   ! the last gas column: the CALIMA ones follow (init_SED_table)
 
 #ifdef CALIMA
      if (ndust > 0) then
@@ -1840,6 +1843,7 @@ SUBROUTINE write_SEDtable()
 !-------------------------------------------------------------------------
   use rt_parameters,only: nIons
 #ifdef RTZ
+  use rt_parameters,only: isH2_rtz
   use rtz_module, only: n_elements, elements
 #endif
 #ifdef CALIMA
@@ -1851,25 +1855,14 @@ SUBROUTINE write_SEDtable()
 !-------------------------------------------------------------------------
 
 #ifdef RTZ
+  ! the gas columns of init_SED_table: nv csn, cse pairs after L, Lacc, egy
   nv = 0
   do i=1,n_elements
      if (elements(i)%atomic_number.gt.0) then 
-        nv = nv + (2 * elements(i)%n_ions)
+        nv = nv + 2 * (elements(i)%n_ions - 1)
      end if
-#if N_H2 > 0
-     nv = nv + 2
-#endif
   end do
-#endif
-#ifdef CALIMA
-  if (ndust > 0) then
-      nv = nv + 3*ndust
-      if (dust_ratd) nv = nv + ndust
-      if (dust_pe_heating) nv = nv + ndust
-  end if
-  if (npah > 0) then
-     nv = nv + 6*npah
-   end if
+  if (elements(1)%atomic_number.gt.0 .and. isH2_rtz) nv = nv + 2
 #endif
   do ip=1,nSEDgroups
      write(filename,'(A, I1, A)') './SEDtables/SEDtable', ip, '.list'
@@ -1888,7 +1881,7 @@ SUBROUTINE write_SEDtable()
               write(10,901,advance='no') SED_table(i,j,ip,2+2*k), SED_table(i,j,ip,3+2*k)
            end do
            write(10,901) SED_table(i,j,ip,2+2*(nv/2)), SED_table(i,j,ip,3+2*(nv/2))
-           counter = 3 + 2*nv/2  ! Position after all element entries
+           counter = 3 + nv  ! the last gas column
 #else
            if(nIons .gt. 1) then
              do k = 1,nIons-1
@@ -1898,7 +1891,7 @@ SUBROUTINE write_SEDtable()
            endif
            write(10,901)                                                 &
                  SED_table(i,j,ip,2+2*nIons), SED_table(i,j,ip,3+2*nIons)
-           counter = 1 + 2*nIons + 3  ! Position after gas entries
+           counter = 3 + 2*nIons  ! the last gas column
 #endif
 #ifdef CALIMA
            ! Export dust and PAH properties using counter calculated above
