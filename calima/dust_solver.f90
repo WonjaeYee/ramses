@@ -703,7 +703,7 @@ module anninos_mod
                 ! production and destruction terms directly from the RHS, rather than
                 ! inferring the sign of fj.  This handles sign changes mid-step correctly.
                 Cj = dydt_dust(j, 1)
-                Dj = dydt_dust(j, 2) / max(yj, y_min)   ! floor guards against division by zero; consistent with y_min everywhere
+                Dj = dydt_dust(j, 2) / max(yj, tiny(1d0))   ! guards y = 0 only (D = 0 there): a y_min floor makes D too small below y_min
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
