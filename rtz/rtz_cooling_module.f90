@@ -157,7 +157,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    !
    ! We use a slightly modified method of Anninos et al. (1997).
    !-------------------------------------------------------------------------
-#ifdef CALIMA
+   use amr_commons, only:myid
+   #ifdef CALIMA
    use dust_commons, only: dust_log, dust_log_tdust_solver_print_reset
    use dust_interface, only: rtgroups_reset_warm
 #endif
@@ -245,6 +246,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    ! Indexed by ion stage, 1..n_ions, and n_ions reaches 27 (Fe) with the full networks
    integer*8,dimension(1:n_elements,1:n_elements):: loopCodes08,loopCodes09
    integer*8,dimension(1:n_elements,0:n_elements):: loopCodes10
+
+   character(len=256)::debug_file
    
    ! the slots above nslot are never read; keep them defined for the whole-array updates of the
    ! equilibrium mode
@@ -625,6 +628,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       cellcnt(1:nCell) = 0
       last_code = 0
       loopcnt=0 ; n_cool_cells=n_cool_cells+nCell     !             Statistics
+
+#ifdef BRUTAL_WRITE
+      ! write all loops for one cell all the time
+      ! surely will be expensive...
+      ! by closing and re-opening the same file again,
+      ! very last cell will be saved, which is the error cell
+      write(debug_file, "('./brutal-write_', I2.2, '.log')") myid
+      open(unit=1026, file=debug_file, status='replace', action='write')
+#endif
+
       do while (nAct .gt. 0)      ! Iterate while there are still active cells
          loopcnt=loopcnt+1   ;   tot_cool_loopcnt=tot_cool_loopcnt+nAct
          ! if (rtz_single_cell_test .and. mod(loopcnt,50)==0) then
@@ -746,7 +759,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             write(*,"(A10, X, I6, A10, X, E22.15)") "loopcnt:", loopcnt, "ddt:", ddt(i)
 #endif
 
+#ifdef BRUTAL_WRITE
+            write(1026,"(A10, X, I6, A10, X, E22.15)") "loopcnt:", loopcnt, "ddt:", ddt(i)
+#endif
+
             call rtz_cool_step(i)
+
+#ifdef BRUTAL_WRITE
+            write(1026,"(A10, X, I6, A10, X, E22.15)") "code:", code, "dt_rec:", dt_rec
+            write(1026,*) ''
+#endif
 
 #ifdef RTZ_ONE_CELL_TEST
             write(*,"(A10, X, I6, A10, X, E22.15)") "code:", code, "dt_rec:", dt_rec
@@ -815,6 +837,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 
       ! loop statistics
       max_cool_loopcnt=max(max_cool_loopcnt,loopcnt)
+
+#ifdef BRUTAL_WRITE
+      close(1026)
+#endif
 
 #ifdef RTZ_ONE_CELL_TEST
       write(*,*) "`rtz_cool_step` is done with loopcnt:", loopcnt
@@ -1919,6 +1945,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          write(*,"(A11, *(X, 1PE22.15))") ' rho_pah:', dust_helper%rho_pah
          write(*,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
 #endif
+    
+#ifdef BRUTAL_WRITE
+         write(1026,"(A14)") 'before update:'
+         write(1026,"(A11, *(X, 1PE22.15))") 'rho_dust:', dust_helper%rho_dust
+         write(1026,"(A11, *(X, 1PE22.15))") ' rho_pah:', dust_helper%rho_pah
+         write(1026,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
+         write(1026,"(A11, *(X, 1PE22.15))") 'ion(C):', dXion(6,1:7)
+         write(1026,"(A11, *(X, 1PE22.15))") 'n(CO):', dCO
+         write(1026,"(A11, *(X, 1PE22.15))") 'dNp:', dNp(1:8)
+#endif
 
          call compute_dust_update(dust_helper,nElement_dep,dXion,ddt(icell)&
 #ifdef RT
@@ -1931,6 +1967,16 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          write(*,"(A11, *(X, 1PE22.15))") 'rho_dust:', dust_helper%rho_dust
          write(*,"(A11, *(X, 1PE22.15))") ' rho_pah:', dust_helper%rho_pah
          write(*,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
+#endif
+
+#ifdef BRUTAL_WRITE
+         write(1026,"(A14)") ' after update:'
+         write(1026,"(A11, *(X, 1PE22.15))") 'rho_dust:', dust_helper%rho_dust
+         write(1026,"(A11, *(X, 1PE22.15))") ' rho_pah:', dust_helper%rho_pah
+         write(1026,"(A11, *(X, 1PE22.15))") 'n(C):', nElement_dep(6)
+         write(1026,"(A11, *(X, 1PE22.15))") 'ion(C):', dXion(6,1:7)
+         write(1026,"(A11, *(X, 1PE22.15))") 'n(CO):', dCO
+         write(1026,"(A11, *(X, 1PE22.15))") 'dNp:', dNp(1:8)
 #endif
 
 #ifdef DEBUG
@@ -1953,6 +1999,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       write(*,*) "from dust part,"
       write(*,"(A11, X, 1PE22.15)") "fracMax:", fracMax
       write(*,"(A11, X, 1PE22.15)") "dt_rec:", 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
+#endif
+
+#ifdef BRUTAL_WRITE
+      write(1026,*) "from dust part,"
+      write(1026,"(A11, X, 1PE22.15)") "fracMax:", fracMax
+      write(1026,"(A11, X, 1PE22.15)") "dt_rec:", 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
 #endif
 
       if ((.not. dust_step_ok).or.(dUU>1.0d0)) then
@@ -2124,6 +2176,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             dUU = ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
             dUU = dUU * one_over_x_FRAC
             fracMax=MAX(fracMax,dUU)
+#ifdef BRUTAL_WRITE
+            write(1026,*) "after H2, fracMax:", fracMax
+#endif
             if(dUU .gt. 1.d0) then
                ! write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -2561,6 +2616,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if (nCO(icell).gt.1.d-10) then
                      dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)) * one_over_x_FRAC
                      fracMax = MAX(fracMax,dUU)
+#ifdef BRUTAL_WRITE
+                     write(1026,*) "after CO (1), fracMax:", fracMax
+#endif
                      if (dUU .gt. 1.d0) then
                         dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                         dt_rec = min(dt_rec,0.5d0*ddt(icell))
@@ -2577,6 +2635,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if (xion(6,1,icell).gt.1.d-10) then
                      dUU = ABS((dXion(6,1)-xion(6,1,icell))/(xion(6,1,icell)+x_FM)) * one_over_x_FRAC
                      fracMax = MAX(fracMax,dUU)
+#ifdef BRUTAL_WRITE
+                     write(1026,*) "after CO (2), fracMax:", fracMax
+#endif
                      if (dUU .gt. 1.d0) then
                         dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                         dt_rec = min(dt_rec,0.5d0*ddt(icell))
@@ -2629,8 +2690,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (xion(iElement,iIon,icell).gt.1.d-10) then 
                   dUU = ABS((dXion(iElement,iIon)-xion(iElement,iIon,icell))/(xion(iElement,iIon,icell)+x_FM))
                   dUU = dUU * one_over_x_FRAC
-                  fracMax=MAX(fracMax,dUU)
-                  if(dUU .gt. 1.) then
+                  if (iIon > 1) then
+                     fracMax=MAX(fracMax,dUU)
+                  end if
+#ifdef BRUTAL_WRITE
+                  write(1026,*) "after ion, fracMax:", fracMax
+                  write(1026,*) "ele", iElement, "ion", iIon
+#endif
+                  if(dUU .gt. 1. .and. iIon>1) then
                      !write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                      dt_rec = min(dt_rec,0.5d0*ddt(icell))
@@ -2648,11 +2715,22 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      ! print out evolution of problematic ionizations
                      write(*,"(2(A10, X, I6))") "loopcnt:", loopcnt, "code:", code
                      write(*,"(2(A10, X, I6))") "iElement:", iElement, "iIon:", iIon
-                     write(*,"(3(A10, X, E22.15))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+                     write(*,"(3(A10, X, E22.15))") "cr:", cr, "de:", de, "ddt:", ddt(icell)
                      write(*,"(A10, *(X, E22.15))") "xion:", xion(iElement, 1:7, icell)
                      write(*,"(A10, *(X, E22.15))") "dXion:", dXion(iElement, 1:7)
                      write(*,"(2(A10, X, E22.15))") "TK:", TK, "dT2:", dT2
                      write(*,*) ''
+#endif
+             
+#ifdef BRUTAL_WRITE
+                     ! print out evolution of problematic ionizations
+                     write(1026,"(2(A10, X, I6))") "loopcnt:", loopcnt, "code:", code
+                     write(1026,"(2(A10, X, I6))") "iElement:", iElement, "iIon:", iIon
+                     write(1026,"(3(A10, X, E22.15))") "cr:", cr, "de:", de, "ddt:", ddt(icell)
+                     write(1026,"(A10, *(X, E22.15))") "xion:", xion(iElement, 1:7, icell)
+                     write(1026,"(A10, *(X, E22.15))") "dXion:", dXion(iElement, 1:7)
+                     write(1026,"(2(A10, X, E22.15))") "TK:", TK, "dT2:", dT2
+                     write(1026,*) ''
 #endif
 
                      ! print some before return
@@ -2682,6 +2760,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (neInit.gt.1.d-10) then 
                   dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
+#ifdef BRUTAL_WRITE
+                  write(1026,*) "after ne, fracMax:", fracMax
+#endif
                   if(dUU .gt. 1.) then
                      !write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -2700,7 +2781,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      ! print out evolution of problematic ionizations
                      write(*,"(2(A10, X, I6))") "loopcnt:", loopcnt, "code:", code
                      write(*,"(2(A10, X, I6))") "iElement:", iElement, "iIon:", iIon
-                     write(*,"(3(A10, X, E22.15))"), "cr:", cr, "de:", de, "ddt:", ddt(icell)
+                     write(*,"(3(A10, X, E22.15))") "cr:", cr, "de:", de, "ddt:", ddt(icell)
                      write(*,"(A10, *(X, E22.15))") 'neInit:', neInit
                      write(*,"(A10, *(X, E22.15))") 'ne:', ne
                      write(*,*) ''
@@ -2799,6 +2880,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
 #endif
       ! Now the dUs are really changes, not new values
       ! Update the timestep for the next iteration:
+#ifdef BRUTAL_WRITE
+      write(1026,*) "at the end, fracMax", fracMax
+      ! write(1026,*) ""
+#endif
       !  dt_rec = 0.5d0 * ddt(icell) / ((0.07d0 + fracMax)**0.5d0)
       dt_rec = 0.9d0 * ddt(icell) / ((0.07d0 + fracMax)**0.3d0)
       ! dt_rec = min(dt_rec,2.*ddt(icell))

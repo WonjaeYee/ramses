@@ -76,6 +76,9 @@ module use_mist
    
    integer,parameter::unit_open=25 ! too trivial? or might be a problem
 
+   ! temporary for test purpose
+   logical::verbose_star=.true.
+
 
 contains
 
@@ -335,6 +338,19 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
    idx_a = get_nearest_index(val=a, arr=axis_a)
    idx_v = get_nearest_index(val=v, arr=axis_v)
    idx_m = get_nearest_index(val=m, arr=axis_m)
+
+   ! for single-star tests
+   ! at the very first call of this function, print properties
+   if (verbose_star) then
+      verbose_star = .false.
+      if (myid==1) then
+         write(*,"(A)") "Testing with a star of"
+         write(*,"('z:', F7.2, '->', F7.2)") z, axis_z(idx_z)
+         write(*,"('a:', F7.2, '->', F7.2)") a, axis_a(idx_a)
+         write(*,"('v:', F7.2, '->', F7.2)") v, axis_v(idx_v)
+         write(*,"('m:', F7.2, '->', F7.2)") m, axis_m(idx_m)
+      end if
+   end if
 
    ! Match to age scale in sample data
    if (axes_t_scale == 0) then

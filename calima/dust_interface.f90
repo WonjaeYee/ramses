@@ -945,7 +945,11 @@ contains
         if (.not. (all(ieee_is_finite(y_dust_out(1:ndust_total))) .and. all(ieee_is_finite(y_gas_out)))) then
             call check_dust_rates_finite(dinfo, dt, y_gas, y_dust(1:ndust_total))
             step_ok = .false.
+#ifndef BRUTAL_WRITE
             return
+            ! even though the values are wrong, return them so that they can be printed
+            ! when we do BRUTAL_WRITE
+#endif
         end if
 
         ! 4. Update the dinfo with the new values after the ODE step
@@ -969,6 +973,21 @@ contains
 
         ! Unpack y_dust_out: PAH bins first [1:npah], grain bins [npah+1:npah+ndust].
         if (dinfo%ndust > 0 .and. dinfo%npah > 0) then
+            ! test: return zero if y_dust_out is smaller than y_min
+            ! do ii=1,dinfo%npah
+            !     if (y_dust_out(ii)>y_min) then
+            !         dinfo%rho_pah(ii) = y_dust_out(ii)
+            !     else
+            !         dinfo%rho_pah(ii) = 0d0
+            !     endif
+            ! end do
+            ! do ii=1,dinfo%ndust
+            !     if (y_dust_out(dinfo%npah+ii)>y_min) then
+            !         dinfo%rho_dust(ii) = y_dust_out(dinfo%npah+ii)
+            !     else
+            !         dinfo%rho_dust(ii) = 0d0
+            !     endif
+            ! end do
             dinfo%rho_pah(1:dinfo%npah) = y_dust_out(1:dinfo%npah)
             dinfo%rho_dust(1:dinfo%ndust) = y_dust_out(dinfo%npah+1:dinfo%npah+dinfo%ndust)
         else if (dinfo%ndust > 0) then
@@ -987,11 +1006,13 @@ contains
         do ii = 1, n_elements
             if (elements(ii)%atomic_number > 0) then
                 dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1)+y_min))
+                ! dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/max(y_gas(ii,1),y_min))
 
                 ! if not, ion part is zero
                 if (carry_gas_ions) then
                     do jj=1,elements(ii)%n_ions
                         dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj)+y_min))
+                        ! dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/max(y_gas(ii,1+jj),y_min))
                     end do
                 end if
 
@@ -1002,6 +1023,14 @@ contains
         if (dinfo%ndust > 0 .or. dinfo%npah > 0) then
             do ii = 1, dinfo%npah+dinfo%ndust
                 dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+y_min))
+                ! dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/max(y_dust(ii),y_min))
+                ! test: if the new dust/PAH density is low enough, just floor it to zero
+                ! check whether this can prevent small jittering in the very low density
+                ! if setting those values to zero makes another problem, just skip
+                ! and don't include such values when we calculate dUU
+                ! if (y_dust_out(ii)>y_min .and. y_dust(ii)>y_min) then
+                !     dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/y_dust(ii))
+                ! end if
             end do
         end if
 #endif
@@ -1037,6 +1066,7 @@ contains
         write(*,'(A,*(ES12.4))') '   rho bins (PAH first) [g cm-3]     = ', y_dust
         write(*,'(A,*(ES12.4))') '   d/dt, production                  = ', dydt_dust(:,1)
         write(*,'(A,*(ES12.4))') '   d/dt, destruction                 = ', dydt_dust(:,2)
+        write(*,'(A,*(ES12.4))') 'local_G0:', dinfo%local_G0
         if (dust_debug) then
             ! each process on its own (the running sum would carry one process's NaN into the rest)
             do i = 1, ndust_processes
@@ -1055,7 +1085,10 @@ contains
             write(*,'(A)') '   rerun with dust_debug=.true. to see which process'
         end if
         flush(6)   ! clean_stop aborts MPI, which can drop unflushed output
+#ifndef BRUTAL_WRITE
+        ! continue the process so that wrong values can be printed out
         call clean_stop
+#endif
     end subroutine check_dust_rates_finite
 
     subroutine ensure_update_cache(n1, n2, ndust_total)

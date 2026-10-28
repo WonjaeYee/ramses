@@ -694,21 +694,37 @@ module anninos_mod
             ! keep fj to be the net rate
 
             if (abs(fj) * h < 1.0d-12 * yj) then
+! #ifdef BRUTAL_WRITE
+!                 if(j==2) write(1026, "('fj case 1')")
+! #endif
                 y_dust_new(j) = yj
             else if (abs(fj) * h < 1.0d-2 * yj) then
+! #ifdef BRUTAL_WRITE
+!                 if(j==2) write(1026, "('fj case 2')")
+! #endif
                 y_dust_new(j) = yj + fj * h
             else
+! #ifdef BRUTAL_WRITE
+!                 if(j==2) write(1026, "('fj case 3')")
+! #endif
                 ! Decompose derivative into creation Cj and destruction Dj.
                 ! We split the net rate fj = C - D*y (Anninos et al. 1997) by reading
                 ! production and destruction terms directly from the RHS, rather than
                 ! inferring the sign of fj.  This handles sign changes mid-step correctly.
                 Cj = dydt_dust(j, 1)
                 Dj = dydt_dust(j, 2) / max(yj, y_min)   ! floor guards against division by zero; consistent with y_min everywhere
+                ! Dj = dydt_dust(j, 2) / yj ! a bit dangerous but the positivity is ensured elsewhere
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
+! #ifdef BRUTAL_WRITE
+!                     if(j==2) write(1026, "('fj case 3-1')")
+! #endif
                     y_dust_new(j) = (yj + Cj * h) / (1.0d0 + Dj * h)
                 else
+! #ifdef BRUTAL_WRITE
+!                     if(j==2) write(1026, "('fj case 3-2')")
+! #endif
                     y_eq = Cj / Dj
                     y_dust_new(j) = y_eq + (yj - y_eq) * exp(-Dj * h)
                 end if
@@ -1263,7 +1279,9 @@ module ode_driver_mod
             print *, 'FATAL ERROR: integrate_dust_ode: negative density in final state (bug in rate routines).'
             print *, '  y_gas_final min:  ', minval(y_gas_final)
             print *, '  y_dust_final min: ', minval(y_dust_final)
-            call clean_stop
+            ! call clean_stop
+            step_ok = .false.
+            return
         end if
 
         if (present(h_last)) h_last = h_last_val

@@ -882,11 +882,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            write(*,*) 'This is raised in `coolfine1`'
            write(*,*) '  myid:', myid
            write(*,*) 'ilevel:', ilevel
-           ! write(*,*) 'ind_leaf:', ind_leaf(err_idx)
+           write(*,*) 'ind_leaf:', ind_leaf(err_idx)
            
            write(*,*) 'error cell, before the update'
            write(*,*) '  uold:', uold(ind_leaf(err_idx),:)
            write(*,*) 'rtuold:', rtuold(ind_leaf(err_idx),:)
+           write(*,*) '  unew:', unew(ind_leaf(err_idx),:)
+           write(*,*) 'rtunew:', rtunew(ind_leaf(err_idx),:)
            
            write(*,*) 'in physical units'
            write(*,*) '     d:', uold(ind_leaf(err_idx),1)*scale_d
@@ -904,6 +906,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
            ! write(*,*) 'uold:', uold(ind_leaf(err_idx)+1, neul)
            ! write(*,*) 'chemicals (uold):', uold(ind_leaf(err_idx)+1,iIons:iIons+53)
 #ifdef CALIMA
+           write(*,*) 'sigma:', sigma(err_idx)
 #if NDUST>0
            write(*,*) 'rho_dust:', rho_dust(err_idx,:)
 #endif
