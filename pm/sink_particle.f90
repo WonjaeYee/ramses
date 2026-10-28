@@ -1541,7 +1541,7 @@ subroutine accrete_sink(ind_grid,ind_part,ind_grid_part,ng,np,ilevel,on_creation
                  ije = ije + 0.5d0 * ijm * sum(vsink(isink,1:ndim)**2)
                  ! - thermal energy 1. assumed gas temperature
                  ! k_B / mu/m_u ~ 6E7 [cm^2 s^-2 K^-1] for mu=1.4
-                 ije = ije + ijm * (6.0d7 * wind_temperature)
+                 ije = ije + ijm * (6.0d7 * wind_temperature)/scale_v/scale_v
                  ! - thermal energy 2. SN energy
                  ije = ije + (sn_e_code_units * (weight/volume) / vol_loc)
 
