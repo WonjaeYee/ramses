@@ -246,6 +246,12 @@ module rt_parameters
   ! kept so for bit-identical results). They bias an H II front by ~10% (0.01/0.01/0.02 is within
   ! 1% of converged): see notebooks/matched/README.md, "The substep tolerance".
   real(dp)::rtz_T_frac=0.1, rtz_x_frac=0.1, rtz_Np_frac=0.2, rtz_Fp_frac=0.5
+  ! H and He by a coupled backward-Euler solve in each substep (every stage from its own balance, coupled
+  ! through ne and the H-He charge exchange), instead of the per-stage update and the neutral = 1 - ions
+  ! rtz_hhe_nsub: sub-steps of that solve per substep (rates frozen); each stage relaxes exactly over a sub-step
+  ! (its own exponential) with the coupling implicit, so the sub-steps only cut the coupling's first-order error
+  logical::rtz_hhe_implicit=.true.
+  integer::rtz_hhe_nsub=4
   ! dC/dT of the semi-implicit temperature update: .false. a forward difference, C(T) and C(T(1 + 1e-5));
   ! .true. a central one, C(T(1 +- 1e-5)), one cooling call more per substep
   logical::rtz_dCdT_central=.false.

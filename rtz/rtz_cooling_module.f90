@@ -923,6 +923,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       !-----------------------------------------------------------------------
       ! Variables specific to RTZ
       real(dp):: xe, x_eq, x_old
+      ! rtz_hhe_implicit: the coupled H/He solve
+      real(dp):: x_hhe(2,3), x0_hhe(2,3), xp_hhe(2,3), xs_hhe(3), ne_hhe, ne_rest, ne_prev, conv_hhe, tot_hhe, G_dustrec
+      real(dp):: Ifix_hhe(2,3), Rdust_hhe(2,3), Ik(3), Rk(3), Lk(3), Sk(3), nHI_hhe, nHII_hhe
+      real(dp):: ct_ion_hhe(1:n_elements,1:n_elements), ct_rec_hhe(1:n_elements,1:n_elements)
+      integer:: el_h, st_h, oel_h, ost_h, it_hhe, ns_h, isub_hhe
+      logical:: hhe_converged
       logical:: ne_sync                       ! the next ion update sums ne over all ions again
       real(dp):: dust_effective_number_density, dust_to_gas_mass_ratio_over_mw
       real(dp):: HI_number_density, HII_number_density
@@ -2209,9 +2215,182 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! grains from the WDB06 charge balance (all ten elements, dust bins only, dust_helper%rec_ion_rate)
       ! in place of the fit; the higher ions keep the fit
 
+      ! H and He by backward Euler, coupled through ne and the H-He charge exchange (rtz_hhe_implicit). Every
+      ! stage from its own balance, dx_k/dt = I_{k-1} x_{k-1} + R_{k+1} x_{k+1} - (I_k + R_k + L_k) x_k + S_k, with
+      ! I and R its total ionisation and recombination rates (the terms of the per-stage update below) and L, S
+      ! the H2 sink and source of H I: a trace stage (He I next to a massive star) comes from its own balance, not
+      ! as the difference 1 - ions. Passes alternate H and He with the latest ne and partners until every
+      ! fraction (floor 1e-12) and ne change by < 1e-8, in each of rtz_hhe_nsub sub-steps (rates frozen); the
+      ! metals then follow as before.
+      if (rtz_hhe_implicit) then
+         x_hhe = 0d0; x0_hhe = 0d0
+         x0_hhe(1,1:2) = dXion(1,1:2); x0_hhe(2,1:3) = dXion(2,1:3)
+         x_hhe = x0_hhe
+         ne_rest = max(getNe(dXion, nElement_dep(:)) - nElement_dep(1)*dXion(1,2) &
+                   - nElement_dep(2)*(dXion(2,2)+2d0*dXion(2,3)), 0d0)
+         ne_hhe = ne_rest + nElement_dep(1)*x_hhe(1,2) + nElement_dep(2)*(x_hhe(2,2)+2d0*x_hhe(2,3))
+         G_dustrec = advected_G0*trans_dust + UV_background_G0*bg_dust
+         ! the rates that depend on neither ne nor the other species, once per substep
+         Ifix_hhe = 0d0; Rdust_hhe = 0d0; ct_ion_hhe = 0d0; ct_rec_hhe = 0d0
+         do el_h = 1, 2
+            ns_h = elements(el_h)%n_ions
+            do st_h = 1, ns_h
+               if (st_h < ns_h) then
+                  if (cion_T(st_h,el_h) /= TK) then
+                     cion_rate(st_h,el_h) = collisional_ionization(TK, st_h, el_h); cion_T(st_h,el_h) = TK
+                  end if
+                  if (rec_T(st_h+1,el_h) /= TK) then
+                     rec_rate(st_h+1,el_h) = recombination(TK, st_h+1, el_h); rec_T(st_h+1,el_h) = TK
+                  end if
+                  if (rtz_include_HM12_UVB) Ifix_hhe(el_h,st_h) = Ifix_hhe(el_h,st_h) + HM12_UVB_z(el_h,st_h,1) * ss_factor
+                  if (rtz_include_photoionization .and. st_h == 1) Ifix_hhe(el_h,st_h) = Ifix_hhe(el_h,st_h) &
+                     + UV_background_G0 * bg_dust * elements(el_h)%G0_photo_rate
+                  if (rtz_include_cosmic_ray_ionization) then
+                     Ifix_hhe(el_h,st_h) = Ifix_hhe(el_h,st_h) &
+                        + cosmic_ray_ionization_rates(el_h,st_h) * total_cosmic_ray_ionization_rate
+                     if (st_h == 1) Ifix_hhe(el_h,st_h) = Ifix_hhe(el_h,st_h) &
+                        + cosmic_ray_ionization_rates_induced_UV(el_h) * cosmic_ray_scale_factor
+                  end if
+#ifdef RT
+                  if (rtz_include_photoionization .and. rt_advect) then
+                     Ifix_hhe(el_h,st_h) = Ifix_hhe(el_h,st_h) + SUM(signc(:,el_h,st_h)*dNp)
+                     if (el_h == 1 .and. st_h == 1) Ifix_hhe(el_h,st_h) = Ifix_hhe(el_h,st_h) + ots_Hrate
+                  end if
+#endif
+               end if
+               if (st_h > 1 .and. rtz_include_dust_recombination) then
+#ifdef CALIMA
+                  if (dust_ion_recombination .and. st_h == 2) then
+                     Rdust_hhe(el_h,st_h) = dust_helper%rec_ion_rate(el_h)
+                  else
+                     Rdust_hhe(el_h,st_h) = dust_recombination(st_h, el_h, TK, G_dustrec, ne) * dust_effective_number_density
+                  end if
+#else
+                  Rdust_hhe(el_h,st_h) = dust_recombination(st_h, el_h, TK, G_dustrec, ne) * dust_effective_number_density
+#endif
+               end if
+            end do
+         end do
+         if (rtz_include_charge_exchange) then
+            do oel_h = 2, n_elements
+               if (elements(oel_h)%atomic_number <= 0) cycle
+               do ost_h = 1, elements(oel_h)%n_ions
+                  ct_ion_hhe(ost_h,oel_h) = charge_transfer_ionization(ost_h, oel_h, TK)
+                  ct_rec_hhe(ost_h,oel_h) = charge_transfer_recombination(ost_h, oel_h, TK)
+               end do
+            end do
+         end if
+         do isub_hhe = 1, max(rtz_hhe_nsub, 1)
+         if (isub_hhe > 1) x0_hhe = x_hhe
+         hhe_converged = .false.
+         do it_hhe = 1, 50
+            xp_hhe = x_hhe; ne_prev = ne_hhe
+            ! hydrogen: H I, H II (the H2 slot as updated above)
+            Ik = 0d0; Rk = 0d0; Lk = 0d0; Sk = 0d0
+            Ik(1) = Ifix_hhe(1,1)
+            if (rtz_include_collisional_ionization) Ik(1) = Ik(1) + cion_rate(1,1) * ne_hhe
+            Rk(2) = (rec_rate(2,1) + ots_dH) * ne_hhe + Rdust_hhe(1,2)
+            if (rtz_include_charge_exchange) then
+               ! X^+ + H -> X + H+ ionises H, X + H+ -> X^+ + H recombines it (He as in this pass)
+               do oel_h = 2, n_elements
+                  if (elements(oel_h)%atomic_number <= 0) cycle
+                  do ost_h = 1, elements(oel_h)%n_ions
+                     if (oel_h == 2) then
+                        Ik(1) = Ik(1) + ct_rec_hhe(ost_h,oel_h) * nElement_dep(2) * x_hhe(2,ost_h)
+                        Rk(2) = Rk(2) + ct_ion_hhe(ost_h,oel_h) * nElement_dep(2) * x_hhe(2,ost_h)
+                     else
+                        Ik(1) = Ik(1) + ct_rec_hhe(ost_h,oel_h) * nElement_dep(oel_h) * dXion(oel_h,ost_h)
+                        Rk(2) = Rk(2) + ct_ion_hhe(ost_h,oel_h) * nElement_dep(oel_h) * dXion(oel_h,ost_h)
+                     end if
+                  end do
+               end do
+            end if
+            tot_hhe = 1d0
+            if (isH2_rtz) then
+               Lk(1) = 2.0d0 * alpha_H2_loc / (x0_hhe(1,1) + 1d-40)
+               Sk(1) = de_H2 * dXion(1,3)
+               tot_hhe = 1d0 - dXion(1,3)
+            end if
+            call rtz_hhe_solve(2, ddt(icell)/max(rtz_hhe_nsub, 1), Ik, Rk, Lk, Sk, x0_hhe(1,:), tot_hhe, xs_hhe)
+            x_hhe(1,:) = xs_hhe
+            ne_hhe = ne_rest + nElement_dep(1)*x_hhe(1,2) + nElement_dep(2)*(x_hhe(2,2)+2d0*x_hhe(2,3))
+            ! helium: He I, He II, He III
+            nHI_hhe = nElement_dep(1) * x_hhe(1,1); nHII_hhe = nElement_dep(1) * x_hhe(1,2)
+            Ik = 0d0; Rk = 0d0; Lk = 0d0; Sk = 0d0
+            Ik(1:2) = Ifix_hhe(2,1:2)
+            if (rtz_include_collisional_ionization) Ik(1:2) = Ik(1:2) + cion_rate(1:2,2) * ne_hhe
+            Rk(2) = (rec_rate(2,2) + ots_dHe) * ne_hhe + Rdust_hhe(2,2)
+            Rk(3) = rec_rate(3,2) * ne_hhe + Rdust_hhe(2,3)
+            if (rtz_include_charge_exchange) then
+               Ik(1:2) = Ik(1:2) + ct_ion_hhe(1:2,2) * nHII_hhe
+               Rk(2:3) = Rk(2:3) + ct_rec_hhe(2:3,2) * nHI_hhe
+            end if
+            call rtz_hhe_solve(3, ddt(icell)/max(rtz_hhe_nsub, 1), Ik, Rk, Lk, Sk, x0_hhe(2,:), 1d0, xs_hhe)
+            x_hhe(2,:) = xs_hhe
+            ne_hhe = ne_rest + nElement_dep(1)*x_hhe(1,2) + nElement_dep(2)*(x_hhe(2,2)+2d0*x_hhe(2,3))
+            conv_hhe = abs(ne_hhe - ne_prev) / max(ne_hhe, 1d-30)
+            do el_h = 1, 2
+               do st_h = 1, elements(el_h)%n_ions
+                  conv_hhe = max(conv_hhe, abs(x_hhe(el_h,st_h) - xp_hhe(el_h,st_h)) / max(x_hhe(el_h,st_h), 1d-12))
+               end do
+            end do
+            if (conv_hhe < 1d-8) then
+               hhe_converged = .true.
+               exit
+            end if
+         end do
+         if (.not. hhe_converged) exit
+         end do   ! sub-steps
+         if (.not. hhe_converged) then   ! never seen in the stress slabs; a smaller substep, as a rejection
+            dt_rec = 0.5d0 * ddt(icell)
+            code = 8
+            RETURN
+         end if
+         dXion(1,1:2) = max(x_hhe(1,1:2), x_MIN); dXion(2,1:3) = max(x_hhe(2,1:3), x_MIN)
+         ne = getNe(dXion, nElement_dep(:))
+         xe = ne / nElement_dep(1)
+         phi_s = secondary_cr_rates(xe)
+         total_cosmic_ray_ionization_rate = primary_cosmic_ray_ionization_rate * (1.d0 + phi_s)
+#ifdef CO
+         mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz, dCO)
+#else
+         mu = getMu_RTZ(ne, nElement_dep, dXion, isH2_rtz)
+#endif
+         TK = dT2 * mu
+         if (rt_isTconst) TK = rt_Tconst
+         ! convergence: the fractional change of every H and He stage, on the values carried to the next substep
+         ! (the neutrals too: they are now as accurate as the ions)
+         do el_h = 1, 2
+            do st_h = 1, elements(el_h)%n_ions
+               if (xion(el_h,st_h,icell) > 1.d-10) then
+                  dUU = ABS((dXion(el_h,st_h)-xion(el_h,st_h,icell))/(xion(el_h,st_h,icell)+x_FM)) * one_over_x_FRAC
+                  fracMax = MAX(fracMax,dUU)
+                  if (dUU .gt. 1.) then
+                     dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+                     dt_rec = min(dt_rec,0.5d0*ddt(icell))
+                     code = 8
+                     loopCodes08(el_h,st_h) = loopCodes08(el_h,st_h) + 1
+                     RETURN
+                  end if
+               end if
+            end do
+         end do
+         if (neInit.gt.1.d-10) then
+            dUU = ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
+            fracMax = MAX(fracMax,dUU)
+            if (dUU .gt. 1.) then
+               dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
+               dt_rec = min(dt_rec,0.5d0*ddt(icell))
+               code = 9
+               RETURN
+            end if
+         end if
+      end if
+
       ! Loop over all elements
       do iElement = 1,n_elements
          if (elements(iElement)%atomic_number > 0) then
+            if (rtz_hhe_implicit .and. iElement <= 2) cycle   ! solved above
             if (iElement /= 6 .and. iElement /= 8) then
                if (nElement_dep(iElement)/nElement_dep(1) .lt. 1d-10) then
                   cycle
@@ -2830,6 +3009,45 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 
    END SUBROUTINE rtz_cool_step
+
+   SUBROUTINE rtz_hhe_solve(n, h, I, R, L, src, x0, tgt, x)
+      ! One step h for the n stages of one element (rtz_hhe_implicit):
+      ! dx_k/dt = I_{k-1} x_{k-1} + R_{k+1} x_{k+1} - (I_k + R_k + L_k) x_k + src_k, implicit in the coupling, with row k
+      ! over h_k = (exp(h D_k) - 1)/D_k, D_k = I_k + R_k + L_k: a stage alone relaxes exactly, x0 exp(-h D_k) (the
+      ! per-stage update), a stiff one goes to its equilibrium, and h_k -> h (backward Euler) as h D_k -> 0. The
+      ! elimination adds positive terms only (e_k = d_k - h_k I_k is carried apart), so a trace stage keeps its
+      ! relative precision; the result is rescaled to tgt, the element's total.
+      integer, intent(in) :: n
+      real(dp), intent(in) :: h, I(3), R(3), L(3), src(3), x0(3), tgt
+      real(dp), intent(out) :: x(3)
+      real(dp) :: e(3), d(3), g(3), sm, hk(3), Dk, a
+      integer :: k
+      x = 0d0
+      do k = 1, n
+         Dk = L(k) + R(k)
+         if (k < n) Dk = Dk + I(k)
+         a = h*Dk
+         if (a < 1d-5) then
+            hk(k) = h * (1d0 + 0.5d0*a)
+         else
+            hk(k) = (exp(min(a, 500d0)) - 1d0) / Dk   ! capped: beyond, the row is its equilibrium
+         end if
+      end do
+      e(1) = 1d0 + hk(1)*L(1)
+      d(1) = e(1) + hk(1)*I(1)
+      g(1) = (x0(1) + hk(1)*src(1)) / d(1)
+      do k = 2, n
+         e(k) = 1d0 + hk(k)*L(k) + hk(k)*R(k)*e(k-1)/d(k-1)
+         d(k) = e(k) + hk(k)*I(k)
+         g(k) = (x0(k) + hk(k)*src(k) + hk(k)*I(k-1)*g(k-1)) / d(k)
+      end do
+      x(n) = g(n)
+      do k = n-1, 1, -1
+         x(k) = g(k) + (hk(k)*R(k+1)/d(k)) * x(k+1)
+      end do
+      sm = sum(x(1:n))
+      if (sm > 0d0) x(1:n) = x(1:n) * (tgt / sm)
+   END SUBROUTINE rtz_hhe_solve
 
    END SUBROUTINE rtz_solve_cooling
 
