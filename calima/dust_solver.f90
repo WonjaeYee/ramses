@@ -343,7 +343,7 @@ end module dust_rhs_mod
 module rk4_mod
     use amr_parameters, only: dp
     use dustbin_types, only: DustChemistryInfo
-    use dust_commons, only: errmax, y_min
+    use dust_commons, only: errmax, y_min, x_trace, trace_reference_masses
     use ode_interface_mod, only: rhs_interface, HALF, TWO, SIXTH
 
     implicit none
@@ -531,6 +531,7 @@ module rk4_mod
         real(dp), pointer :: y_gas_temp(:,:), y_dust_temp(:)
         real(dp), pointer :: error_gas(:,:), error_dust(:)
         real(dp) :: max_error, scale
+        real(dp) :: m_el(size(y_gas,1)), m_bin(size(y_dust))
 
         call ensure_rk4_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
         y_gas_temp => y_gas_temp_cache; y_dust_temp => y_dust_temp_cache
@@ -549,10 +550,11 @@ module rk4_mod
             return
         end if
 
-        ! 2. Max relative change w.r.t. old state.
-        ! Use y_min as the denominator floor (consistent with anninos_step and elsewhere).
+        ! 2. Max relative change w.r.t. old state. The bins are floored at x_trace of the mass their
+        ! scarcest element could make (a trace bin does not limit the step); y_min only guards absent elements.
+        call trace_reference_masses(dust_info%npah, y_gas, y_dust, m_el, m_bin)
         error_gas(:,:) = abs(y_gas_temp(:,:) - y_gas(:,:)) / max(abs(y_gas(:,:)), y_min)
-        error_dust(:) = abs(y_dust_temp(:) - y_dust(:)) / max(abs(y_dust(:)), y_min)
+        error_dust(:) = abs(y_dust_temp(:) - y_dust(:)) / max(abs(y_dust(:)), x_trace*m_bin(:), y_min)
         max_error = maxval(error_gas(:,:))
         max_error = max(max_error, maxval(error_dust(:)))
 
@@ -561,6 +563,13 @@ module rk4_mod
         ! 3. Update the step size based on the error
         scale = 0.9d0 * (errmax / max(max_error,1.0d-10))
         h_new = h * min(2.0_dp, max(0.1_dp, scale))  ! Limit the change in step size
+
+        ! A negative value rejects the step: a stiff trace bin, whose change is measured against its
+        ! floor, can overshoot below zero (RK4 is unstable beyond D*h ~ 2.8).
+        if (any(y_gas_temp(:,:) < 0.0_dp) .or. any(y_dust_temp(:) < 0.0_dp)) then
+            accepted = .false.
+            h_new = 0.5_dp * h
+        end if
 
         ! 4. Always write the attempted solution to the output arrays so the caller has
         !    a valid state regardless of acceptance (y_gas_new is intent(out); if we skip
@@ -696,14 +705,20 @@ module anninos_mod
             if (abs(fj) * h < 1.0d-12 * yj) then
                 y_dust_new(j) = yj
             else if (abs(fj) * h < 1.0d-2 * yj) then
+                ! Small changes: explicit. Unlike the exponential below it keeps mass moved between bins
+                ! balanced (the donor loses and the receiver gains the same rate*h); the exponential takes
+                ! the difference from the gas. Both have the root C/D (Dj below divides by yj itself).
                 y_dust_new(j) = yj + fj * h
             else
                 ! Decompose derivative into creation Cj and destruction Dj.
                 ! We split the net rate fj = C - D*y (Anninos et al. 1997) by reading
                 ! production and destruction terms directly from the RHS, rather than
                 ! inferring the sign of fj.  This handles sign changes mid-step correctly.
+                ! Dj divides by yj itself (tiny() only guards yj = 0): with a larger floor, a bin
+                ! below it relaxes to C/Dj = (C/D) * floor/yj instead of C/D, the explicit branch to
+                ! C/D, and the two alternate (this stalled RTZ next to massive stars).
                 Cj = dydt_dust(j, 1)
-                Dj = dydt_dust(j, 2) / max(yj, y_min)   ! floor guards against division by zero; consistent with y_min everywhere
+                Dj = dydt_dust(j, 2) / max(yj, tiny(1.0_dp))
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
@@ -770,7 +785,7 @@ end module anninos_mod
 module rk54_mod
     use amr_parameters, only: dp
     use dustbin_types, only: DustChemistryInfo
-    use dust_commons, only: errmax, y_min
+    use dust_commons, only: errmax, y_min, x_trace, trace_reference_masses
     use ode_interface_mod, only: rhs_interface
 
     implicit none
@@ -870,6 +885,7 @@ module rk54_mod
         real(dp), pointer :: error_gas(:,:), error_dust(:)
         real(dp) :: kmax, scale, max_error
         real(dp) :: h_local
+        real(dp) :: m_el(size(y_gas,1)), m_bin(size(y_dust))
 
         ! Cash-Karp RK5(4) Coefficients
         real(dp), parameter :: c2 = 0.2_dp
@@ -979,11 +995,12 @@ module rk54_mod
         y_gas_new = y_gas + h_local * (b1 * k1_gas + b3 * k3_gas + b4 * k4_gas + b6 * k6_gas)
         y_dust_new = y_dust + h_local * (b1 * k1_dust(:,3) + b3 * k3_dust(:,3) + b4 * k4_dust(:,3) + b6 * k6_dust(:,3))
 
-        ! Error estimate — use y_min floor for consistency with anninos_step and rk4_step.
+        ! Error estimate, the bins floored as in rk4_step.
+        call trace_reference_masses(dust_info%npah, y_gas, y_dust, m_el, m_bin)
         error_gas = abs(h_local * (e1 * k1_gas + e3 * k3_gas + e4 * k4_gas + e5 * k5_gas + e6 * k6_gas)) / &
                     max(abs(y_gas), y_min)
         error_dust = abs(h_local * (e1 * k1_dust(:,3) + e3 * k3_dust(:,3) + e4 * k4_dust(:,3) + e5 * k5_dust(:,3) + e6 * k6_dust(:,3))) / &
-                     max(abs(y_dust), y_min)
+                     max(abs(y_dust), x_trace*m_bin(:), y_min)
 
         max_error = maxval(error_gas)
         max_error = max(max_error, maxval(error_dust))
@@ -992,10 +1009,419 @@ module rk54_mod
 
         scale = 0.9d0 * (errmax / max(max_error, 1.0d-10))**0.2d0
         h_new = h_local * min(2.0_dp, max(0.1_dp, scale))
+        ! A negative value rejects the step, as in rk4_step
+        if (any(y_gas_new < 0.0_dp) .or. any(y_dust_new < 0.0_dp)) then
+            accepted = .false.
+            h_new = 0.5_dp * h_local
+        end if
         h = h_local
 
     end subroutine rk54_step
 end module rk54_mod
+
+module mprk22_mod
+    ! Modified Patankar-Runge-Kutta solver MPRK22 (Kopecz & Meister 2018), dust_solver_type = 4, ported
+    ! from pyCALIMA (src/pycalima/solvers/mprk22.py). The dust ODE is a production-destruction system:
+    ! every process moves mass between the gas-phase elements and the bins and conserves each element.
+    ! The right-hand side is written as a sum of transfers v, each with one donor d and conserving every
+    ! element, and each is weighted by its donor's new-to-old ratio (Burchard, Deleersnijder & Meister 2003),
+    !     z_new = z_old + h * sum_v v * z_new(d) / z_den(d),
+    ! a linear system whose columns sum to one. Every element is conserved to round-off, single-donor
+    ! transfers stay positive for any h, and the step is implicit in whichever node is emptying, the gas
+    ! included (anninos_step takes the gas as the explicit residual of the bins). The transfers:
+    !  * a process that trades each bin with the gas only (accretion, sputtering, sublimation, photolysis)
+    !    gives one per bin; the donor is the bin when it loses mass, else its most depleted element;
+    !  * the others (coagulation, shattering, ratd, coalescence, cluster evaporation, freezing, desorption)
+    !    are split by group of bins of identical composition (PAHs count as carbon): the mass leaving bins
+    !    is shared pro rata among the group's gainers, one transfer per losing bin, so self-loops cancel
+    !    and bin-to-bin transfers take nothing from the gas; a group whose losers include gas elements
+    !    becomes one transfer, with the node that empties first as donor;
+    !  * whatever a process does not conserve is added explicitly.
+    ! Stage 1 takes the rates and denominators at z_old (first order), stage 2 the mean of the rates at
+    ! z_old and z1 with denominators z1 (second order); stage 1 alone is kept where it changes nothing by
+    ! 1e-4 or more. The round-off of the solves is handed back to the gas, so the element totals change by
+    ! the explicit part only.
+    ! Like anninos_step it is not substepped by the driver: it takes the whole RTZ substep, whose change
+    ! RTZ limits (dUU), in one step where that is accurate (see mprk22_step). The system holds the
+    ! elements of the bins and the bins only (the other gas elements see the explicit part alone).
+    use amr_parameters, only: dp
+    use dustbin_types, only: DustChemistryInfo
+    use dust_commons, only: errmax, y_min, x_trace, trace_reference_masses, dustbins_props, pahbins_props, &
+                            dust_processes_list, pah_processes_list, ndust_processes, npah_processes, dust_debug
+    use ode_interface_mod, only: rhs_interface
+    use dust_rhs_mod, only: last_dydt_dust_per_proc, last_dydt_pah_per_proc
+
+    implicit none
+    private
+    public :: mprk22_step
+
+    ! Set once: the elements of the bins (iel(1:nact), in the gas arrays), the element content A(iel, bin)
+    ! of each bin, its group of identical composition, and which processes trade with the gas only
+    integer, save :: n_el_s = -1, nb_s = -1, nact = 0, ngrp = 0, maxt = 0
+    integer, allocatable, save :: iel(:), grp(:)
+    real(dp), allocatable, save :: A(:,:)
+    logical, allocatable, save :: local_proc(:)
+    ! Work arrays
+    real(dp), allocatable, save :: V0(:,:), V1(:,:), Mw(:,:), dg(:,:), dd2(:,:)
+    real(dp), allocatable, save :: z0(:), z1(:), z2(:), p0(:), p1(:), g0(:), g1(:), fl(:), y_gas_s(:,:)
+    real(dp), allocatable, save :: yg(:,:), ygn(:,:), yd(:), ydn(:)
+    ! (module arrays, not automatic ones: gfortran puts those on the heap, a malloc per call)
+    real(dp), allocatable, save :: wdd(:), wu(:), wgain(:), wb(:), wmel(:), wmbin(:)
+    integer, allocatable, save :: d0(:), d1(:)
+
+    contains
+
+    subroutine setup(npah_in, n_el, ncol, nb)
+        integer, intent(in) :: npah_in, n_el, ncol, nb
+        real(dp) :: Afull(n_el, nb)
+        logical :: used(n_el)
+        integer :: j, k, jj, e, ip
+        character(len=30) :: pname
+        Afull = 0.0_dp
+        do j = 1, npah_in
+            Afull(pahbins_props(j)%C_index, j) = 1.0_dp
+        end do
+        do j = npah_in+1, nb
+            associate(bin => dustbins_props(j-npah_in))
+                do k = 1, bin%nelements
+                    Afull(bin%el_index(k), j) = bin%el_mfractions(k)
+                end do
+            end associate
+        end do
+        used = any(Afull > 0.0_dp, dim=2)
+        nact = count(used)
+        if (allocated(iel)) deallocate(iel, grp, A, local_proc, V0, V1, Mw, dg, dd2, d0, d1, wdd, wu, wgain, wb, wmel, wmbin)
+        allocate(iel(nact), grp(nb), A(nact, nb), local_proc(ndust_processes + npah_processes))
+        k = 0
+        do e = 1, n_el
+            if (.not. used(e)) cycle
+            k = k + 1
+            iel(k) = e
+            A(k, :) = Afull(e, :)
+        end do
+        ngrp = 0
+        do j = 1, nb
+            grp(j) = 0
+            do jj = 1, j-1
+                if (all(abs(A(:,j) - A(:,jj)) <= 1.0d-12)) then
+                    grp(j) = grp(jj)
+                    exit
+                end if
+            end do
+            if (grp(j) == 0) then
+                ngrp = ngrp + 1
+                grp(j) = ngrp
+            end if
+        end do
+        do ip = 1, ndust_processes + npah_processes
+            if (ip <= ndust_processes) then
+                pname = dust_processes_list(ip)%name
+            else
+                pname = pah_processes_list(ip-ndust_processes)%name
+            end if
+            select case (trim(pname))
+            case ('accretion', 'sputtering', 'sublimation', 'photolysis')
+                local_proc(ip) = .true.
+            case default
+                local_proc(ip) = .false.
+            end select
+        end do
+        maxt = max(1, (ndust_processes + npah_processes) * nb)
+        allocate(V0(nact+nb, maxt), V1(nact+nb, maxt), Mw(nact+nb, nact+nb), dg(n_el, ncol), dd2(nb, 2))
+        allocate(d0(maxt), d1(maxt))
+        allocate(wdd(nb), wu(nact+nb), wgain(nact+nb), wb(nact+nb), wmel(n_el), wmbin(nb))
+        n_el_s = n_el
+        nb_s = nb
+    end subroutine setup
+
+    subroutine transfers(dust_info, y_gas_s, y_dust_s, z, V, donor, nt, res, kmax, write_cache)
+        ! The transfers V(:,1:nt) (donor(k) the donor of column k) at the state (y_gas_s, y_dust_s), packed
+        ! as z = (gas of the bins' elements, bins), and the explicit residual res of every gas element.
+        type(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas_s(:,:), y_dust_s(:), z(:)
+        real(dp), intent(out) :: V(:,:), res(:), kmax
+        integer, intent(out) :: donor(:), nt
+        logical, intent(in) :: write_cache
+        real(dp) :: gsum, pk, best, r
+        integer :: ip, j, k, g, l, n
+
+        n = nact + nb_s
+        nt = 0
+        res = 0.0_dp
+        kmax = 0.0_dp
+        do ip = 1, ndust_processes + npah_processes
+            dg = 0.0_dp
+            dd2 = 0.0_dp
+            pk = 0.0_dp
+            if (ip <= ndust_processes) then
+                call dust_processes_list(ip)%comp_rate(dust_info, y_gas_s, y_dust_s, dg, dd2, pk)
+                if (write_cache .and. dust_debug .and. allocated(last_dydt_dust_per_proc)) &
+                    last_dydt_dust_per_proc(:, ip, 1:2) = dd2
+            else
+                call pah_processes_list(ip-ndust_processes)%comp_rate(dust_info, y_gas_s, y_dust_s, dg, dd2, pk)
+                if (write_cache .and. dust_debug .and. allocated(last_dydt_pah_per_proc)) &
+                    last_dydt_pah_per_proc(:, ip-ndust_processes, 1:2) = dd2
+            end if
+            kmax = max(kmax, pk)
+            wdd = dd2(:,1) - dd2(:,2)
+            if (all(wdd == 0.0_dp) .and. all(dg(:,1) == 0.0_dp)) cycle
+            ! what the process does to the gas beyond what its bins imply
+            res = res + dg(:,1)
+            do k = 1, nact
+                res(iel(k)) = res(iel(k)) + sum(A(k,:) * wdd)
+            end do
+
+            if (local_proc(ip)) then
+                do j = 1, nb_s
+                    if (wdd(j) == 0.0_dp) cycle
+                    nt = nt + 1
+                    V(1:nact, nt) = -A(:, j) * wdd(j)
+                    V(nact+1:n, nt) = 0.0_dp
+                    V(nact+j, nt) = wdd(j)
+                    if (wdd(j) < 0.0_dp) then
+                        donor(nt) = nact + j
+                    else
+                        ! the bin grows: the donor is its most depleted element
+                        best = huge(1.0_dp)
+                        donor(nt) = 1
+                        do k = 1, nact
+                            if (A(k, j) <= 0.0_dp) cycle
+                            r = z(k) / A(k, j)
+                            if (r < best) then
+                                best = r
+                                donor(nt) = k
+                            end if
+                        end do
+                    end if
+                end do
+                cycle
+            end if
+
+            do g = 1, ngrp
+                if (all(wdd == 0.0_dp .or. grp /= g)) cycle
+                wu = 0.0_dp
+                do j = 1, nb_s
+                    if (grp(j) /= g) cycle
+                    wu(1:nact) = wu(1:nact) - A(:, j) * wdd(j)
+                    wu(nact+j) = wdd(j)
+                end do
+                wgain = max(wu, 0.0_dp)
+                gsum = sum(wgain)
+                if (gsum <= 0.0_dp .or. all(wu >= 0.0_dp)) cycle
+                if (all(wu(1:nact) >= 0.0_dp)) then
+                    ! bins of one composition: share each loss pro rata among the gainers
+                    do l = nact+1, n
+                        if (wu(l) >= 0.0_dp) cycle
+                        nt = nt + 1
+                        V(:, nt) = wgain * (-wu(l) / gsum)
+                        V(l, nt) = V(l, nt) + wu(l)
+                        donor(nt) = l
+                    end do
+                else
+                    nt = nt + 1
+                    V(:, nt) = wu
+                    best = huge(1.0_dp)
+                    donor(nt) = 1
+                    do k = 1, n
+                        if (wu(k) >= 0.0_dp) cycle
+                        r = z(k) / (-wu(k))
+                        if (r < best) then
+                            best = r
+                            donor(nt) = k
+                        end if
+                    end do
+                end if
+            end do
+        end do
+    end subroutine transfers
+
+    subroutine patankar_solve(z_old, z_den, h, w0, n0, r0, w1, n1, r1, z_new)
+        ! Solve z = z_old + h * sum_s w_s * (sum_k V_s(:,k) * z(d_s(k)) / z_den(d_s(k)) + r_s) for z, with the
+        ! transfers of stage s in (V0, d0) and (V1, d1), r_s their residuals in the packed layout (n1 = 0 and
+        ! w1 = 0 for the first stage). I - M has unit column sums and a positive diagonal: no pivoting.
+        real(dp), intent(in) :: z_old(:), z_den(:), h, w0, r0(:), w1, r1(:)
+        integer, intent(in) :: n0, n1
+        real(dp), intent(out) :: z_new(:)
+        real(dp) :: f
+        integer :: n, k, i
+        n = size(z_old)
+        Mw = 0.0_dp
+        do k = 1, n0
+            Mw(:, d0(k)) = Mw(:, d0(k)) - (h * w0 / max(z_den(d0(k)), y_min)) * V0(:, k)
+        end do
+        do k = 1, n1
+            Mw(:, d1(k)) = Mw(:, d1(k)) - (h * w1 / max(z_den(d1(k)), y_min)) * V1(:, k)
+        end do
+        do i = 1, n
+            Mw(i, i) = Mw(i, i) + 1.0_dp
+        end do
+        wb = z_old + h * (w0 * r0 + w1 * r1)
+        do k = 1, n-1
+            do i = k+1, n
+                if (Mw(i, k) == 0.0_dp) cycle
+                f = Mw(i, k) / Mw(k, k)
+                Mw(i, k+1:n) = Mw(i, k+1:n) - f * Mw(k, k+1:n)
+                wb(i) = wb(i) - f * wb(k)
+            end do
+        end do
+        do i = n, 1, -1
+            z_new(i) = (wb(i) - sum(Mw(i, i+1:n) * z_new(i+1:n))) / Mw(i, i)
+        end do
+    end subroutine patankar_solve
+
+    subroutine mprk22_try(dust_info, y_gas, y_dust, h, y_gas_new, y_dust_new, err, ok, kmax, nt0)
+        ! One MPRK22 step of size h from (y_gas, y_dust): the new state, its error estimate err (the first-
+        ! against the second-order solution, each component scaled by the larger of its old and new value
+        ! and floored at x_trace of its element, as the RTZ check), ok = .false. if a value would go negative.
+        type(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:), h
+        real(dp), intent(out) :: y_gas_new(:,:), y_dust_new(:), err, kmax
+        logical, intent(out) :: ok
+        integer, intent(out) :: nt0
+        integer :: n, nt1, k, e
+        real(dp) :: kmax1
+
+        n = nact + nb_s
+        ok = .false.
+        err = huge(1.0_dp)
+        z0(1:nact) = y_gas(iel, 1)
+        z0(nact+1:n) = y_dust
+        call transfers(dust_info, y_gas, y_dust, z0, V0, d0, nt0, g0, kmax, .true.)
+        if (kmax == 0.0_dp .and. nt0 == 0) return
+        p0(1:nact) = g0(iel)
+        p0(nact+1:n) = 0.0_dp
+
+        ! stage 1: modified Patankar-Euler
+        call patankar_solve(z0, z0, h, 1.0_dp, nt0, p0, 0.0_dp, 0, p0, z1)
+        if (minval(z1) < 0.0_dp) return
+
+        ! Small changes (below 1e-4 of every component, floored at x_trace of its element as the RTZ check):
+        ! the first-order step is accurate to ~1e-8 of the component, positive and conservative, and the
+        ! second stage would only cost. This is almost every RTZ substep (99.9% next to a massive star);
+        ! at 1e-2 the first-order error added up along accretion to 5x that of anninos_step.
+        call trace_reference_masses(dust_info%npah, y_gas, y_dust, wmel, wmbin)
+        fl(1:nact) = max(x_trace * wmel(iel), y_min)
+        fl(nact+1:n) = max(x_trace * wmbin, y_min)
+        if (maxval(abs(z1 - z0) / max(abs(z1), abs(z0), fl)) < 1.0d-4) then
+            do k = 1, nact
+                z1(k) = z1(k) + (y_gas(iel(k), 1) + sum(A(k, :) * y_dust) + h * p0(k)) &
+                              - (z1(k) + sum(A(k, :) * z1(nact+1:n)))
+            end do
+            if (minval(z1) < 0.0_dp) return
+            y_gas_new = y_gas
+            y_gas_new(:, 1) = y_gas(:, 1) + h * g0
+            y_gas_new(iel, 1) = z1(1:nact)
+            y_dust_new = z1(nact+1:n)
+            if (any(y_gas_new(:, 1) < 0.0_dp)) return
+            ok = .true.
+            err = 0.0_dp
+            return
+        end if
+
+        ! stage 2: the rates at z1 (the ion stages of each element scaled with it)
+        y_gas_s = y_gas
+        do k = 1, nact
+            e = iel(k)
+            y_gas_s(e, 1) = z1(k)
+            if (y_gas(e, 1) > 0.0_dp .and. size(y_gas, 2) > 1) y_gas_s(e, 2:) = y_gas(e, 2:) * (z1(k) / y_gas(e, 1))
+        end do
+        call transfers(dust_info, y_gas_s, z1(nact+1:n), z1, V1, d1, nt1, g1, kmax1, .false.)
+        p1(1:nact) = g1(iel)
+        p1(nact+1:n) = 0.0_dp
+        call patankar_solve(z0, z1, h, 0.5_dp, nt0, p0, 0.5_dp, nt1, p1, z2)
+
+        ! the solves conserve each element up to round-off, which grows with h*rate/z: hand it back to
+        ! the gas, so the totals change by exactly the explicit part
+        do k = 1, nact
+            z2(k) = z2(k) + (y_gas(iel(k), 1) + sum(A(k, :) * y_dust) + 0.5_dp * h * (p0(k) + p1(k))) &
+                          - (z2(k) + sum(A(k, :) * z2(nact+1:n)))
+        end do
+        if (minval(z2) < 0.0_dp) return
+
+        ! the gas elements outside the bins see the explicit part only
+        y_gas_new = y_gas
+        y_gas_new(:, 1) = y_gas(:, 1) + 0.5_dp * h * (g0 + g1)
+        y_gas_new(iel, 1) = z2(1:nact)
+        y_dust_new = z2(nact+1:n)
+        if (any(y_gas_new(:, 1) < 0.0_dp)) return
+        ok = .true.
+        err = maxval(abs(z2 - z1) / max(abs(z2), abs(z0), fl))
+    end subroutine mprk22_try
+
+    subroutine mprk22_step(dust_info,y_gas,y_dust,h,rhs,y_gas_new,y_dust_new,h_new,firstcall,accepted,break,debug_flag,step_ok_present)
+        ! The whole RTZ substep h (not substepped by the driver, as anninos_step): first in one MPRK22 step,
+        ! subdivided only where its error estimate exceeds 0.1*errmax (0.01 with the default, as pyCALIMA;
+        ! the error of a first-order solution), e.g. a bin destroyed with D*h >> 1, where the rational
+        ! MPRK22 factor falls short of exp(-D*h). Fails (RTZ then halves ddt) if it cannot cover h.
+        ! Same interface as the other dust solvers (rhs is not used: the transfers need each process on
+        ! its own).
+        implicit none
+        type(DustChemistryInfo), intent(in) :: dust_info
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(inout) :: h
+        procedure(rhs_interface) :: rhs
+        real(dp), intent(out) :: y_gas_new(:,:), y_dust_new(:)
+        real(dp), intent(out) :: h_new
+        logical, intent(out) :: accepted, break
+        logical, intent(in) :: firstcall
+        logical, intent(in), optional :: debug_flag
+        logical, intent(in), optional :: step_ok_present
+
+        integer, parameter :: nsub_max = 1000
+        integer :: n_el, nb, nt0, nsub
+        real(dp) :: tau, hs, err, kmax, tol
+        logical :: ok
+
+        n_el = size(y_gas, 1)
+        nb = size(y_dust)
+        if (n_el /= n_el_s .or. nb /= nb_s) then
+            call setup(dust_info%npah, n_el, size(y_gas, 2), nb)
+            if (allocated(z0)) deallocate(z0, z1, z2, p0, p1, g0, g1, fl, y_gas_s, yg, ygn, yd, ydn)
+            allocate(z0(nact+nb), z1(nact+nb), z2(nact+nb), p0(nact+nb), p1(nact+nb), fl(nact+nb), g0(n_el), g1(n_el))
+            allocate(y_gas_s(n_el, size(y_gas, 2)), yg(n_el, size(y_gas, 2)), ygn(n_el, size(y_gas, 2)), yd(nb), ydn(nb))
+        end if
+        tol = 0.1_dp * errmax
+        break = .false.
+        accepted = .true.
+        h_new = h
+        y_gas_new = y_gas
+        y_dust_new = y_dust
+        yg = y_gas
+        yd = y_dust
+        tau = 0.0_dp
+        hs = h
+        nsub = 0
+        do while (tau < h)
+            hs = min(hs, h - tau)
+            call mprk22_try(dust_info, yg, yd, hs, ygn, ydn, err, ok, kmax, nt0)
+            if (nsub == 0 .and. kmax == 0.0_dp .and. nt0 == 0) then
+                ! no active process
+                break = firstcall
+                return
+            end if
+            nsub = nsub + 1
+            if (ok .and. err <= tol) then
+                tau = tau + hs
+                yg = ygn
+                yd = ydn
+                hs = hs * min(5.0_dp, max(0.2_dp, 0.9_dp * sqrt(tol / max(err, 1.0d-12))))
+            else
+                if (ok) then
+                    hs = hs * max(0.2_dp, 0.9_dp * sqrt(tol / err))
+                else
+                    hs = 0.5_dp * hs
+                end if
+                if (nsub >= nsub_max .or. hs < 1.0d-12 * h) then
+                    accepted = .false.
+                    h_new = 0.5_dp * h
+                    return
+                end if
+            end if
+        end do
+        y_gas_new = yg
+        y_dust_new = yd
+    end subroutine mprk22_step
+end module mprk22_mod
 
 module ode_driver_mod
     use amr_parameters, only: dp
@@ -1236,6 +1662,14 @@ module ode_driver_mod
         ! 6. Set the final solution
         y_gas_final(:,:) = y_gas_temp(:,:)
         y_dust_final(:) = y_dust_temp(:)
+
+        ! A rejected non-substepped step (a gas element would go negative) returns its trial state with
+        ! step_ok = .false.: RTZ discards it (code 10), halves ddt and retries. The checks below are for
+        ! accepted states; on a rejected one the negativity check stopped the run instead.
+        if (.not. step_ok) then
+            if (present(h_last)) h_last = 0.0_dp
+            return
+        end if
 
         mass_final = sum(y_gas_final(:,1)) + sum(y_dust_final(:))
         if (mass_init > 0d0) then

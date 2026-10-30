@@ -852,6 +852,7 @@ contains
         ! On re-entry with the same (or similar) conditions this skips the firstcall
         ! 1/kmax reduction, cutting substep count at equilibrium for explicit solvers.
         real(dp), save :: last_h_ode = 0.0_dp
+        real(dp) :: m_el(n_elements), m_bin(ndust+npah)  ! reference masses of the trace floors [g cm-3]
 
         real(dp), intent(out) :: dUU
 
@@ -998,12 +999,14 @@ contains
             end if
         end do
 
-        ! check for dust
-        if (dinfo%ndust > 0 .or. dinfo%npah > 0) then
-            do ii = 1, dinfo%npah+dinfo%ndust
-                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+y_min))
-            end do
-        end if
+        ! check for dust. Trace bins are floored as RTZ floors the ion fractions (x + x_fm): each change
+        ! is measured against y + x_trace * m, with m the mass the bin's scarcest element could make.
+        ! Not the gas, above: it is updated explicitly (what the bins do not take), so a depleted
+        ! element needs the relative limit to stay positive; the bins (Anninos) are positive and stable.
+        call trace_reference_masses(dinfo%npah, y_gas, y_dust(1:ndust_total), m_el, m_bin(1:ndust_total))
+        do ii = 1, ndust_total
+            dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+x_trace*m_bin(ii)+y_min))
+        end do
 #endif
 
     end subroutine compute_dust_update
