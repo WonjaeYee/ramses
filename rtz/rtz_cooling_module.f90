@@ -2625,8 +2625,12 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if(rt_isTconst) TK=rt_Tconst                         ! Force constant T 
                end if
 
-               ! Check for convergence -- Fractional change in ion
-               if (xion(iElement,iIon,icell).gt.1.d-10) then 
+               ! Check for convergence -- Fractional change in ion. Not for the neutral stage of He and
+               ! metals (W. Yee): its change is minus that of the ion stages, which are limited, and as
+               ! a trace stage (He I next to a massive star) it held the substep to its own 10% changes.
+               ! H I keeps it: at an ionisation front H II is below 1d-10 and unchecked, so H I is the
+               ! only limit on the ionisation (and the photon budget) of the substep.
+               if ((iIon > 1 .or. iElement == 1) .and. xion(iElement,iIon,icell).gt.1.d-10) then
                   dUU = ABS((dXion(iElement,iIon)-xion(iElement,iIon,icell))/(xion(iElement,iIon,icell)+x_FM))
                   dUU = dUU * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
