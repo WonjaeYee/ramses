@@ -2093,7 +2093,7 @@ module dust_radiation
 
     subroutine update_T_dust(G0_background,coll_heat,&
                             &recomb_heat,pe_heat,P_rad,T_dust,&
-                            &ne,nElement,xelem_ions,Coulomb_factor,&
+                            &ne,nElement,xelem_ions,&
                             &nH2,nCO,Tgas,dust_charge,&
                             &Ep,cs_abs,lin)
         ! This subroutine updates the local dust temperatures by considering
@@ -2115,7 +2115,6 @@ module dust_radiation
         ! ne            --> electron density [cm^-3]
         ! nElement       --> array of elemental densities [cm^-3]
         ! xelem_ions     --> array of ionisation fractions for each element
-        ! Coulomb_factor --> array of Coulomb factors
         ! nH2            --> molecular hydrogen density [cm^-3]
         ! nCO            --> carbon monoxide density [cm^-3]
         ! Tgas           --> gas temperature [K]
@@ -2125,7 +2124,8 @@ module dust_radiation
         ! lin           <-- (optional) the solution and its first-order response (serve_T_dust)
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
-        use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ
+        use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ, &
+                                BH80Gas
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -2133,7 +2133,6 @@ module dust_radiation
         real(dp),dimension(1:ndust),intent(inout) :: T_dust
         real(dp),dimension(1:n_elements),intent(in) :: nElement
         real(dp),dimension(1:n_elements,1:n_elements),intent(in) :: xelem_ions
-        real(dp),dimension(1:ndust,-1:n_elements),intent(in) :: Coulomb_factor
         real(dp),intent(in) :: ne,nH2,nCO,Tgas
         real(dp),dimension(1:ndust),intent(in) :: dust_charge
         real(dp),intent(in),optional :: Ep(:),cs_abs(:,:)
@@ -2142,9 +2141,11 @@ module dust_radiation
         integer :: i,j
         real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd
         type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
+        type(BH80Gas) :: gas          ! the BH80 sums of this gas, for every bin
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
+        gas%ready = .false.
 
         do j = 1, ndust
             ! --- Radiative absorbed power ---
@@ -2162,7 +2163,7 @@ module dust_radiation
             ! --- Check collisional heating at Tgas ---
             ! If collisional heating dominates radiation, start closer to Tgas
             if (dust_coll_cooling) then
-                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge(j),pre,deriv=present(lin))
+                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge(j),pre,deriv=present(lin),gas=gas)
                 H_coll_at_Tgas = coll_heating_eval(pre,T0)
                 coll_heat(j) = H_coll_at_Tgas
                 if (H_coll_at_Tgas > P_abs) then

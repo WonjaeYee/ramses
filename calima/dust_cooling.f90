@@ -12,13 +12,12 @@ module dust_cooling
     private
 
     public :: compute_dust_coll_heating_BH80
-    public :: compute_dust_coll_heating
     public :: init_dust_coll_heating_BH80_cache
     public :: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ
+    public :: BH80Gas
 
-    ! compute_dust_coll_heating split at the dust temperature: everything but the T_d dependence,
-    ! for one bin and one gas state (coll_heating_prepare), then H_coll at any T_d
-    ! (coll_heating_eval), with the operations of compute_dust_coll_heating in the same order
+    ! The collisional heating split at the dust temperature: everything but the T_d dependence,
+    ! for one bin and one gas state (coll_heating_prepare), then H_coll at any T_d (coll_heating_eval)
     type CollHeatPre
         logical :: hot = .false., blend = .false., hneutral = .false.
         real(dp) :: Tgas = 0d0, sum_rate = 0d0, supp = 0d0, supp_inv = 0d0   ! T > 1e3 K: tables, blend with BH80
@@ -27,6 +26,20 @@ module dust_cooling
         ! with deriv: d sum_rate / d T_gas, d sum_rate / d Z (dust_coll_charge), d supp_inv / d T_gas
         real(dp) :: dsum_dT = 0d0, dsum_dZ = 0d0, dsupp_inv = 0d0
     end type CollHeatPre
+
+    ! The BH80 sum over the species of unit accommodation (all but H2 and neutral H) of one gas state,
+    ! of every bin (bh80_gas): the caller of a loop over the bins sets ready = .false. for a new gas
+    ! state, and the first bin that needs it fills it for all
+    type BH80Gas
+        logical :: ready
+        real(dp), dimension(1:ndust) :: s_const
+    end type BH80Gas
+
+    ! Without dust_coll_charge, coll_heating_prepare interpolates every collisional table of a bin at
+    ! log10 T_gas. Where they are all on the T axis of the electron table (equally spaced, the same
+    ! nodes), interpolate_1d and slope_1d find the same cell and weight in each: found once per bin
+    ! (coll_axis_init sets which bins)
+    logical, allocatable, save :: coll_same_axis(:)
 
     logical, save :: bh80_cache_ready = .false.
     real(dp), allocatable, save :: bh80_h2_prefactor(:)
@@ -112,28 +125,19 @@ module dust_cooling
 
     end subroutine compute_dust_coll_heating_BH80
 
-    subroutine bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre)
-        ! the T_d-independent part of the BH80 rate
+    subroutine bh80_gas(nElement,xelem_ions,gas)
+        ! the sum of bh80_prepare over the species of unit accommodation of this gas state, of every bin
+        ! at once (BH80Gas): the sums of the bins apart, each over the species in the same order
         implicit none
 
-        integer, intent(in) :: i_dust
-        real(dp), intent(in) :: nH2,nCO
         real(dp), dimension(1:n_elements), intent(in) :: nElement
         real(dp), dimension(1:n_elements,1:n_elements), intent(in) :: xelem_ions
-        real(dp), intent(in) :: Tgas
-        type(CollHeatPre), intent(inout) :: pre
+        type(BH80Gas), intent(inout) :: gas
 
-        integer :: j,iel,nions_loc
-        real(dp) :: xion,Hcoll
+        integer :: i,j,iel,nions_loc
+        real(dp) :: xion,w
 
-        if (.not. bh80_cache_ready) call init_dust_coll_heating_BH80_cache
-
-        ! 1. Common prefactor: 2 kB (Tgas - Td) sqrt(Tgas), finished in bh80_eval
-        pre%sqrtTg = sqrt(Tgas)
-
-        ! 2. Compute contribution from species whose accommodation factor is unity
-        ! (everything except H2 and H neutral)
-        Hcoll = 0d0
+        gas%s_const = 0d0
         do iel = 1, n_elements
 #ifdef RTZ
             nions_loc = max(1, elements(iel)%n_ions)
@@ -149,10 +153,44 @@ module dust_cooling
                 ! Skip H neutral here as it depends on Td
                 if (iel == 1 .and. j == 1) cycle
 
-                Hcoll = Hcoll + nElement(iel) * xion * bh80_species_prefactor(i_dust,iel)
+                w = nElement(iel) * xion
+                do i = 1, ndust
+                    gas%s_const(i) = gas%s_const(i) + w * bh80_species_prefactor(i,iel)
+                end do
             end do
         end do
-        pre%s_const = Hcoll
+        gas%ready = .true.
+    end subroutine bh80_gas
+
+    subroutine bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre,gas)
+        ! the T_d-independent part of the BH80 rate; gas (optional): the sums of this gas state, filled
+        ! here if not ready (BH80Gas)
+        implicit none
+
+        integer, intent(in) :: i_dust
+        real(dp), intent(in) :: nH2,nCO
+        real(dp), dimension(1:n_elements), intent(in) :: nElement
+        real(dp), dimension(1:n_elements,1:n_elements), intent(in) :: xelem_ions
+        real(dp), intent(in) :: Tgas
+        type(CollHeatPre), intent(inout) :: pre
+        type(BH80Gas), intent(inout), optional :: gas
+
+        type(BH80Gas) :: own
+
+        if (.not. bh80_cache_ready) call init_dust_coll_heating_BH80_cache
+
+        ! 1. Common prefactor: 2 kB (Tgas - Td) sqrt(Tgas), finished in bh80_eval
+        pre%sqrtTg = sqrt(Tgas)
+
+        ! 2. Compute contribution from species whose accommodation factor is unity
+        ! (everything except H2 and H neutral)
+        if (present(gas)) then
+            if (.not. gas%ready) call bh80_gas(nElement,xelem_ions,gas)
+            pre%s_const = gas%s_const(i_dust)
+        else
+            call bh80_gas(nElement,xelem_ions,own)
+            pre%s_const = own%s_const(i_dust)
+        end if
 
         ! 3. H2 (accommodation depends on Td), CO (unity) and H neutral (depends on Td)
         pre%nh2_pf = nH2 * bh80_h2_prefactor(i_dust)
@@ -189,33 +227,11 @@ module dust_cooling
 
     end function bh80_eval
 
-    subroutine compute_dust_coll_heating(i_dust,ne,nElement,xelem_ions,&
-                                        Coulomb_factor,nH2,nCO,Tgas,Td,&
-                                        dust_charge,Hcoll)
-        implicit none
-
-        integer, intent(in) :: i_dust
-        real(dp), intent(in) :: ne
-        real(dp), dimension(1:n_elements), intent(in) :: nElement
-        real(dp), dimension(1:n_elements,1:n_elements), intent(in) :: xelem_ions
-        real(dp), dimension(-1:n_elements),intent(in) :: Coulomb_factor
-        real(dp), intent(in) :: nH2,nCO
-        real(dp), intent(in) :: Tgas
-        real(dp), intent(in) :: Td,dust_charge
-
-        real(dp), intent(inout) :: Hcoll
-
-        type(CollHeatPre) :: pre
-
-        call coll_heating_prepare(i_dust,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge,pre)
-        Hcoll = coll_heating_eval(pre,Td)
-
-    end subroutine compute_dust_coll_heating
-
-    subroutine coll_heating_prepare(i_dust,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge,pre,deriv)
-        ! compute_dust_coll_heating but its dependence on the dust temperature (the tables of the
-        ! electrons and ions, and the BH80 terms that do not depend on Td). deriv (optional): also
-        ! what coll_heating_dTg and coll_heating_dZ need (the slopes of the tables)
+    subroutine coll_heating_prepare(i_dust,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge,pre,deriv,gas)
+        ! The collisional heating of bin i_dust but its dependence on the dust temperature (the tables of
+        ! the electrons and ions, and the BH80 terms that do not depend on Td). deriv (optional): also
+        ! what coll_heating_dTg and coll_heating_dZ need (the slopes of the tables). gas (optional):
+        ! the BH80 sums of this gas state, shared by the bins (BH80Gas)
         implicit none
 
         integer, intent(in) :: i_dust
@@ -227,6 +243,7 @@ module dust_cooling
         real(dp), intent(in) :: dust_charge
         type(CollHeatPre), intent(out) :: pre
         logical, intent(in), optional :: deriv
+        type(BH80Gas), intent(inout), optional :: gas
 
         integer :: j,iel,nT,nphi,nions_loc
         real(dp) :: lT,cooling_rate,rate_lin
@@ -236,6 +253,9 @@ module dust_cooling
         real(dp) :: dsl, dsz, sx, sy
         integer :: idx_T
         logical :: want_d
+        logical :: same              ! the tables on one T axis (coll_same_axis): its cell, from axis_cell
+        integer :: iedge, i0, is
+        real(dp) :: t, dxs
 
         want_d = .false.
         if (present(deriv)) want_d = deriv
@@ -245,6 +265,13 @@ module dust_cooling
         pre%hot = Tgas > 1d3
         if (pre%hot) then
             lT = log10(Tgas)
+
+            same = .false.
+            if (.not. dust_coll_charge) then
+                if (.not. allocated(coll_same_axis)) call coll_axis_init
+                same = coll_same_axis(i_dust)
+                if (same) call axis_cell(dustbins_props(i_dust)%collisional_tab(0))
+            end if
 
             sum_rate = 0d0
 
@@ -264,11 +291,19 @@ module dust_cooling
                 end if
             else
                 ! 1D interpolation: use stored phi=0 index
-                call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, cooling_rate, idx_x=idx_T)
+                if (same) then
+                    cooling_rate = tab_val(dustbins_props(i_dust)%collisional_tab(0))
+                else
+                    call dustbins_props(i_dust)%collisional_tab(0)%interpolate(lT, cooling_rate, idx_x=idx_T)
+                end if
                 cooling_rate = exp(cooling_rate * ln10)
                 sum_rate = sum_rate + ne * cooling_rate
                 if (want_d) then
-                    call dustbins_props(i_dust)%collisional_tab(0)%slope_1d(lT, sx)
+                    if (same) then
+                        sx = tab_slope(dustbins_props(i_dust)%collisional_tab(0))
+                    else
+                        call dustbins_props(i_dust)%collisional_tab(0)%slope_1d(lT, sx)
+                    end if
                     dsl = dsl + ne * cooling_rate * sx
                 end if
             end if
@@ -308,12 +343,20 @@ module dust_cooling
                     sum_rate = sum_rate + nElement(iel) * sum_element
                 else
                     ! No charge dependence: just add contribution from the total abundance of this element
-                    call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, cooling_rate, idx_x=idx_T)
+                    if (same) then
+                        cooling_rate = tab_val(dustbins_props(i_dust)%collisional_tab(iel))
+                    else
+                        call dustbins_props(i_dust)%collisional_tab(iel)%interpolate(lT, cooling_rate, idx_x=idx_T)
+                    end if
                     if (cooling_rate >= -30d0) then
                         rate_lin = exp(cooling_rate * ln10)
                         sum_rate = sum_rate + nElement(iel) * rate_lin
                         if (want_d) then
-                            call dustbins_props(i_dust)%collisional_tab(iel)%slope_1d(lT, sx)
+                            if (same) then
+                                sx = tab_slope(dustbins_props(i_dust)%collisional_tab(iel))
+                            else
+                                call dustbins_props(i_dust)%collisional_tab(iel)%slope_1d(lT, sx)
+                            end if
                             dsl = dsl + nElement(iel) * rate_lin * sx
                         end if
                     end if
@@ -331,13 +374,86 @@ module dust_cooling
                 pre%supp = 1d0 - 1d0/(1d0+exp(-1d1*(log10(Tgas)-4d0)))
                 pre%supp_inv = 1d0 / (1d0 + exp(-1d1*(log10(Tgas) - 4d0)))
                 pre%dsupp_inv = pre%supp_inv * (1d0 - pre%supp_inv) * 1d1 / (Tgas * ln10)
-                call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre)
+                call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre,gas)
             end if
         else
-            call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre)
+            call bh80_prepare(i_dust,nElement,xelem_ions,nH2,nCO,Tgas,pre,gas)
         end if
 
+    contains
+
+        subroutine axis_cell(t0)
+            ! the cell and weight of interpolate1D_eqw, and the cell of slope_1d, at lT on the T axis of t0
+            type(DustTable), intent(in) :: t0
+            integer :: n1
+            n1 = t0%npts(1)
+            iedge = 0
+            if (lT <= t0%tab1d(1,1)) then
+                iedge = 1
+            else if (lT >= t0%tab1d(n1,1)) then
+                iedge = n1
+            else
+                i0 = locate_eqw(t0%tab1d(1:n1,1), n1, lT, t0%inv_dx(1))
+                t = (lT - t0%tab1d(i0,1)) * t0%inv_dx(1)
+                is = i0
+                if (is < n1 - 1 .and. lT >= t0%tab1d(is+1,1)) is = is + 1
+                dxs = t0%tab1d(is+1,1) - t0%tab1d(is,1)
+            end if
+        end subroutine axis_cell
+
+        real(dp) function tab_val(tb)
+            ! interpolate_1d of table tb at lT, in the cell of axis_cell
+            type(DustTable), intent(in) :: tb
+            integer :: k
+            k = tb%ipos_zero(2)
+            if (iedge > 0) then
+                tab_val = tb%tab2d(iedge,k,1)
+            else
+                tab_val = (1.0d0 - t) * tb%tab2d(i0,k,1) + t * tb%tab2d(i0+1,k,1)
+            end if
+        end function tab_val
+
+        real(dp) function tab_slope(tb)
+            ! slope_1d of table tb at lT, in the cell of axis_cell
+            type(DustTable), intent(in) :: tb
+            integer :: k
+            k = tb%ipos_zero(2)
+            if (iedge > 0) then
+                tab_slope = 0d0
+            else
+                tab_slope = (tb%tab2d(is+1,k,1) - tb%tab2d(is,k,1)) / dxs
+            end if
+        end function tab_slope
+
     end subroutine coll_heating_prepare
+
+    subroutine coll_axis_init
+        ! coll_same_axis: the bins whose initialised collisional tables are all 2D, equally spaced and on
+        ! the T nodes of their electron table (coll_heating_prepare)
+        implicit none
+        integer :: i, iel, n1
+        logical :: ok
+
+        allocate(coll_same_axis(1:ndust))
+        do i = 1, ndust
+            ok = dustbins_props(i)%collisional_tab(0)%initialised
+            if (ok) ok = dustbins_props(i)%collisional_tab(0)%eqw .and. dustbins_props(i)%collisional_tab(0)%ndim == 2
+            if (ok) then
+                n1 = dustbins_props(i)%collisional_tab(0)%npts(1)
+                do iel = 1, n_elements
+                    if (.not. dustbins_props(i)%collisional_tab(iel)%initialised) cycle
+                    ok = dustbins_props(i)%collisional_tab(iel)%eqw .and. dustbins_props(i)%collisional_tab(iel)%ndim == 2
+                    if (ok) ok = dustbins_props(i)%collisional_tab(iel)%npts(1) == n1
+                    if (ok) ok = dustbins_props(i)%collisional_tab(iel)%inv_dx(1) == &
+                                 dustbins_props(i)%collisional_tab(0)%inv_dx(1)
+                    if (ok) ok = all(dustbins_props(i)%collisional_tab(iel)%tab1d(1:n1,1) == &
+                                     dustbins_props(i)%collisional_tab(0)%tab1d(1:n1,1))
+                    if (.not. ok) exit
+                end do
+            end if
+            coll_same_axis(i) = ok
+        end do
+    end subroutine coll_axis_init
 
     real(dp) function coll_heating_dTg(pre,Td)
         ! d H_coll / d T_gas at dust temperature Td, fixed Td and charge (pre prepared with deriv)
