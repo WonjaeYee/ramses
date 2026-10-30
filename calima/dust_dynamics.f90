@@ -28,8 +28,23 @@ module dust_dynamics
     integer, parameter :: TS_MEMO_N = 16384
     integer(kind=8), allocatable, save :: ts_memo_key(:,:)
     real(dp), allocatable, save :: ts_memo_val(:)
+    ! the collision models of grain_relative_velocity (velocity_model_id of dust_velocity_model)
+    integer, parameter :: VEL_OTHER = 0, VEL_ORMEL2007 = 1, VEL_HIRASHITA2019 = 2
 
     contains
+
+    integer function velocity_model_id(model)
+        ! grain_relative_velocity's model of the name model, compared once per caller rather than
+        ! in every call
+        character(len=*), intent(in) :: model
+        if (trim(model) == 'Ormel2007') then
+            velocity_model_id = VEL_ORMEL2007
+        else if (trim(model) == 'Hirashita2019') then
+            velocity_model_id = VEL_HIRASHITA2019
+        else
+            velocity_model_id = VEL_OTHER
+        end if
+    end function velocity_model_id
 
     subroutine check_tva_rt_params()
         ! The trapped-IR radiation pressure on the dust needs a non-thermal energy variable, the IR
@@ -197,7 +212,7 @@ module dust_dynamics
         ! velocity distribution (see gaussian_collision_speeds for the speeds the kernels use).
         ! For further details see Section 2.3.1 in Rodriguez Montero et al. (2023).
 
-        ! model        => name of collision model to use
+        ! model        => collision model to use (velocity_model_id of its name)
         ! T            => gas temperature [K]
         ! rho_gas      => gas density [g/cm**3]
         ! nH           => Hydrogen number density [1/cm**3]
@@ -212,7 +227,7 @@ module dust_dynamics
         ! target_m     => target grain mass [g]
         ! projectile_m => projectile grain mass [g]
         implicit none
-        character(len=30), intent(in) :: model
+        integer, intent(in) :: model
         real(dp), intent(in) :: T,rho_gas,nH,ne,v_turb,local_mu,inject_L
         real(dp), intent(in) :: target_a,target_s,target_m
         real(dp), intent(in) :: projectile_a,projectile_s,projectile_m
@@ -232,7 +247,7 @@ module dust_dynamics
         ! Cache for gas-phase invariants to avoid redundant calculations within a cell
         real(dp),save :: last_T=-1d0, last_rho_gas=-1d0, last_nH=-1d0, last_v_turb=-1d0, last_mu=-1d0, last_L=-1d0
         real(dp),save :: last_ne=-1d0
-        character(len=30),save :: last_model=''
+        integer,save :: last_model=-1
         real(dp),save :: cs_gas_save, v_th_save, tau_L_save, Re_save, tau_eta_save
         if (T /= last_T .or. rho_gas /= last_rho_gas .or. nH /= last_nH .or. &
             v_turb /= last_v_turb .or. local_mu /= last_mu .or. inject_L /= last_L .or. &
@@ -247,7 +262,7 @@ module dust_dynamics
             ! Thermal velocity: the Maxwellian mean speed of the gas particles, with no adiabatic index
             v_th_save = sqrt(8d0 * kB * T / (pi * mH * local_mu))
 
-            if (trim(model) == 'Ormel2007' .and. v_turb > 0d0) then
+            if (model == VEL_ORMEL2007 .and. v_turb > 0d0) then
                 ! Kinematic viscosity of the neutral + ionised (x_ion = ne/nH) mixture, each weighted by
                 ! its mass fraction: nu = sum_s f_s v_th mfp_s / 3. Neutrals collide (with neutrals and
                 ! ions) at sigma_neutral; ions also with each other through Coulomb collisions,
@@ -271,7 +286,7 @@ module dust_dynamics
         cs_gas = cs_gas_save
         v_th = v_th_save
 
-        if (trim(model).eq.'Ormel2007') then
+        if (model == VEL_ORMEL2007) then
             ! This is based on the formulation presented in Kawasaki & Machida (2023)
             ! which is basically the analytical model of Ormel & Cuzzi (2007)
 
@@ -323,7 +338,7 @@ module dust_dynamics
                                             + St2**2 / (St2 + St_star) - St2**2 / (St2 + Stmin)
             dV_turb = sqrt(3d0/2d0) * v_turb * sqrt(max(dVI2 + dVII2, 0d0))
             grain_relative_velocity = sqrt(dV_thermal**2d0 + dV_turb**2d0)
-        else if (trim(model).eq.'Hirashita2019') then
+        else if (model == VEL_HIRASHITA2019) then
             ! Velocity scaling with the Mach number as given by the model of Hirashita & Aoyama (2019)
             ! which is a further approximation from the full Ormel & Cuzzi (2007) model (see Appendix C)
 

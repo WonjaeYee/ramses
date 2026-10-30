@@ -39,6 +39,7 @@ module dust_interface
     logical, save :: td_valid = .false., td_hasNp = .false.
     real(dp), save :: td_T = 0d0, td_ne = 0d0, td_G0 = 0d0, td_nH2 = 0d0, td_nCO = 0d0
     real(dp), allocatable, save :: td_nel(:), td_xion(:,:), td_Np(:), td_egy(:)
+    real(dp), allocatable, save :: td_Ep(:)    ! the photon energy densities of update_T_dust [eV/cm3]
     ! The grain charge of the dust bins by charging model (compute_dust_precool): the charge (dinfo%Z_dust,
     ! Z_sigma) and, where the model gives them, the PE heating and recombination cooling per grain, the
     ! correction of the Coulomb factors of the low impactor charges ISRF_DCHARGE (Dmode 1: the Gaussian
@@ -372,16 +373,19 @@ contains
                 if (.not. allocated(td_lin)) allocate(td_lin(1:dinfo%ndust), td_nel(size(nElement)), &
                                                       td_xion(size(xelem_ions,1), size(xelem_ions,2)))
                 if (present(Np)) then
+                    ! the energy densities in an array of their own, not a temporary allocated in every call
+                    if (.not. allocated(td_Ep)) allocate(td_Ep(dinfo%nGroups))
+                    td_Ep = Np(:)*dinfo%group_eV(:)
                     call update_T_dust(dinfo%G0_background,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
-                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
-                                        Np(:)*dinfo%group_eV(:),dinfo%csa_dust(:,:),lin=td_lin)
+                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
+                                        td_Ep,dinfo%csa_dust(:,:),lin=td_lin)
                     if (.not. allocated(td_Np)) allocate(td_Np(dinfo%nGroups), td_egy(dinfo%nGroups))
                     td_Np = Np
                     td_egy = dinfo%group_eV
                     td_G0 = dinfo%G0_background
                 else
                     call update_T_dust(G0_total,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
-                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),dinfo%Coulomb_factor(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
+                                        dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
                                         lin=td_lin)
                     td_G0 = G0_total
                 end if
