@@ -40,6 +40,12 @@ subroutine condinit(x,u,dx,nn)
   case('dustydiffuse')
      call dustydiffuse_condinit(x, q, dx, nn)
 
+  case('dustywave','dustywave_v')
+     call dustywave_condinit(x, q, dx, nn)
+
+  case('dustysettle')
+     call dustysettle_condinit(x, q, dx, nn)
+
   case('dustyspress')
      call dustyspress_condinit(x, q, dx, nn)
 
@@ -60,6 +66,9 @@ subroutine condinit(x,u,dx,nn)
 
   case('dustyslabsil')
      call dustyslab_condinit(x, q, dx, nn)
+
+  case('radsweep')
+     call radsweep_condinit(x, q, dx, nn)
 
   case('dustylev')
      call dustylev_condinit(x, q, dx, nn)
@@ -186,12 +195,17 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
   ! test case.
   !================================================================
   integer::i,ivar
-  real(dp)::dist,eps_val
+  real(dp)::dist,eps_val,wsum
 
   ! Call built-in initial condition generator to set background gas properties
   call region_condinit(x,q,dx,nn)
 
   do i=1,nn
+#if NDUST>0
+     ! The bins share the profile in proportion to their var_region (one bin: all of it), so
+     ! a multigrain run of identical bins must reproduce the single-bin one (L19 sect. 4.6.1)
+     wsum = sum(q(i,idust:idust+ndust-1))
+#endif
      ! Distance from the center of the box (0.5 * boxlen)
      dist = x(i,1) - 0.5d0*boxlen
      if (dist > 0.5d0*boxlen) dist = dist - boxlen
@@ -205,7 +219,7 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
      ! do not exist otherwise, so a CALIMA=0 build could not compile this file.
 #if NDUST>0
      do ivar=1,ndust
-        q(i,idust+ivar-1) = eps_val
+        q(i,idust+ivar-1) = eps_val * q(i,idust+ivar-1) / wsum
      end do
 #endif
 
@@ -215,6 +229,82 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
   end do
 
 end subroutine dustydiffuse_condinit
+!================================================================
+!================================================================
+subroutine dustywave_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use constants
+  implicit none
+  integer ::nn
+  real(dp)::dx
+  real(dp),dimension(1:nvector,1:nvar)::q
+  real(dp),dimension(1:nvector,1:ndim)::x
+  !================================================================
+  ! DustyWave (Lebreuilly et al. 2019 sect. 4.4; Laibe & Price 2011): one isothermal sound
+  ! mode k = 2 pi/boxlen on the uniform mixture of the region (d_region = rho0,
+  ! p_region = P0, var_region = eps of each bin):
+  !   rho = rho0 (1 + amp sin kx), v = amp sin kx, P = P0 (1 + amp sin kx), eps unchanged,
+  ! with amp = u_region(1) (L19: 1e-4) and P0 = (1 - eps0) rho0 c_s^2.  The values are exact
+  ! cell averages, momentum included, so the initial projection adds no error of its own.
+  ! condinit_kind='dustywave_v' perturbs the barycentric velocity alone (L19 sect. 4.6.2).
+  !================================================================
+  integer::i
+  real(dp)::k,amp,s1,s2,rho0,p0
+
+  call region_condinit(x,q,dx,nn)
+  k = 2.0d0*pi/boxlen
+  amp = u_region(1)
+  do i=1,nn
+     ! cell averages of sin(kx) and sin^2(kx)
+     s1 = sin(k*x(i,1)) * sin(0.5d0*k*dx)/(0.5d0*k*dx)
+     s2 = 0.5d0 - 0.5d0*cos(2.0d0*k*x(i,1)) * sin(k*dx)/(k*dx)
+     rho0 = q(i,1); p0 = q(i,ndim+2)
+     if (trim(condinit_kind) == 'dustywave_v') then
+        q(i,2) = amp*s1
+     else
+        q(i,1) = rho0*(1.0d0 + amp*s1)
+        q(i,2) = rho0*amp*(s1 + amp*s2) / q(i,1)    ! <rho v> / <rho>
+        q(i,ndim+2) = p0*(1.0d0 + amp*s1)
+     end if
+  end do
+end subroutine dustywave_condinit
+!================================================================
+!================================================================
+subroutine dustysettle_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use poisson_parameters, only: gravity_params
+  use constants
+  implicit none
+  integer ::nn
+  real(dp)::dx
+  real(dp),dimension(1:nvector,1:nvar)::q
+  real(dp),dimension(1:nvector,1:ndim)::x
+  !================================================================
+  ! Dust settling (Lebreuilly et al. 2019 sect. 4.5; Price & Laibe 2015), along the disk's
+  ! vertical, in 1D: gravity_type=2 with softening gravity_params(2) = r gives exactly
+  ! f = -GM y/(y^2 + r^2)^(3/2), the point mass at y = gravity_params(3).  The region sets the
+  ! mid-plane rho0 (d_region), P0 = (1-eps) rho0 c_s^2 (p_region) and eps (var_region); the
+  ! isothermal mixture is put in exact hydrostatic equilibrium in that potential,
+  !   rho = rho0 exp(-(Phi - Phi_0)/((1-eps) c_s^2)),  Phi = -GM/sqrt(y^2 + r^2).
+  !================================================================
+  integer::i
+  real(dp)::gm,r,y,cs2_eff,eps_tot
+
+  call region_condinit(x,q,dx,nn)
+  gm = gravity_params(1); r = gravity_params(2)
+  do i=1,nn
+     y = x(i,1) - gravity_params(3)
+     eps_tot = 0.0d0
+#if NDUST>0
+     eps_tot = sum(q(i,idust:idust+ndust-1))
+#endif
+     cs2_eff = q(i,ndim+2)/q(i,1)                    ! P0/rho0 = (1-eps) c_s^2
+     q(i,1) = q(i,1)*exp(gm*(1.0d0/sqrt(y**2 + r**2) - 1.0d0/r)/cs2_eff)
+     q(i,ndim+2) = cs2_eff*q(i,1)
+  end do
+end subroutine dustysettle_condinit
 
 
 !================================================================
@@ -348,6 +438,45 @@ subroutine dustyslab_condinit(x,q,dx,nn)
   end do
 
 end subroutine dustyslab_condinit
+
+
+subroutine radsweep_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+
+  implicit none
+  integer ::nn                            ! Number of cells
+  real(dp)::dx                            ! Cell size
+  real(dp),dimension(1:nvector,1:nvar)::q ! Primitive variables
+  real(dp),dimension(1:nvector,1:ndim)::x ! Cell center position.
+  !================================================================
+  ! Dust swept up by an attenuated beam (radiation-pressure test 1): region 1 is the
+  ! uniform background (gas, ambient dust, metals), and a smooth dust layer
+  ! eps_k = eps_k,amb + eps_k,pk sin^2(pi (x - x_lo)/(x_hi - x_lo)) is added on
+  ! x_lo..x_hi = x_center(2) -/+ length_x(2)/2, with eps_k,pk = var_region(2, slot of bin k).
+  ! Region 2 only carries these parameters: run with nregion=1. The layer is smooth so the
+  ! steepening phase can be convergence-tested; the exact solution starts from the snapshot.
+  !================================================================
+  integer::i,j,iv
+  real(dp)::xlo,xhi,shape
+  real(dp),parameter::pi=3.14159265358979323846d0
+
+  call region_condinit(x,q,dx,nn)
+#if NDUST>0
+  xlo = x_center(2) - 0.5d0*length_x(2)
+  xhi = x_center(2) + 0.5d0*length_x(2)
+  do i=1,nn
+     if (x(i,1) > xlo .and. x(i,1) < xhi) then
+        shape = sin(pi*(x(i,1)-xlo)/(xhi-xlo))**2
+        do j=1,ndust
+           iv = idust+j-1
+           q(i,iv) = q(i,iv) + var_region(2,iv-nhydro-nener)*shape
+        end do
+     end if
+  end do
+#endif
+
+end subroutine radsweep_condinit
 
 
 !================================================================
@@ -619,9 +748,14 @@ subroutine dustylevatm_condinit(x,q,dx,nn)
   ! the lower boundary to EMIT rather than merely impose a state, which is what
   ! the local patch/rt_hydro_boundary.f90 (RT15 eq. 83) provides.
   !
-  ! In >=2 D the density gets RT15 eq. 76 fluctuations,
-  !     drho/rho = 0.25*(1 + chi)*sin(2*pi*x/boxlen),  chi in [-0.25, 0.25],
-  ! which seed the radiative Rayleigh-Taylor instability. In 1D there is no
+  ! In >=2 D the density gets the fluctuations of RT15's own code,
+  ! patch/rt/davis/condinit.f90, which seed the radiative Rayleigh-Taylor
+  ! instability:
+  !     rho -> rho * (1 + 0.25*sin(8*pi*x/boxlen)) * (1 + chi),  chi in [-0.25, 0.25]
+  ! i.e. a 25% mode of wavelength boxlen/4 times independent +-25% noise in
+  ! every cell. This is NOT RT15's printed eq. 76 (one mode across the box, the
+  ! noise only modulating its amplitude), which at 2048^2 left the layer intact
+  ! at 25 t_* where RT15's fig. 10 has broken into fingers. In 1D there is no
   ! horizontal direction, so the 1D variants are the unperturbed reference.
   !================================================================
   integer::i
@@ -637,7 +771,7 @@ subroutine dustylevatm_condinit(x,q,dx,nn)
   real(dp),parameter::eps_lev    = 0.016359d0
 #endif
   real(dp),parameter::floor_frac = 1.0d-10  ! RT15: floor at 1e-10 rho_*
-  real(dp),parameter::pert_amp   = 0.25d0   ! RT15 eq. 76
+  real(dp),parameter::pert_amp   = 0.25d0   ! RT15 davis/condinit.f90
   real(dp)::rho_pk, cs2, rho_loc, h, chi
 
   ! Uniform background from the region parameters: q(i,1) = d_region = rho_*
@@ -655,17 +789,17 @@ subroutine dustylevatm_condinit(x,q,dx,nn)
      h       = max(x(i,ndim) - 0.5d0*dx, 0.0d0)
      rho_loc = rho_pk * (exp(-h) - exp(-(x(i,ndim)+0.5d0*dx))) / dx
 #if NDIM>1
-     ! RT15 eq. 76: seed the radiative Rayleigh-Taylor instability with
-     !   drho/rho = pert_amp*(1 + chi)*sin(2 pi x / boxlen),  chi in [+-0.25].
-     ! chi comes from a deterministic position hash rather than ranf: with the
-     ! default unseeded localseed = -1, ranf did not return a uniform [0,1]
-     ! deviate here and the coherent amplitude came out at 0.125 instead of
-     ! 0.25 (measured). The hash is reproducible run to run, which is what a
-     ! regression test wants anyway.
+     ! RT15's code: rho*(1 + 0.25 sin(4*3.14*x/0.5/boxlen)) * (1 + 0.5*(0.5 + R)),
+     ! R from ranf with the unseeded localseed = -1, which gives R uniform in
+     ! [-1, 0] (emulated), so the noise factor is uniform in [0.75, 1.25] and
+     ! keeps the column. Two departures: 2*pi*4 instead of 4*3.14/0.5, so the
+     ! mode is periodic in the box, and chi from a deterministic position hash
+     ! instead of ranf, whose pattern depends on the MPI decomposition (every
+     ! rank restarts from the same seed). The hash is reproducible run to run.
      chi = 0.5d0 * (mod(abs(sin(x(i,1)*12.9898d0 + x(i,ndim)*78.233d0))       &
                         * 43758.5453d0, 1.0d0) - 0.5d0)
-     rho_loc = rho_loc * (1.0d0 + pert_amp * (1.0d0 + chi)                  &
-                                * sin(twopi * x(i,1) / boxlen))
+     rho_loc = rho_loc * (1.0d0 + pert_amp * sin(4.0d0 * twopi * x(i,1) / boxlen)) &
+                       * (1.0d0 + chi)
 #endif
      rho_loc = max(rho_loc, floor_frac * rho_pk)
      q(i,1)    = rho_loc

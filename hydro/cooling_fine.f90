@@ -6,6 +6,9 @@ subroutine cooling_fine(ilevel)
   use grackle_parameters
 #endif
   use mpi_mod
+#ifdef RT
+  use rt_hydro_commons, only: rt_tau_ir, rt_ir_apflux
+#endif
   implicit none
   integer::ilevel
   !-------------------------------------------------------------------
@@ -27,6 +30,9 @@ subroutine cooling_fine(ilevel)
      end do
      call coolfine1(ind_grid,ngrid,ilevel)
   end do
+#ifdef RT
+  if(rt_ir_apflux) call make_virtual_fine_dp(rt_tau_ir(1),ilevel)
+#endif
 
 #ifndef RTZ
   if((cooling.and..not.neq_chem.and..not.cooling_ism).and.ilevel==levelmin.and.cosmo)then
@@ -63,7 +69,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   use rt_parameters, only: nGroups, iGroups, rt_vc, iIR &
                           ,iIRtrapVar, rt_kIR_RT15
   use rtz_cooling_module, only: rtz_solve_cooling, T2_min_fix
-  use rtz_module, only: n_elements, elements
+#endif
+#ifdef CALIMA
+  use rt_parameters, only: rt_dust_only, rt_Tconst
+#endif
+  use rt_parameters, only: rt_irtrap_mom
+#ifdef RTZ
+  use rtz_module, only: n_elements, elements, getMu_RTZ, getNe
 #else
   use rt_parameters, only: nGroups, iGroups
 #endif
@@ -109,6 +121,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
   logical,dimension(1:nvector),save::cooling_on=.true.
   real(dp)::scale_Np,scale_Fp,work,Npc,Npnew,fred,kIR,E_rad,TR
   real(dp),dimension(1:ndim)::Fpnew
+  real(dp),dimension(1:ndim)::dp_trap
+  real(dp)::ekin_trap
 #ifdef RTZ
   real(dp),dimension(1:n_elements, 1:n_elements, 1:nvector),save:: xion = 0d0
 #else
@@ -440,6 +454,24 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      do i=1,nleaf
         T2(i)=(gamma-1.0d0)*(T2(i)-ekk(i)-err(i)-emag(i))
      end do
+
+#ifdef CALIMA
+     ! The thermal pressure is the gas's alone: the grains carry none. From here on nH is the
+     ! gas density rho - sum rho_d (dust and PAHs), so T = mu m_H P/(rho_gas k) and the energy is
+     ! converted back with the same density below (an rt_Tconst reset gives P = rho_gas k T/mu).
+     ! With the mixture density the dust counted as gas particles: P and c_s^2 1/(1-eps) too
+     ! high at a fixed T, T (1-eps) too low at a given P. The kinetic energy above is the
+     ! mixture's and keeps rho.
+     do i=1,nleaf
+#if NDUST>0
+        nH(i)=nH(i)-sum(max(uold(ind_leaf(i),idust:idust+ndust-1),0d0))
+#endif
+#if NPAH>0
+        nH(i)=nH(i)-sum(max(uold(ind_leaf(i),ipah:ipah+npah-1),0d0))
+#endif
+        nH(i)=MAX(nH(i),smallr)
+     end do
+#endif
 
      ! Compute T2=T/mu in Kelvin
      do i=1,nleaf
@@ -850,7 +882,25 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 
        ! for static test, temporarily disable RTZ solver
+#ifdef CALIMA
+        if (rt_dust_only) then
+           ! test switch: the grain-photon coupling only, no thermochemistry (rt_dust_only_step)
+           call rt_dust_only_step(Np, Fp, p_gas, dNpdt, dFpdt, rho_dust, dtcool, nleaf, ilevel)
+           ! rt_Tconst is T, as in rtz_cool_step: T2 = T/mu with RTZ's mu of the (frozen) cell state
+           do i=1,nleaf
+#ifdef CO
+              T2_new(i) = rt_Tconst / getMu_RTZ(getNe(xion(:,:,i), nElement(:,i)), nElement(:,i), &
+                                                xion(:,:,i), isH2_rtz, nCO(i))
+#else
+              T2_new(i) = rt_Tconst / getMu_RTZ(getNe(xion(:,:,i), nElement(:,i)), nElement(:,i), &
+                                                xion(:,:,i), isH2_rtz)
+#endif
+           end do
+           err_idx = 0
+        else if (rtz_cooling) then
+#else
         if (rtz_cooling) then
+#endif
            call rtz_solve_cooling(T2_new, aexp_loc, xion, nElement, nCO, Np, Fp   &
                               ,p_gas, dNpdt, dFpdt, ilevel, dtcool, nleaf &
                               ,dx_SS_H2, err_idx &
@@ -921,6 +971,13 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
 
 #else
+#ifdef CALIMA
+        if (rt_dust_only) then
+           ! test switch: the grain-photon coupling only, no thermochemistry (rt_dust_only_step)
+           call rt_dust_only_step(Np, Fp, p_gas, dNpdt, dFpdt, rho_dust, dtcool, nleaf, ilevel)
+           T2_new(1:nleaf) = rt_Tconst
+        else
+#endif
         call rt_solve_cooling(T2_new, xion, Np, Fp, p_gas, dNpdt, dFpdt  &
                              ,nH, cooling_on, Zsolar, dtcool, aexp_loc   &
                              ,nleaf, ilevel                              &
@@ -931,6 +988,9 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
                              ,sigma, rho_dust, rho_pah                   &
 #endif
                              )
+#ifdef CALIMA
+        end if
+#endif
 #endif
         delta_T2(1:nleaf) = T2_new(1:nleaf) - T2(1:nleaf)
      endif
@@ -1122,7 +1182,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #else
         do ii=0,nIons-1
            do i=1,nleaf
-              uold(ind_leaf(i),iIons+ii) = xion(1+ii,i)*nH(i)
+              ! a passive scalar: the fraction times the mixture density (nH is the gas's under CALIMA)
+              uold(ind_leaf(i),iIons+ii) = xion(1+ii,i)*uold(ind_leaf(i),1)
            end do
         end do
 #endif
@@ -1142,8 +1203,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
      endif
 
      ! Split IR photons into trapped and freeflowing
-     if(rt_isIRtrap) then
-        if(nener .le. 0) then
+     if(rt_isIRtrap .or. rt_ir_apflux) then
+        if(rt_isIRtrap .and. nener .le. 0) then
            print*,'Trying to store E_trapped pressure, but NERAD too small!!'
            STOP
         endif
@@ -1213,6 +1274,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #else
            tau = nH(i) * Zsolar(i) * f_dust * unit_tau * kIR
 #endif
+           if(rt_ir_apflux) rt_tau_ir(il) = tau / 1.5d0
+           if(.not. rt_isIRtrap) cycle
            f_trap = 0d0             ! Fraction IR photons that are trapped
            if(tau .gt. 0d0) f_trap = min(max(exp(-1d0/tau), 0d0), 1d0)
 #ifdef CALIMA
@@ -1224,6 +1287,17 @@ subroutine coolfine1(ind_grid,ngrid,ilevel)
 #endif
            ! Update streaming photons, trapped photons, and tot energy:
            rtuold(il,iNp) = max(smallnp,(1d0-f_trap) * NIRtot) ! Streaming
+           if (rt_irtrap_mom) then
+              ! The flux removed below, f_trap Fp, belongs to photons that have just become trapped, i.e.
+              ! absorbed and re-emitted isotropically in the gas frame: its momentum goes to the gas,
+              ! (f_trap Fp) E_IR/(c c~), the conversion the RT source step uses for the flux it damps, and
+              ! the kinetic energy with it. RT15's scheme (rt_irtrap_mom=.false.) drops it.
+              dp_trap(1:ndim) = f_trap * rtuold(il,iNp+1:iNp+ndim) * scale_Fp &
+                              * group_egy(iIR) * eV2erg / (c_cgs * rt_c_cgs(ilevel)) / (scale_d * scale_v)
+              ekin_trap = 0.5d0 * sum(uold(il,2:ndim+1)**2) / uold(il,1)
+              uold(il,2:ndim+1) = uold(il,2:ndim+1) + dp_trap(1:ndim)
+              uold(il,neul) = uold(il,neul) + 0.5d0 * sum(uold(il,2:ndim+1)**2) / uold(il,1) - ekin_trap
+           end if
            rtuold(il,iNp+1:iNp+ndim) = &            ! Limit streaming flux
                                   rtuold(il,iNp+1:iNp+ndim) * (1d0-f_trap)
            EIR_trapped = max(0d0, NIRtot-rtuold(il,iNp)) * Np2Ep ! Trapped
@@ -1768,4 +1842,79 @@ subroutine ps_report
   ps_ncheck=0; ps_nbad_top=0; ps_nbad_child=0; ps_nrenorm=0
   ps_maxdev_top=0; ps_maxdev_child=0
 end subroutine ps_report
+#endif
+#if defined(RT) && defined(CALIMA)
+!################################################################
+!################################################################
+subroutine rt_dust_only_step(Np, Fp, p_gas, dNpdt, dFpdt, rho_dust, dt, nleaf, ilevel)
+  ! rt_dust_only (test switch): the RT source step reduced to what the grains do to the radiation, for
+  ! tests in neutral isothermal gas, with no thermochemistry. Per cell and group g, with the CALIMA group
+  ! cross sections per grain and R = c~ sum_k sigma_k,g rho_d,k / m_gr,k (rad_dust_rate):
+  !   N_g <- (N_g + dt dN_g/dt) / (1 + dt R_abs,g)       photons removed by absorption
+  !   F_g <- (F_g + dt dF_g/dt) / (1 + dt R_rp,g)        flux damped at the momentum-transfer rate
+  !   p_gas <- p_gas + rt_pressBoost dt R_rp,g E_g F_g / (c c~)
+  ! the updates and momentum transfer of rtz_cool_step's CALIMA branch with the gas terms zero, in one
+  ! implicit step (the steady state does not depend on the step). The grain drift is not touched here.
+  ! With rt_isIR the IR group is the grains' own emission, for dust in radiative equilibrium (no
+  ! collisional coupling to the gas): every photon absorbed in any group is re-emitted into the IR, so
+  ! N_IR is not absorbed and gains the energy the other groups lose, and its cross sections are the
+  ! Rosseland (flux, momentum) mean at the local T_rad of the total IR (trapped photons included), as
+  ! rtz_cool_step takes them from get_IR_mean_cross_sections.
+  use amr_parameters, only: dp, nvector, ndim
+  use hydro_parameters, only: ndust, npah
+  use constants, only: eV2erg
+  use rt_parameters, only: nGroups, group_egy, rt_c_cgs, one_over_c_cgs, rt_pressBoost, smallNp, &
+                           rt_isIR, iIR, rt_c_fraction
+  use dust_commons, only: group_csa_dust, group_csr_dust, dustbins_props
+  use dust_optics, only: get_IR_mean_cross_sections
+  implicit none
+  integer, intent(in) :: nleaf, ilevel
+  real(dp), intent(in) :: dt
+  real(dp), dimension(nGroups, 1:nvector), intent(inout) :: Np
+  real(dp), dimension(ndim, nGroups, 1:nvector), intent(inout) :: Fp
+  real(dp), dimension(ndim, 1:nvector), intent(inout) :: p_gas
+  real(dp), dimension(nGroups, 1:nvector), intent(in) :: dNpdt
+  real(dp), dimension(ndim, nGroups, 1:nvector), intent(in) :: dFpdt
+  real(dp), dimension(1:nvector, 1:ndust), intent(in) :: rho_dust
+  integer :: i, ig, k
+  real(dp) :: n_gr, R_abs, R_rp, fmag, cN, N_new, E_abs, T_rad
+  real(dp), dimension(max(1,ndust))  :: sigR_IR, sigP_IR
+  real(dp), dimension(max(1,2*npah)) :: sigR_IR_pah, sigP_IR_pah
+  do i = 1, nleaf
+     E_abs = 0d0                                       ! energy absorbed from the non-IR groups [erg/cm3]
+     if (rt_isIR) call get_IR_mean_cross_sections(group_egy(iIR) * eV2erg * Np(iIR,i), rt_c_fraction(ilevel), &
+                                                  sigR_IR, sigP_IR, sigR_IR_pah, sigP_IR_pah, T_rad)
+     do ig = 1, nGroups
+        if (rt_isIR .and. ig == iIR) cycle             ! after the others, which feed it
+        R_abs = 0d0; R_rp = 0d0
+        do k = 1, ndust
+           n_gr = rho_dust(i,k) / dustbins_props(k)%mgrain
+           R_abs = R_abs + group_csa_dust(k,ig) * rt_c_cgs(ilevel) * n_gr
+           R_rp  = R_rp  + group_csr_dust(k,ig) * rt_c_cgs(ilevel) * n_gr
+        end do
+        N_new = max(smallNp, (Np(ig,i) + dt * dNpdt(ig,i)) / (1d0 + dt * R_abs))
+        E_abs = E_abs + (Np(ig,i) + dt * dNpdt(ig,i) - N_new) * group_egy(ig) * eV2erg
+        Np(ig,i) = N_new
+        call damp_flux(ig, R_rp)
+     end do
+     if (rt_isIR) then
+        R_rp = 0d0
+        do k = 1, ndust
+           R_rp = R_rp + sigR_IR(k) * rt_c_cgs(ilevel) * rho_dust(i,k) / dustbins_props(k)%mgrain
+        end do
+        Np(iIR,i) = max(smallNp, Np(iIR,i) + dt * dNpdt(iIR,i) + max(E_abs, 0d0) / (group_egy(iIR) * eV2erg))
+        call damp_flux(iIR, R_rp)
+     end if
+  end do
+contains
+  subroutine damp_flux(g, R)
+     integer, intent(in) :: g
+     real(dp), intent(in) :: R
+     Fp(:,g,i) = (Fp(:,g,i) + dt * dFpdt(:,g,i)) / (1d0 + dt * R)
+     fmag = sqrt(sum(Fp(:,g,i)**2)); cN = rt_c_cgs(ilevel) * Np(g,i)
+     if (fmag > cN) Fp(:,g,i) = Fp(:,g,i) * (cN / fmag)              ! |F| <= c~ N, as reduce_flux
+     p_gas(:,i) = p_gas(:,i) + rt_pressBoost * dt * R * group_egy(g) * eV2erg &
+                  * one_over_c_cgs / rt_c_cgs(ilevel) * Fp(:,g,i)
+  end subroutine damp_flux
+end subroutine rt_dust_only_step
 #endif

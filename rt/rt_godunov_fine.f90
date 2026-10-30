@@ -166,6 +166,7 @@ SUBROUTINE rt_godfine1(ind_grid, ncache, ilevel, dt)
   real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nrtvar),save::uloc
   real(dp),dimension(1:nvector,if1:if2,jf1:jf2,kf1:kf2,1:nrtvar,1:ndim),save::flux
   logical,dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::ok
+  real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::tauloc
   integer,dimension(1:nvector),save::igrid_nbor,ind_cell,ind_buffer
   integer,dimension(1:nvector),save::ind_exist,ind_nexist
 
@@ -384,6 +385,16 @@ SUBROUTINE rt_godfine1(ind_grid, ncache, ilevel, dt)
            ok(ind_nexist(i),i3,j3,k3)=.false.
         end do
 
+        ! IR optical depth for rt_ir_apflux; a coarser neighbour's tau_c is halved to this level's dx
+        if(rt_ir_apflux) then
+           do i=1,nexist
+              tauloc(ind_exist(i),i3,j3,k3)=rt_tau_ir(ind_cell(i))
+           end do
+           do i=1,nbuffer
+              tauloc(ind_nexist(i),i3,j3,k3)=0.5d0*rt_tau_ir(ind_buffer(i))
+           end do
+        endif
+
      end do
      end do
      end do
@@ -399,7 +410,7 @@ SUBROUTINE rt_godfine1(ind_grid, ncache, ilevel, dt)
   !----------------------------------------------------------------------
   do i = 1,nGroups
      call cmp_rt_faces(uloc, flux, dx, dx, dx, dt, iGroups(i), ncache   &
-          ,ilevel)
+          ,ilevel, tauloc, rt_ir_apflux .and. i==iIR)
   end do
 
   !----------------------------------------------------------------------

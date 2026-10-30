@@ -298,7 +298,7 @@ END FUNCTION cmp_face
 
 
 !************************************************************************
-SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
+SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel,tauin,apflux)
 
 !  Compute intercell fluxes for one photon group in all dimensions,
 !  using the Eddington tensor with the M1 closure relation.
@@ -317,6 +317,9 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
 !  iP0         => Starting index, among the RT variables, of the group.
 !  ngrid       => number of sub-grids
 !  ilevel      => level being updated
+!  tauin       => optional: cell optical depths, used if apflux
+!  apflux      => optional: scale the photon-number flux by 1/(1+1.5 tau)
+!                 with tau the smaller of the two cells' (rt_ir_apflux)
 !
 !  other vars
 !  iu1,iu2     |First and last index of input array,
@@ -334,6 +337,9 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
        ::iFlx
   real(dp)::dx, dy, dz, dt
   integer ::iP0, iP1, nGrid, ilevel !------------------------------------
+  real(dp),dimension(nvector,iu1:iu2,ju1:ju2,ku1:ku2),optional::tauin
+  logical,optional::apflux
+  logical::ap
   real(dp),save, &                                     !   Central fluxes
            dimension(nvector,iu1:iu2,ju1:ju2,ku1:ku2, ndim+1, ndim)::cFlx
   real(dp),save, &                                     ! Cell eigenvalues
@@ -345,6 +351,8 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
   integer ::i, j, k, n
 !------------------------------------------------------------------------
   iP1=iP0+nDim                                ! end index of photon group
+  ap=.false.
+  if(present(apflux)) ap=apflux
 
   ! compute flux tensors for all the cells
   call cmp_flux_tensors(uin, iP0, ngrid, cFlx, ilevel)    !  flux tensors
@@ -369,6 +377,8 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
            lplus =MAX(lmax(n,i-1,j,k,1), lmax(n,i,j,k,1), 0d0)
            iFlx(n, i, j, k, iP0:iP1, 1)=&
                 cmp_face( fdn, fup, udn, uup, lminus, lplus, ilevel)*dtdx
+           if(ap) iFlx(n,i,j,k,iP0,1) = iFlx(n,i,j,k,iP0,1) &
+                / (1d0 + 1.5d0*min(tauin(n,i-1,j,k), tauin(n,i,j,k)))
       end do
   end do
   end do
@@ -391,6 +401,8 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
            lplus =MAX(lmax(n,i,j-1,k,2), lmax(n,i,j,k,2), 0d0)
            iFlx(n,i,j,k,iP0:iP1,2)=&
                 cmp_face( fdn, fup, udn, uup, lminus, lplus, ilevel)*dtdx
+           if(ap) iFlx(n,i,j,k,iP0,2) = iFlx(n,i,j,k,iP0,2) &
+                / (1d0 + 1.5d0*min(tauin(n,i,j-1,k), tauin(n,i,j,k)))
      end do
   end do
   end do
@@ -413,6 +425,8 @@ SUBROUTINE cmp_rt_faces(uin,iFlx,dx,dy,dz,dt,iP0,ngrid,ilevel)
            lplus =MAX(lmax(n,i,j,k-1,3), lmax(n,i,j,k,3), 0d0)
            iFlx(n,i,j,k,iP0:iP1,3)=&
                 cmp_face( fdn, fup, udn, uup, lminus, lplus, ilevel)*dtdx
+           if(ap) iFlx(n,i,j,k,iP0,3) = iFlx(n,i,j,k,iP0,3) &
+                / (1d0 + 1.5d0*min(tauin(n,i,j,k-1), tauin(n,i,j,k)))
       end do
   end do
   end do

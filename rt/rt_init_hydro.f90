@@ -39,6 +39,10 @@ subroutine rt_init_hydro
   if(verbose)write(*,*)'Allocate done for nrtvar'
 
   call rt_init
+  if(rt_ir_apflux) then
+     allocate(rt_tau_ir(1:ncell))
+     rt_tau_ir=0d0
+  endif
 
 #ifdef RTZ_ONE_CELL_TEST
   ! manual read and set uold for debugging

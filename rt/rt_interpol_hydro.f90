@@ -103,6 +103,19 @@ SUBROUTINE rt_upl(ind_cell,ncell)
   end do
   ! End loop over variables
 
+  if(rt_ir_apflux) then                       ! tau_c scales with dx
+     getx(1:ncell)=0.0d0
+     do ind_son=1,twotondim
+        iskip_son=ncoarse+(ind_son-1)*ngridmax
+        do i=1,ncell
+           getx(i)=getx(i)+rt_tau_ir(iskip_son+igrid_son(i))
+        end do
+     end do
+     do i=1,ncell
+        rt_tau_ir(ind_cell(i))=2d0*getx(i)/dble(twotondim)
+     end do
+  end if
+
 END SUBROUTINE rt_upl
 !************************************************************************
 SUBROUTINE rt_interpol_hydro(u1,u2,nn)

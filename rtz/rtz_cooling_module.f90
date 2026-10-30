@@ -1472,10 +1472,23 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             endif
 
             do idim=1,ndim
+#ifdef CALIMA
+               ! The flux is damped at the transport rate of the grains, C_abs + (1 - g) C_sca
+               ! (dustRp; the Rosseland mean for the IR group), the rate at which they take its
+               ! momentum (mom_fact below), not at the extinction C_abs + C_sca: the forward-
+               ! scattered fraction g stays in the flux. With dustAbs + dustSc the radiation lost
+               ! g C_sca F/c of momentum that no matter received, and the dust behind strongly
+               ! scattering grains (the 0.1 um bins) was under-pushed.
+               dFp(idim,igroup) = &
+                     (ddt(icell)*dFpdt(idim,igroup,icell)+dFp(idim,igroup)) &
+                     /(1d0+ddt(icell)*(phAbs(igroup)+phSc(igroup) &
+                     +dustRp(igroup)))
+#else
                dFp(idim,igroup) = &
                      (ddt(icell)*dFpdt(idim,igroup,icell)+dFp(idim,igroup)) &
                      /(1d0+ddt(icell)*(phAbs(igroup)+phSc(igroup) &
                      +dustAbs(igroup)+dustSc(igroup)))
+#endif
             end do
             call reduce_flux(dFp(:,igroup),dNp(igroup)*rt_c_cgs(ilevel))
 
@@ -1711,7 +1724,13 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          end if
          dCdT2 = Crate_prime * mu                            ! dC/dT2 = mu * dC/dT
 
+#ifdef CALIMA
+         ! heat capacity of the gas alone: rho includes the grains (above), which hold no
+         ! thermal energy; T2 = P/rho_gas in cooling_fine under CALIMA
+         X_nHkb = 1.d0/(1.5d0 * ((rho - rho_dust_tot)/mH) * kB)
+#else
          X_nHkb = 1.d0/(1.5d0 * (rho/mH) * kB)
+#endif
          rate  = X_nHkb*Crate
          dRate = X_nHkb*dCdT2                         ! dRate/dT2 
                                                       ! 1st order dt constr

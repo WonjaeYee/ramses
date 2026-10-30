@@ -41,7 +41,7 @@ module dust_radpressure_module
 #ifdef CO
     use hydro_parameters, only: iCO
 #endif
-    use dust_commons, only: draine_on, draine_pz, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar, &
+    use dust_commons, only: draine_on, draine_pz, draine_test_coul, dustbins_props, pahbins_props, group_csr_dust, group_csr_pah, ncharge_pah_max, GD_solar, &
                             nshield_band, SHB_LW
     use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
     use dust_optics, only: get_IR_mean_cross_sections
@@ -237,7 +237,7 @@ contains
         mu = 1d0/(X*(0.5d0+0.5d0*xHI_loc+1.5d0*xion_rt(ixHII)) &
                 + 0.25d0*Y*(1d0+xHeII_loc+2d0*xHeIII_loc))
 #endif
-        Tk = P_gas / rho_loc * scale_T2 * mu
+        Tk = P_gas / rho_gas * scale_T2 * mu     ! the gas pressure over the gas density
 
         ! 5. Habing band radiation field G0
 #ifdef RTZ
@@ -447,6 +447,8 @@ contains
               end do
 #endif
            end if
+           ! Test problems: the charge pinned (draine_test_coul), whatever the ionisation state
+           if (draine_test_coul >= 0d0) drag_state(3+npah:2+npah+ndust) = draine_test_coul
         end if
 
     end subroutine compute_gas_dust_radpressure_acc

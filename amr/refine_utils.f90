@@ -879,6 +879,11 @@ subroutine make_grid_fine(ind_grid,ind_cell,ind,ilevel,nn,ibound,boundary_region
                       rtuold(iskip+ind_grid_son(i),ivar) * rt_c(ilevel-1)/rt_c(ilevel)
               end do
            end do
+           if(rt_ir_apflux) then                  ! tau_c scales with dx
+              do i=1,nn
+                 rt_tau_ir(iskip+ind_grid_son(i))=0.5d0*rt_tau_ir(ind_fathers(i,0))
+              end do
+           end if
         enddo
      end if
 #endif

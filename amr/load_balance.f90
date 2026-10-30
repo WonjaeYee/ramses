@@ -10,7 +10,7 @@ subroutine load_balance
   use hydro_commons, ONLY: uold, pstarold, rho_eq, p_eq
   use poisson_commons, ONLY: phi, f
 #ifdef RT
-  use rt_hydro_commons, ONLY: nrtvar, rtuold
+  use rt_hydro_commons, ONLY: nrtvar, rtuold, rt_tau_ir, rt_ir_apflux
 #endif
 #endif
   use bisection
@@ -93,6 +93,7 @@ subroutine load_balance
         do ivar=1,nrtvar
            call make_virtual_fine_dp(rtuold(1,ivar),ilevel)
         end do
+        if(rt_ir_apflux) call make_virtual_fine_dp(rt_tau_ir(1),ilevel)
         if(simple_boundary)then
            call rt_make_boundary_hydro(ilevel)
         end if
@@ -1446,7 +1447,7 @@ subroutine defrag
 #ifdef RT
   if(rt)then
 
-  do ivar=1,nrtvar
+  do ivar=1,nrtvar+merge(1,0,rt_ir_apflux)  ! the extra pass reorders rt_tau_ir
   do ind=1,twotondim
   iskip2=ncoarse+(ind-1)*ngridmax
   ngrid2=0
@@ -1465,7 +1466,11 @@ subroutine defrag
         if(ncache>0)then
            igrid=istart
            do i=1,ncache
-              hilbert_key(ngrid2+i)=real(rtuold(iskip2+igrid,ivar),kind=qdp)
+              if(ivar<=nrtvar) then
+                 hilbert_key(ngrid2+i)=real(rtuold(iskip2+igrid,ivar),kind=qdp)
+              else
+                 hilbert_key(ngrid2+i)=real(rt_tau_ir(iskip2+igrid),kind=qdp)
+              end if
               igrid=next(igrid)
            end do
            ngrid2=ngrid2+ncache
@@ -1473,7 +1478,11 @@ subroutine defrag
      end do
   end do
   do igrid=1,igridmax
-     rtuold(iskip2+igrid,ivar)=real(hilbert_key(igrid),kind=8)
+     if(ivar<=nrtvar) then
+        rtuold(iskip2+igrid,ivar)=real(hilbert_key(igrid),kind=8)
+     else
+        rt_tau_ir(iskip2+igrid)=real(hilbert_key(igrid),kind=8)
+     end if
   end do
   end do
   end do

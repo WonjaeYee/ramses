@@ -189,7 +189,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rt_err_grad_cn, rt_floor_cn, rt_err_grad_xHII, rt_floor_xHII   &
        & ,rt_err_grad_xHI, rt_floor_xHI, rt_refine_aexp, isHe            &
        & ,isH2, rt_isIR, is_kIR_T, rt_T_rad, rt_vc, rt_pressBoost        &
-       & ,rt_kIR_RT15                                                    &
+       & ,rt_kIR_RT15, rt_dust_only, rt_irtrap_mom, rt_ir_apflux         &
        & ,rt_isoPress, rt_isIRtrap, heat_unresolved_HII                  &
        & ,cosmic_rays                                                    &
 #ifdef RTZ
@@ -330,6 +330,10 @@ SUBROUTINE read_rt_params(nml_ok)
   if(rt_isIRtrap) gamma_rad(1) = 1d0 / 3d0 + 1d0
 
   if(rt_Tconst .ge. 0d0) rt_isTconst=.true.
+  if(rt_dust_only .and. .not. rt_isTconst) then
+     if(myid==1) write(*,*) 'rt_dust_only needs rt_Tconst > 0: it holds T fixed instead of solving the thermochemistry'
+     call clean_stop
+  endif
 
   ! Set number of used ionisation fractions, indexes of ionization
   ! fractions, and ionization energies, and check if we have enough

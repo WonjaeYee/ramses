@@ -187,6 +187,17 @@ module rt_parameters
   ! public list instead of redeclaring them, so every existing consumer is unaffected.
   logical::rt_isoPress=.false.         ! Use cE, not F, for rad. pressure
   real(dp)::rt_pressBoost=1d0          ! Boost on RT pressure
+  logical::rt_dust_only=.false.        ! Test switch (CALIMA): the RT source step does only what the
+                                       ! grains do to the radiation -- absorption, flux damping, momentum
+                                       ! to the gas -- with no thermochemistry, T held at rt_Tconst and
+                                       ! the ions frozen. For radiation-dust tests in neutral isothermal
+                                       ! gas (notebooks/radpress_tva). Needs rt_Tconst > 0.
+  logical::rt_irtrap_mom=.true.        ! rt_isIRtrap: the streaming IR flux that the trapped/streaming
+                                       ! repartition removes each step, f_trap Fp, gives its momentum to the gas
+                                       ! (cooling_fine). .false. is RT15's scheme, which deletes that momentum:
+                                       ! an IR-supported tube then gets 0.13-0.41 of tau F/c (radpress_tva test 2).
+  logical::rt_ir_apflux=.false.        ! IR group: scale the photon-number face flux by 1/(1+1.5 tau_c), tau_c the
+                                       ! smaller of the two neighbours' (RT15 eq. 32 per face; Kimura+26 sect. 4.2)
   logical::rt_isIR=.false.             ! Using IR scattering on dust?
   logical::rt_isIRtrap=.false.         ! IR trapping in NENER variable?
   logical::is_kIR_T=.false.            ! k_IR propto T^2?

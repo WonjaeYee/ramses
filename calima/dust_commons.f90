@@ -97,6 +97,20 @@ module dust_commons
                                                  ! 'draine2011_pz' -- the same, with the Coulomb term
                                                  !   averaged over the charge distribution P(Z) of
                                                  !   charging_model instead of taken at |<Z>|.
+    character(len=8) ::tva_scheme='calima'       ! Drift scheme of the pure-drag fluxes (no radiation):
+                                                 ! 'calima' -- cell drift averaged to the face, drift CFL
+                                                 !   at Courant <= 1/2, parabolic bound, positivity cap
+                                                 ! 'l19' -- Lebreuilly et al. (2019) sect. 3.2-3.3 as
+                                                 !   published: minmod drift slopes (eq. 22), compression
+                                                 !   predictor (eq. 21), advective CFL only (eq. 26), no
+                                                 !   positivity cap. For the comparison tests only.
+    logical  ::tva_l19=.false.                   ! tva_scheme == 'l19'
+    real(dp) ::tva_test_dt=0d0                   ! Test problems: largest time step [code units], as L19
+                                                 ! impose in their tests. <=0 disables it.
+    real(dp) ::draine_test_coul=-1d0             ! Test problems: pins the Coulomb coefficient
+                                                 ! (n_H+/n_H) phi^2 ln(Lambda) of the Draine drag of every
+                                                 ! dust bin (Draine 2011 eq. 27: 2.5^2 x 14.8 = 92.5),
+                                                 ! in place of the charge of charging_model. <0 disables it.
     real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.
                                                  ! TVA assumes Stokes << 1, which fails once the drift
                                                  ! approaches c_s (typically in hot/diffuse cells, where

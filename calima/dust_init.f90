@@ -74,8 +74,10 @@ module dust_init
             write(*,*) 'use_w_drift_test     = ',use_w_drift_test
             if (use_w_drift_test) write(*,*) '   w_drift_test      = ',w_drift_test
             write(*,*) 'tva_wmax_cs          = ',tva_wmax_cs,' (cap on |w_drift| / c_s)'
+            write(*,*) 'tva_scheme           = ',trim(tva_scheme)
             write(*,*) 'epstein_coef         = ',epstein_coef,' = sqrt(pi*gamma/8)'
             write(*,*) 'drag_model           = ',trim(drag_model)
+            if (draine_test_coul >= 0d0) write(*,*) 'draine_test_coul     = ',draine_test_coul,' (pinned Coulomb coefficient)'
         end if
         write(*,*) '=============================================================='
     end subroutine print_dust_parameters
@@ -206,8 +208,23 @@ module dust_init
         end select
         ! The Draine drag needs n_H, T and the grain charge, which the TVA gets
         ! from the per-cell radiation-pressure call; the pure-drag path has none.
+        if (draine_test_coul >= 0d0 .and. .not.draine_on) then
+            if(myid==1)write(*,*)'Error: draine_test_coul needs drag_model=draine2011'
+            check_params_dust=.false.
+        end if
         if (draine_on .and. .not.dust_radpressure) then
             if(myid==1)write(*,*)'Error: drag_model=',trim(drag_model),' requires dust_radpressure=.true.'
+            check_params_dust=.false.
+        end if
+        select case (trim(tva_scheme))
+        case ('calima'); tva_l19 = .false.
+        case ('l19');    tva_l19 = .true.
+        case default
+            if(myid==1)write(*,*)'Error: tva_scheme=',trim(tva_scheme),' is neither calima nor l19'
+            check_params_dust=.false.
+        end select
+        if (tva_l19 .and. dust_radpressure) then
+            if(myid==1)write(*,*)'Error: tva_scheme=l19 is implemented for the pure-drag fluxes only'
             check_params_dust=.false.
         end if
         if (dust_tva .and. myid==1) then
@@ -875,6 +892,7 @@ module dust_init
         select case (trim(condinit_kind))
         case ('dustydiffuse'); tva_test_mode = TVA_TEST_DIFFUSE
         case ('dustyshock');   tva_test_mode = TVA_TEST_SHOCK
+        case ('dustywave', 'dustywave_v'); tva_test_mode = TVA_TEST_SHOCK   ! the same t_s = eps rho / K
         case ('dustyblast1d'); tva_test_mode = TVA_TEST_BLAST1D
         case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
         case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
@@ -1425,7 +1443,7 @@ module dust_init
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
                 dust_tva, dust_radpressure, dust_drift_collisions, use_w_drift_test, w_drift_test,drag_coefficient,&
-                tva_wmax_cs,drag_model,&
+                tva_wmax_cs,drag_model,tva_scheme,tva_test_dt,draine_test_coul,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,charging_table_label,ice_model,&
                 dust_ion_recombination,&

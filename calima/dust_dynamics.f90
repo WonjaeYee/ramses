@@ -31,6 +31,30 @@ module dust_dynamics
 
     contains
 
+    pure real(dp) function dust_slope(dlft, drgt)
+        ! The limited slope of rho_d in a cell from its left and right differences, by slope_type in
+        ! the hydro solver's numbering: 1 minmod, 2 monotonized central (MC), 4 superbee (Roe 1986),
+        ! 7 van Leer (1974); 6 the unlimited central slope. Any other value falls back to minmod.
+        ! All four limited slopes are at most 2 min(|dlft|, |drgt|), MC's bound, which is what the
+        ! positivity-limited drift Courant number of get_dust_courant_dt assumes for slope_type >= 2.
+        use hydro_parameters, only: slope_type
+        real(dp), intent(in) :: dlft, drgt
+        real(dp) :: dcen, theta
+        dcen = 0.5_dp * (dlft + drgt)
+        if (slope_type == 6) then
+            dust_slope = dcen
+        else if (dlft * drgt <= 0.0_dp) then
+            dust_slope = 0.0_dp
+        else if (slope_type == 4) then
+            dust_slope = sign(1.0_dp, dcen) * max(min(2.0_dp * abs(dlft), abs(drgt)), min(abs(dlft), 2.0_dp * abs(drgt)))
+        else if (slope_type == 7) then
+            dust_slope = 2.0_dp * dlft * drgt / (dlft + drgt)
+        else
+            theta = merge(2.0_dp, 1.0_dp, slope_type == 2)
+            dust_slope = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+        end if
+    end function dust_slope
+
     subroutine check_tva_rt_params()
         ! The trapped-IR radiation pressure on the dust needs a non-thermal energy variable, the IR
         ! group and the GLF flux (Rosdahl & Teyssier 2015, footnote 3: the trapped/streaming
@@ -682,16 +706,20 @@ module dust_dynamics
         ! consistent with the numerical scheme being stabilised.
         !
         !   (1) Advection (hyperbolic) CFL:
-        !         dt <= courant_factor * dx / |w_drift_face|
+        !         dt <= min(courant_factor, C_pos) * dx / (ndim |w_drift_face|),
+        !       C_pos = 1/2, 0.382, 0.293 for slope_type 0, 1 (minmod), 2 (MC)
         !       where w_drift_face is the TVA drift velocity evaluated using
         !       the true face pressure gradient (P_R - P_L)/dx.
+        !   (2) Diffusion (parabolic) bound:
+        !         dt <= courant_factor * dx^2 / (2 ndim D),
+        !         D = c_s^2 (1 - eps_tot) sum_k eps_k t_s,k
         !
         ! MPI reduces to the global minimum and updates dtnew(ilevel).
         ! ====================================================================
         use amr_commons
         use const
         use hydro_commons
-        use hydro_parameters, only: courant_factor, smallr, smallc, gamma, neul, npah
+        use hydro_parameters, only: courant_factor, smallr, smallc, gamma, neul, npah, slope_type
 #ifdef RT
         use rt_hydro_commons, only: rtuold, nrtvar
         use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
@@ -740,7 +768,7 @@ module dust_dynamics
         integer  :: i3min, i3max, j3min, j3max, k3min, k3max
         integer  :: ilo, ihi, jlo, jhi, klo, khi
 
-        real(dp) :: dx, scale, dt_loc, dt_all, dtcell
+        real(dp) :: dx, scale, dt_loc, dt_all, dtcell, c_drift, D_diff
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
         real(dp), dimension(1:ntva) :: agrain_code, sgrain_code, t_s_face_arr
 
@@ -785,6 +813,19 @@ module dust_dynamics
         scale  = boxlen / dble(icoarse_max - icoarse_min + 1)
         dx     = 0.5d0**ilevel * scale
         dt_loc = dtnew(ilevel)      ! upper bound: current level timestep
+        ! STEP 6 of the flux routines keeps rho_d >= 0 by capping each face's outflow at the
+        ! share rho_d/(2 ndim) of the donor. On a rising slope the MUSCL-Hancock face state is
+        ! up to rho_d (1 + theta (1-C)/2), theta the limiter's largest slope/rho_d (1 minmod,
+        ! 2 MC, superbee and van Leer), so the cap stays idle for C (1 + theta (1-C)/2) <= 1/2: C <= 1/2 at first
+        ! order, (3 - sqrt 5)/2 = 0.382 with minmod, 1 - 1/sqrt 2 = 0.293 with MC. Above that
+        ! it clips the trailing edge of every rising profile and slows the drift.
+        select case (slope_type)
+        case (0);    c_drift = 0.5_dp
+        case (1);    c_drift = 0.5_dp * (3.0_dp - sqrt(5.0_dp))
+        case default; c_drift = 1.0_dp - 1.0_dp / sqrt(2.0_dp)
+        end select
+        c_drift = min(courant_factor, c_drift)
+        if (tva_l19) c_drift = courant_factor   ! L19 eq. 26: the advective CFL alone
 
         ! ----------------------------------------------------------------
         ! PART A: Simple analytic CFL for the drift-test mode
@@ -792,7 +833,7 @@ module dust_dynamics
         if (use_w_drift_test) then
             do i = 1, ndim
                 if (abs(w_drift_test(i)) > 0.0_dp) &
-                    dt_loc = min(dt_loc, courant_factor * dx / abs(w_drift_test(i)))
+                    dt_loc = min(dt_loc, c_drift * dx / (dble(ndim) * abs(w_drift_test(i))))
             end do
         end if
 
@@ -1132,6 +1173,31 @@ module dust_dynamics
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
                             end do
 
+                            ! Pressure-driven drift makes the dust update a diffusion, and the
+                            ! drift CFL above does not bound it: for a resolved profile |w| does
+                            ! not grow as dx shrinks, while explicit diffusion needs dt ~ dx^2.
+                            ! The bins couple through grad P alone (a rank-1 matrix), so the
+                            ! diffusivity is D = c_s^2 (1 - eps_tot) sum_k eps_k t_s,k, i.e.
+                            ! eps (1-eps) t_s c_s^2 for one bin (Price & Laibe 2015). The bound is
+                            ! that of the compact 3-point operator; the cell-averaged drift of the
+                            ! flux routines is a 2 dx operator and stable to 4x this.
+                            D_diff = 0.0_dp
+                            do jbin = 1, ntva
+                                if (idim == 1) then
+                                    eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else if (idim == 2) then
+                                    eps_face_bin = half * (eps_arr(l,i,j-1,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else
+                                    eps_face_bin = half * (eps_arr(l,i,j,k-1,jbin) + eps_arr(l,i,j,k,jbin))
+                                end if
+                                D_diff = D_diff + max(eps_face_bin, 0.0_dp) * t_s_face_arr(jbin)
+                            end do
+                            D_diff = D_diff * c_s_face**2 * (1.0_dp - eps_tot_face)
+                            if (D_diff > 0.0_dp .and. .not. tva_l19) then
+                                dtcell = courant_factor * dx**2 / (2.0_dp * dble(ndim) * D_diff)
+                                dt_loc = min(dt_loc, dtcell)
+                            end if
+
                             ! The dust update sums ndim independent directional flux
                             ! divergences (dust_upwind_correct1/2), so the per-direction
                             ! bound needs a 1/ndim -- cmpdt does the equivalent with
@@ -1148,7 +1214,7 @@ module dust_dynamics
                             end if
                             u_drift = abs(w_g)
                             if (u_drift > 0.0_dp) then
-                                dtcell = courant_factor * dx / (dble(ndim) * u_drift)
+                                dtcell = c_drift * dx / (dble(ndim) * u_drift)
                                 dt_loc = min(dt_loc, dtcell)
                             end if
 
@@ -1161,7 +1227,7 @@ module dust_dynamics
                                 end if
                                 u_drift = abs(w_d_val)
                                 if (u_drift > 0.0_dp) then
-                                    dtcell = courant_factor * dx / (dble(ndim) * u_drift)
+                                    dtcell = c_drift * dx / (dble(ndim) * u_drift)
                                     dt_loc = min(dt_loc, dtcell)
                                 end if
                             end do
@@ -1602,6 +1668,8 @@ module dust_dynamics
         ! Arrays strictly matching Lebreuilly 2019 formulation
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: slope_rhod, rhod_pred
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: slope_wd   ! tva_l19 only
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: slope_wg              ! tva_l19 only
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, wg_pred
         
         real(dp) :: eken, rho_gas_cell, grad_P_cell, erad_cell
@@ -1801,14 +1869,34 @@ module dust_dynamics
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
                             drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
                         end if
-                        dcen = half * (dlft + drgt)
-                        if (slope_type == 6) then
-                            slope_rhod(l,i,j,k,jbin) = dcen
+                        slope_rhod(l,i,j,k,jbin) = dust_slope(dlft, drgt)
+                    end do
+                end do; end do; end do; end do
+            end if
+
+            ! L19 eq. 22: the drifts are reconstructed to the faces from their own slopes
+            slope_wd = 0.0_dp; slope_wg = 0.0_dp
+            if (tva_l19 .and. slope_type > 0 .and. slope_type /= 6) then
+                do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                    if (idim == 1) then
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i-1,j,k); drgt = w_g_cell(l,i+1,j,k) - w_g_cell(l,i,j,k)
+                    else if (idim == 2) then
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i,j-1,k); drgt = w_g_cell(l,i,j+1,k) - w_g_cell(l,i,j,k)
+                    else
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i,j,k-1); drgt = w_g_cell(l,i,j,k+1) - w_g_cell(l,i,j,k)
+                    end if
+                    dcen = half * (dlft + drgt)
+                    if (dlft * drgt > 0.0_dp) slope_wg(l,i,j,k) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+                    do jbin = 1, ntva
+                        if (idim == 1) then
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i-1,j,k,jbin); drgt = w_d_cell(l,i+1,j,k,jbin) - w_d_cell(l,i,j,k,jbin)
+                        else if (idim == 2) then
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j-1,k,jbin); drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
                         else
-                            if (dlft * drgt <= 0.0_dp) then; slope_rhod(l,i,j,k,jbin) = 0.0_dp
-                            else; slope_rhod(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
-                            end if
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j,k-1,jbin); drgt = w_d_cell(l,i,j,k+1,jbin) - w_d_cell(l,i,j,k,jbin)
                         end if
+                        dcen = half * (dlft + drgt)
+                        if (dlft * drgt > 0.0_dp) slope_wd(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
                     end do
                 end do; end do; end do; end do
             end if
@@ -1826,7 +1914,7 @@ module dust_dynamics
                     ! grid's stencil. The two grids sharing a face would then build different
                     ! fluxes for it, which does not conserve the dust mass (see STEP 5).
                     rhod_pred(l,i,j,k,jbin) = rhod_cell(l,i,j,k,jbin) - 0.5_dp * (dt / dx) * &
-                        w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin)
+                        (w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin) + rhod_cell(l,i,j,k,jbin) * slope_wd(l,i,j,k,jbin))
                     rhod_pred(l,i,j,k,jbin) = MAX(rhod_pred(l,i,j,k,jbin), 0.0_dp)
                 end do
             end do; end do; end do; end do
@@ -1842,14 +1930,14 @@ module dust_dynamics
                     ! --- A. GAS ENTHALPY FLUX ---
                     ! Reconstruct L and R states for the gas drift at the face
                     if (idim == 1) then
-                        wg_state_L = w_g_cell(l,i-1,j,k)
-                        wg_state_R = w_g_cell(l,i,j,k)
+                        wg_state_L = w_g_cell(l,i-1,j,k) + half * slope_wg(l,i-1,j,k)
+                        wg_state_R = w_g_cell(l,i,j,k) - half * slope_wg(l,i,j,k)
                     else if (idim == 2) then
-                        wg_state_L = w_g_cell(l,i,j-1,k)
-                        wg_state_R = w_g_cell(l,i,j,k)
+                        wg_state_L = w_g_cell(l,i,j-1,k) + half * slope_wg(l,i,j-1,k)
+                        wg_state_R = w_g_cell(l,i,j,k) - half * slope_wg(l,i,j,k)
                     else
-                        wg_state_L = w_g_cell(l,i,j,k-1)
-                        wg_state_R = w_g_cell(l,i,j,k)
+                        wg_state_L = w_g_cell(l,i,j,k-1) + half * slope_wg(l,i,j,k-1)
+                        wg_state_R = w_g_cell(l,i,j,k) - half * slope_wg(l,i,j,k)
                     end if
                     
                     ! Point 3: Unique Averaged Face Velocity
@@ -1875,18 +1963,18 @@ module dust_dynamics
                         if (idim == 1) then
                             rhod_state_L = rhod_pred(l,i-1,j,k,jbin) + half * slope_rhod(l,i-1,j,k,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
-                            w_state_L    = w_d_cell(l,i-1,j,k,jbin)
-                            w_state_R    = w_d_cell(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i-1,j,k,jbin) + half * slope_wd(l,i-1,j,k,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin) - half * slope_wd(l,i,j,k,jbin)
                         else if (idim == 2) then
                             rhod_state_L = rhod_pred(l,i,j-1,k,jbin) + half * slope_rhod(l,i,j-1,k,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
-                            w_state_L    = w_d_cell(l,i,j-1,k,jbin)
-                            w_state_R    = w_d_cell(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i,j-1,k,jbin) + half * slope_wd(l,i,j-1,k,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin) - half * slope_wd(l,i,j,k,jbin)
                         else
                             rhod_state_L = rhod_pred(l,i,j,k-1,jbin) + half * slope_rhod(l,i,j,k-1,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
-                            w_state_L    = w_d_cell(l,i,j,k-1,jbin)
-                            w_state_R    = w_d_cell(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i,j,k-1,jbin) + half * slope_wd(l,i,j,k-1,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin) - half * slope_wd(l,i,j,k,jbin)
                         end if
 
                         ! Safety clamp
@@ -1923,6 +2011,7 @@ module dust_dynamics
             ! content: the drift CFL bounds |w| dt/dx, not the predicted face states, and a
             ! cell could be emptied below zero (inactive where the CFL keeps it positive)
             ! ====================================================================
+            if (tva_l19) cycle   ! L19 has neither cap
             io_l = 0; jo_l = 0; ko_l = 0
             if (idim == 1) io_l = 1
             if (idim == 2) jo_l = 1
@@ -2748,14 +2837,7 @@ module dust_dynamics
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
                             drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
                         end if
-                        dcen = half * (dlft + drgt)
-                        if (slope_type == 6) then
-                            slope_rhod(l,i,j,k,jbin) = dcen
-                        else
-                            if (dlft * drgt <= 0.0_dp) then; slope_rhod(l,i,j,k,jbin) = 0.0_dp
-                            else; slope_rhod(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
-                            end if
-                        end if
+                        slope_rhod(l,i,j,k,jbin) = dust_slope(dlft, drgt)
                     end do
                 end do; end do; end do; end do
             end if
