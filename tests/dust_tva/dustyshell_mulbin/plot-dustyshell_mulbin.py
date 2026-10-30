@@ -2,28 +2,13 @@ import sys
 import os
 import subprocess
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
-mpl.rcParams.update({
-    'font.family': 'serif',
-    'axes.labelsize': 12,
-    'axes.titlesize': 13,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'xtick.direction': 'in',
-    'ytick.direction': 'in',
-    'xtick.minor.visible': True,
-    'ytick.minor.visible': True,
-    'axes.linewidth': 0.8,
-    'axes.facecolor': 'none',
-    'figure.facecolor': 'none',
-    'legend.frameon': False,
-    'lines.linewidth': 2.5,
-})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save, tex  # noqa: E402
+use_style()
 
 def run_simulation():
     """Run the simulation once using the parameter file."""
@@ -90,7 +75,7 @@ x_eval = np.linspace(0.0, boxlen, 500)
 # =====================================================================
 # 4. PLOT OVERLAY
 # =====================================================================
-fig, ax = plt.subplots(figsize=(6.5, 4.5))
+fig, ax = plt.subplots(figsize=(10, 5))
 
 # Load Snapshot 2 (t = 6.0 Myr)
 try:
@@ -105,12 +90,12 @@ except Exception as e:
     print(f"Error loading snapshots: {e}")
     sys.exit(1)
 
-colors = ['#1565c0', '#b71c1c', '#1b5e20', '#6a1b9a']
+colors = ['C0', 'C1', 'C2', 'C3']
 styles = ['-', '--', ':', '-.']
 
 # Plot initial condition (common to all bins)
 f_dust_init = snap_init["data"]["DustBin_01"][order_init]
-ax.plot(x_num_init, f_dust_init, 'k:', linewidth=2.5, label='Initial Condition (t=0)')
+ax.plot(x_num_init, f_dust_init, 'k:', label='Initial Condition (t=0)')
 
 # Loop over the 4 bins
 for i in range(4):
@@ -124,26 +109,27 @@ for i in range(4):
     eps_analytic = eps_base + delta_eps * np.exp(-((x_eval - x_shifted_wrapped)**2) / (2.0 * sigma_shell**2))
     
     # Plot Analytical curve
-    ax.plot(x_eval, eps_analytic, '-', color=colors[i], linewidth=2.5, alpha=0.4,
-             label=f'Bin {i+1} Analytic (v_d={u_drift_pc_myr[i]:.3f})')
+    ax.plot(x_eval, eps_analytic, '-', color=colors[i], alpha=0.4,
+             label=tex(f'Bin {i+1} Analytic (v_d={u_drift_pc_myr[i]:.3f})'))
              
     # Plot Numerical curve
     bin_name = f"DustBin_0{i+1}"
     f_dust_num = snap["data"][bin_name][order]
-    ax.plot(x_num, f_dust_num, '--', color=colors[i], linewidth=2.5,
-             label=f'Bin {i+1} Numerical ({bin_name})')
+    ax.plot(x_num, f_dust_num, '--', color=colors[i],
+             label=tex(f'Bin {i+1} Numerical ({bin_name})'))
 
 # Grid presentation properties
 ax.set_xlim(0.0, boxlen)
 ax.set_ylim(0.0, delta_eps * 1.2)
-ax.set_xlabel('Position x [pc]', fontsize=12)
-ax.set_ylabel('Dust Mass Fraction $\epsilon_i$', fontsize=12)
-ax.legend(loc='upper right', frameon=False, ncol=2)
-ax.grid(True, linestyle=':', alpha=0.3, color='#aaaaaa')
+ax.set_xlabel('Position x [pc]')
+ax.set_ylabel('Dust Mass Fraction $\epsilon_i$')
+ax.legend(loc='center left', bbox_to_anchor=(1.02, 0.5))
+ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0))
+tidy(ax)
 fig.tight_layout()
 
 # Save figure
-fig.savefig("dustyshell_multbin.png", dpi=300, bbox_inches="tight", format='png', transparent=True)
+save(fig, "dustyshell_multbin")
 print("Saved convergence plot to dustyshell_multbin.png")
 
 # Check level 7 results against the reference solution if it exists

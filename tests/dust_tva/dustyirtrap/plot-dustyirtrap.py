@@ -35,20 +35,14 @@ import subprocess
 import sys
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
 
-mpl.rcParams.update({
-    "font.family": "serif", "axes.labelsize": 10, "axes.titlesize": 10,
-    "xtick.labelsize": 9, "ytick.labelsize": 9,
-    "xtick.direction": "in", "ytick.direction": "in",
-    "xtick.minor.visible": True, "ytick.minor.visible": True,
-    "axes.linewidth": 0.8, "legend.frameon": False, "figure.facecolor": "white",
-})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save  # noqa: E402
+use_style()
 
 EXEC, NML, LOG = "./ramses_irtrap_test1d", "dustyirtrap.nml", "run.log"
 
@@ -184,72 +178,72 @@ e_D_struct = err(D_code, D_from_code_grad)          # concern (2)
 interior = np.isclose(gPt_code, grad_Ptrap, rtol=1e-6)
 n_edge = int((~interior).sum())
 
-fig, axes = plt.subplots(2, 2, figsize=(10.0, 7.4))
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 axA, axB, axC, axD = axes.ravel()
 
 # A: frozen trapped-IR pressure profile, numerical vs analytic
 xf = np.linspace(0, boxlen, 400)
 if snaps:
     s0 = snaps[0]
-    axA.plot(xf, Ptrap_analytic(xf), "-", color="#888888", lw=3, alpha=.6,
+    axA.plot(xf, Ptrap_analytic(xf), "-", color="k", alpha=.4,
              label="analytic ramp")
-    axA.plot(s0["x"], s0["Pt"], "--", color="#1565c0", lw=1.8, label="t=0 (code)")
+    axA.plot(s0["x"], s0["Pt"], "--", color="C0", label="t=0 (code)")
     if len(snaps) > 1:
-        axA.plot(snaps[-1]["x"], snaps[-1]["Pt"], ":", color="#b71c1c", lw=1.8,
+        axA.plot(snaps[-1]["x"], snaps[-1]["Pt"], ":", color="C3",
                  label=f"t={snaps[-1]['t']:.3g} (code, frozen)")
     gi = np.gradient(s0["Pt"], s0["x"])[2:-2].mean()
     axA.set_title(f"A. frozen $P_{{\\rm trap}}(x)$\ninterior $\\nabla P$ = {gi:.4e}"
                   f" vs analytic {grad_Ptrap:.4e}")
     axA.set_xlabel("x [pc]"); axA.set_ylabel(r"$P_{\rm trap}$ [code]")
-    axA.legend(loc="upper right", fontsize=8); axA.grid(True, ls=":", alpha=.3)
+    axA.legend(loc="upper right"); tidy(axA)
 
 # B: initial dust ramp, numerical vs analytic
 if snaps:
-    axB.semilogy(xf, eps_ic(xf), "-", color="#888888", lw=3, alpha=.6, label="analytic IC")
-    axB.semilogy(s0["x"], s0["eps"], "--", color="#1565c0", lw=1.8, label="t=0 (code)")
+    axB.semilogy(xf, eps_ic(xf), "-", color="k", alpha=.4, label="analytic IC")
+    axB.semilogy(s0["x"], s0["eps"], "--", color="C0", label="t=0 (code)")
     axB.set_title("B. initial dust-to-gas ratio (2-decade ramp)")
     axB.set_xlabel("x [pc]"); axB.set_ylabel(r"$\epsilon_1$")
-    axB.legend(loc="lower right", fontsize=8); axB.grid(True, ls=":", alpha=.3)
+    axB.legend(loc="lower right"); tidy(axB)
 
 # C: THE functional check -- D(rho_d) code vs analytic over 2 decades
 rr = np.logspace(np.log10(rho_d.min()*.8), np.log10(rho_d.max()*1.2), 300)
-axC.loglog(rr, D_analytic(rr), "-", color="#888888", lw=3, alpha=.6,
+axC.loglog(rr, D_analytic(rr), "-", color="k", alpha=.4,
            label=r"analytic $-\nabla P_{\rm trap}(1/\rho_d-1/\rho_{\rm mix})$")
-axC.loglog(rr, -grad_Ptrap/rr, ":", color="#b71c1c", lw=1.4,
+axC.loglog(rr, -grad_Ptrap/rr, ":", color="C3",
            label=r"leading term only ($1/\rho_d$)")
 axC.loglog(rho_d[interior], D_code[interior], "o", ms=4.5, mfc="none",
-           mec="#1565c0", mew=1.2, label=f"code, step 1 ({int(interior.sum())} cells)")
+           mec="C0", mew=1.2, label=f"code, step 1 ({int(interior.sum())} cells)")
 if n_edge:
     axC.loglog(rho_d[~interior], np.abs(D_code[~interior]), "x", ms=6,
-               color="#b71c1c", label=f"domain-edge cells ({n_edge}, |D|)")
+               color="C3", label=f"domain-edge cells ({n_edge}, $|D|$)")
 axC.set_title("C. drift driver $D_1$ vs dust density\n"
               "(gap to the dotted line = barycentric $-1/\\rho_{\\rm mix}$ term)")
 axC.set_xlabel(r"$\rho_d$ [code]"); axC.set_ylabel(r"$D_1$ [code]")
-axC.legend(loc="lower left", fontsize=8); axC.grid(True, which="both", ls=":", alpha=.3)
+axC.legend(loc="lower left"); tidy(axC)
 
 # D: relative errors
-axD.semilogy(rho_d, np.maximum(e_D_struct, 1e-17), "o", ms=4, mfc="none", mec="#1565c0",
+axD.semilogy(rho_d, np.maximum(e_D_struct, 1e-17), "o", ms=4, mfc="none", mec="C0",
              label=r"$D_1$ vs code's own $\nabla P_{\rm trap}$")
-axD.semilogy(rho_d, np.maximum(e_ts, 1e-17), "s", ms=4, mfc="none", mec="#1b5e20",
+axD.semilogy(rho_d, np.maximum(e_ts, 1e-17), "s", ms=4, mfc="none", mec="C2",
              label=r"$t_s$")
 axD.semilogy(rho_d[interior], np.maximum(e_D[interior], 1e-17), "^", ms=4,
-             mfc="none", mec="#6a1b9a", label=r"$D_1$ vs fully analytic (interior)")
-axD.axhline(TOL, color="#b71c1c", ls="--", lw=1.2, label=f"tolerance {TOL:g}")
+             mfc="none", mec="C4", label=r"$D_1$ vs fully analytic (interior)")
+axD.axhline(TOL, color="C3", ls="--", lw=1.2, label=f"tolerance {TOL:g}")
 axD.set_xscale("log"); axD.set_ylim(1e-17, 1.0)
 axD.set_title("D. relative error, code vs analytic (step 1)")
 axD.set_xlabel(r"$\rho_d$ [code]"); axD.set_ylabel("relative error")
-axD.legend(loc="upper left", fontsize=7.5); axD.grid(True, which="both", ls=":", alpha=.3)
+axD.legend(loc="lower right"); tidy(axD)
 
-fig.suptitle("DustyIRtrap: trapped-IR radiation pressure on TVA dust drift", fontsize=12)
+fig.suptitle("DustyIRtrap: trapped-IR radiation pressure on TVA dust drift")
 fig.tight_layout(rect=(0, 0, 1, 0.97))
-fig.savefig("dustyirtrap.png", dpi=170, bbox_inches="tight")
+save(fig, "dustyirtrap")
 print("Saved dustyirtrap.png")
 
 if len(snaps) > 1:
-    f2, a2 = plt.subplots(1, 2, figsize=(9.5, 3.6))
-    for sn, col in zip(snaps, ["k", "#1565c0", "#b71c1c"]):
-        a2[0].semilogy(sn["x"], sn["eps"], color=col, lw=1.6, label=f"t={sn['t']:.3g}")
-        a2[1].plot(sn["x"], sn["pg"], color=col, lw=1.6, label=f"t={sn['t']:.3g}")
+    f2, a2 = plt.subplots(1, 2, figsize=(14, 5.5))
+    for sn, col in zip(snaps, ["k", "C0", "C3"]):
+        a2[0].semilogy(sn["x"], sn["eps"], color=col, label=f"t={sn['t']:.3g}")
+        a2[1].plot(sn["x"], sn["pg"], color=col, label=f"t={sn['t']:.3g}")
     a2[0].set_xlabel("x [pc]"); a2[0].set_ylabel(r"$\epsilon_1$")
     a2[0].set_title("dust evolution, frozen $P_{\\rm trap}$: a $2\\Delta x$ mode\n"
                     "eats inward from BOTH boundaries; interior stays smooth")
@@ -258,8 +252,8 @@ if len(snaps) > 1:
     a2[1].set_title("gas pressure (stays positive; note $q_{\\rm neul}$ is\n"
                     "pre-divided by $1-\\epsilon$, so the ramp is by construction)")
     for a in a2:
-        a.legend(fontsize=8); a.grid(True, ls=":", alpha=.3)
-    f2.tight_layout(); f2.savefig("dustyirtrap_runaway.png", dpi=170, bbox_inches="tight")
+        a.legend(); tidy(a)
+    f2.tight_layout(); save(f2, "dustyirtrap_runaway")
     print("Saved dustyirtrap_runaway.png")
 
 # ------------------------------------------------------------------ verdict

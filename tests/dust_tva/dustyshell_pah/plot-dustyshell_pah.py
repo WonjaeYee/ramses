@@ -33,12 +33,13 @@ import subprocess
 import sys
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses  # noqa: E402
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save, tex  # noqa: E402
+use_style()
 
 NML = sys.argv[1] if len(sys.argv) > 1 else "dustyshell_pah.nml"
 TOL = 0.02          # |measured / predicted - 1| per species
@@ -189,20 +190,21 @@ for k, (n, a, _, _, s) in enumerate(species):
     print(f"{n:11s} {a * 1e4:9.5f} {s:15.4e} {ts1[k, ipk] / 3.15576e7:10.4g} {w_rad[k] / 1e5:13.5e} "
           f"{w_pred[k] / 1e5:13.5e} {w_meas[k] / 1e5:14.5e} {r:9.4f}")
 
-fig, ax = plt.subplots(figsize=(7.0, 4.4))
-cols = ["#0f766e", "#5eead4", "#1565c0", "#b71c1c", "#1b5e20", "#6a1b9a"]
-ax.plot(S0["x"], S0[species[0][0]], ":", color="0.4", lw=1.5, label="t = 0 (every species)")
+fig, ax = plt.subplots(figsize=(10, 5))
+cols = ["C0", "C1", "C2", "C3", "C4", "C5"]
+ax.plot(S0["x"], S0[species[0][0]], ":", color="0.4", label="t = 0 (every species)")
 x0 = np.array([centroid(S0, n) for n, *_ in species])
 for n, dp, x_0, col in zip(names, dx_pred, x0, cols):
-    ax.plot(x, S1[n], "-", color=col, lw=1.8, label=f"{n} (code)")
+    ax.plot(x, S1[n], "-", color=col, label=tex(f"{n} (code)"))
     xs = x_0 + dp / scale_l
     ax.axvline(xs, color=col, lw=1.0, ls="--")
 ax.set_xlabel("x [pc]")
 ax.set_ylabel(r"mass fraction $\epsilon_k$")
-ax.set_title(f"DustyShell_PAH, t = {t1:g}: shells (lines) and predicted centroids (dashed)", fontsize=10)
-ax.legend(fontsize=7, frameon=False, ncol=2)
+ax.set_title(tex(f"DustyShell_PAH, t = {t1:g}: shells (lines) and predicted centroids (dashed)"))
+ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5))
+tidy(ax)
 fig.tight_layout()
-fig.savefig("dustyshell_pah.png", dpi=150)
+save(fig, "dustyshell_pah")
 print("saved dustyshell_pah.png")
 print(f"{'PASS' if ok else 'FAIL'}: every species drifts at its TVA prediction to within {TOL:.0%}")
 sys.exit(0 if ok else 1)

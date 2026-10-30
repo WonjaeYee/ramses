@@ -42,10 +42,13 @@ cooling substep at 1.4 s against a 3e6 s hydro step, and the run cannot
 advance.
 
 This namelist is RT15's resolution: 2048^2 over L_box = 1024 h_*, 200 t_*,
-and the light-speed ramp from full c over 3e4 RHD steps. It is a CLUSTER run --
-the ramp alone is ~400x more expensive per unit physical time than running at
-c_red (measured: 2.8 steps/min at 256^2 on 12 cores), which is exactly why RT15
-needed 3e4 steps to cover 'the initial few t_*'. Use the _quick namelist locally.
+and the light-speed ramp from full c over 3e4 RHD steps. It is a CLUSTER run:
+~2.35e6 RHD steps (3e4 in the ramp, ~0.4 t_*, then dt = dt_RT at c_red), at
+0.082 s/step on one 128-core DIaL3 node, i.e. ~54 h. Use the _quick namelist locally.
+
+rt_nsubcycle=1, as RT15 (davis.nml leaves it at the default): the ramp counts
+RHD steps, so subcycling stretches it in time -- with rt_nsubcycle=4000 the
+3e4-step ramp spans >200 t_* instead of RT15's fraction of a t_*.
 
 Diagnostics (plot-levgas.py) reproduce RT15 figs. 9-11 and 13:
   f_E,V = <f_y,rad>/<g rho>                                     (eq. 84, 0.5 at t=0)
@@ -69,6 +72,7 @@ BOUNDARIES -- matched to patch/rt/davis
                state: 1e-13 x 1e3 = 1e-10 = the initial density floor at T_*.
 
 &RUN_PARAMS
+nstepmax=10000000            ! ~2.35e6 steps needed; the default 1e6 would stop at ~86 t_*
 hydro=.true.
 rt=.true.
 poisson=.true.
@@ -164,7 +168,7 @@ rt_vc=.true.
 rt_T_rad=.false.
 rt_pressBoost=1d0
 rt_is_init_xion=.true.
-rt_nsubcycle=4000
+rt_nsubcycle=1               ! RT15: no RT subcycling (see header)
 rt_isIR=.true.
 rt_isIRtrap=.true.
 is_kIR_T=.true.              ! kappa_IR = kappa*(T/10)^2, RT15 eq. 79

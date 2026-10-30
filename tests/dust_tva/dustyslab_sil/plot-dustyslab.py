@@ -29,18 +29,13 @@ import subprocess
 import sys
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
 
-mpl.rcParams.update({
-    "font.family": "serif", "axes.labelsize": 10, "axes.titlesize": 10,
-    "xtick.labelsize": 9, "ytick.labelsize": 9,
-    "xtick.direction": "in", "ytick.direction": "in",
-    "axes.linewidth": 0.8, "legend.frameon": False, "figure.facecolor": "white",
-})
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save, tex  # noqa: E402
+use_style()
 
 _cand = sorted(glob.glob("./ramses_*1d"))
 EXEC = _cand[0] if _cand else "./ramses_slab_test1d"
@@ -360,59 +355,59 @@ left = x < x_lo - 0.1
 E_trap, E_str, f_meas, f_pred, tau_x, T_rad_x, kR_x = trapping_diag(x, H, R)
 TRAP_ACTIVE = bool(f_meas.max() > 1e-4)
 
-fig, axes = plt.subplots(2, 2, figsize=(10.4, 7.6))
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
 axA, axB, axC, axD = axes.ravel()
-cols = ["#1565c0", "#b71c1c", "#1b5e20", "#6a1b9a", "#ef6c00"]
+cols = ["C0", "C3", "C2", "C4", "C1"]
 shade = lambda ax: ax.axvspan(x_lo, x_hi, color="0.88", zorder=0)
 
 # A: UV flux -- free streaming, then exponential attenuation in the slab
 shade(axA)
-axA.semilogy(x, np.maximum(Fuv, 1e-30), "-", color=cols[0], lw=1.8, label="UV (code)")
+axA.semilogy(x, np.maximum(Fuv, 1e-30), "-", color=cols[0], label="UV (code)")
 xa = np.linspace(x_lo, x_hi, 200)
 F0 = np.median(Fuv[(x > x_lo - 0.5) & (x < x_lo)])
-axA.semilogy(xa, F0 * np.exp(-(xa - x_lo) / l_UV_pc), "--", color="k", lw=1.5,
+axA.semilogy(xa, F0 * np.exp(-(xa - x_lo) / l_UV_pc), "--", color="k",
              label=r"$F_0e^{-\tau}$, $\tau_{\rm slab}$=%.2f" % tau_UV_slab)
 axA.set_title("A. UV energy flux (t=%.3g Myr, radiation steady)\nfree streaming outside, attenuated in the slab" % t_ref)
 axA.set_xlabel("x [pc]")
 axA.set_ylabel(r"$F_{\rm UV}$ [erg cm$^{-2}$ s$^{-1}$]")
 axA.set_ylim(max(Fuv.max() * 1e-7, 1e-30), Fuv.max() * 3)
-axA.legend(fontsize=8)
-axA.grid(True, ls=":", alpha=.3)
+axA.legend()
+tidy(axA)
 
 # B: IR reprocessing and trapped energy
 shade(axB)
-axB.semilogy(x, np.maximum(np.abs(Fir), 1e-30), "-", color=cols[1], lw=1.8, label="IR flux |F|")
+axB.semilogy(x, np.maximum(np.abs(Fir), 1e-30), "-", color=cols[1], label="IR flux $|F|$")
 axB.set_xlabel("x [pc]")
 axB.set_ylabel(r"$|F_{\rm IR}|$ [erg cm$^{-2}$ s$^{-1}$]", color=cols[1])
 axB2 = axB.twinx()
-axB2.plot(x, Pt, "-", color=cols[3], lw=1.8, label=r"$P_{\rm trap}$")
+axB2.plot(x, Pt, "-", color=cols[3], label=r"$P_{\rm trap}$")
 axB2.set_ylabel(r"$P_{\rm trap}$ [code]", color=cols[3])
 _ipk = int(np.argmax(E_trap))
 axB.set_title("B. IR reprocessed inside the slab\n"
               r"measured $\tau_{\rm cell,IR}$=%.3f, $f_{\rm trap}$=%.1e $\Rightarrow$ trapping %s"
               % (tau_x[_ipk], f_meas.max(), "ON" if TRAP_ACTIVE else "OFF"))
-axB.grid(True, ls=":", alpha=.3)
+tidy(axB)
 h1, l1 = axB.get_legend_handles_labels()
 h2, l2 = axB2.get_legend_handles_labels()
-axB.legend(h1 + h2, l1 + l2, fontsize=8, loc="upper right")
+axB.legend(h1 + h2, l1 + l2, loc="upper right")
 
 # C: the three dust acceleration channels
 shade(axC)
-axC.semilogy(x, np.maximum(a_uv, 1e-30), "-", color=cols[0], lw=1.8, label="streaming UV")
-axC.semilogy(x, np.maximum(np.abs(a_ir), 1e-30), "-", color=cols[1], lw=1.4, label="streaming IR |a|")
-axC.semilogy(x, np.maximum(np.abs(a_tr), 1e-30), "-", color=cols[3], lw=1.6, label=r"trapped IR |a|")
+axC.semilogy(x, np.maximum(a_uv, 1e-30), "-", color=cols[0], label="streaming UV")
+axC.semilogy(x, np.maximum(np.abs(a_ir), 1e-30), "-", color=cols[1], label="streaming IR $|a|$")
+axC.semilogy(x, np.maximum(np.abs(a_tr), 1e-30), "-", color=cols[3], label=r"trapped IR $|a|$")
 axC.set_title("C. dust acceleration by channel\nUV collapses through the slab")
 axC.set_xlabel("x [pc]")
 axC.set_ylabel(r"$|a_{\rm dust}|$ [cm s$^{-2}$]")
 _amax = max(a_uv.max(), np.abs(a_ir).max(), np.abs(a_tr).max())
 axC.set_ylim(_amax * 1e-9, _amax * 5)
-axC.legend(fontsize=8, loc="lower left")
-axC.grid(True, which="both", ls=":", alpha=.3)
+axC.legend(loc="lower right")
+tidy(axC)
 
 # D: trapped-IR force direction, or dust evolution if there is no trapping
 shade(axD)
 if TRAP_ACTIVE:
-    axD.plot(x, a_tr, "-", color=cols[3], lw=1.8, label=r"$a_{\rm trap}$ (signed)")
+    axD.plot(x, a_tr, "-", color=cols[3], label=r"$a_{\rm trap}$ (signed)")
     axD.axhline(0, color="k", lw=.8)
     _s = np.abs(a_tr).max()
     axD.set_yscale("symlog", linthresh=max(_s * 1e-7, 1e-30))
@@ -421,18 +416,18 @@ if TRAP_ACTIVE:
                   r"($-x$ at the illuminated face, $+x$ at the far face; symlog)")
 else:
     for (tt, xx, HH, _), c in zip(snaps, cols):
-        axD.semilogy(xx, np.asarray(HH["DustBin_01"]), color=c, lw=1.5, label="t=%.3g" % tt)
+        axD.semilogy(xx, np.asarray(HH["DustBin_01"]), color=c, label="t=%.3g" % tt)
     axD.set_ylabel(r"$\epsilon_1$")
-    axD.set_title("D. dust evolution -- trapped IR negligible here\n"
-                  "(f_trap = %.1e; illuminated face pushed towards +x)" % f_meas.max())
+    axD.set_title(tex("D. dust evolution -- trapped IR negligible here\n"
+                      "(f_trap = %.1e; illuminated face pushed towards +x)" % f_meas.max()))
 axD.set_xlabel("x [pc]")
-axD.legend(fontsize=8)
-axD.grid(True, ls=":", alpha=.3)
+axD.legend()
+tidy(axD)
 
 fig.suptitle("DustySlab (%s): UV streaming, attenuation, IR reprocessing%s"
-             % (TAG, " and trapped-IR pressure" if TRAP_ACTIVE else ""), fontsize=12)
+             % (TAG, " and trapped-IR pressure" if TRAP_ACTIVE else ""))
 fig.tight_layout(rect=(0, 0, 1, 0.96))
-fig.savefig("dustyslab_%s.png" % TAG, dpi=170, bbox_inches="tight")
+save(fig, "dustyslab_%s" % TAG)
 print("Saved dustyslab_%s.png" % TAG)
 
 # ------------------------------------------------------------------ checks

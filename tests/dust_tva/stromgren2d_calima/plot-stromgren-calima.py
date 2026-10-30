@@ -14,13 +14,14 @@ Writes: stromgren2d_maps_rt.png, stromgren2d_maps_calima.png,
 """
 import os, re, sys, glob
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, TwoSlopeNorm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save, tex  # noqa: E402
+use_style()
 
 RT_DIR     = os.path.abspath("../stromgren2d_plainrt")
 CAL_DIR    = os.path.abspath(".")
@@ -100,7 +101,7 @@ print("snapshot times [Myr]:", ", ".join("%.2f" % t for t in times))
 # ------------------------------------------------------------------ maps
 def maps(runs, cols, fname, title):
     nr, nc = len(runs), len(cols)
-    fig, ax = plt.subplots(nr, nc, figsize=(3.05 * nc, 2.95 * nr),
+    fig, ax = plt.subplots(nr, nc, figsize=(4.3 * nc, 4.1 * nr),
                            squeeze=False, constrained_layout=True)
     for i, R in enumerate(runs):
         for j, (key, lab, cmap, norm, lim) in enumerate(cols):
@@ -125,12 +126,12 @@ def maps(runs, cols, fname, title):
                 # value-proportional bar, so label the narrow enhancement side
                 cb.set_ticks([lim[0], 0.5 * (lim[0] + lim[1]), lim[1],
                               lim[1] + 0.5 * (lim[2] - lim[1]), lim[2]])
-                cb.ax.tick_params(labelsize=8)
             a.set_xticks([]); a.set_yticks([])
-            if i == 0: a.set_title(lab, fontsize=10)
-            if j == 0: a.set_ylabel("t = %.2f Myr" % R["t"], fontsize=10)
-    fig.suptitle(title, fontsize=12)
-    fig.savefig(fname, dpi=115)
+            tidy(a)
+            if i == 0: a.set_title(lab)
+            if j == 0: a.set_ylabel("t = %.2f Myr" % R["t"])
+    fig.suptitle(tex(title))
+    save(fig, fname)
     plt.close(fig)
     print("  saved", fname)
 
@@ -149,16 +150,17 @@ maps(CAL, [("nH",   r"$n_{\rm H}$ [cm$^{-3}$]", "viridis", "log", nH_lim),
      "2D Stromgren -- RT + CALIMA, 1% dust, drift + radiation pressure")
 
 # difference map: where does the dust actually change the ionisation
-fig, ax = plt.subplots(1, len(SNAPS), figsize=(3.4 * len(SNAPS), 3.2), constrained_layout=True)
+fig, ax = plt.subplots(1, len(SNAPS), figsize=(4.8 * len(SNAPS), 4.5), constrained_layout=True)
 for j, (A, B) in enumerate(zip(RT, CAL)):
     dimg = togrid(B["xHII"] - A["xHII"], A["x"], A["y"])
     m = np.nanmax(np.abs(dimg)) or 1e-12
     im = ax[j].imshow(dimg, cmap="RdBu_r", vmin=-m, vmax=m, origin="lower", extent=[0, 1, 0, 1])
     fig.colorbar(im, ax=ax[j], fraction=0.046, pad=0.02)
-    ax[j].set_title("t = %.2f Myr\nmax|$\\Delta$| = %.1e" % (A["t"], m), fontsize=9)
+    ax[j].set_title("t = %.2f Myr\nmax$|\\Delta|$ = %.1e" % (A["t"], m))
     ax[j].set_xticks([]); ax[j].set_yticks([])
-fig.suptitle(r"$x_{\rm HII}$(RT+CALIMA) $-$ $x_{\rm HII}$(plain RT): the dust effect", fontsize=12)
-fig.savefig("stromgren2d_maps_diff.png", dpi=115); plt.close(fig)
+    tidy(ax[j])
+fig.suptitle(r"$x_{\rm HII}$(RT+CALIMA) $-$ $x_{\rm HII}$(plain RT): the dust effect")
+save(fig, "stromgren2d_maps_diff"); plt.close(fig)
 print("  saved stromgren2d_maps_diff.png")
 
 # ------------------------------------------------------------------ profiles
@@ -171,7 +173,7 @@ panels = [("xHII", r"$x_{\rm HII}$",              False),
           ("epszoom", r"$\epsilon/\epsilon_0$  -- shell zoom",  False),
           ("DxHII", r"$\Delta x_{\rm HII}$  (CALIMA $-$ RT)", False),
           ("DT",    r"$\Delta T$ [K]  (CALIMA $-$ RT)",        False)]
-fig, ax = plt.subplots(3, 3, figsize=(14.4, 11.0), constrained_layout=True)
+fig, ax = plt.subplots(3, 3, figsize=(18, 14), constrained_layout=True)
 cmap = plt.get_cmap("viridis")
 cols = [cmap(v) for v in np.linspace(0.05, 0.85, len(SNAPS))]
 for k, (key, lab, logy) in enumerate(panels):
@@ -180,43 +182,44 @@ for k, (key, lab, logy) in enumerate(panels):
         if key.startswith("D"):                      # residual panels
             base = key[1:]
             r, pa = radial(A[base], A["r"]); _, pb = radial(B[base], B["r"])
-            a.plot(r, pb - pa, "-", color=cols[i], lw=1.5, label="t = %.2f Myr" % B["t"])
+            a.plot(r, pb - pa, "-", color=cols[i], label="t = %.2f Myr" % B["t"])
             a.axhline(0.0, color="0.6", lw=0.8)
             continue
         if key.startswith("eps"):
             r, p = radial(B["eps"], B["r"]); p = p / 1e-2
         else:
-            r, pa = radial(A[key], A["r"]); a.plot(r, pa, "--", color=cols[i], lw=1.3)
+            r, pa = radial(A[key], A["r"]); a.plot(r, pa, "--", color=cols[i])
             r, p  = radial(B[key], B["r"])
-        a.plot(r, p, "-", color=cols[i], lw=1.7, label="t = %.2f Myr" % B["t"])
+        a.plot(r, p, "-", color=cols[i], label="t = %.2f Myr" % B["t"])
         if key == "epszoom":
             k = np.nanargmax(np.where(r < 0.95, p, np.nan))
             a.plot(r[k], p[k], "o", color=cols[i], ms=4)
     a.set_xlabel("r from source [box units]"); a.set_ylabel(lab)
     if logy: a.set_yscale("log")
     a.set_xlim(0, 1.0)
+    tidy(a)
     if k == 0:
-        a.legend(fontsize=8, loc="lower left")
+        a.legend(loc="lower left")
         a.text(0.97, 0.95, "solid: RT+CALIMA\ndashed: plain RT", transform=a.transAxes,
-               ha="right", va="top", fontsize=8)
+               ha="right", va="top")
     if key == "xHI":
         a.set_ylim(1e-12, 2.0)
     if key == "eps":
         a.set_ylim(2e-3, 1.5)
         a.axhline(1.0, color="0.5", lw=0.9, ls=":")
-        a.text(0.03, 1.05, "initial 1% dust", fontsize=8, color="0.4")
+        a.text(0.03, 1.05, tex("initial 1% dust"), color="0.4")
     if key == "epszoom":
         # the pile-up is only a few per cent, so it needs its own scale
         a.set_ylim(0.975, 1.12)
         a.axhline(1.0, color="0.5", lw=0.9, ls=":")
-        a.text(0.03, 1.103, "dots mark the shell peak", fontsize=8, color="0.4")
+        a.text(0.03, 1.103, "dots mark the shell peak", color="0.4")
     if key == "DxHII":
         a.text(0.5, 0.95, "plain-RT dashed curves in the other panels lie\n"
                           "under the solid ones; this is the actual difference",
-               transform=a.transAxes, ha="center", va="top", fontsize=7.5, color="0.35")
-fig.suptitle("2D Stromgren, radial profiles from the source at (0,0) -- "
-             "solid: RT+CALIMA (1% dust), dashed: plain RT", fontsize=12)
-fig.savefig("stromgren2d_profiles.png", dpi=115); plt.close(fig)
+               transform=a.transAxes, ha="center", va="top", color="0.35")
+fig.suptitle(tex("2D Stromgren, radial profiles from the source at (0,0) -- "
+                 "solid: RT+CALIMA (1% dust), dashed: plain RT"))
+save(fig, "stromgren2d_profiles"); plt.close(fig)
 print("  saved stromgren2d_profiles.png")
 
 # ------------------------------------------------------------------ numbers

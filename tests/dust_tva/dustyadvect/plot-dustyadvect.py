@@ -2,28 +2,13 @@ import sys
 import os
 import subprocess
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
-mpl.rcParams.update({
-    'font.family': 'serif',
-    'axes.labelsize': 12,
-    'axes.titlesize': 13,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'xtick.direction': 'in',
-    'ytick.direction': 'in',
-    'xtick.minor.visible': True,
-    'ytick.minor.visible': True,
-    'axes.linewidth': 0.8,
-    'axes.facecolor': 'none',
-    'figure.facecolor': 'none',
-    'legend.frameon': False,
-    'lines.linewidth': 2.5,
-})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save  # noqa: E402
+use_style()
 
 # ====================================================================
 # TOP-HAT ADVECTION CONVERGENCE TEST
@@ -107,18 +92,12 @@ rho_pad   = np.tile(rho_ref, 3)
 rho_analytic = np.interp(x_shifted, x_pad, rho_pad)
 
 # ---- plot ---------------------------------------------------------------
-colors = {
-    7:  "#b71c1c",   # Dark Red
-    9:  "#1565c0",   # Dark Blue
-    11: "#1b5e20",   # Dark Green
-    13: "#6a1b9a",   # Dark Purple
-}
+colors = {7: "C0", 9: "C1", 11: "C2", 13: "C3"}
 linestyles = {7: "-", 9: "--", 11: ":", 13: "-."}
-linewidths = {7: 2.0, 9: 1.8, 11: 1.6, 13: 1.4}
 
-fig, ax = plt.subplots(figsize=(5.5, 4))
+fig, ax = plt.subplots(figsize=(7, 5))
 
-ax.plot(x_fine, rho_analytic, "-", color="#212121", linewidth=2.0, label="Analytic", zorder=5)
+ax.plot(x_fine, rho_analytic, "-", color="k", label="Analytic", zorder=5)
 
 for lvl in levels:
     ax.plot(
@@ -126,20 +105,18 @@ for lvl in levels:
         results[lvl]["rho_dust_final"],
         label=f"Level {lvl}  ({2**lvl} cells)",
         color=colors[lvl],
-        linewidth=linewidths[lvl],
         linestyle=linestyles[lvl],
         drawstyle="steps-mid",
     )
 
 ax.set_xlabel(r"$x$")
 ax.set_ylabel(r"Dust density $\rho_\mathrm{d}$")
-ax.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
-ax.legend(loc="upper right")
+ax.legend(loc="center")
 ax.set_xlim(0.0, L)
+tidy(ax)
 
 fig.tight_layout()
-fig.savefig("dustyadvect.pdf", bbox_inches="tight", transparent=True)
-fig.savefig("dustyadvect.png", dpi=300, bbox_inches="tight", transparent=True)
+save(fig, "dustyadvect")
 print("--- Top-hat convergence plot saved as dustyadvect.pdf / dustyadvect.png ---")
 
 # Reference solution check (level 7)

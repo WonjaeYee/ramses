@@ -26,18 +26,13 @@ import subprocess
 import sys
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
 
-mpl.rcParams.update({
-    "font.family": "serif", "axes.labelsize": 10, "axes.titlesize": 10,
-    "xtick.labelsize": 9, "ytick.labelsize": 9,
-    "xtick.direction": "in", "ytick.direction": "in",
-    "axes.linewidth": 0.8, "legend.frameon": False, "figure.facecolor": "white",
-})
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save  # noqa: E402
+use_style()
 
 _cand = sorted(glob.glob("./ramses_*1d"))
 EXEC = _cand[0] if _cand else "./ramses_lev_test1d"
@@ -361,7 +356,7 @@ if TRAPPING:
     print()
 
 # ------------------------------------------------------------------ figure
-fig, ax = plt.subplots(2, 2, figsize=(9.6, 6.8))
+fig, ax = plt.subplots(2, 2, figsize=(14, 10))
 (A, B), (C, Dp) = ax
 
 # Projections at several times: the layer profile, and the local Eddington
@@ -370,31 +365,31 @@ NT = min(5, len(snaps))
 sel_t = np.linspace(0, len(snaps) - 1, NT).astype(int)
 cmap = plt.cm.viridis(np.linspace(0.05, 0.9, NT))
 for cc, j in zip(cmap, sel_t):
-    A.plot(snaps[j][1], np.asarray(snaps[j][2]["density"]), "-", color=cc, lw=1.1,
+    A.plot(snaps[j][1], np.asarray(snaps[j][2]["density"]), "-", color=cc,
            label=f"t = {t[j]:.2f}")
 A.set_yscale("log")
 A.set_xlabel("x [pc]")
 A.set_ylabel(r"$\rho$ [code]")
 A.set_title(f"A. the dusty layer at {NT} times")
-A.legend(fontsize=7)
+A.legend()
 
 B.plot(t, vbar, "ko", ms=4, label=r"measured $\langle v\rangle$")
 tf = np.linspace(t[mask].min(), t[-1], 50)
-B.plot(tf, slope * tf + icept, "C0-", lw=1.2,
+B.plot(tf, slope * tf + icept, "C0-",
        label=rf"fit: $d\langle v\rangle/dt$ = {slope:+.4f}")
 B.plot(tf, (a_pred_code - g_code) * (tf - t[mask].min()) + (slope * t[mask].min() + icept),
-       "C3--", lw=1.4, label=rf"$g(f_E-1)$ = {a_pred_code-g_code:+.4f}")
+       "C3--", label=rf"$g(f_E-1)$ = {a_pred_code-g_code:+.4f}")
 B.plot(tf, -g_code * (tf - t[mask].min()) + (slope * t[mask].min() + icept),
-       "0.6", ls=":", lw=1.2, label=rf"free fall ($-g$)")
+       "0.6", ls=":", label=rf"free fall ($-g$)")
 B.axvspan(t[0], max(t_fill, t[1]), color="0.9", zorder=0)
 B.set_xlabel("t [Myr]")
 B.set_ylabel(r"$\langle v\rangle$ [code]")
 B.set_title(f"B. momentum budget   ($f_E$ = {fE_meas:.4f} vs {fE_pred:.4f})")
-B.legend(fontsize=7.5, loc="best")
+B.legend(loc="best")
 
 for cc, j in zip(cmap, sel_t):
     Dj = derived(*snaps[j][1:])
-    C.plot(snaps[j][1], Dj["a_rad"] / g_cgs, "-", color=cc, lw=1.1)
+    C.plot(snaps[j][1], Dj["a_rad"] / g_cgs, "-", color=cc)
 C.axhline(1.0, color="0.6", ls=":", lw=1.0)
 C.axhline(fE_pred, color="C3", ls="--", lw=1.2,
           label=rf"mass-weighted = {fE_pred:.3f}")
@@ -402,22 +397,22 @@ C.set_yscale("log")
 C.set_xlabel("x [pc]")
 C.set_ylabel(r"$f_E$ = $a_{\rm rad}/g$")
 C.set_title(rf"C. local Eddington ratio, same {NT} times")
-C.legend(fontsize=8)
+C.legend()
 
 if TRAPPING:
     sel = Dl["P_trap"] > 0
-    Dp.plot(snaps[-1][1], Dl["P_trap"], "C1-", lw=1.2, label=r"$P_{\rm trap}$ [code]")
-    Dp.plot(snaps[-1][1], np.asarray(snaps[-1][2]["pressure"]), "0.6", lw=1.0,
+    Dp.plot(snaps[-1][1], Dl["P_trap"], "C1-", label=r"$P_{\rm trap}$ [code]")
+    Dp.plot(snaps[-1][1], np.asarray(snaps[-1][2]["pressure"]), "0.6",
             label=r"$P_{\rm gas}$ [code]")
     Dp2 = Dp.twinx()
-    Dp2.plot(snaps[-1][1], Dl["f_trap"], "C2--", lw=1.2, label=r"$f_{\rm trap}$")
+    Dp2.plot(snaps[-1][1], Dl["f_trap"], "C2--", label=r"$f_{\rm trap}$")
     Dp2.set_ylabel(r"$f_{\rm trap}$", color="C2")
     Dp2.tick_params(axis="y", colors="C2")
     Dp.set_yscale("log")
     Dp.set_xlabel("x [pc]")
     Dp.set_ylabel("pressure [code]")
     Dp.set_title(r"D. trapped IR: $P_{\rm trap}$ vs $P_{\rm gas}$ and $f_{\rm trap}$")
-    Dp.legend(fontsize=8, loc="upper left")
+    Dp.legend(loc="upper left")
 else:
     # RT15 eqs. 85-86 for reference, so the isolated-layer test can be put on
     # the same axes as tests/dust_tva/dustylevatm.
@@ -429,21 +424,23 @@ else:
         Fm = np.mean(np.asarray(snaps[j][3]["photon_flux_01_x"]))
         tauF.append(np.sum(Dj["chi_R"] * np.asarray(snaps[j][3]["photon_flux_01_x"]))
                     * dl / (len(Dj["chi_R"]) * Fm) if Fm != 0 else np.nan)
-    Dp.plot(t, tauV, "C0-o", ms=3, lw=1.1, label=r"$\tau_V$ (RT15 eq. 85)")
+    Dp.plot(t, tauV, "C0-o", ms=3, label=r"$\tau_V$ (RT15 eq. 85)")
     Dp2 = Dp.twinx()
-    Dp2.plot(t, np.array(tauF) / np.array(tauV), "C1--s", ms=3, lw=1.1)
+    Dp2.plot(t, np.array(tauF) / np.array(tauV), "C1--s", ms=3)
     Dp2.set_ylabel(r"$\tau_F/\tau_V$", color="C1")
     Dp2.tick_params(axis="y", colors="C1")
     Dp.set_yscale("log")
     Dp.set_xlabel("t [Myr]")
     Dp.set_ylabel(r"$\tau_V$")
     Dp.set_title(r"D. RT15 optical-depth diagnostics")
-    Dp.legend(fontsize=7.5, loc="best")
+    Dp.legend(loc="best")
 
-fig.suptitle(f"DustyLev ({TAG}): IR radiation force vs gravity", fontsize=11)
+fig.suptitle(f"DustyLev ({TAG}): IR radiation force vs gravity")
+for _ax in (A, B, C, Dp):
+    tidy(_ax)
 fig.tight_layout(rect=[0, 0, 1, 0.965])
 OUT = f"dustylev_{TAG}.png"
-fig.savefig(OUT, dpi=150)
+save(fig, OUT)
 print(f"Saved {OUT}")
 
 # ------------------------------------------------------------------ report

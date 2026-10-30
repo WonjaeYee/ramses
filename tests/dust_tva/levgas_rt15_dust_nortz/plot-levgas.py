@@ -34,18 +34,13 @@ import subprocess
 import sys
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
 
-mpl.rcParams.update({
-    "font.family": "serif", "axes.labelsize": 10, "axes.titlesize": 10,
-    "xtick.labelsize": 9, "ytick.labelsize": 9,
-    "xtick.direction": "in", "ytick.direction": "in",
-    "axes.linewidth": 0.8, "legend.frameon": False, "figure.facecolor": "white",
-})
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save, tex  # noqa: E402
+use_style()
 
 _cand = sorted(glob.glob("./ramses_*[0-9]d"))
 EXEC = _cand[0] if _cand else "./ramses_levgas2d"
@@ -402,8 +397,8 @@ NPROJ = min(4, len(snaps))
 pick = [snaps[j] for j in np.linspace(0, len(snaps) - 1, NPROJ).astype(int)]
 
 if NDIM == 1:
-    fig = plt.figure(figsize=(11.0, 7.6))
-    gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.30)
+    fig = plt.figure(figsize=(16, 11))
+    gs = fig.add_gridspec(3, 3, hspace=0.42, wspace=0.35, top=0.92)
     axp = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1]), fig.add_subplot(gs[0, 2])]
     for ax, key, lab, logy in zip(
             axp, ["rho", "T_rad", "P_trap"],
@@ -414,25 +409,26 @@ if NDIM == 1:
                 yv = yv / scale_d
             if key == "T_rad":
                 yv = yv / T_STAR
-            ax.plot(G["y"][:, 0], np.maximum(yv, 1e-30), lw=1.1,
+            ax.plot(G["y"][:, 0], np.maximum(yv, 1e-30),
                     label=rf"$t={G['t']:.2f}\,t_*$")
         if key == "P_trap":
-            ax.plot(pick[-1]["y"][:, 0], pick[-1]["P_gas"][:, 0], "0.6", lw=1.0,
+            ax.plot(pick[-1]["y"][:, 0], pick[-1]["P_gas"][:, 0], "0.6",
                     label=r"$P_{\rm gas}$")
         if logy:
             ax.set_yscale("log")
         ax.set_xlabel(r"$h/h_*$")
         ax.set_ylabel(lab)
         ax.set_title("profiles at 4 times" if key == "rho" else "")
-    axp[0].legend(fontsize=7)
-    axp[2].legend(fontsize=7)
+        tidy(ax)
+    axp[0].legend()
+    axp[2].legend()
     ax1 = fig.add_subplot(gs[1, :])
     ax2 = fig.add_subplot(gs[2, 0])
     ax3 = fig.add_subplot(gs[2, 1])
     ax4 = fig.add_subplot(gs[2, 2])
 else:
-    fig = plt.figure(figsize=(11.4, 12.0))
-    gs = fig.add_gridspec(5, NPROJ, hspace=0.50, wspace=0.28,
+    fig = plt.figure(figsize=(16, 17))
+    gs = fig.add_gridspec(5, NPROJ, hspace=0.50, wspace=0.35, top=0.95,
                           height_ratios=[1.4, 1.4, 1.4, 1.0, 1.0])
     for j, G in enumerate(pick):
         for row, key, cmap, lab in (
@@ -454,72 +450,74 @@ else:
                           extent=[0, boxlen, 0, boxlen],
                           vmin=(-4 if row == 0 else (1.0 if row == 1 else -0.4)),
                           vmax=(0.2 if row == 0 else (None if row == 1 else 0.4)))
-            ax.set_title(rf"$t = {G['t']:.1f}\,t_*$", fontsize=9)
+            ax.set_title(rf"$t = {G['t']:.1f}\,t_*$")
+            tidy(ax)
             if j == 0:
                 ax.set_ylabel(r"$y/h_*$")
             ax.set_xlabel(r"$x/h_*$")
             if j == NPROJ - 1:
                 cb = fig.colorbar(h, ax=ax, fraction=0.05, pad=0.02)
-                cb.set_label(lab, fontsize=8)
+                cb.set_label(lab)
     ax1 = fig.add_subplot(gs[3, :])
     ax2 = fig.add_subplot(gs[4, 0])
     ax3 = fig.add_subplot(gs[4, 1])
     ax4 = fig.add_subplot(gs[4, 2])
 
 # RT15 fig. 11 top panel + fig. 13 decomposition
-ax1.plot(T, get("fE_code"), "C0-o", ms=3, lw=1.2, label=r"$f_{E,V}$ as coded")
-ax1.plot(T, get("fE_RT15"), "C3-s", ms=3, lw=1.2, label=r"$f_{E,V}$ with RT15 eq. 46")
-ax1.plot(T, get("fE_stream"), "C2--", lw=1.0, label=r"streaming $\kappa_R\rho F_y/c$")
-ax1.plot(T, get("fE_trap_RT15"), "C1:", lw=1.2, label=r"trapped $-\frac{1}{3}\nabla E_t$ (RT15)")
+ax1.plot(T, get("fE_code"), "C0-o", ms=3, label=r"$f_{E,V}$ as coded")
+ax1.plot(T, get("fE_RT15"), "C3-s", ms=3, label=r"$f_{E,V}$ with RT15 eq. 46")
+ax1.plot(T, get("fE_stream"), "C2--", label=r"streaming $\kappa_R\rho F_y/c$")
+ax1.plot(T, get("fE_trap_RT15"), "C1:", label=r"trapped $-\frac{1}{3}\nabla E_t$ (RT15)")
 ax1.axhline(RT15["fE0"], color="0.6", ls=":", lw=1.0)
-ax1.text(T[-1], RT15["fE0"], r"  RT15 $f_{E,*}=0.5$", va="center", fontsize=7, color="0.4")
+ax1.text(T[-1], RT15["fE0"], r"RT15 $f_{E,*}=0.5$", va="bottom", ha="right", color="0.4")
 if STATIC:
     ax1.axhline(RT15["fE_static"], color="k", ls="-.", lw=1.0)
-    ax1.text(T[-1], RT15["fE_static"], r"  RT15 static $=10.7$", va="center",
-             fontsize=7, color="k")
+    ax1.text(T[-1], RT15["fE_static"], r"RT15 static $=10.7$", va="bottom", ha="right",
+             color="k")
 ax1.set_yscale("log")
 _fin = np.concatenate([get("fE_code"), get("fE_RT15"), get("fE_stream")])
 _fin = _fin[np.isfinite(_fin) & (_fin > 0)]
 if _fin.size:
-    ax1.set_ylim(max(1e-3, 0.3 * _fin.min()), 3.0 * _fin.max())
+    ax1.set_ylim(max(1e-3, 0.3 * _fin.min()), 10.0 * _fin.max())
 ax1.set_xlabel(r"$t/t_*$")
 ax1.set_ylabel(r"$f_{E,V}$")
 ax1.set_title(r"RT15 eq. 84 / fig. 11 top + fig. 13 decomposition")
-ax1.legend(fontsize=7.5, ncol=2)
+ax1.legend(ncol=4, loc="upper center")
 
-ax2.plot(T, get("tau_V"), "C0-o", ms=3, lw=1.2)
+ax2.plot(T, get("tau_V"), "C0-o", ms=3)
 ax2.axhline(RT15["tauV0"], color="0.6", ls=":", lw=1.0)
 if STATIC:
     ax2.axhline(RT15["tauV_static"], color="k", ls="-.", lw=1.0,
                 label=r"RT15 static 32.5")
-    ax2.legend(fontsize=7)
+    ax2.legend()
 ax2.set_yscale("log")
 ax2.set_xlabel(r"$t/t_*$")
 ax2.set_ylabel(r"$\tau_V$")
 ax2.set_title(r"RT15 eq. 85 ($\tau_*=3$)")
 
-ax3.plot(T, get("ratio"), "C0-o", ms=3, lw=1.2)
+ax3.plot(T, get("ratio"), "C0-o", ms=3)
 ax3.axhline(1.0, color="0.6", ls=":", lw=1.0)
 ax3.set_ylim(0.0, 1.25)
 ax3.set_xlabel(r"$t/t_*$")
 ax3.set_ylabel(r"$\tau_F/\tau_V$")
 ax3.set_title(r"RT15 eq. 86  ($\tau_F/\tau_V$)")
 
-ax4.plot(T, get("tau_c_max"), "C3-", lw=1.2, label=r"$\tau_{c,\max}$")
-ax4.plot(T, get("tau_c_M"), "C3--", lw=1.2, label=r"$\langle\tau_{c}\rangle_M$")
+ax4.plot(T, get("tau_c_max"), "C3-", label=r"$\tau_{c,\max}$")
+ax4.plot(T, get("tau_c_M"), "C3--", label=r"$\langle\tau_{c}\rangle_M$")
 ax4.axhline(1.0, color="0.6", ls=":", lw=1.0)
 ax4.set_yscale("log")
 ax4.set_xlabel(r"$t/t_*$")
 ax4.set_ylabel(r"$\tau_c$")
 ax4.set_title("RT15 fig. 9")
-ax4.legend(fontsize=7.5)
+ax4.legend()
 
-fig.suptitle(f"LevGas ({TAG}): {'CALIMA + dust dynamics' if not KT13 else 'plain RAMSES-RT'}"
-             f" vs Rosdahl & Teyssier 2015 sec. 3.7",
-             fontsize=11)
+fig.suptitle(tex(f"LevGas ({TAG}): {'CALIMA + dust dynamics' if not KT13 else 'plain RAMSES-RT'}"
+                 f" vs Rosdahl & Teyssier 2015 sec. 3.7"))
+for ax in (ax1, ax2, ax3, ax4):
+    tidy(ax)
 fig.tight_layout(rect=[0, 0, 1, 0.965])
 OUT = f"levgas_{TAG}.png"
-fig.savefig(OUT, dpi=140)
+save(fig, OUT)
 print(f"Saved {OUT}")
 
 # ---------------------------------------------------------------- checks

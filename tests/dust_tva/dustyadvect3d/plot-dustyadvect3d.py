@@ -33,28 +33,13 @@ import re
 import sys
 
 import numpy as np
-import matplotlib as mpl
-mpl.use("Agg")
 import matplotlib.pyplot as plt
-mpl.rcParams.update({
-    'font.family': 'serif',
-    'axes.labelsize': 12,
-    'axes.titlesize': 13,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'xtick.direction': 'in',
-    'ytick.direction': 'in',
-    'xtick.minor.visible': True,
-    'ytick.minor.visible': True,
-    'axes.linewidth': 0.8,
-    'axes.facecolor': 'none',
-    'figure.facecolor': 'none',
-    'legend.frameon': False,
-    'lines.linewidth': 2.5,
-})
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../utils/py/calima")))
+from calima_style import use_style, tidy, save  # noqa: E402
+use_style()
 
 # --- must match the namelist ---------------------------------------------------------
 W_DRIFT = np.array([1.0, 0.5, 0.25])
@@ -124,7 +109,7 @@ print("  analytic        = [%.5f %.5f %.5f]" % tuple(expected))
 print("  offset          = [%+.5f %+.5f %+.5f]" % tuple(delta))
 
 # --- figure: profile along each axis vs the analytic top hat --------------------------
-fig, axarr = plt.subplots(1, 3, figsize=(9, 3.2))
+fig, axarr = plt.subplots(1, 3, figsize=(18, 5))
 cell = BOXLEN / 2 ** int(round(np.log2(BOXLEN / np.min(dx))))
 for ia, (ax, coord) in enumerate(zip(axarr, (x, y, z))):
     # collapse onto this axis: mass-weighted mean dust fraction per slab
@@ -134,7 +119,7 @@ for ia, (ax, coord) in enumerate(zip(axarr, (x, y, z))):
     den, _ = np.histogram(coord, bins=edges, weights=vol)
     prof = num / np.maximum(den, 1e-300)
     ctr = 0.5 * (edges[1:] + edges[:-1])
-    ax.step(ctr, prof, where="mid", label="RAMSES", lw=2.5, color="#1565c0")
+    ax.step(ctr, prof, where="mid", label="RAMSES", color="C0")
 
     # analytic: top hat of width CUBE_LEN centred on the drifted position, periodic
     c0 = np.mod(CUBE_CTR[ia] + W_DRIFT[ia] * t, BOXLEN)
@@ -143,18 +128,18 @@ for ia, (ax, coord) in enumerate(zip(axarr, (x, y, z))):
     # the enhanced region is diluted by (CUBE_LEN/BOXLEN)^2
     dilut = (CUBE_LEN / BOXLEN) ** 2
     ana = eps_bg + (eps_hi - eps_bg) * dilut * (np.abs(off) <= 0.5 * CUBE_LEN)
-    ax.plot(ctr, ana, "--", color="#b71c1c", label="analytic", lw=2.0)
+    ax.plot(ctr, ana, "--", color="C3", label="analytic")
 
-    ax.axvline(com[ia], color="#1565c0", alpha=0.5, ls=":", label="centroid")
-    ax.axvline(expected[ia], color="#b71c1c", alpha=0.5, ls=":", label="analytic centroid")
+    ax.axvline(com[ia], color="C0", alpha=0.5, ls=":", label="centroid")
+    ax.axvline(expected[ia], color="C3", alpha=0.5, ls=":", label="analytic centroid")
     ax.set_xlabel(AXES[ia])
     ax.set_ylabel("mean dust fraction" if ia == 0 else "")
+    tidy(ax)
     if ia == 0:
 
-        ax.legend(fontsize=8)
+        ax.legend()
 fig.tight_layout()
-fig.savefig("dustyadvect3d.pdf", bbox_inches="tight", transparent=True)
-fig.savefig("dustyadvect3d.png", dpi=300, bbox_inches="tight", transparent=True)
+save(fig, "dustyadvect3d")
 print("  wrote dustyadvect3d.pdf / .png")
 
 # Keep the harness's bookkeeping happy (it expects a .tex per test).
