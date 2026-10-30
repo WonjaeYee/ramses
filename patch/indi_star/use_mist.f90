@@ -13,7 +13,8 @@ module use_mist
    private
    public read_mist_parameters, load_sample,&
       get_stellar_properties, get_stellar_lifetime,&
-      i_mass, i_rmom, i_chem, i_phot, photon_scale
+      i_mass, i_rmom, i_chem, i_phot, photon_scale,&
+      wind_temperature
 
    integer,parameter::rp=kind(1.0e0)
    !! Precision number to use in this module
@@ -65,8 +66,11 @@ module use_mist
    !! scale of photon numbers.
    !! to get the actual number of photons, `prop` should be multiplied with this factor
 
+   real(dp)::wind_temperature=0.0_dp
+   !! ``assumed'' gas temperature of the stellar wind [K]
+
    ! integer,allocatable,dimension(:,:)::idx_table
-   !! Table to store parameter indices
+   ! Table to store parameter indices
    ! ... probably become problem if list of sink is dynamic
    ! in this new code, not yet used.
    
@@ -81,7 +85,7 @@ subroutine read_mist_parameters()
    implicit none
 
    ! for now, there is only one parameter to read
-   namelist /indi_star/ mist_sample
+   namelist /indi_star/ mist_sample, wind_temperature
 
    rewind(1)
    ! following the method of read_stellar_params in read_sink_feedback_params,
@@ -316,6 +320,7 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
    ! If the scale is log, log values of `t_now` and `t_pre`.
    real(rp),dimension(1:2)::t12
    ! Lower- and upper-bound of age axis, for a given combination of (feh, afe, vvc, mass)
+   ! If axes_t_scale=0, linear [yr], else, log([yr]).
    real(rp),dimension(1:2)::x12
    ! For interpolation: age values of left- and right-sides.
    real(rp),dimension(1:sample_shape(1),1:2)::y12
@@ -357,8 +362,16 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
    else if (idx_t_now == 0) then
       ! take first row
       arr_now = sample(:, 1, idx_m, idx_v, idx_a, idx_z)
-      ! set ejecta zero
-      arr_now(i_rmom:) = 0.0_rp
+      ! extrapolate
+      if (axes_t_scale == 0) then
+         ! linearly extrapolate ejecta (zero at t=0)
+         arr_now(i_rmom:) = arr_now(i_rmom:) * t_now/(10.0_rp**t12(1))
+         ! lienarly extrapolate current mass (initial mass at t=0)
+         arr_now(i_mass) = arr_now(i_mass)*t_now/(10.0_rp**t12(1)) + axis_m(idx_m)*(1.0_rp-t_now/(10.0_rp**t12(1)))
+      else
+         arr_now(i_rmom:) = arr_now(i_rmom:) * t_now/t12(1)
+         arr_now(i_mass) = arr_now(i_mass)*t_now/t12(1) + axis_m(idx_m)*(t12(1)-t_now)/t12(1)
+      end if
    else if (idx_t_now == num_t) then
       ! take last row
       arr_now = sample(:, num_t, idx_m, idx_v, idx_a, idx_z)
@@ -370,7 +383,11 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
       arr_pre = linear_interpolation(x=use_t_pre, x1=x12(1), x2=x12(2), y1=y12(:,1), y2=y12(:,2))
    else if (idx_t_pre == 0) then
       arr_pre = sample(:, 1, idx_m, idx_v, idx_a, idx_z)
-      arr_pre(i_rmom:) = 0.0_rp
+      if (axes_t_scale == 0) then
+         arr_pre(i_rmom:) = arr_pre(i_rmom:) * t_pre/(10.0_rp**t12(1))
+      else
+         arr_pre(i_rmom:) = arr_pre(i_rmom:) * t_pre/t12(1)
+      end if
    else if (idx_t_pre == num_t) then
       arr_pre = sample(:, num_t, idx_m, idx_v, idx_a, idx_z)
    end if
