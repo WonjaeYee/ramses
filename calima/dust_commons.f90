@@ -22,7 +22,7 @@ module dust_commons
     logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
     logical ::dust_debug=.false.                 ! Debug diagnostics: the per-process dust mass budget (dM/dt; heavier), the
                                                  ! TVA drift-clipping report, the test diagnostics (IRTRAP_DIAG)
-    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54
+    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54, 4 = MPRK22
     logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
     logical ::dust_eq_test=.false.               ! Activate dust equilibrium test parameters
@@ -359,8 +359,50 @@ module dust_commons
 
     real(dp), parameter :: y_min = 1.0d-60
     !! minimum of mass density of gas, dust, and PAH
+    real(dp), parameter :: x_trace = 1.0d-6
+    !! floor of the fractional changes, in units of the element mass (as RTZ's x_fm for the ion fractions)
 
     contains
+
+    subroutine trace_reference_masses(npah_in, y_gas, y_dust, m_el, m_bin)
+        ! Reference masses of the trace floors [g cm-3]: the total (gas + grains) mass of each element,
+        ! and for each bin the mass its scarcest element could make. A change of y is then measured
+        ! against y + x_trace * m, so a bin far below its element (PAH clusters at 1e-60 g cm-3 next to
+        ! a star) no longer limits the step to 10% changes of itself.
+        ! npah_in --> Number of PAH bins; y_dust packs them first (carbon only), then the grain bins.
+        ! y_gas   --> 2D array with the gas phase element mass densities in its first column [g cm-3].
+        ! y_dust  --> 1D array with the bin mass densities [g cm-3].
+        ! m_el    <-- Total mass density of each element [g cm-3].
+        ! m_bin   <-- Reference mass density of each bin [g cm-3].
+        implicit none
+        integer, intent(in) :: npah_in
+        real(dp), intent(in) :: y_gas(:,:), y_dust(:)
+        real(dp), intent(out) :: m_el(:), m_bin(:)
+        integer :: j, k, e
+
+        m_el(:) = y_gas(:,1)
+        do j = 1, npah_in
+            m_el(6) = m_el(6) + y_dust(j)
+        end do
+        do j = npah_in+1, size(y_dust)
+            associate(bin => dustbins_props(j-npah_in))
+                do k = 1, bin%nelements
+                    e = bin%el_index(k)
+                    m_el(e) = m_el(e) + y_dust(j) * bin%el_mfractions(k)
+                end do
+            end associate
+        end do
+
+        m_bin(1:npah_in) = m_el(6)
+        do j = npah_in+1, size(y_dust)
+            associate(bin => dustbins_props(j-npah_in))
+                m_bin(j) = huge(1.0_dp)
+                do k = 1, bin%nelements
+                    m_bin(j) = min(m_bin(j), m_el(bin%el_index(k)) / bin%el_mfractions(k))
+                end do
+            end associate
+        end do
+    end subroutine trace_reference_masses
 
     subroutine dust_log_tdust_solver_update(i_dust, T, n_iter, used_brent)
         implicit none
