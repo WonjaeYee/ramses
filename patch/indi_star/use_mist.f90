@@ -45,7 +45,7 @@ module use_mist
    integer::prop_rad_scale
    !! Order of scale by which photon counts are reduced.
    !! E.g., if it is 36, photon counts are in unit of 10^36 sec^-1.
-   real(rp),allocatable,dimension(:,:,:,:,:,:)::sample
+   real(rp),pointer,contiguous,dimension(:,:,:,:,:,:)::sample=>null()
    !! Main array of sample data from MIST.
    !! Order of axes: (properties, age, mass, vvc, afe, feh)
 
@@ -97,15 +97,20 @@ end subroutine read_mist_parameters
 subroutine load_sample
 !! Load MIST sample data from given `mist_sample` path.
 
+   use node_shared, only: node_reader, node_bcast_i, node_bcast_r4, node_alloc_r4_6, node_publish
    implicit none
 
    logical::file_exists
    !! True if the file exists
+   integer,dimension(2)::ibuf
 
    ! Check file existence
    inquire(file=trim(mist_sample), exist=file_exists)
 
    if (file_exists) then
+      ! With shared_tables, node rank 0 reads the file into the node's shared sample; the axes and the
+      ! small arrays are broadcast
+      if (node_reader()) then
       open(unit=unit_open, file=trim(mist_sample), status='old', action='read', form='unformatted')
       
       ! Dimension of the main array
@@ -114,45 +119,63 @@ subroutine load_sample
       ! Shape of the main array
       ! allocate(sample_shape(1:sample_dim))
       read(unit_open) sample_shape
+      end if
+      call node_bcast_i(sample_shape, 6)
 
-      ! Axis 1: feh
       allocate(axis_z(1:sample_shape(6)))
+      allocate(axis_a(1:sample_shape(5)))
+      allocate(axis_v(1:sample_shape(4)))
+      allocate(axis_m(1:sample_shape(3)))
+      allocate(axes_t(1:2,1:sample_shape(3),1:sample_shape(4),1:sample_shape(5),1:sample_shape(6)))
+      allocate(prop_nums(1:3))
+      if (node_reader()) then
+      ! Axis 1: feh
       read(unit_open) axis_z
       
       ! Axis 2: afe
-      allocate(axis_a(1:sample_shape(5)))
       read(unit_open) axis_a
 
       ! Axis 3: vvc
-      allocate(axis_v(1:sample_shape(4)))
       read(unit_open) axis_v
       
       ! Axis 4: mass
-      allocate(axis_m(1:sample_shape(3)))
       read(unit_open) axis_m
       
       ! Axis 5: age (bounds)
-      allocate(axes_t(1:2,1:sample_shape(3),1:sample_shape(4),1:sample_shape(5),1:sample_shape(6)))
       read(unit_open) axes_t
       ! scale of the age axis: 0 if log, 1 if linear
       read(unit_open) axes_t_scale
       
       ! Number of properties
-      allocate(prop_nums(1:3))
       read(unit_open) prop_nums
+      end if
+      call node_bcast_r4(axis_z, sample_shape(6))
+      call node_bcast_r4(axis_a, sample_shape(5))
+      call node_bcast_r4(axis_v, sample_shape(4))
+      call node_bcast_r4(axis_m, sample_shape(3))
+      call node_bcast_r4(axes_t, size(axes_t))
+      call node_bcast_i(prop_nums, 3)
 
       ! Radiation bin edges
       allocate(prop_rad_bins(1:prop_nums(3)+1))
+      if (node_reader()) then
       read(unit_open) prop_rad_bins
       ! and order of photon count scale
       read(unit_open) prop_rad_scale
+      end if
+      call node_bcast_r4(prop_rad_bins, prop_nums(3)+1)
+      ibuf = (/axes_t_scale, prop_rad_scale/)
+      call node_bcast_i(ibuf, 2)
+      axes_t_scale = ibuf(1) ; prop_rad_scale = ibuf(2)
       
       ! Main array
-      ! we cannot do a fancy way, like sample(sample_shape) :/
-      allocate(sample(1:sample_shape(1),1:sample_shape(2),1:sample_shape(3),1:sample_shape(4),1:sample_shape(5),1:sample_shape(6)))
+      call node_alloc_r4_6(sample, sample_shape)
+      if (node_reader()) then
       read(unit_open) sample
 
       close(unit_open)
+      end if
+      call node_publish()   ! the node's shared sample is filled
 
       num_t = sample_shape(2)
 

@@ -466,7 +466,7 @@ MODULE SED_module
   !                                         (Lum, Lum-acc, egy, csn, cse).
   ! Lum is photons per sec per solar mass (eV per sec per solar mass in
   ! the case of SED_isEgy=true). Lum-acc is accumulated lum.
-  real(dp),allocatable,dimension(:,:,:,:)::SED_table
+  real(dp),pointer,contiguous,dimension(:,:,:,:)::SED_table=>null()   ! node-shared with shared_tables
 #ifdef RTZ
   real(dp),allocatable,dimension(:,:,:,:)::SED_table_dust
 #endif
@@ -541,6 +541,7 @@ SUBROUTINE init_SED_table()
 #endif
   use constants,only:c_cgs, eV2erg, hplanck
   use mpi_mod
+  use node_shared, only: node_reader, node_alloc_r8_4, node_publish
 #ifndef WITHOUTMPI
   use amr_commons,only:IOGROUPSIZE
   real(kind=8),allocatable::tbl2(:,:,:)
@@ -800,10 +801,13 @@ SUBROUTINE init_SED_table()
 #endif
 
      SED_nA=SED_nA+1                              ! Make room for zero age
-     if(ip .eq. 1) allocate(SED_table(SED_nA, SED_nZ, nSEDgroups, nv))
+     ! every rank has the table (the reduction above); with shared_tables node rank 0 keeps the node's copy
+     if(ip .eq. 1) call node_alloc_r8_4(SED_table, SED_nA, SED_nZ, nSEDgroups, nv)
+     if(node_reader()) then
      SED_table(1, :,ip,:) = reb_tbl(1,:,:)            ! Zero age properties
      SED_table(1, :,ip,2) = 0.                        !  Lacc=0 at zero age
      SED_table(2:,:,ip,:) = reb_tbl
+     end if
      deallocate(reb_tbl)
 
      if(ip .eq. 1) then
@@ -817,11 +821,13 @@ SUBROUTINE init_SED_table()
      end if
 
      ! Integrate the cumulative luminosities:
+     if(node_reader()) then
      SED_table(:,:,ip,2)=0d0
      do iz = 1, SED_nZ ! Loop metallicity
         tmp = trapz1( SED_ages, SED_table(:,iz,ip,1), SED_nA, SED_table(:,iz,ip,2) )
         SED_table(:,iz,ip,2) = SED_table(:,iz,ip,2) * Gyr2sec
      end do
+     end if
 
 #ifdef RTZ
      SED_table_dust(1, :,ip,:) = reb_tbl_dust(1,:,:)                   ! Zero age properties
@@ -831,6 +837,7 @@ SUBROUTINE init_SED_table()
 
   end do ! End photon group loop
 
+  call node_publish()   ! the node's shared SED_table is filled
   deallocate(SEDs) ; deallocate(tbl)
   deallocate(ages) ; deallocate(rebAges)
   deallocate(zs)
