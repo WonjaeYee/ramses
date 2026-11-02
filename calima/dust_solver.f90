@@ -1072,6 +1072,10 @@ module mprk22_mod
     ! (module arrays, not automatic ones: gfortran puts those on the heap, a malloc per call)
     real(dp), allocatable, save :: wdd(:), wu(:), wgain(:), wb(:), wmel(:), wmbin(:)
     integer, allocatable, save :: d0(:), d1(:)
+    ! exp_groups (dust_solver_type = 6): a donor group's augmented matrix, its exponential and Taylor terms,
+    ! phi1 times the group's masses, the group of each component and the members of the current one
+    real(dp), allocatable, save :: Xg(:,:), Eg(:,:), Tg(:,:), Ug(:,:), phig(:)
+    integer, allocatable, save :: glab(:), gmem(:)
 
     contains
 
@@ -1094,7 +1098,8 @@ module mprk22_mod
         end do
         used = any(Afull > 0.0_dp, dim=2)
         nact = count(used)
-        if (allocated(iel)) deallocate(iel, grp, A, local_proc, V0, V1, Mw, dg, dd2, d0, d1, wdd, wu, wgain, wb, wmel, wmbin)
+        if (allocated(iel)) deallocate(iel, grp, A, local_proc, V0, V1, Mw, dg, dd2, d0, d1, wdd, wu, wgain, wb, wmel, wmbin, &
+                                       Xg, Eg, Tg, Ug, phig, glab, gmem)
         allocate(iel(nact), grp(nb), A(nact, nb), local_proc(ndust_processes + npah_processes))
         k = 0
         do e = 1, n_el
@@ -1134,6 +1139,8 @@ module mprk22_mod
         allocate(V0(nact+nb, maxt), V1(nact+nb, maxt), Mw(nact+nb, nact+nb), dg(n_el, ncol), dd2(nb, 2))
         allocate(d0(maxt), d1(maxt))
         allocate(wdd(nb), wu(nact+nb), wgain(nact+nb), wb(nact+nb), wmel(n_el), wmbin(nb))
+        allocate(Xg(nact+nb+1, nact+nb+1), Eg(nact+nb+1, nact+nb+1), Tg(nact+nb+1, nact+nb+1), Ug(nact+nb+1, nact+nb+1))
+        allocate(phig(nact+nb), glab(nact+nb), gmem(nact+nb))
         n_el_s = n_el
         nb_s = nb
     end subroutine setup
@@ -1276,11 +1283,10 @@ module mprk22_mod
         end do
     end subroutine patankar_solve
 
-    subroutine exp_solve(z_old, h, w0, n0, r0, zd0, w1, n1, r1, zd1, z_new, done, force)
+    subroutine exp_solve(z_old, h, w0, n0, r0, zd0, w1, n1, r1, zd1, z_new, done)
         ! The exponential counterpart of patankar_solve: for MPRK22's second stage (dust_solver_type = 5) where the
         ! step is stiff (done = .true.: some loss rate times h above z_stiff; otherwise z_new is not set and the
-        ! caller takes the Patankar stage), and for both stages of the coupled-exponential Anninos
-        ! (dust_solver_type = 6, force = .true.: always): z = exp(h K) z_old + h (w0 r0 + w1 r1),
+        ! caller takes the Patankar stage; dust_solver_type = 6 takes exp_groups): z = exp(h K) z_old + h (w0 r0 + w1 r1),
         ! K = sum_s w_s sum_k V_s(:,k) e_{d_s(k)}^T / zd_s(d_s(k)): the transfers of each stage as rates per unit mass
         ! of their donor, at the state where that stage evaluated them. A linear exchange is integrated exactly, so a
         ! stiff mode decays by exp(-z) per step instead of MPRK22's -1/2 (the ringing at the start of a call, e.g.
@@ -1292,7 +1298,6 @@ module mprk22_mod
         integer, intent(in) :: n0, n1
         real(dp), intent(out) :: z_new(:)
         logical, intent(out) :: done
-        logical, intent(in) :: force
         ! below z = 2.73 MPRK22(1) damps a linear mode without a sign change: the Patankar stage is fine there
         real(dp), parameter :: z_stiff = 2.7_dp
         real(dp), dimension(size(z_old), size(z_old)) :: B, T, E
@@ -1310,7 +1315,7 @@ module mprk22_mod
         do i = 1, n
             c = max(c, -Mw(i, i))
         end do
-        done = force .or. c > z_stiff
+        done = c > z_stiff
         if (.not. done) return
         s = 0
         if (c > 1.0_dp) s = ceiling(log(c) / log(2.0_dp))
@@ -1333,6 +1338,196 @@ module mprk22_mod
         end do
         z_new = matmul(E, z_old) + h * (w0 * r0 + w1 * r1)
     end subroutine exp_solve
+
+    subroutine exp_groups(z_old, h, w0, n0, r0, zd0, w1, n1, r1, zd1, z_new)
+        ! exp_solve for the coupled-exponential Anninos (dust_solver_type = 6), z = exp(h K) z_old + h (w0 r0 + w1 r1),
+        ! by groups of donors instead of the whole matrix. Only the donors' columns of K are non-zero: with D the
+        ! donors and R the rest, exp(h K) = [[exp(h K_DD), 0], [h K_RD phi1(h K_DD), I]], phi1(X) = (exp(X) - I) / X,
+        ! and K_DD splits into groups P of donors linked by transfers (carbon and silicate bins never are, nor bins
+        ! that only feed the gas). Each group's exp(h K_PP) z_P and phi1(h K_PP) z_P come from one exponential of
+        ! [[h K_PP, z_P], [0, 0]] (z_P scaled by its largest value), by exp_solve's uniformisation, Taylor series and
+        ! squarings with the group's own largest loss rate: non-negative where K's off-diagonal is, as exp_solve; a
+        ! lone donor (a = its loss rate times h) is exp(-a) and phi1(-a) in closed form. R gains h K_RP phi1(h K_PP) z_P.
+        ! Exact in exact arithmetic, and the mass leaving P is what R gains (zero column sums).
+        real(dp), intent(in) :: z_old(:), h, w0, r0(:), zd0(:), w1, r1(:), zd1(:)
+        integer, intent(in) :: n0, n1
+        real(dp), intent(out) :: z_new(:)
+        integer :: n, i, j, k, l, m, m1, g, s, it
+        real(dp) :: a, c, e, f, zs, zz
+        n = size(z_old)
+        Mw = 0.0_dp
+        do k = 1, n0
+            Mw(:, d0(k)) = Mw(:, d0(k)) + (V0(:, k) / max(zd0(d0(k)), tiny(1.0_dp))) * (h * w0)
+        end do
+        do k = 1, n1
+            Mw(:, d1(k)) = Mw(:, d1(k)) + (V1(:, k) / max(zd1(d1(k)), tiny(1.0_dp))) * (h * w1)
+        end do
+        ! the donors (glab = -1 until grouped), the others 0
+        do j = 1, n
+            glab(j) = 0
+            if (any(Mw(:, j) /= 0.0_dp)) glab(j) = -1
+        end do
+        z_new = z_old
+        g = 0
+        do j = 1, n
+            if (glab(j) /= -1) cycle
+            ! the group of donor j: every donor linked to it by a transfer, either way
+            g = g + 1
+            glab(j) = g
+            m = 1
+            gmem(1) = j
+            it = 1
+            do while (it <= m)
+                i = gmem(it)
+                do k = 1, n
+                    if (glab(k) == -1 .and. (Mw(k, i) /= 0.0_dp .or. Mw(i, k) /= 0.0_dp)) then
+                        m = m + 1
+                        gmem(m) = k
+                        glab(k) = g
+                    end if
+                end do
+                it = it + 1
+            end do
+            if (m == 1) then
+                ! a lone donor: exp(-a), and phi1(-a) = (1 - exp(-a)) / a by its series where that cancels
+                a = -Mw(j, j)
+                if (abs(a) < 0.5_dp) then
+                    f = 1.0_dp
+                    do k = 15, 1, -1
+                        f = 1.0_dp - f * a / real(k + 1, dp)
+                    end do
+                    e = 1.0_dp - a * f
+                else
+                    e = exp(-a)
+                    f = (1.0_dp - e) / a
+                end if
+                z_new(j) = e * z_old(j)
+                do i = 1, n
+                    if (i /= j) z_new(i) = z_new(i) + Mw(i, j) * (f * z_old(j))
+                end do
+                cycle
+            end if
+            zs = 0.0_dp
+            do l = 1, m
+                zs = max(zs, z_old(gmem(l)))
+            end do
+            if (zs <= 0.0_dp) cycle
+            ! [[h K_PP, z_P / zs], [0, 0]] = [[A, v], [0, 0]], uniformised (+ c I) and scaled by 2^-s as exp_solve,
+            ! kept as A (Xg(1:m,1:m)) and v (Xg(1:m,m1)): every power of it is [[A^k, w_k], [0, c^k]]
+            m1 = m + 1
+            c = 0.0_dp
+            do l = 1, m
+                do k = 1, m
+                    Xg(k, l) = Mw(gmem(k), gmem(l))
+                end do
+                Xg(l, m1) = z_old(gmem(l)) / zs
+                c = max(c, -Xg(l, l))
+            end do
+            s = 0
+            if (c > 1.0_dp) s = ceiling(log(c) / log(2.0_dp))
+            f = 1.0_dp / 2.0_dp**s
+            Xg(1:m, 1:m1) = Xg(1:m, 1:m1) * f
+            c = c * f
+            do l = 1, m
+                Xg(l, l) = Xg(l, l) + c
+            end do
+            call group_exp(m, size(Xg, 1), Xg, Eg, Tg, Ug, c, s)
+            ! P: exp(h K_PP) z_P; R: + h K_RP phi1(h K_PP) z_P
+            do k = 1, m
+                zz = 0.0_dp
+                do l = 1, m
+                    zz = zz + Eg(k, l) * z_old(gmem(l))
+                end do
+                z_new(gmem(k)) = zz
+                phig(k) = Eg(k, m1) * zs
+            end do
+            do l = 1, m
+                k = gmem(l)
+                do i = 1, n
+                    if (glab(i) /= g) z_new(i) = z_new(i) + Mw(i, k) * phig(l)
+                end do
+            end do
+        end do
+        z_new = z_new + h * (w0 * r0 + w1 * r1)
+    end subroutine exp_groups
+
+    subroutine group_exp(m, ld, X, E, T, U, c, s)
+        ! exp_groups' exponential of [[A, v], [0, c]] (A = X(1:m,1:m), v = X(1:m,m+1), non-negative where K's
+        ! off-diagonal is), times exp(-c) and squared s times: E(1:m,1:m) = exp(2^s (A - c I)), E(1:m,m+1) = phi1 of it
+        ! times 2^s v (the last row of every power is (0, c^k): E's is (0, 1)). The Taylor terms
+        ! [[T, t], [0, c^k/k!]] -> [[T A, T v + c t], [0, .]] / (k+1), until neither block changes E by epsilon;
+        ! the squarings [[F, g], [0, 1]]^2 = [[F F, F g + g], [0, 1]]. Dot products in a register: at m ~ 5 this
+        ! is twice as fast as column updates (matmul's or array syntax).
+        integer, intent(in) :: m, ld, s
+        real(dp), intent(in) :: X(ld, *), c
+        real(dp), intent(inout) :: E(ld, *), T(ld, *), U(ld, *)
+        integer :: i, j, k, l
+        real(dp) :: acc, rk, tA, eA, tv, ev, ec
+        do j = 1, m + 1
+            do i = 1, m
+                E(i, j) = X(i, j)
+                T(i, j) = X(i, j)
+            end do
+        end do
+        do i = 1, m
+            E(i, i) = E(i, i) + 1.0_dp
+        end do
+        do k = 2, 40
+            rk = 1.0_dp / real(k, dp)
+            do j = 1, m + 1
+                do i = 1, m
+                    acc = 0.0_dp
+                    if (j > m) acc = c * T(i, j)
+                    do l = 1, m
+                        acc = acc + T(i, l) * X(l, j)
+                    end do
+                    U(i, j) = acc * rk
+                end do
+            end do
+            tA = 0.0_dp
+            eA = 0.0_dp
+            do j = 1, m
+                do i = 1, m
+                    T(i, j) = U(i, j)
+                    E(i, j) = E(i, j) + U(i, j)
+                    tA = max(tA, abs(U(i, j)))
+                    eA = max(eA, abs(E(i, j)))
+                end do
+            end do
+            tv = 0.0_dp
+            ev = 0.0_dp
+            do i = 1, m
+                T(i, m + 1) = U(i, m + 1)
+                E(i, m + 1) = E(i, m + 1) + U(i, m + 1)
+                tv = max(tv, abs(U(i, m + 1)))
+                ev = max(ev, abs(E(i, m + 1)))
+            end do
+            if (tA <= epsilon(1.0_dp) * eA .and. tv <= epsilon(1.0_dp) * ev) exit
+        end do
+        ec = exp(-c)
+        do j = 1, m + 1
+            do i = 1, m
+                E(i, j) = E(i, j) * ec
+            end do
+        end do
+        do k = 1, s
+            do j = 1, m + 1
+                do i = 1, m
+                    acc = 0.0_dp
+                    if (j > m) acc = E(i, j)
+                    do l = 1, m
+                        acc = acc + E(i, l) * E(l, j)
+                    end do
+                    U(i, j) = acc
+                end do
+            end do
+            do j = 1, m + 1
+                do i = 1, m
+                    E(i, j) = U(i, j)
+                end do
+            end do
+        end do
+    end subroutine group_exp
 
     subroutine mprk22_try(dust_info, y_gas, y_dust, h, y_gas_new, y_dust_new, err, ok, kmax, nt0)
         ! One MPRK22 step of size h from (y_gas, y_dust): the new state, its error estimate err (the first-
@@ -1390,7 +1585,7 @@ module mprk22_mod
         ! transfer matrix (every bin and its donors together, exact for linear exchanges), stage 2 below its
         ! exponential Heun correction; their difference is the error estimate of the substepping in mprk22_step
         if (dust_solver_type == 6) then
-            call exp_solve(z0, h, 1.0_dp, nt0, p0, z0, 0.0_dp, 0, p0, z0, z1, stiff, .true.)
+            call exp_groups(z0, h, 1.0_dp, nt0, p0, z0, 0.0_dp, 0, p0, z0, z1)
             if (minval(z1) < 0.0_dp) return
         end if
 
@@ -1406,10 +1601,14 @@ module mprk22_mod
         p1(nact+1:n) = 0.0_dp
         ! dust_solver_type = 5, where the step is stiff: exponential Heun (the stage rates averaged, each per unit
         ! donor mass at its own state), damping a stiff mode by exp(-z) instead of MPRK22's -1/2 (the ringing)
+        ! (dust_solver_type = 6: always, by groups of donors)
         stiff = .false.
-        if (dust_solver_type >= 5) call exp_solve(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2, stiff, &
-                                                  dust_solver_type == 6)
-        if (.not. stiff) call patankar_solve(z0, z1, h, 0.5_dp, nt0, p0, 0.5_dp, nt1, p1, z2)
+        if (dust_solver_type == 5) call exp_solve(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2, stiff)
+        if (dust_solver_type == 6) then
+            call exp_groups(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2)
+        else if (.not. stiff) then
+            call patankar_solve(z0, z1, h, 0.5_dp, nt0, p0, 0.5_dp, nt1, p1, z2)
+        end if
 
         ! the solves conserve each element up to round-off, which grows with h*rate/z: hand it back to
         ! the gas, so the totals change by exactly the explicit part
