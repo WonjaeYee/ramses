@@ -312,7 +312,7 @@ function get_stellar_properties(z, a, v, m, t_now, t_pre) result(prop)
    real(rp)::t_pre
    !! Age in previous time step, in unit of year.
 
-   real(dp),allocatable,dimension(:)::prop
+   real(dp),dimension(1:sample_shape(1))::prop
    !! Stellar properties to be returned
    !! (instantaneous, ejected chemicals, emitted photons).
 
