@@ -862,7 +862,7 @@ module dust_init
         real(dp) :: mf_max,mf_min,prefactor,chi_total,frac_tot,mcoag
         real(dp) :: R
         integer :: iend_chemtype
-        ! external :: run_dust_solver_test
+        external :: run_dust_solver_test
 
         ! Epstein drag coefficient. t_s = rho_s*a/(rho_g*v_th) with v_th the MEAN thermal
         ! speed sqrt(8kT/(pi mu mH)); the solver's c_s is adiabatic, and
@@ -1387,9 +1387,11 @@ module dust_init
         call report_calima_memory()
 #endif
 
-        ! if (dust_test) then
-        !     call run_dust_solver_test()
-        ! end if
+        ! Standalone dust solver test (dust_test = .true.; tests/dust_evolution): needs dust_test.o in
+        ! the Makefile's object list (every Makefile of the repo's builds and of the nightly has it)
+        if (dust_test) then
+            call run_dust_solver_test()
+        end if
 
     end subroutine init_CALIMA_dust
 
@@ -1422,7 +1424,7 @@ module dust_init
         namelist/calima_params/&
                 ! Dust physics flags
                 dust_log,dust_debug,dust_solver_type,dust_only_rtadv,dust_eq_test,dust_SNdest,dust_inSN,dust_inSNIa,dust_inSW,&
-                dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,&
+                dust_test,test_nH,test_Tk,test_nsteps,test_dt,test_ne,test_mu,test_G0,test_sigma,test_name,&
                 dust_coagulation,dust_coagulation_boost,dust_shattering,dust_shattering_all,dust_shattering_dest,dust_shattering_SN,&
                 dust_accretion,dust_sputtering,dust_sputtering_charge,dust_acc_coulomb,dust_ratd,dust_coll_cooling,dust_coll_lowT,dust_coll_charge,&
                 dust_sublimation,dust_pe_heating,ratd_only_rtadv,poppe_ice_enhancement,H2ondust,dust_turbulent_model,&

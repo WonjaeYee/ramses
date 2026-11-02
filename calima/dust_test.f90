@@ -6,6 +6,7 @@ subroutine run_dust_solver_test()
     use constants, only: amu2g, yr2sec
     use dust_init, only: init_dust_depletion_tests
     use amr_commons, only: myid
+    use dust_rhs_mod, only: last_dydt_dust_per_proc, last_dydt_pah_per_proc
 #ifdef RTZ
     use rtz_module, only: elements
 #endif
@@ -20,8 +21,11 @@ subroutine run_dust_solver_test()
     integer :: iElement, step, unit_log, i, jj
     logical :: step_ok
     external :: clean_stop
-    character(len=64) :: log_filename
-    integer :: n_active
+    character(len=80) :: log_filename
+    integer :: n_active, ip, n_not_ok
+    real(dp), allocatable :: nel_save(:), rd_save(:), rp_save(:)
+    real(dp) :: t_cpu0, t_cpu1
+    logical :: debug_save
 
     real(dp) :: dummy_dUU
 
@@ -30,15 +34,14 @@ subroutine run_dust_solver_test()
     ! Only run on processor 1 to avoid duplicate/interfering outputs and files
     if (myid /= 1) return
 
-    n_active = 0
-    if (dust_accretion) n_active = n_active + 1
-    if (dust_sputtering) n_active = n_active + 1
-    if (dust_coagulation) n_active = n_active + 1
-    if (dust_shattering) n_active = n_active + 1
+    ! Any combination of processes: one alone for the analytic checks, or a pair such as cluster
+    ! evaporation + coalescence for a stiff balance
+    n_active = count([dust_accretion, dust_sputtering, dust_sublimation, dust_coagulation, dust_shattering, &
+                      pah_sputtering, pah_coalescence, pah_freezing, pah_cluster_evaporation, pah_photolysis])
 
-    if (n_active /= 1) then
-        write(*,*) 'ERROR: Exactly one dust process (accretion, sputtering, coagulation, shattering)'
-        write(*,*) 'must be active for this test.'
+    if (n_active < 1) then
+        write(*,*) 'ERROR: at least one dust process (accretion, sputtering, sublimation, coagulation, shattering)'
+        write(*,*) 'or PAH process (sputtering, coalescence, freezing, cluster evaporation, photolysis) must be active.'
         call clean_stop()
     end if
 
@@ -48,12 +51,21 @@ subroutine run_dust_solver_test()
     write(*,*) '  test_Tk          = ', test_Tk
     write(*,*) '  test_ne          = ', test_ne
     write(*,*) '  test_mu          = ', test_mu
+    write(*,*) '  test_G0          = ', test_G0
+    write(*,*) '  test_sigma       = ', test_sigma, ' cm/s'
     write(*,*) '  test_nsteps      = ', test_nsteps
     write(*,*) '  test_dt          = ', test_dt, ' yr'
+    write(*,*) '  dust_solver_type = ', dust_solver_type
     write(*,*) '  dust_accretion   = ', dust_accretion
     write(*,*) '  dust_sputtering  = ', dust_sputtering
+    write(*,*) '  dust_sublimation = ', dust_sublimation
     write(*,*) '  dust_coagulation = ', dust_coagulation
     write(*,*) '  dust_shattering  = ', dust_shattering
+    write(*,*) '  pah_sputtering   = ', pah_sputtering
+    write(*,*) '  pah_coalescence  = ', pah_coalescence
+    write(*,*) '  pah_freezing     = ', pah_freezing
+    write(*,*) '  pah_cluster_evaporation = ', pah_cluster_evaporation
+    write(*,*) '  pah_photolysis   = ', pah_photolysis
     write(*,*) '========================================='
 
     allocate(nElement(1:n_elements))
@@ -99,10 +111,10 @@ subroutine run_dust_solver_test()
     dust_helper%local_dx = 1.0d18 ! dummy cell size (e.g. 1 pc)
     dust_helper%local_vol = dust_helper%local_dx**3
     dust_helper%local_Jeans = 4.81973044d19 * sqrt(test_Tk/test_nH)
-    dust_helper%local_G0 = 0.0_dp
+    dust_helper%local_G0 = test_G0
     dust_helper%local_nCO = 0.0_dp
     dust_helper%G0_background = 0.0_dp
-    dust_helper%local_sigma = 1.0d5 ! 1 km/s in cm/s
+    dust_helper%local_sigma = test_sigma
 
     ! Copy cross sections
     if (allocated(sigca_dust) .and. ndust > 0) then
@@ -123,8 +135,11 @@ subroutine run_dust_solver_test()
     if (ndust > 0) dust_helper%rho_dust = rho_dust
     if (npah > 0) dust_helper%rho_pah = rho_pah
 
-    ! Determine log filename based on active process
-    if (dust_accretion) then
+    ! Determine log filename: test_name if set, otherwise the active dust process
+    log_filename = 'dust_test.log'
+    if (len_trim(test_name) > 0) then
+        log_filename = 'dust_'//trim(test_name)//'_test.log'
+    else if (dust_accretion) then
         log_filename = 'dust_accretion_test.log'
     else if (dust_sputtering) then
         log_filename = 'dust_sputtering_test.log'
@@ -153,6 +168,21 @@ subroutine run_dust_solver_test()
     write(unit_log, '(A,L1)') '# dust_shattering = ', dust_shattering
     write(unit_log, '(A,ES15.7)') '# local_mu = ', dust_helper%local_mu
     write(unit_log, '(A,A)') '# dust_tables_dir = ', trim(dust_tables_dir)
+    write(unit_log, '(A,I0)') '# dust_solver_type = ', dust_solver_type
+    write(unit_log, '(A,L1)') '# solver_substepped = ', solver_substepped
+    write(unit_log, '(A,ES15.7)') '# errmax = ', errmax
+    write(unit_log, '(A,ES15.7)') '# G0 = ', test_G0
+    write(unit_log, '(A,ES15.7)') '# sigma = ', test_sigma
+    write(unit_log, '(A,L1)') '# dust_sublimation = ', dust_sublimation
+    write(unit_log, '(A,L1)') '# pah_sputtering = ', pah_sputtering
+    write(unit_log, '(A,L1)') '# pah_coalescence = ', pah_coalescence
+    write(unit_log, '(A,L1)') '# pah_freezing = ', pah_freezing
+    write(unit_log, '(A,L1)') '# pah_cluster_evaporation = ', pah_cluster_evaporation
+    write(unit_log, '(A,L1)') '# pah_photolysis = ', pah_photolysis
+    do i = 1, npah
+        write(unit_log, '(A,I0,A,ES15.7,A,ES15.7,A,I0,A,L1)') '# PAH ', i, ' mpah = ', pahbins_props(i)%mpah, &
+            ' apah_cm = ', pahbins_props(i)%apah_cm, ' nc = ', pahbins_props(i)%nc, ' is_cluster = ', pahbins_props(i)%is_cluster
+    end do
     do i = 1, n_elements
 #ifdef RTZ
         write(unit_log, '(A,I0,A,I0,A,ES15.7E3)') '# GasElement ', i, ' atomic_number = ', elements(i)%atomic_number, ' mass_g = ', elements(i)%atomic_mass_g
@@ -182,6 +212,47 @@ subroutine run_dust_solver_test()
                 ' mass_g = ', dustbins_props(i)%el_atomic_masses_g(jj)
         end do
     end do
+
+    ! Rates of every process at the initial state, for the analytic checks: one step of 1e-12 dt with
+    ! dust_debug on fills last_dydt_*_per_proc from the RHS at (to 1e-12) the initial state, which is then
+    ! restored. One accepted substep leaves the solver's saved step at its 'none' value, so the run below
+    ! starts as it would without this call. Species 1..npah are the PAH bins, npah+1..npah+ndust the dust bins.
+    nel_save = nElement
+    if (ndust > 0) rd_save = dust_helper%rho_dust
+    if (npah > 0) rp_save = dust_helper%rho_pah
+    debug_save = dust_debug
+    dust_debug = .true.
+    call compute_dust_update(dust_helper, nElement, xelem_ions, 1.0d-12 * test_dt * yr2sec, step_ok=step_ok, dUU=dummy_dUU)
+    if (allocated(last_dydt_dust_per_proc)) then
+        do ip = 1, ndust_processes
+            do i = 1, ndust + npah
+                if (any(last_dydt_dust_per_proc(i, ip, :) /= 0.0_dp)) &
+                    write(unit_log, '(A,A,A,I0,2(A,ES23.15E3))') '# Rate dust ', trim(dust_processes_list(ip)%name), &
+                        ' species ', i, ' gain = ', last_dydt_dust_per_proc(i, ip, 1), ' loss = ', last_dydt_dust_per_proc(i, ip, 2)
+            end do
+        end do
+    end if
+    if (allocated(last_dydt_pah_per_proc)) then
+        do ip = 1, npah_processes
+            do i = 1, ndust + npah
+                if (any(last_dydt_pah_per_proc(i, ip, :) /= 0.0_dp)) &
+                    write(unit_log, '(A,A,A,I0,2(A,ES23.15E3))') '# Rate pah ', trim(pah_processes_list(ip)%name), &
+                        ' species ', i, ' gain = ', last_dydt_pah_per_proc(i, ip, 1), ' loss = ', last_dydt_pah_per_proc(i, ip, 2)
+            end do
+        end do
+    end if
+    nElement = nel_save
+    if (ndust > 0) dust_helper%rho_dust = rd_save
+    if (npah > 0) dust_helper%rho_pah = rp_save
+    dust_debug = debug_save
+    if (.not. dust_debug) then
+        if (allocated(last_dydt_dust_per_proc)) deallocate(last_dydt_dust_per_proc)
+        if (allocated(last_dydt_pah_per_proc)) deallocate(last_dydt_pah_per_proc)
+    end if
+    ode_naccepted = 0
+    ode_nrejected = 0
+    ode_nreduced = 0
+
     write(unit_log, '(A)', advance='no') '# Time(yr)  ne(cm-3)'
     do i = 1, n_elements
         write(unit_log, '(A,I0,A)', advance='no') '  Gas_El_', i, '(cm-3)'
@@ -210,6 +281,8 @@ subroutine run_dust_solver_test()
     ! Step size in seconds
     dt = test_dt * yr2sec
     t_yr = 0.0_dp
+    n_not_ok = 0
+    call cpu_time(t_cpu0)
 
     do step = 1, test_nsteps
         dust_helper%local_ne = test_ne
@@ -234,8 +307,16 @@ subroutine run_dust_solver_test()
 
         if (.not. step_ok) then
             write(*,*) 'WARNING: step_ok = .false. at step ', step
+            n_not_ok = n_not_ok + 1
         end if
     end do
+
+    ! Cost and failures of the run (the ODE substep counts need dust_log = .true.)
+    call cpu_time(t_cpu1)
+    write(unit_log, '(A,ES15.7)') '# cpu_s = ', t_cpu1 - t_cpu0
+    write(unit_log, '(A,I0)') '# steps_not_ok = ', n_not_ok
+    if (dust_log) write(unit_log, '(A,I0,A,I0,A,I0)') '# ode_accepted = ', ode_naccepted, &
+        ' rejected = ', ode_nrejected, ' reduced = ', ode_nreduced
 
     close(unit_log)
     write(*,*) 'CALIMA DUST SOLVER TEST COMPLETE. Log written to ', trim(log_filename)

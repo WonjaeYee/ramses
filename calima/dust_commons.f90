@@ -127,6 +127,9 @@ module dust_commons
     real(dp) ::test_dt=1.0d4                     ! Target test solver step size [yr]
     real(dp) ::test_ne=1.0d-2                    ! Target test gas electron density [cm-3]
     real(dp) ::test_mu=1.0d0                     ! Target test gas mean molecular weight
+    real(dp) ::test_G0=0.0d0                     ! Test FUV field on the grains [Habing] (photolysis, cluster evaporation)
+    real(dp) ::test_sigma=1.0d5                  ! Test turbulent velocity dispersion [cm/s] (shattering, coagulation)
+    character(len=64) ::test_name=''             ! Test log name, dust_<test_name>_test.log (default: the active process)
 
     ! ==== Dust modelling options (read from nml) ====
     character(LEN=30)::sputtering_model='Tsai1998'    ! Thermal sputtering law (Tsai&Matthews 1995)
