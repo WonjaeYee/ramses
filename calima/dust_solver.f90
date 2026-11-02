@@ -574,7 +574,7 @@ end module rk4_mod
 module anninos_mod
     use amr_parameters, only: dp
     use dustbin_types, only: DustChemistryInfo
-    use dust_commons, only: errmax, dustbins_props, pahbins_props, y_min
+    use dust_commons, only: errmax, dustbins_props, pahbins_props, y_min, y_ign
     use ode_interface_mod, only: rhs_interface
 
     implicit none
@@ -693,17 +693,17 @@ module anninos_mod
             fj = dydt_dust(j, 1) - dydt_dust(j, 2)
             ! keep fj to be the net rate
 
-            if (abs(fj) * h < 1.0d-12 * yj) then
+!             if (abs(fj) * h < 1.0d-12 * yj) then
 ! #ifdef BRUTAL_WRITE
 !                 if(j==2) write(1026, "('fj case 1')")
 ! #endif
-                y_dust_new(j) = yj
-            else if (abs(fj) * h < 1.0d-2 * yj) then
+!                 y_dust_new(j) = yj
+!             else if (abs(fj) * h < 1.0d-2 * yj) then
 ! #ifdef BRUTAL_WRITE
 !                 if(j==2) write(1026, "('fj case 2')")
 ! #endif
-                y_dust_new(j) = yj + fj * h
-            else
+!                 y_dust_new(j) = yj + fj * h
+!             else
 ! #ifdef BRUTAL_WRITE
 !                 if(j==2) write(1026, "('fj case 3')")
 ! #endif
@@ -717,18 +717,18 @@ module anninos_mod
 
                 ! Anninos et al. (1997) quasi-implicit update
                 if (Dj * h < 1.0d-6) then
-! #ifdef BRUTAL_WRITE
-!                     if(j==2) write(1026, "('fj case 3-1')")
-! #endif
+#ifdef BRUTAL_WRITE
+                    if(j<=2) write(1026, "('fj case 3-1')")
+#endif
                     y_dust_new(j) = (yj + Cj * h) / (1.0d0 + Dj * h)
                 else
-! #ifdef BRUTAL_WRITE
-!                     if(j==2) write(1026, "('fj case 3-2')")
-! #endif
+#ifdef BRUTAL_WRITE
+                    if(j<=2) write(1026, "('fj case 3-2')")
+#endif
                     y_eq = Cj / Dj
                     y_dust_new(j) = y_eq + (yj - y_eq) * exp(-Dj * h)
                 end if
-            end if
+!             end if
 
             ! Enforce non-negativity.
             ! If the Anninos formula (Cj>=0, Dj>=0) gives a negative result, that
@@ -1279,9 +1279,9 @@ module ode_driver_mod
             print *, 'FATAL ERROR: integrate_dust_ode: negative density in final state (bug in rate routines).'
             print *, '  y_gas_final min:  ', minval(y_gas_final)
             print *, '  y_dust_final min: ', minval(y_dust_final)
-            ! call clean_stop
-            step_ok = .false.
-            return
+            call clean_stop
+            ! step_ok = .false.
+            ! return
         end if
 
         if (present(h_last)) h_last = h_last_val

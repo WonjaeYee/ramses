@@ -1012,6 +1012,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp)::kd584
       integer::g584
 
+      ! test normalization scheme
+      real(dp)::test_sum1,test_sum2
+
       ! RTZ variable initialization
 #ifdef DEBUG
       if (rtz_equilibrium_test.gt.0) then
@@ -2176,9 +2179,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             dUU = ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
             dUU = dUU * one_over_x_FRAC
             fracMax=MAX(fracMax,dUU)
-#ifdef BRUTAL_WRITE
-            write(1026,*) "after H2, fracMax:", fracMax
-#endif
+! #ifdef BRUTAL_WRITE
+!             write(1026,*) "after H2, fracMax:", fracMax
+! #endif
             if(dUU .gt. 1.d0) then
                ! write(*,*) "Broken H2", TK, dXion(1,3), xion(1,3,icell), ABS((dXion(1,3)-xion(1,3,icell))/(xion(1,3,icell)+x_FM))
                dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -2616,9 +2619,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if (nCO(icell).gt.1.d-10) then
                      dUU = ABS((nCO_new-nCO(icell))/(nCO(icell)+x_FM)) * one_over_x_FRAC
                      fracMax = MAX(fracMax,dUU)
-#ifdef BRUTAL_WRITE
-                     write(1026,*) "after CO (1), fracMax:", fracMax
-#endif
+! #ifdef BRUTAL_WRITE
+!                      write(1026,*) "after CO (1), fracMax:", fracMax
+! #endif
                      if (dUU .gt. 1.d0) then
                         dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                         dt_rec = min(dt_rec,0.5d0*ddt(icell))
@@ -2635,9 +2638,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if (xion(6,1,icell).gt.1.d-10) then
                      dUU = ABS((dXion(6,1)-xion(6,1,icell))/(xion(6,1,icell)+x_FM)) * one_over_x_FRAC
                      fracMax = MAX(fracMax,dUU)
-#ifdef BRUTAL_WRITE
-                     write(1026,*) "after CO (2), fracMax:", fracMax
-#endif
+! #ifdef BRUTAL_WRITE
+!                      write(1026,*) "after CO (2), fracMax:", fracMax
+! #endif
                      if (dUU .gt. 1.d0) then
                         dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
                         dt_rec = min(dt_rec,0.5d0*ddt(icell))
@@ -2693,10 +2696,10 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   if (iIon > 1) then
                      fracMax=MAX(fracMax,dUU)
                   end if
-#ifdef BRUTAL_WRITE
-                  write(1026,*) "after ion, fracMax:", fracMax
-                  write(1026,*) "ele", iElement, "ion", iIon
-#endif
+! #ifdef BRUTAL_WRITE
+!                   write(1026,*) "after ion, fracMax:", fracMax
+!                   write(1026,*) "ele", iElement, "ion", iIon
+! #endif
                   if(dUU .gt. 1. .and. iIon>1) then
                      !write(*,*) "Broken element/ion", Tk, iElement, iIon, dXion(iElement,iIon), xion(iElement,iIon,icell), dUU, ddt(icell)/(365.25d0*24.d0*60.d0*60.d0)
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -2731,6 +2734,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      write(1026,"(A10, *(X, E22.15))") "dXion:", dXion(iElement, 1:7)
                      write(1026,"(2(A10, X, E22.15))") "TK:", TK, "dT2:", dT2
                      write(1026,*) ''
+
+                     write(1026,*) "after ion, fracMax:", fracMax
+                     write(1026,*) "ele", iElement, "ion", iIon
 #endif
 
                      ! print some before return
@@ -2760,9 +2766,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                if (neInit.gt.1.d-10) then 
                   dUU=ABS((ne-neInit)) / (neInit+x_FM) * one_over_x_FRAC
                   fracMax=MAX(fracMax,dUU)
-#ifdef BRUTAL_WRITE
-                  write(1026,*) "after ne, fracMax:", fracMax
-#endif
+! #ifdef BRUTAL_WRITE
+!                   write(1026,*) "after ne, fracMax:", fracMax
+! #endif
                   if(dUU .gt. 1.) then
                      !write(*,*) "Broken electron", TK, ABS((ne-neInit)) / (neInit+x_FM), dUU
                      dt_rec = 0.9d0 * ddt(icell) / sqrt(2.d0+fracMax)
@@ -2813,8 +2819,34 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             ! REDUCE SO THAT IONIZATION FRACTIONS SUM TO 1
             ion_fracs = elements(iElement)%n_ions + elements(iElement)%n_mol
 
+#ifdef BRUTAL_WRITE
+            if (iElement==2) then
+               write(1026,*) "before renormalization"
+               write(1026,*) "He xion:", dXion(2,1:3)
+            end if
+#endif
+
             if (iElement.le.2) then 
-                  current_mass_frac = sum(dXion(iElement,2:ion_fracs))
+! 
+!                ! total sum - should be close to 1.0
+!                test_sum1 = sum(dXion(iElement,1:ion_fracs))
+! 
+!                ! sum of fractions above threshold
+!                test_sum2 = 0.0d0
+!                do iIon=1,ion_fracs
+!                   if (dXion(iElement,iIon)>0.25d0) then
+!                      test_sum2 = test_sum2 + dXion(iElement,iIon)
+!                   end if
+!                end do
+! 
+!                ! distribute the excess over fractions
+!                do iIon=1,ion_fracs
+!                   if (dXion(iElement,iIon)>0.25d0) then
+!                      dXion(iElement,iIon) = dXion(iElement,iIon) * (test_sum2-test_sum1+1.0d0)/test_sum2
+!                   end if
+!                end do
+! Wonjae above / previous below
+               current_mass_frac = sum(dXion(iElement,2:ion_fracs))
 
                   dXion(iElement,1) = 0.d0
 
@@ -2830,7 +2862,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                      dXion(iElement,1) = 1.d0
                      dXion(iElement,2:ion_fracs) = 0.d0
                   end if
-               ! end if
             else 
                current_mass_frac = sum(dXion(iElement,1:ion_fracs))
                do iIon=1,ion_fracs
@@ -2838,6 +2869,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                   dXion(iElement,iIon) = dXion(iElement,iIon) / current_mass_frac
                end do
             end if
+            
+#ifdef BRUTAL_WRITE
+            if (iElement==2) then
+               write(1026,*) " after renormalization"
+               write(1026,*) "He xion:", dXion(2,1:3)
+            end if
+#endif
+
          end if
       end do ! END ELEMENT LOOP
 

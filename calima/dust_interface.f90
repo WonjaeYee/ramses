@@ -1005,14 +1005,14 @@ contains
         ! check for gas
         do ii = 1, n_elements
             if (elements(ii)%atomic_number > 0) then
-                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1)+y_min))
-                ! dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/max(y_gas(ii,1),y_min))
+                ! dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/(y_gas(ii,1)+y_min))
+                dUU = max(dUU, abs(y_gas_out(ii,1)-y_gas(ii,1))/max(y_gas(ii,1),y_ign))
 
                 ! if not, ion part is zero
                 if (carry_gas_ions) then
                     do jj=1,elements(ii)%n_ions
-                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj)+y_min))
-                        ! dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/max(y_gas(ii,1+jj),y_min))
+                        ! dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/(y_gas(ii,1+jj)+y_min))
+                        dUU = max(dUU, abs(y_gas_out(ii,1+jj)-y_gas(ii,1+jj))/max(y_gas(ii,1+jj),y_ign))
                     end do
                 end if
 
@@ -1022,7 +1022,9 @@ contains
         ! check for dust
         if (dinfo%ndust > 0 .or. dinfo%npah > 0) then
             do ii = 1, dinfo%npah+dinfo%ndust
-                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+y_min))
+                ! previous
+                ! dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/(y_dust(ii)+y_min))
+
                 ! dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/max(y_dust(ii),y_min))
                 ! test: if the new dust/PAH density is low enough, just floor it to zero
                 ! check whether this can prevent small jittering in the very low density
@@ -1031,6 +1033,10 @@ contains
                 ! if (y_dust_out(ii)>y_min .and. y_dust(ii)>y_min) then
                 !     dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/y_dust(ii))
                 ! end if
+
+                ! trial 2.
+                ! if the dust/PAH density is low enough, skip them when getting dUU
+                dUU = max(dUU, abs(y_dust_out(ii)-y_dust(ii))/max(y_dust(ii),y_ign))
             end do
         end if
 #endif

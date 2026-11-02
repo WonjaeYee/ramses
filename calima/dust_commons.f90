@@ -357,8 +357,10 @@ module dust_commons
     integer*8, dimension(:), allocatable :: ode_reduction_count_dust_all
     integer*8, dimension(:), allocatable :: ode_reduction_count_pah_all
 
-    real(dp), parameter :: y_min = 1.0d-60
-    !! minimum of mass density of gas, dust, and PAH
+    real(dp), parameter :: y_min = 1.0d-75
+    !! minimum mass density of dust, and PAH
+    real(dp), parameter :: y_ign = 1.0d-60
+    !! level below which solver skip to check the fractional change
 
     contains
 
