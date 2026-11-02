@@ -1366,7 +1366,9 @@ module dust_init
         else if (dust_solver_type == 3) then
             dust_solver_step => rk54_step
             solver_substepped = .true.
-        else if (dust_solver_type == 4) then
+        else if (dust_solver_type >= 4 .and. dust_solver_type <= 6) then
+            ! 5: MPRK22 with matrix exponentials for the stiff second stages (exp_solve; no stiff ringing)
+            ! 6: Anninos made coupled and second order: exponentials of the transfer matrix in both stages
             dust_solver_step => mprk22_step
             solver_substepped = .false.
         else

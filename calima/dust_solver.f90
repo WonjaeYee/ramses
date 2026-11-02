@@ -1050,7 +1050,8 @@ module mprk22_mod
     use amr_parameters, only: dp
     use dustbin_types, only: DustChemistryInfo
     use dust_commons, only: errmax, y_min, x_trace, trace_reference_masses, dustbins_props, pahbins_props, &
-                            dust_processes_list, pah_processes_list, ndust_processes, npah_processes, dust_debug
+                            dust_processes_list, pah_processes_list, ndust_processes, npah_processes, dust_debug, &
+                            dust_solver_type
     use ode_interface_mod, only: rhs_interface
     use dust_rhs_mod, only: last_dydt_dust_per_proc, last_dydt_pah_per_proc
 
@@ -1275,6 +1276,64 @@ module mprk22_mod
         end do
     end subroutine patankar_solve
 
+    subroutine exp_solve(z_old, h, w0, n0, r0, zd0, w1, n1, r1, zd1, z_new, done, force)
+        ! The exponential counterpart of patankar_solve: for MPRK22's second stage (dust_solver_type = 5) where the
+        ! step is stiff (done = .true.: some loss rate times h above z_stiff; otherwise z_new is not set and the
+        ! caller takes the Patankar stage), and for both stages of the coupled-exponential Anninos
+        ! (dust_solver_type = 6, force = .true.: always): z = exp(h K) z_old + h (w0 r0 + w1 r1),
+        ! K = sum_s w_s sum_k V_s(:,k) e_{d_s(k)}^T / zd_s(d_s(k)): the transfers of each stage as rates per unit mass
+        ! of their donor, at the state where that stage evaluated them. A linear exchange is integrated exactly, so a
+        ! stiff mode decays by exp(-z) per step instead of MPRK22's -1/2 (the ringing at the start of a call, e.g.
+        ! PAH bin 1 under thermal sputtering at D h ~ 20). K has zero column sums (the masses), and exp(hK) comes from
+        ! uniformisation, exp(hK) = exp(-c) exp(hK + c I) with c the largest loss rate times h, scaled by 2^s so that
+        ! c <= 1 and squared back: every term is non-negative where K's off-diagonal is (one donor per transfer), so
+        ! the result stays positive; mixed transfers (several losers) are left to the caller's negativity check.
+        real(dp), intent(in) :: z_old(:), h, w0, r0(:), zd0(:), w1, r1(:), zd1(:)
+        integer, intent(in) :: n0, n1
+        real(dp), intent(out) :: z_new(:)
+        logical, intent(out) :: done
+        logical, intent(in) :: force
+        ! below z = 2.73 MPRK22(1) damps a linear mode without a sign change: the Patankar stage is fine there
+        real(dp), parameter :: z_stiff = 2.7_dp
+        real(dp), dimension(size(z_old), size(z_old)) :: B, T, E
+        real(dp) :: c
+        integer :: n, k, i, m, s
+        n = size(z_old)
+        Mw = 0.0_dp
+        do k = 1, n0
+            Mw(:, d0(k)) = Mw(:, d0(k)) + (V0(:, k) / max(zd0(d0(k)), tiny(1.0_dp))) * (h * w0)
+        end do
+        do k = 1, n1
+            Mw(:, d1(k)) = Mw(:, d1(k)) + (V1(:, k) / max(zd1(d1(k)), tiny(1.0_dp))) * (h * w1)
+        end do
+        c = 0.0_dp
+        do i = 1, n
+            c = max(c, -Mw(i, i))
+        end do
+        done = force .or. c > z_stiff
+        if (.not. done) return
+        s = 0
+        if (c > 1.0_dp) s = ceiling(log(c) / log(2.0_dp))
+        B = Mw / 2.0_dp**s
+        c = c / 2.0_dp**s
+        E = 0.0_dp
+        do i = 1, n
+            B(i, i) = B(i, i) + c
+            E(i, i) = 1.0_dp
+        end do
+        T = E
+        do m = 1, 40
+            T = matmul(T, B) / real(m, dp)
+            E = E + T
+            if (maxval(abs(T)) <= epsilon(1.0_dp) * maxval(abs(E))) exit
+        end do
+        E = E * exp(-c)
+        do m = 1, s
+            E = matmul(E, E)
+        end do
+        z_new = matmul(E, z_old) + h * (w0 * r0 + w1 * r1)
+    end subroutine exp_solve
+
     subroutine mprk22_try(dust_info, y_gas, y_dust, h, y_gas_new, y_dust_new, err, ok, kmax, nt0)
         ! One MPRK22 step of size h from (y_gas, y_dust): the new state, its error estimate err (the first-
         ! against the second-order solution, each component scaled by the larger of its old and new value
@@ -1286,6 +1345,7 @@ module mprk22_mod
         integer, intent(out) :: nt0
         integer :: n, nt1, k, e
         real(dp) :: kmax1
+        logical :: stiff
 
         n = nact + nb_s
         ok = .false.
@@ -1298,6 +1358,8 @@ module mprk22_mod
         p0(nact+1:n) = 0.0_dp
 
         ! stage 1: modified Patankar-Euler
+        ! (also for dust_solver_type = 5: MPE damps a linear mode by 1/(1+z) > 0, it cannot ring; for 6 it only
+        ! decides the small-change shortcut below)
         call patankar_solve(z0, z0, h, 1.0_dp, nt0, p0, 0.0_dp, 0, p0, z1)
         if (minval(z1) < 0.0_dp) return
 
@@ -1324,6 +1386,14 @@ module mprk22_mod
             return
         end if
 
+        ! dust_solver_type = 6, the coupled-exponential Anninos: stage 1 is the exponential Euler step of the whole
+        ! transfer matrix (every bin and its donors together, exact for linear exchanges), stage 2 below its
+        ! exponential Heun correction; their difference is the error estimate of the substepping in mprk22_step
+        if (dust_solver_type == 6) then
+            call exp_solve(z0, h, 1.0_dp, nt0, p0, z0, 0.0_dp, 0, p0, z0, z1, stiff, .true.)
+            if (minval(z1) < 0.0_dp) return
+        end if
+
         ! stage 2: the rates at z1 (the ion stages of each element scaled with it)
         y_gas_s = y_gas
         do k = 1, nact
@@ -1334,7 +1404,12 @@ module mprk22_mod
         call transfers(dust_info, y_gas_s, z1(nact+1:n), z1, V1, d1, nt1, g1, kmax1, .false.)
         p1(1:nact) = g1(iel)
         p1(nact+1:n) = 0.0_dp
-        call patankar_solve(z0, z1, h, 0.5_dp, nt0, p0, 0.5_dp, nt1, p1, z2)
+        ! dust_solver_type = 5, where the step is stiff: exponential Heun (the stage rates averaged, each per unit
+        ! donor mass at its own state), damping a stiff mode by exp(-z) instead of MPRK22's -1/2 (the ringing)
+        stiff = .false.
+        if (dust_solver_type >= 5) call exp_solve(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2, stiff, &
+                                                  dust_solver_type == 6)
+        if (.not. stiff) call patankar_solve(z0, z1, h, 0.5_dp, nt0, p0, 0.5_dp, nt1, p1, z2)
 
         ! the solves conserve each element up to round-off, which grows with h*rate/z: hand it back to
         ! the gas, so the totals change by exactly the explicit part

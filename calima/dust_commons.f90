@@ -22,7 +22,7 @@ module dust_commons
     logical ::dust_log=.false.                   ! Activate dust logging (ODE solver stats: accept/reject/substep counts)
     logical ::dust_debug=.false.                 ! Debug diagnostics: the per-process dust mass budget (dM/dt; heavier), the
                                                  ! TVA drift-clipping report, the test diagnostics (IRTRAP_DIAG)
-    integer ::dust_solver_type=1                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54, 4 = MPRK22
+    integer ::dust_solver_type=5                 ! Solver type: 1 = RK4, 2 = Anninos, 3 = RK54, 4 = MPRK22, 5 = MPRK22 with exponentials, 6 = coupled-exponential Anninos
     logical ::solver_substepped=.true.           ! Whether the dust solver uses adaptive substepping (e.g. RK4, RK54)
     logical ::dust_only_rtadv=.false.            ! Activate dust chemistry only when RT is on
     logical ::dust_eq_test=.false.               ! Activate dust equilibrium test parameters
