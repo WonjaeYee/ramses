@@ -2991,6 +2991,11 @@ SUBROUTINE rtz_run_single_cell_test(filename)
 #endif
 
    err_idx_out = 0
+#ifdef RT
+   ! As during a run's steps: at initialisation rt_advect is still .false., and rtz_cool_step then gives the
+   ! grains no local FUV (G0 = 0: no PAH cluster evaporation, photolysis or local PE)
+   rt_advect = .true.
+#endif
    call rtz_solve_cooling( &
         T2_1, aexp_r, xion_1, nElement_1, nCO_1, &
 #ifdef RT

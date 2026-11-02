@@ -704,10 +704,13 @@ module anninos_mod
 
             if (abs(fj) * h < 1.0d-12 * yj) then
                 y_dust_new(j) = yj
-            else if (abs(fj) * h < 1.0d-2 * yj) then
+            else if (abs(fj) * h < 1.0d-2 * yj .and. dydt_dust(j, 2) * h < 0.5d0 * max(yj, tiny(1.0_dp))) then
                 ! Small changes: explicit. Unlike the exponential below it keeps mass moved between bins
                 ! balanced (the donor loses and the receiver gains the same rate*h); the exponential takes
                 ! the difference from the gas. Both have the root C/D (Dj below divides by yj itself).
+                ! Only where D h < 0.5: near a stiff equilibrium the net change is small but explicit Euler
+                ! flips the deviation's sign every step, and the switch to the exponential above 1% gives a
+                ! limit cycle (PAH bin 2 next to massive stars).
                 y_dust_new(j) = yj + fj * h
             else
                 ! Decompose derivative into creation Cj and destruction Dj.
@@ -1239,6 +1242,9 @@ module mprk22_mod
         ! Solve z = z_old + h * sum_s w_s * (sum_k V_s(:,k) * z(d_s(k)) / z_den(d_s(k)) + r_s) for z, with the
         ! transfers of stage s in (V0, d0) and (V1, d1), r_s their residuals in the packed layout (n1 = 0 and
         ! w1 = 0 for the first stage). I - M has unit column sums and a positive diagonal: no pivoting.
+        ! Each transfer is divided by its donor's own value (tiny() only guards zero), as Anninos' Dj: with
+        ! y_min as the floor, a donor below it at a stiff equilibrium y* maps to y* * y_min / y every step,
+        ! a two-cycle that never damps (PAH bin 2 next to massive stars). V / z first: h / tiny() overflows.
         real(dp), intent(in) :: z_old(:), z_den(:), h, w0, r0(:), w1, r1(:)
         integer, intent(in) :: n0, n1
         real(dp), intent(out) :: z_new(:)
@@ -1247,10 +1253,10 @@ module mprk22_mod
         n = size(z_old)
         Mw = 0.0_dp
         do k = 1, n0
-            Mw(:, d0(k)) = Mw(:, d0(k)) - (h * w0 / max(z_den(d0(k)), y_min)) * V0(:, k)
+            Mw(:, d0(k)) = Mw(:, d0(k)) - (V0(:, k) / max(z_den(d0(k)), tiny(1.0_dp))) * (h * w0)
         end do
         do k = 1, n1
-            Mw(:, d1(k)) = Mw(:, d1(k)) - (h * w1 / max(z_den(d1(k)), y_min)) * V1(:, k)
+            Mw(:, d1(k)) = Mw(:, d1(k)) - (V1(:, k) / max(z_den(d1(k)), tiny(1.0_dp))) * (h * w1)
         end do
         do i = 1, n
             Mw(i, i) = Mw(i, i) + 1.0_dp
