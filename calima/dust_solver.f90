@@ -1023,7 +1023,8 @@ module rk54_mod
 end module rk54_mod
 
 module mprk22_mod
-    ! Modified Patankar-Runge-Kutta solver MPRK22 (Kopecz & Meister 2018), dust_solver_type = 4, ported
+    ! Modified Patankar-Runge-Kutta solver MPRK22 (Kopecz & Meister 2018), dust_solver_type = 4 (with an
+    ! exponential second stage where the step is stiff), and Anninos-coupled, dust_solver_type = 5; ported
     ! from pyCALIMA (src/pycalima/solvers/mprk22.py). The dust ODE is a production-destruction system:
     ! every process moves mass between the gas-phase elements and the bins and conserves each element.
     ! The right-hand side is written as a sum of transfers v, each with one donor d and conserving every
@@ -1072,7 +1073,7 @@ module mprk22_mod
     ! (module arrays, not automatic ones: gfortran puts those on the heap, a malloc per call)
     real(dp), allocatable, save :: wdd(:), wu(:), wgain(:), wb(:), wmel(:), wmbin(:)
     integer, allocatable, save :: d0(:), d1(:)
-    ! exp_groups (dust_solver_type = 6): a donor group's augmented matrix, its exponential and Taylor terms,
+    ! exp_groups (Anninos-coupled, dust_solver_type = 5): a donor group's augmented matrix, its exponential and Taylor terms,
     ! phi1 times the group's masses, the group of each component and the members of the current one
     real(dp), allocatable, save :: Xg(:,:), Eg(:,:), Tg(:,:), Ug(:,:), phig(:)
     integer, allocatable, save :: glab(:), gmem(:)
@@ -1284,9 +1285,9 @@ module mprk22_mod
     end subroutine patankar_solve
 
     subroutine exp_solve(z_old, h, w0, n0, r0, zd0, w1, n1, r1, zd1, z_new, done)
-        ! The exponential counterpart of patankar_solve: for MPRK22's second stage (dust_solver_type = 5) where the
+        ! The exponential counterpart of patankar_solve: for MPRK22's second stage (dust_solver_type = 4) where the
         ! step is stiff (done = .true.: some loss rate times h above z_stiff; otherwise z_new is not set and the
-        ! caller takes the Patankar stage; dust_solver_type = 6 takes exp_groups): z = exp(h K) z_old + h (w0 r0 + w1 r1),
+        ! caller takes the Patankar stage; Anninos-coupled takes exp_groups): z = exp(h K) z_old + h (w0 r0 + w1 r1),
         ! K = sum_s w_s sum_k V_s(:,k) e_{d_s(k)}^T / zd_s(d_s(k)): the transfers of each stage as rates per unit mass
         ! of their donor, at the state where that stage evaluated them. A linear exchange is integrated exactly, so a
         ! stiff mode decays by exp(-z) per step instead of MPRK22's -1/2 (the ringing at the start of a call, e.g.
@@ -1340,7 +1341,7 @@ module mprk22_mod
     end subroutine exp_solve
 
     subroutine exp_groups(z_old, h, w0, n0, r0, zd0, w1, n1, r1, zd1, z_new)
-        ! exp_solve for the coupled-exponential Anninos (dust_solver_type = 6), z = exp(h K) z_old + h (w0 r0 + w1 r1),
+        ! exp_solve for Anninos-coupled (dust_solver_type = 5), z = exp(h K) z_old + h (w0 r0 + w1 r1),
         ! by groups of donors instead of the whole matrix. Only the donors' columns of K are non-zero: with D the
         ! donors and R the rest, exp(h K) = [[exp(h K_DD), 0], [h K_RD phi1(h K_DD), I]], phi1(X) = (exp(X) - I) / X,
         ! and K_DD splits into groups P of donors linked by transfers (carbon and silicate bins never are, nor bins
@@ -1553,8 +1554,8 @@ module mprk22_mod
         p0(nact+1:n) = 0.0_dp
 
         ! stage 1: modified Patankar-Euler
-        ! (also for dust_solver_type = 5: MPE damps a linear mode by 1/(1+z) > 0, it cannot ring; for 6 it only
-        ! decides the small-change shortcut below)
+        ! (MPE damps a linear mode by 1/(1+z) > 0, it cannot ring; for Anninos-coupled it only decides the
+        ! small-change shortcut below)
         call patankar_solve(z0, z0, h, 1.0_dp, nt0, p0, 0.0_dp, 0, p0, z1)
         if (minval(z1) < 0.0_dp) return
 
@@ -1581,10 +1582,10 @@ module mprk22_mod
             return
         end if
 
-        ! dust_solver_type = 6, the coupled-exponential Anninos: stage 1 is the exponential Euler step of the whole
+        ! Anninos-coupled (dust_solver_type = 5): stage 1 is the exponential Euler step of the whole
         ! transfer matrix (every bin and its donors together, exact for linear exchanges), stage 2 below its
         ! exponential Heun correction; their difference is the error estimate of the substepping in mprk22_step
-        if (dust_solver_type == 6) then
+        if (dust_solver_type == 5) then
             call exp_groups(z0, h, 1.0_dp, nt0, p0, z0, 0.0_dp, 0, p0, z0, z1)
             if (minval(z1) < 0.0_dp) return
         end if
@@ -1599,12 +1600,12 @@ module mprk22_mod
         call transfers(dust_info, y_gas_s, z1(nact+1:n), z1, V1, d1, nt1, g1, kmax1, .false.)
         p1(1:nact) = g1(iel)
         p1(nact+1:n) = 0.0_dp
-        ! dust_solver_type = 5, where the step is stiff: exponential Heun (the stage rates averaged, each per unit
-        ! donor mass at its own state), damping a stiff mode by exp(-z) instead of MPRK22's -1/2 (the ringing)
-        ! (dust_solver_type = 6: always, by groups of donors)
+        ! MPRK22 (dust_solver_type = 4), where the step is stiff: exponential Heun (the stage rates averaged, each
+        ! per unit donor mass at its own state), damping a stiff mode by exp(-z) instead of the Patankar stage's
+        ! -1/2 (the ringing); Anninos-coupled (5): always, by groups of donors
         stiff = .false.
-        if (dust_solver_type == 5) call exp_solve(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2, stiff)
-        if (dust_solver_type == 6) then
+        if (dust_solver_type == 4) call exp_solve(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2, stiff)
+        if (dust_solver_type == 5) then
             call exp_groups(z0, h, 0.5_dp, nt0, p0, z0, 0.5_dp, nt1, p1, z1, z2)
         else if (.not. stiff) then
             call patankar_solve(z0, z1, h, 0.5_dp, nt0, p0, 0.5_dp, nt1, p1, z2)

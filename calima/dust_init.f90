@@ -29,6 +29,10 @@ module dust_init
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Anninos)'
         else if (dust_solver_type == 3) then
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK54)'
+        else if (dust_solver_type == 4) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (MPRK22)'
+        else if (dust_solver_type == 5) then
+            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Anninos-coupled)'
         else
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Unknown)'
         end if
@@ -1366,9 +1370,10 @@ module dust_init
         else if (dust_solver_type == 3) then
             dust_solver_step => rk54_step
             solver_substepped = .true.
-        else if (dust_solver_type >= 4 .and. dust_solver_type <= 6) then
-            ! 5: MPRK22 with matrix exponentials for the stiff second stages (exp_solve; no stiff ringing)
-            ! 6: Anninos made coupled and second order: exponentials of the transfer matrix in both stages
+        else if (dust_solver_type == 4 .or. dust_solver_type == 5) then
+            ! 4: MPRK22, its second stage by matrix exponentials where the step is stiff (exp_solve; no ringing)
+            ! 5: Anninos-coupled: Anninos made coupled and second order, exponentials of the transfer matrix in
+            !    both stages (exp_groups), MPRK22's error control and small-change shortcut
             dust_solver_step => mprk22_step
             solver_substepped = .false.
         else
