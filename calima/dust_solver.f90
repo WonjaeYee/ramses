@@ -704,13 +704,10 @@ module anninos_mod
 
             if (abs(fj) * h < 1.0d-12 * yj) then
                 y_dust_new(j) = yj
-            else if (abs(fj) * h < 1.0d-2 * yj .and. dydt_dust(j, 2) * h < 0.5d0 * max(yj, tiny(1.0_dp))) then
+            else if (abs(fj) * h < 1.0d-2 * yj) then
                 ! Small changes: explicit. Unlike the exponential below it keeps mass moved between bins
                 ! balanced (the donor loses and the receiver gains the same rate*h); the exponential takes
                 ! the difference from the gas. Both have the root C/D (Dj below divides by yj itself).
-                ! Only where D h < 0.5: near a stiff equilibrium the net change is small but explicit Euler
-                ! flips the deviation's sign every step, and the switch to the exponential above 1% gives a
-                ! limit cycle (PAH bin 2 next to massive stars).
                 y_dust_new(j) = yj + fj * h
             else
                 ! Decompose derivative into creation Cj and destruction Dj.
