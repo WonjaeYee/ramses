@@ -30,8 +30,6 @@ module dust_init
         else if (dust_solver_type == 3) then
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (RK54)'
         else if (dust_solver_type == 4) then
-            write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (MPRK22)'
-        else if (dust_solver_type == 5) then
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Anninos-coupled)'
         else
             write(*,*) 'dust_solver_type      = ',dust_solver_type, ' (Unknown)'
@@ -855,7 +853,7 @@ module dust_init
         use rk4_mod, only: rk4_step
         use anninos_mod, only: anninos_step
         use rk54_mod, only: rk54_step
-        use mprk22_mod, only: mprk22_step
+        use anninos_coupled_mod, only: anninos_coupled_step
         use ode_interface_mod, only: dust_solver_step
         implicit none
         integer, intent(in) :: nGroups
@@ -1370,11 +1368,9 @@ module dust_init
         else if (dust_solver_type == 3) then
             dust_solver_step => rk54_step
             solver_substepped = .true.
-        else if (dust_solver_type == 4 .or. dust_solver_type == 5) then
-            ! 4: MPRK22, its second stage by matrix exponentials where the step is stiff (exp_solve; no ringing)
-            ! 5: Anninos-coupled: Anninos made coupled and second order, exponentials of the transfer matrix in
-            !    both stages (exp_groups), MPRK22's error control and small-change shortcut
-            dust_solver_step => mprk22_step
+        else if (dust_solver_type == 4) then
+            ! Anninos-coupled: the bins coupled through the exponential of the transfer matrix, second order
+            dust_solver_step => anninos_coupled_step
             solver_substepped = .false.
         else
             if (myid == 1) then
