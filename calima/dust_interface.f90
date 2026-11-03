@@ -38,8 +38,7 @@ module dust_interface
     type(TdustLin), allocatable, save :: td_lin(:)
     logical, save :: td_valid = .false., td_hasNp = .false.
     real(dp), save :: td_T = 0d0, td_ne = 0d0, td_G0 = 0d0, td_nH2 = 0d0, td_nCO = 0d0
-    real(dp), allocatable, save :: td_nel(:), td_xion(:,:), td_Np(:), td_egy(:)
-    real(dp), allocatable, save :: td_Ep(:)    ! the photon energy densities of update_T_dust [eV/cm3]
+    real(dp), allocatable, save :: td_nel(:), td_xion(:,:), td_Erad(:)
     ! The grain charge of the dust bins by charging model (compute_dust_precool): the charge (dinfo%Z_dust,
     ! Z_sigma) and, where the model gives them, the PE heating and recombination cooling per grain, the
     ! correction of the Coulomb factors of the low impactor charges ISRF_DCHARGE (Dmode 1: the Gaussian
@@ -238,7 +237,7 @@ contains
         ! xelem_ions --> array of ionization fractions for each element and ionization state
         ! nH2 --> local molecular hydrogen density (cm^-3)
         ! nCO --> local carbon monoxide density (cm^-3)
-        ! Np --> the radiation energy density (#/cm^3) for each radiation group
+        ! Np --> the photon number density (#/cm^3) for each radiation group (dinfo%Erad: their energy density)
         use dust_charging, only: compute_Coulomb_focusing_ions, isrf_lookup, ISRF_ND, ISRF_DCHARGE
         use dust_photoelectric_heating, only: interpolate_dust_peh_rate
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
@@ -277,6 +276,9 @@ contains
         ! cooling solver's T(1 + 1e-5) call for the rates (rates_only)
         rec = dust_ion_recombination
         if (present(rates_only)) rec = rec .and. .not. rates_only
+
+        ! the photon energy density of each group [erg/cm3], for the absorbed powers (T_dust, PAH PEH)
+        if (present(Np)) dinfo%Erad = Np * dinfo%group_eV * eV2erg
 
         if (dinfo%ndust > 0) then
             do ii = 1, dinfo%ndust
@@ -325,13 +327,15 @@ contains
 
             ! 2. If needed, precompute the Coulomb factors, for compute_dust_update: not in a call for
             ! the rates only (the cooling solver's T(1 + 1e-5) call), whose factors differ from those
-            ! at T only to first order
+            ! at T only to first order; only of the bins whose factors a dust process reads (need_coulomb,
+            ! dust_init), the others stay 1. The collisional heating (update_T_dust) does not read them.
             skip_coulomb = .false.
             if (present(rates_only)) skip_coulomb = rates_only
             if (.not. skip_coulomb) then
                 dinfo%Coulomb_factor = 1d0
                 if (Coulomb_precompute) then
                     do ii = 1, dinfo%ndust
+                        if (.not. dustbins_props(ii)%need_coulomb) cycle
                         call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
                                                            dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
                         ! the low impactor charges over the exact P(Z), where the Gaussian of <Z> and sigma_Z
@@ -373,15 +377,11 @@ contains
                 if (.not. allocated(td_lin)) allocate(td_lin(1:dinfo%ndust), td_nel(size(nElement)), &
                                                       td_xion(size(xelem_ions,1), size(xelem_ions,2)))
                 if (present(Np)) then
-                    ! the energy densities in an array of their own, not a temporary allocated in every call
-                    if (.not. allocated(td_Ep)) allocate(td_Ep(dinfo%nGroups))
-                    td_Ep = Np(:)*dinfo%group_eV(:)
                     call update_T_dust(dinfo%G0_background,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
                                         dinfo%T_dust(:),ne,nElement(:),xelem_ions(:,:),nH2,nCO,Tk,dinfo%Z_dust(:),&
-                                        td_Ep,dinfo%csa_dust(:,:),lin=td_lin)
-                    if (.not. allocated(td_Np)) allocate(td_Np(dinfo%nGroups), td_egy(dinfo%nGroups))
-                    td_Np = Np
-                    td_egy = dinfo%group_eV
+                                        dinfo%Erad,dinfo%csa_dust(:,:),lin=td_lin)
+                    if (.not. allocated(td_Erad)) allocate(td_Erad(dinfo%nGroups))
+                    td_Erad = dinfo%Erad
                     td_G0 = dinfo%G0_background
                 else
                     call update_T_dust(G0_total,dinfo%Pcoll_dust(:),dinfo%Prec_dust(:),dinfo%Pinj_dust(:),dinfo%Prad_dust(:),&
@@ -445,7 +445,7 @@ contains
                                                             dinfo%csa_pah(i_charged,:),&
                                                             dinfo%csa_pah(i_charged,:),&
                                                             dinfo%nGroups,dinfo%local_solid_angle(:),&
-                                                            Np(:),dinfo%group_eV(:),&
+                                                            Np(:),dinfo%group_eV(:),dinfo%Erad(:),&
                                                             dinfo%local_c,Tk,ne,dinfo%fcharge_pah(:,ii),&
                                                             dinfo%Pabs_pah(ii,:),dinfo%Pinj_pah(ii),&
                                                             dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
@@ -505,7 +505,7 @@ contains
             if (ne /= td_ne .or. nH2 /= td_nH2 .or. nCO /= td_nCO) return
             if (present(Np)) then
                 if (dinfo%G0_background /= td_G0) return
-                if (any(Np /= td_Np) .or. any(dinfo%group_eV /= td_egy)) return
+                if (any(dinfo%Erad /= td_Erad)) return
             else
                 if (G0_total /= td_G0) return
             end if
@@ -882,9 +882,11 @@ contains
         ! 1. Compute the local RAT-D quantities if we run with dust_ratd
         if (dust_ratd) then
             if (present(Np)) then
+                ! the energy densities of this call's Np (with the dust IR emission added since the precool)
+                dinfo%Erad = Np * dinfo%group_eV * eV2erg
                 do ii = 1, dinfo%ndust
-                    dinfo%rat_torque(ii) = total_radiative_torque(dinfo%local_rad_ani,Np,&
-                                                            dinfo%group_eV(:)*eV2erg,dinfo%nGroups,&
+                    dinfo%rat_torque(ii) = total_radiative_torque(dinfo%local_rad_ani,dinfo%Erad,&
+                                                            dinfo%group_eV,dinfo%nGroups,&
                                                             dinfo%local_c,dinfo%csrat_dust(:,ii))
                 end do
             end if

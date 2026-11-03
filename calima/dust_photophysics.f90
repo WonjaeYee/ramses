@@ -2095,7 +2095,7 @@ module dust_radiation
                             &recomb_heat,pe_heat,P_rad,T_dust,&
                             &ne,nElement,xelem_ions,&
                             &nH2,nCO,Tgas,dust_charge,&
-                            &Ep,cs_abs,lin)
+                            &Erad,cs_abs,lin)
         ! This subroutine updates the local dust temperatures by considering
         ! the radiation field conditions. The balance between radiative
         ! heating and radiative cooling is only achieved for the larger grains
@@ -2119,13 +2119,13 @@ module dust_radiation
         ! nCO            --> carbon monoxide density [cm^-3]
         ! Tgas           --> gas temperature [K]
         ! dust_charge    --> charge of the dust grains (in units of e)
-        ! Ep            --> radiation energy density [eV/cm3]
+        ! Erad          --> photon energy density of each group [erg/cm3] (dinfo%Erad)
         ! cs_abs        --> grain cross section array for dust types [cm3/s] (no PAHs)
         ! lin           <-- (optional) the solution and its first-order response (serve_T_dust)
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
         use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ, &
-                                BH80Gas
+                                bh80_unit_flux
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -2135,35 +2135,36 @@ module dust_radiation
         real(dp),dimension(1:n_elements,1:n_elements),intent(in) :: xelem_ions
         real(dp),intent(in) :: ne,nH2,nCO,Tgas
         real(dp),dimension(1:ndust),intent(in) :: dust_charge
-        real(dp),intent(in),optional :: Ep(:),cs_abs(:,:)
+        real(dp),intent(in),optional :: Erad(:),cs_abs(:,:)
         type(TdustLin),dimension(1:ndust),intent(out),optional :: lin
 
         integer :: i,j
-        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd
+        real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd, flux_bh80
+        logical :: rt_field
         type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
-        type(BH80Gas) :: gas          ! the BH80 sums of this gas, for every bin
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
-        gas%ready = .false.
+        rt_field = .false.
+        if (present(Erad) .and. present(cs_abs)) rt_field = any(Erad /= 0d0)
+        ! the BH80 flux of the species of unit accommodation: the same for every bin
+        if (dust_coll_cooling) flux_bh80 = bh80_unit_flux(nElement,xelem_ions)
 
         do j = 1, ndust
             ! --- Radiative absorbed power ---
             P_abs = dustbins_props(j)%Pabs_isrf * (G0_background / 1.13d0) ! [erg/s]
             
-            if (present(Ep) .and. present(cs_abs)) then
-                if (.not.all(Ep.eq.0d0)) then
-                    do i = 1, size(Ep)
-                        P_abs = P_abs + Ep(i) * cs_abs(j,i) * eV2erg ! [erg/s]
-                    end do
-                end if
+            if (rt_field) then
+                do i = 1, size(Erad)
+                    P_abs = P_abs + Erad(i) * cs_abs(j,i) ! [erg/s]
+                end do
             endif
             ! --- Initial guess: radiative equilibrium ---
             call get_Tdust_radiative_eq(j, P_abs, Tmin, T0)
             ! --- Check collisional heating at Tgas ---
             ! If collisional heating dominates radiation, start closer to Tgas
             if (dust_coll_cooling) then
-                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,Tgas,dust_charge(j),pre,deriv=present(lin),gas=gas)
+                call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,flux_bh80,Tgas,dust_charge(j),pre,deriv=present(lin))
                 H_coll_at_Tgas = coll_heating_eval(pre,T0)
                 coll_heat(j) = H_coll_at_Tgas
                 if (H_coll_at_Tgas > P_abs) then
@@ -2275,15 +2276,16 @@ module dust_radiative_torques
 
     contains
 
-    function total_radiative_torque(rad_anisotropy,dNp,group_egy_erg,nGroups,local_c,csrat_dust)
+    function total_radiative_torque(rad_anisotropy,Erad,group_eV,nGroups,local_c,csrat_dust)
         ! This function computes the local radiative torque caused
         ! by the different radiation bins on a particular dust grain
         ! based on the RAT model (see Hoang et al. 2020 for a review)
+        ! Erad: photon energy density of each group [erg/cm3]; group_eV: their mean photon energies [eV]
 
-        use constants, only:twopi,hplanck,c_cgs
+        use constants, only:twopi,hplanck,c_cgs,eV2erg
         implicit none
         integer, intent(in) :: nGroups
-        real(dp), dimension(1:nGroups) :: dNp,csrat_dust,group_egy_erg,rad_anisotropy
+        real(dp), dimension(1:nGroups) :: Erad,csrat_dust,group_eV,rad_anisotropy
         real(dp) :: local_c
         real(dp) :: total_radiative_torque
 
@@ -2293,13 +2295,13 @@ module dust_radiative_torques
         total_radiative_torque = 0d0
 
         do igroup = 1, nGroups
-            if (dNp(igroup) .lt. 0d0) cycle
+            if (Erad(igroup) .lt. 0d0) cycle
 
             ! 1. Compute mean wavelength [cm] of radiation bin
-            lambda_mean = hplanck * c_cgs / (group_egy_erg(igroup))
+            lambda_mean = hplanck * c_cgs / (group_eV(igroup) * eV2erg)
 
-            ! 2. Compute radiation energy density in [erg/cm^3]
-            rad_density = group_egy_erg(igroup) * dNp(igroup)
+            ! 2. The radiation energy density in [erg/cm^3]
+            rad_density = Erad(igroup)
 
             ! 3. Get everything together into the formula of radiative torque [erg]
             !    (Eq. 13 in Hoang et al. (2021))
@@ -2779,7 +2781,7 @@ module pah_photoelectric_heating
 
     subroutine compute_pah_peh_equilibrium(i_pah,csa_anion,csa_neutral,&
                                           csa_cation,csa_dication,nGroups,&
-                                          solid_angle,Np,E,local_c,Tgas,ne,fcharge_pahs,&
+                                          solid_angle,Np,E,Erad,local_c,Tgas,ne,fcharge_pahs,&
                                           Pabs_pah,Pinj_pah,Prad_pah,Prec_pah)
         ! This subroutine computes the equilibrium charge distribution of PAHs
         ! based on the ionisation and recombination rates for the local
@@ -2794,6 +2796,7 @@ module pah_photoelectric_heating
         ! solid_angle    --> solid angle subtended by the radiation field in each group in sr
         ! Np             --> number density flux of photons in #/cm2/s
         ! E              --> photon energy in eV (for each group)
+        ! Erad           --> photon energy density of each group in erg/cm3 (dinfo%Erad)
         ! Tgas           --> gas temperature in Kelvin
         ! ne             --> electron number density in cm-3
         ! fcharge_pahs   <-- allocatable/assumed-shape vector with the
@@ -2807,7 +2810,7 @@ module pah_photoelectric_heating
         implicit none
         integer, intent(in) :: i_pah,nGroups
         real(dp), intent(in) :: local_c, Tgas, ne
-        real(dp), dimension(1:nGroups), intent(in) :: Np, E, solid_angle
+        real(dp), dimension(1:nGroups), intent(in) :: Np, E, Erad, solid_angle
         real(dp), dimension(1:nGroups), intent(in) :: csa_anion, csa_neutral, csa_cation, csa_dication
         real(dp), dimension(:), intent(out) :: fcharge_pahs
         real(dp), dimension(1:nGroups), intent(inout) :: Pabs_pah
@@ -2932,7 +2935,7 @@ module pah_photoelectric_heating
         Pabs_local(:) = 0d0
         do i = 1, nGroups
             if (E(i) .gt. 13.6d0 .and. (.not.pah_pe_nolyman)) cycle ! Ignore ionising photons
-            F_pe = Np(i) * E(i) * eV2erg ! [erg/cm3]
+            F_pe = Erad(i) ! [erg/cm3]
             Pabs_local(i) = Pabs_local(i) + power_absorbed(solid_angle(i)*csa_anion(i), F_pe) * fcharge_pahs(1)
             Pabs_local(i) = Pabs_local(i) + power_absorbed(solid_angle(i)*csa_neutral(i), F_pe) * fcharge_pahs(2)
             Pabs_local(i) = Pabs_local(i) + power_absorbed(solid_angle(i)*csa_cation(i), F_pe) * f_cat

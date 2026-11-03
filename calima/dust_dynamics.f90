@@ -28,23 +28,50 @@ module dust_dynamics
     integer, parameter :: TS_MEMO_N = 16384
     integer(kind=8), allocatable, save :: ts_memo_key(:,:)
     real(dp), allocatable, save :: ts_memo_val(:)
-    ! the collision models of grain_relative_velocity (velocity_model_id of dust_velocity_model)
-    integer, parameter :: VEL_OTHER = 0, VEL_ORMEL2007 = 1, VEL_HIRASHITA2019 = 2
+    ! The rms relative velocity Delta V of two grains (target and projectile), the width of their
+    ! Gaussian relative velocity distribution (see gaussian_collision_speeds for the speeds the kernels
+    ! use), of the collision model dust_velocity_model: grain_relative_velocity points to its function,
+    ! set once at init (select_velocity_model). For further details see Section 2.3.1 in Rodriguez
+    ! Montero et al. (2023).
+    ! T            => gas temperature [K]
+    ! rho_gas      => gas density [g/cm**3]
+    ! nH           => Hydrogen number density [1/cm**3]
+    ! ne           => electron number density [1/cm**3] (the ionised fraction of the gas viscosity)
+    ! v_turb       => turbulent velocity [cm]
+    ! local_mu     => local mean molecular weight
+    ! inject_L     => turbulent injection scale [cm]
+    ! target_a     => target grain radius [cm]
+    ! projectile_a => projectile grain radius [cm]
+    ! target_s     => target grain material density [g/cm**3]
+    ! projectile_s => projectile grain material density [g/cm**3]
+    ! target_m     => target grain mass [g]
+    ! projectile_m => projectile grain mass [g]
+    abstract interface
+        function relative_velocity_model(T,rho_gas,nH,ne,v_turb,local_mu,inject_L,target_a,projectile_a, &
+                                         target_s,projectile_s,target_m,projectile_m) result(dV)
+            import :: dp
+            real(dp), intent(in) :: T,rho_gas,nH,ne,v_turb,local_mu,inject_L
+            real(dp), intent(in) :: target_a,target_s,target_m
+            real(dp), intent(in) :: projectile_a,projectile_s,projectile_m
+            real(dp) :: dV
+        end function relative_velocity_model
+    end interface
+    procedure(relative_velocity_model), pointer, save :: grain_relative_velocity => null()
 
     contains
 
-    integer function velocity_model_id(model)
-        ! grain_relative_velocity's model of the name model, compared once per caller rather than
-        ! in every call
-        character(len=*), intent(in) :: model
-        if (trim(model) == 'Ormel2007') then
-            velocity_model_id = VEL_ORMEL2007
-        else if (trim(model) == 'Hirashita2019') then
-            velocity_model_id = VEL_HIRASHITA2019
-        else
-            velocity_model_id = VEL_OTHER
-        end if
-    end function velocity_model_id
+    subroutine select_velocity_model()
+        ! grain_relative_velocity => the model of dust_velocity_model: Ormel2007, Hirashita2019, or
+        ! else the turbulent velocity itself
+        select case (trim(dust_velocity_model))
+        case ('Ormel2007')
+            grain_relative_velocity => relvel_ormel2007
+        case ('Hirashita2019')
+            grain_relative_velocity => relvel_hirashita2019
+        case default
+            grain_relative_velocity => relvel_turbulent
+        end select
+    end subroutine select_velocity_model
 
     subroutine check_tva_rt_params()
         ! The trapped-IR radiation pressure on the dust needs a non-thermal energy variable, the IR
@@ -202,67 +229,42 @@ module dust_dynamics
         ts_memo_slot = int(iand(ieor(x, ishft(x, -24)), int(TS_MEMO_N - 1, 8)))
     end function ts_memo_slot
 
-    function grain_relative_velocity(model,T,rho_gas,nH,ne,v_turb&
-                                    &,local_mu,inject_L&
-                                    &,target_a,projectile_a&
-                                    &,target_s,projectile_s&
-                                    &,target_m,projectile_m)
-        ! This function returns the rms relative velocity Delta V of two grains (target and
-        ! projectile) based on a particular collision model, the width of their Gaussian relative
-        ! velocity distribution (see gaussian_collision_speeds for the speeds the kernels use).
-        ! For further details see Section 2.3.1 in Rodriguez Montero et al. (2023).
-
-        ! model        => collision model to use (velocity_model_id of its name)
-        ! T            => gas temperature [K]
-        ! rho_gas      => gas density [g/cm**3]
-        ! nH           => Hydrogen number density [1/cm**3]
-        ! ne           => electron number density [1/cm**3] (the ionised fraction of the gas viscosity)
-        ! v_turb       => turbulent velocity [cm]
-        ! local_mu     => local mean molecular weight
-        ! inject_L     => turbulent injection scale [cm]
-        ! target_a     => target grain radius [cm]
-        ! projectile_a => projectile grain radius [cm]
-        ! target_s     => target grain material density [g/cm**3]
-        ! projectile_s => projectile grain material density [g/cm**3]
-        ! target_m     => target grain mass [g]
-        ! projectile_m => projectile grain mass [g]
+    function relvel_ormel2007(T,rho_gas,nH,ne,v_turb,local_mu,inject_L,target_a,projectile_a, &
+                              target_s,projectile_s,target_m,projectile_m) result(dV)
+        ! dust_velocity_model = 'Ormel2007': the Brownian motion and the analytical turbulent model of
+        ! Ormel & Cuzzi (2007), in the formulation of Kawasaki & Machida (2023)
         implicit none
-        integer, intent(in) :: model
         real(dp), intent(in) :: T,rho_gas,nH,ne,v_turb,local_mu,inject_L
         real(dp), intent(in) :: target_a,target_s,target_m
         real(dp), intent(in) :: projectile_a,projectile_s,projectile_m
+        real(dp) :: dV
 
-        real(dp) :: grain_relative_velocity
-        real(dp) :: dV_thermal,cs_gas,v_th
+        real(dp) :: dV_thermal,v_th
         real(dp) :: tau_L,Re,tau_eta,rc,x_ion,sigma_C,nu
         real(dp) :: St1,St2,St_star,dVI2,dVII2
-        ! Gas viscosity (Ormel2007): neutral (H, H2) kinetic cross-section, as Ormel et al. (2009),
-        ! and the Coulomb logarithm of the ion-ion collisions (Braginskii 1965)
+        ! Gas viscosity: neutral (H, H2) kinetic cross-section, as Ormel et al. (2009), and the Coulomb
+        ! logarithm of the ion-ion collisions (Braginskii 1965)
         real(dp), parameter :: sigma_neutral = 2d-15, coulomb_log = 20d0
         real(dp) :: ts_target,ts_projectile
         real(dp) :: St_target,St_projectile
         real(dp) :: Stmin,dV_turb
-        real(dp) :: Mach,v_target,v_projectile
 
         ! Cache for gas-phase invariants to avoid redundant calculations within a cell
         real(dp),save :: last_T=-1d0, last_rho_gas=-1d0, last_nH=-1d0, last_v_turb=-1d0, last_mu=-1d0, last_L=-1d0
         real(dp),save :: last_ne=-1d0
-        integer,save :: last_model=-1
-        real(dp),save :: cs_gas_save, v_th_save, tau_L_save, Re_save, tau_eta_save
+        real(dp),save :: v_th_save, tau_L_save, Re_save, tau_eta_save
         if (T /= last_T .or. rho_gas /= last_rho_gas .or. nH /= last_nH .or. &
             v_turb /= last_v_turb .or. local_mu /= last_mu .or. inject_L /= last_L .or. &
-            ne /= last_ne .or. model /= last_model) then
+            ne /= last_ne) then
 
             last_T = T; last_rho_gas = rho_gas; last_nH = nH
             last_v_turb = v_turb; last_mu = local_mu; last_L = inject_L
-            last_ne = ne; last_model = model
+            last_ne = ne
 
-            ! Gas sound speed (assumed gas with adiabatic constant of 5d0/3d0)
-            cs_gas_save = sqrt(5d0/3d0 * kB * T / (mH * local_mu))
             ! Thermal velocity: the Maxwellian mean speed of the gas particles, with no adiabatic index
             v_th_save = sqrt(8d0 * kB * T / (pi * mH * local_mu))
 
-            if (model == VEL_ORMEL2007 .and. v_turb > 0d0) then
+            if (v_turb > 0d0) then
                 ! Kinematic viscosity of the neutral + ionised (x_ion = ne/nH) mixture, each weighted by
                 ! its mass fraction: nu = sum_s f_s v_th mfp_s / 3. Neutrals collide (with neutrals and
                 ! ions) at sigma_neutral; ions also with each other through Coulomb collisions,
@@ -282,82 +284,96 @@ module dust_dynamics
                 tau_eta_save = tau_L_save / sqrt(Re_save)
             end if
         end if
-        
-        cs_gas = cs_gas_save
+
         v_th = v_th_save
 
-        if (model == VEL_ORMEL2007) then
-            ! This is based on the formulation presented in Kawasaki & Machida (2023)
-            ! which is basically the analytical model of Ormel & Cuzzi (2007)
-
-            ! 1. Contribution to relative velocity from thermal (Brownian) motion: (8 kB T / pi m_red)^1/2
-            dV_thermal = sqrt(8.d0 * kB * T * (target_m + projectile_m)/(pi * target_m * projectile_m))
-            if (v_turb <= 0d0) then
-                grain_relative_velocity = dV_thermal
-                return
-            end if
-
-            ! 2. Assume that the injection scale of turbulence is a cell size of inject_L length and
-            ! the velocity is given by the largest size eddie velocity
-            tau_L = tau_L_save
-            Re = Re_save
-            tau_eta = tau_eta_save
-
-            ! 3. Stopping time computation (we are always in the Epstein regime for large particles)
-            ts_target = target_s * target_a / (rho_gas * v_th)
-            ts_projectile = projectile_s * projectile_a / (rho_gas * v_th)
-
-            ! 4. Stokes' number for both particles, ordered St1 >= St2: the callers pass the pair in
-            ! either order, and with the larger grain as projectile the tightly coupled branch took
-            ! the square root of a negative number (NaN)
-            St_target = ts_target / tau_L
-            St_projectile = ts_projectile / tau_L
-            St1 = max(St_target, St_projectile)
-            St2 = min(St_target, St_projectile)
-
-            ! 5. Finally the turbulent relative velocity: the full closed form of Ormel & Cuzzi (2007,
-            ! Eqs. 16-18), continuous across the tightly coupled, intermediate and heavy regimes (their
-            ! Eqs. 26-29 are its limits; switching between those left jumps of up to x2.4 at tau_eta
-            ! and tau_L). Times are in units of tau_L, so Stmin = tau_eta/tau_L = Re^-1/2. The class I/II
-            ! boundary eddy is t* = 1.6 t_s (their Sect. 3.2.1), within [tau_eta, tau_L], and t* = tau_L
-            ! once t_s >= tau_L; no root solve, and the exact boundary differs by a few per cent, only
-            ! for 0.1 < St < 1.
-            Stmin = tau_eta / tau_L
-            if (St1 < 1d0) then
-                St_star = min(max(1.6d0 * St1, Stmin), 1d0)
-            else
-                St_star = 1d0
-            end if
-            if (St1 + St2 > 0d0) then
-                dVI2 = (St1 - St2) / (St1 + St2) * (St1**2 / (St_star + St1) - St1**2 / (1d0 + St1) &
-                                                  - St2**2 / (St_star + St2) + St2**2 / (1d0 + St2))
-            else
-                dVI2 = 0d0
-            end if
-            dVII2 = 2d0 * (St_star - Stmin) + St1**2 / (St1 + St_star) - St1**2 / (St1 + Stmin) &
-                                            + St2**2 / (St2 + St_star) - St2**2 / (St2 + Stmin)
-            dV_turb = sqrt(3d0/2d0) * v_turb * sqrt(max(dVI2 + dVII2, 0d0))
-            grain_relative_velocity = sqrt(dV_thermal**2d0 + dV_turb**2d0)
-        else if (model == VEL_HIRASHITA2019) then
-            ! Velocity scaling with the Mach number as given by the model of Hirashita & Aoyama (2019)
-            ! which is a further approximation from the full Ormel & Cuzzi (2007) model (see Appendix C)
-
-            Mach = v_turb / cs_gas
-            v_target = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(target_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(target_s/3.5d0)
-            v_projectile = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(projectile_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(projectile_s/3.5d0)
-            ! Each grain velocity is a random, isotropic turbulent velocity of rms v(a), independent of
-            ! the other (Gaussian reading, as Flower et al. 2005 and Guillet et al. 2020 for Ormel's
-            ! velocities): the relative velocity is Gaussian with rms (v_t^2 + v_p^2)^1/2, and the
-            ! collision kernels average over that distribution (gaussian_collision_speeds). Not one
-            ! random cos(theta) draw: the draw used the star-formation stream (pm_commons localseed),
-            ! unseeded (-1) before the first star forms, from which ranf returns only negative numbers
-            ! (cos(theta) clamped to -1, every collision head-on).
-            grain_relative_velocity = sqrt(v_target**2 + v_projectile**2)
-        else
-            ! Just assume that the relative velocity is given by the turbulent velocity
-            grain_relative_velocity = v_turb
+        ! 1. Contribution to relative velocity from thermal (Brownian) motion: (8 kB T / pi m_red)^1/2
+        dV_thermal = sqrt(8.d0 * kB * T * (target_m + projectile_m)/(pi * target_m * projectile_m))
+        if (v_turb <= 0d0) then
+            dV = dV_thermal
+            return
         end if
-    end function grain_relative_velocity
+
+        ! 2. Assume that the injection scale of turbulence is a cell size of inject_L length and
+        ! the velocity is given by the largest size eddie velocity
+        tau_L = tau_L_save
+        Re = Re_save
+        tau_eta = tau_eta_save
+
+        ! 3. Stopping time computation (we are always in the Epstein regime for large particles)
+        ts_target = target_s * target_a / (rho_gas * v_th)
+        ts_projectile = projectile_s * projectile_a / (rho_gas * v_th)
+
+        ! 4. Stokes' number for both particles, ordered St1 >= St2: the callers pass the pair in
+        ! either order, and with the larger grain as projectile the tightly coupled branch took
+        ! the square root of a negative number (NaN)
+        St_target = ts_target / tau_L
+        St_projectile = ts_projectile / tau_L
+        St1 = max(St_target, St_projectile)
+        St2 = min(St_target, St_projectile)
+
+        ! 5. Finally the turbulent relative velocity: the full closed form of Ormel & Cuzzi (2007,
+        ! Eqs. 16-18), continuous across the tightly coupled, intermediate and heavy regimes (their
+        ! Eqs. 26-29 are its limits; switching between those left jumps of up to x2.4 at tau_eta
+        ! and tau_L). Times are in units of tau_L, so Stmin = tau_eta/tau_L = Re^-1/2. The class I/II
+        ! boundary eddy is t* = 1.6 t_s (their Sect. 3.2.1), within [tau_eta, tau_L], and t* = tau_L
+        ! once t_s >= tau_L; no root solve, and the exact boundary differs by a few per cent, only
+        ! for 0.1 < St < 1.
+        Stmin = tau_eta / tau_L
+        if (St1 < 1d0) then
+            St_star = min(max(1.6d0 * St1, Stmin), 1d0)
+        else
+            St_star = 1d0
+        end if
+        if (St1 + St2 > 0d0) then
+            dVI2 = (St1 - St2) / (St1 + St2) * (St1**2 / (St_star + St1) - St1**2 / (1d0 + St1) &
+                                              - St2**2 / (St_star + St2) + St2**2 / (1d0 + St2))
+        else
+            dVI2 = 0d0
+        end if
+        dVII2 = 2d0 * (St_star - Stmin) + St1**2 / (St1 + St_star) - St1**2 / (St1 + Stmin) &
+                                        + St2**2 / (St2 + St_star) - St2**2 / (St2 + Stmin)
+        dV_turb = sqrt(3d0/2d0) * v_turb * sqrt(max(dVI2 + dVII2, 0d0))
+        dV = sqrt(dV_thermal**2d0 + dV_turb**2d0)
+    end function relvel_ormel2007
+
+    function relvel_hirashita2019(T,rho_gas,nH,ne,v_turb,local_mu,inject_L,target_a,projectile_a, &
+                                  target_s,projectile_s,target_m,projectile_m) result(dV)
+        ! dust_velocity_model = 'Hirashita2019': the velocity scaling with the Mach number of the model
+        ! of Hirashita & Aoyama (2019), a further approximation of the full Ormel & Cuzzi (2007) model
+        ! (see their Appendix C)
+        implicit none
+        real(dp), intent(in) :: T,rho_gas,nH,ne,v_turb,local_mu,inject_L
+        real(dp), intent(in) :: target_a,target_s,target_m
+        real(dp), intent(in) :: projectile_a,projectile_s,projectile_m
+        real(dp) :: dV
+        real(dp) :: cs_gas,Mach,v_target,v_projectile
+
+        ! Gas sound speed (assumed gas with adiabatic constant of 5d0/3d0)
+        cs_gas = sqrt(5d0/3d0 * kB * T / (mH * local_mu))
+        Mach = v_turb / cs_gas
+        v_target = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(target_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(target_s/3.5d0)
+        v_projectile = 1.1d5 * (Mach**(3d0/2d0)) * sqrt(projectile_a/1d-5) * ((T/1d4)**(1d0/4d0)) * (nH**(-1d0/4d0)) * sqrt(projectile_s/3.5d0)
+        ! Each grain velocity is a random, isotropic turbulent velocity of rms v(a), independent of
+        ! the other (Gaussian reading, as Flower et al. 2005 and Guillet et al. 2020 for Ormel's
+        ! velocities): the relative velocity is Gaussian with rms (v_t^2 + v_p^2)^1/2, and the
+        ! collision kernels average over that distribution (gaussian_collision_speeds). Not one
+        ! random cos(theta) draw: the draw used the star-formation stream (pm_commons localseed),
+        ! unseeded (-1) before the first star forms, from which ranf returns only negative numbers
+        ! (cos(theta) clamped to -1, every collision head-on).
+        dV = sqrt(v_target**2 + v_projectile**2)
+    end function relvel_hirashita2019
+
+    function relvel_turbulent(T,rho_gas,nH,ne,v_turb,local_mu,inject_L,target_a,projectile_a, &
+                              target_s,projectile_s,target_m,projectile_m) result(dV)
+        ! any other dust_velocity_model: the relative velocity is the turbulent velocity
+        implicit none
+        real(dp), intent(in) :: T,rho_gas,nH,ne,v_turb,local_mu,inject_L
+        real(dp), intent(in) :: target_a,target_s,target_m
+        real(dp), intent(in) :: projectile_a,projectile_s,projectile_m
+        real(dp) :: dV
+        dV = v_turb
+    end function relvel_turbulent
 
     logical function tva_collision_drift()
         ! The TVA drift enters the grain-grain collisions when it exists and something collides
