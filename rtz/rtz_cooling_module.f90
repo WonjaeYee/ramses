@@ -929,6 +929,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: ct_ion_hhe(1:n_elements,1:n_elements), ct_rec_hhe(1:n_elements,1:n_elements)
       integer:: el_h, st_h, oel_h, ost_h, it_hhe, ns_h, isub_hhe
       logical:: hhe_converged
+      logical:: he_on                         ! He in the coupled solve: n_He/n_H >= 1e-10, as for the metals
       logical:: ne_sync                       ! the next ion update sums ne over all ions again
       real(dp):: dust_effective_number_density, dust_to_gas_mass_ratio_over_mw
       real(dp):: HI_number_density, HII_number_density
@@ -2226,6 +2227,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          x_hhe = 0d0; x0_hhe = 0d0
          x0_hhe(1,1:2) = dXion(1,1:2); x0_hhe(2,1:3) = dXion(2,1:3)
          x_hhe = x0_hhe
+         he_on = nElement_dep(2) >= 1d-10 * nElement_dep(1)
          ne_rest = max(getNe(dXion, nElement_dep(:)) - nElement_dep(1)*dXion(1,2) &
                    - nElement_dep(2)*(dXion(2,2)+2d0*dXion(2,3)), 0d0)
          ne_hhe = ne_rest + nElement_dep(1)*x_hhe(1,2) + nElement_dep(2)*(x_hhe(2,2)+2d0*x_hhe(2,3))
@@ -2315,6 +2317,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             x_hhe(1,:) = xs_hhe
             ne_hhe = ne_rest + nElement_dep(1)*x_hhe(1,2) + nElement_dep(2)*(x_hhe(2,2)+2d0*x_hhe(2,3))
             ! helium: He I, He II, He III
+            if (he_on) then
             nHI_hhe = nElement_dep(1) * x_hhe(1,1); nHII_hhe = nElement_dep(1) * x_hhe(1,2)
             Ik = 0d0; Rk = 0d0; Lk = 0d0; Sk = 0d0
             Ik(1:2) = Ifix_hhe(2,1:2)
@@ -2328,8 +2331,9 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
             call rtz_hhe_solve(3, ddt(icell)/max(rtz_hhe_nsub, 1), Ik, Rk, Lk, Sk, x0_hhe(2,:), 1d0, xs_hhe)
             x_hhe(2,:) = xs_hhe
             ne_hhe = ne_rest + nElement_dep(1)*x_hhe(1,2) + nElement_dep(2)*(x_hhe(2,2)+2d0*x_hhe(2,3))
+            end if
             conv_hhe = abs(ne_hhe - ne_prev) / max(ne_hhe, 1d-30)
-            do el_h = 1, 2
+            do el_h = 1, merge(2, 1, he_on)
                do st_h = 1, elements(el_h)%n_ions
                   conv_hhe = max(conv_hhe, abs(x_hhe(el_h,st_h) - xp_hhe(el_h,st_h)) / max(x_hhe(el_h,st_h), 1d-12))
                end do
@@ -2360,7 +2364,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rt_isTconst) TK = rt_Tconst
          ! convergence: the fractional change of every H and He stage, on the values carried to the next substep
          ! (the neutrals too: they are now as accurate as the ions)
-         do el_h = 1, 2
+         do el_h = 1, merge(2, 1, he_on)
             do st_h = 1, elements(el_h)%n_ions
                if (xion(el_h,st_h,icell) > 1.d-10) then
                   dUU = ABS((dXion(el_h,st_h)-xion(el_h,st_h,icell))/(xion(el_h,st_h,icell)+x_FM)) * one_over_x_FRAC
