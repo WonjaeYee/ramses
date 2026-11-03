@@ -496,7 +496,9 @@ contains
         logical function td_served()
             ! same inputs as the last update_T_dust but T, within RTG_SERVE in ln T (and the
             ! recombination and photoelectric terms and the grain charge, which serve_T_dust takes to
-            ! first order)
+            ! first order). In the cooling solver's T(1 +- 1e-5) calls (rtg_dT_calls) the photon field
+            ! may differ: with rt_isIR the precool adds the dust IR emission to the IR group in between.
+            ! They are served as the grain charge is, so dC/dT is a derivative in T only.
             real(dp) :: x
             td_served = .false.
             if (.not. td_valid .or. (td_hasNp .neqv. present(Np))) return
@@ -505,7 +507,7 @@ contains
             if (ne /= td_ne .or. nH2 /= td_nH2 .or. nCO /= td_nCO) return
             if (present(Np)) then
                 if (dinfo%G0_background /= td_G0) return
-                if (any(dinfo%Erad /= td_Erad)) return
+                if (.not. rtg_dT_calls .and. any(dinfo%Erad /= td_Erad)) return
             else
                 if (G0_total /= td_G0) return
             end if
