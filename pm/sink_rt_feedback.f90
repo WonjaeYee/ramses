@@ -193,7 +193,7 @@ SUBROUTINE gather_ioni_flux(dt,ilevel)
   if(cosmo)factG=3d0/4d0/twopi*omega_m*aexp
 
   ! Mesh spacing in that level
-  dx=0.5D0**ilevel
+  ! dx=0.5D0**ilevel
   nx_loc=(icoarse_max-icoarse_min+1)
   scale=boxlen/dble(nx_loc)
   ! dx_loc=dx*scale
