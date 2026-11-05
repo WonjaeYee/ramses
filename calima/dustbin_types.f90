@@ -32,6 +32,21 @@ module dustbin_types
         procedure :: init => initialise_dust_table
     end type DustTable
 
+    ! ==== Tables on one axis ====
+    ! The 1D tables y_k(x), k = lo..hi, of one quantity on one equally spaced axis (the collisional
+    ! tables of a dust bin at phi = 0, its sputtering tables, a PAH bin's sputtering tables): at any x,
+    ! one cell for all of them, then their values and slopes (eval). Filled at init from the DustTables
+    ! (add), which stops if a table is not on the axis of the first one.
+    type TableFamily
+        integer :: n = 0                                    ! number of axis nodes
+        real(dp) :: inv_dx = 0d0                            ! 1 / node spacing
+        real(dp), dimension(:), allocatable :: x            ! the axis (1:n)
+        real(dp), dimension(:,:), allocatable :: y          ! the tables (lo:hi, 1:n); 0 where not added
+    contains
+        procedure :: add => family_add
+        procedure :: eval => family_eval
+    end type TableFamily
+
     ! ==== Dust Chemistry Info ====
     type DustChemistryInfo
         logical :: initialised = .false.
@@ -67,6 +82,7 @@ module dustbin_types
         real(dp),dimension(:),allocatable :: local_rad_ani ! Local radiation anisotropy factor
         real(dp),dimension(:),allocatable :: local_solid_angle ! Local solid angle subtended by radiation sources
         real(dp),dimension(:),allocatable :: group_eV ! Energy of each radiation group in eV
+        real(dp),dimension(:),allocatable :: Erad ! Photon energy density of each radiation group [erg/cm3], set where Np enters
         real(dp),dimension(:),allocatable :: rho_dust ! Dust mass density
         real(dp),dimension(:),allocatable :: n_dust ! Dust number density
         real(dp),dimension(:),allocatable :: rho_pah ! PAH mass density
@@ -152,6 +168,9 @@ module dustbin_types
         real(dp) :: amax                    ! Maximum grain size (in microns)
         real(dp) :: mgrain_min              ! Minimum grain mass (in g)
         real(dp) :: mgrain_max              ! Maximum grain mass (in g)
+        real(dp) :: mgrain_min_pow          ! mgrain_min**slope_frag_func (shattering fragments)
+        real(dp) :: mgrain_max_pow          ! mgrain_max**slope_frag_func
+        logical  :: need_coulomb=.false.    ! Whether a dust process reads this bin's Coulomb factors (dinfo%Coulomb_factor)
         real(dp) :: SNII_cond_eff           ! SNII condensation efficiency
         real(dp) :: SNIa_cond_eff           ! SNIa condensation efficiency
         real(dp) :: AGB_cond_eff            ! AGB condensation efficiency
@@ -195,6 +214,8 @@ module dustbin_types
         type(DustTable),dimension(1:n_elements) :: sputtering_tab ! Sputtering tables
         type(DustTable) :: sublimation_tab ! Thermal sublimation erosion rate table (function of dust temperature)
         type(DustTable),dimension(0:n_elements) :: collisional_tab ! Collisional tables (0 is for electrons)
+        type(TableFamily) :: coll_tabs     ! collisional_tab(0:n_elements) at phi = 0, on their common log10 T axis
+        type(TableFamily) :: sput_tabs     ! sputtering_tab(1:n_elements) at phi = 0, on their common log10 T axis
         type(DustTable) :: cs_abs_tab, cs_scat_tab, cs_ext_tab ! Absorption, scattering and extinction cross-section tables
         type(DustTable) :: Rosseland_tab, Planck_tab ! Rosseland and Planck mean opacity tables
         type(DustTable),dimension(:),allocatable :: Im_n ! Imaginary part of the refractive index tables for each element
@@ -224,6 +245,8 @@ module dustbin_types
         real(dp) :: mpah                    ! PAH mass (in g)
         real(dp) :: mpah_min                ! Minimum PAH mass (in g)
         real(dp) :: mpah_max                ! Maximum PAH mass (in g)
+        real(dp) :: mpah_min_pow            ! mpah_min**slope_frag_func (shattering fragments)
+        real(dp) :: mpah_max_pow            ! mpah_max**slope_frag_func
         real(dp) :: AGB_cond_eff            ! AGB condensation efficiency
         real(dp) :: SNdest_eff              ! SN dust destruction efficiency
         real(dp) :: t0_acc                  ! Reference time for accretion (s)
@@ -236,6 +259,7 @@ module dustbin_types
 
         ! Tables for PAH processes
         type(DustTable),dimension(0:n_elements) :: sputtering_tab ! PAH tables for each element
+        type(TableFamily) :: sput_tabs     ! sputtering_tab(0:n_elements), on their common log10 T axis
         type(DustTable) :: peh_eff_tab, peh_pabs_tab ! Photoelectric efficiency and absorption cross-section tables for PAHs
         type(DustTable),dimension(:),allocatable :: fcharge_tab ! Charging states distribution tables for PAHs
         type(DustTable) :: cs_abs_tab_n, cs_scat_tab_n, cs_ext_tab_n ! Absorption, scattering and extinction cross-section tables for neutral PAHs
@@ -477,6 +501,71 @@ contains
                          + alloc_bytes(this%dx) + alloc_bytes(this%inv_dx)
     end subroutine initialise_dust_table
 
+    subroutine family_add(this, tab, k, lo, hi)
+        ! Add tab (1D, or 2D at the zero of its second axis) as member k of the family of members lo..hi.
+        ! The first table added sets the axis, which must be equally spaced; the others must be on its nodes.
+        class(TableFamily), intent(inout) :: this
+        type(DustTable), intent(in) :: tab
+        integer, intent(in) :: k, lo, hi
+        integer :: n
+
+        n = tab%npts(1)
+        if (.not. allocated(this%y)) then
+            if (.not. tab%eqw) then
+                write(*,*) 'ERROR: table ', trim(tab%name), ' is not equally spaced (TableFamily)'
+                call clean_stop
+            end if
+            this%n = n
+            this%inv_dx = tab%inv_dx(1)
+            allocate(this%x(1:n), this%y(lo:hi, 1:n))
+            this%x = tab%tab1d(1:n,1)
+            this%y = 0d0
+            dust_table_bytes = dust_table_bytes + alloc_bytes(this%x) + alloc_bytes(this%y)
+        end if
+        if (n /= this%n .or. lbound(this%y,1) /= lo .or. ubound(this%y,1) /= hi) then
+            write(*,*) 'ERROR: table ', trim(tab%name), ' does not fit its TableFamily (nodes or members)'
+            call clean_stop
+        end if
+        if (any(tab%tab1d(1:n,1) /= this%x)) then
+            write(*,*) 'ERROR: table ', trim(tab%name), ' is not on the axis of its TableFamily'
+            call clean_stop
+        end if
+        select case (tab%ndim)
+        case (1)
+            this%y(k,:) = tab%tab1d(1:n,2)
+        case (2)
+            this%y(k,:) = tab%tab2d(1:n,tab%ipos_zero(2),1)
+        case default
+            write(*,*) 'ERROR: table ', trim(tab%name), ' is not 1D or 2D (TableFamily)'
+            call clean_stop
+        end select
+    end subroutine family_add
+
+    pure subroutine family_eval(this, x, v, dv)
+        ! The members at x, linear in the cell of x (as interpolate_1d of each table), held at the end
+        ! values outside the axis; dv (optional): their slopes dy/dx in that cell, 0 outside the axis.
+        ! v and dv are the members lo..hi in order.
+        class(TableFamily), intent(in) :: this
+        real(dp), intent(in) :: x
+        real(dp), dimension(:), intent(out) :: v
+        real(dp), dimension(:), intent(out), optional :: dv
+        integer :: i
+        real(dp) :: t
+
+        if (x <= this%x(1)) then
+            v = this%y(:,1)
+            if (present(dv)) dv = 0d0
+        else if (x >= this%x(this%n)) then
+            v = this%y(:,this%n)
+            if (present(dv)) dv = 0d0
+        else
+            i = min(int((x - this%x(1)) * this%inv_dx) + 1, this%n - 1)
+            t = (x - this%x(i)) * this%inv_dx
+            v = (1d0 - t) * this%y(:,i) + t * this%y(:,i+1)
+            if (present(dv)) dv = (this%y(:,i+1) - this%y(:,i)) * this%inv_dx
+        end if
+    end subroutine family_eval
+
     subroutine init_dust_chemistry_info(this, ndust, npah, nGroups, ncharge_pah_max, nion_charges)
         ! Initializes the DustChemistryInfo derived type by allocating arrays and setting default values.
         ! This is done at RAMSES initialisation, and re-used for each threat
@@ -642,6 +731,10 @@ contains
         allocate(this%group_eV(1:this%nGroups))
         this%group_eV = 0d0
 
+        if (allocated(this%Erad)) deallocate(this%Erad)
+        allocate(this%Erad(1:this%nGroups))
+        this%Erad = 0d0
+
         if (allocated(this%rat_torque)) deallocate(this%rat_torque)
         allocate(this%rat_torque(1:this%ndust))
         this%rat_torque = 0d0
@@ -692,6 +785,7 @@ contains
         if (allocated(this%local_rad_ani)) this%local_rad_ani = 0d0
         if (allocated(this%local_solid_angle)) this%local_solid_angle = 0d0
         if (allocated(this%group_eV)) this%group_eV = 0d0
+        if (allocated(this%Erad)) this%Erad = 0d0
         if (allocated(this%rat_torque)) this%rat_torque = 0d0
         if (allocated(this%IR_damp_factor)) this%IR_damp_factor = 0d0
         this%H2_formation_rate = 0d0

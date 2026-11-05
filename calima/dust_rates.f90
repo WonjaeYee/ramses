@@ -84,7 +84,7 @@ module dust_rates
         logical :: interact_pah_flag
         
         real(dp) :: nO, vth, N_mono, f_ice_ii, enhan_factor_pair
-        real(dp), dimension(1:max(1, dust_info%ndust)) :: enhan_factor
+        real(dp), dimension(1:max(1, ndust)) :: enhan_factor   ! fixed size: no allocation per call
         
         call ensure_rate_caches(dust_info)
         
@@ -122,7 +122,7 @@ module dust_rates
             do ii = ii1, ii2
                 do kk = ii, ii2
                     kk_loc = kk - ii1 + 1
-                    v_rel = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,&
+                    v_rel = grain_relative_velocity(dust_info%local_Tk,&
                                                     dust_info%local_rho,dust_info%local_nH,&
                                                     dust_info%local_ne,temp_sigma,dust_info%local_mu,temp_L,&
                                                     dustbins_props(ii)%asize_cm,&
@@ -163,7 +163,7 @@ module dust_rates
             
             do kk = dust_start, dust_end
                 if (.not. dustbins_props(kk)%interact_pah) cycle
-                v_rel = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
+                v_rel = grain_relative_velocity(dust_info%local_Tk,dust_info%local_rho,&
                                                dust_info%local_nH,dust_info%local_ne,temp_sigma,dust_info%local_mu,temp_L,&
                                                dustbins_props(kk)%asize_cm,pahbins_props(pp)%apah_cm,&
                                                dustbins_props(kk)%sgrain,pahbins_props(pp)%spah,&
@@ -266,16 +266,18 @@ module dust_rates
 #if NPAH > 0
             if (interact_pah) then
                 if (m_min < pahbins_props(1)%mpah_min) then
-                    chi_frag_dest_out = prefactor * (min(pahbins_props(1)%mpah_min,m_max)**slope_frag_func - m_min_pow)
+                    chi_frag_dest_out = prefactor * (pow_min_mmax(pahbins_props(1)%mpah_min,pahbins_props(1)%mpah_min_pow) - m_min_pow)
                 end if
             else
                 if (m_min < dustbins_props(global_ii1)%mgrain_min) then
-                    chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                    chi_frag_dest_out = prefactor * (pow_min_mmax(dustbins_props(global_ii1)%mgrain_min,dustbins_props(global_ii1)%mgrain_min_pow) &
+                                                     - m_min_pow)
                 end if
             end if
 #else
             if (m_min < dustbins_props(global_ii1)%mgrain_min) then
-                chi_frag_dest_out = prefactor * (min(dustbins_props(global_ii1)%mgrain_min,m_max)**slope_frag_func - m_min_pow)
+                chi_frag_dest_out = prefactor * (pow_min_mmax(dustbins_props(global_ii1)%mgrain_min,dustbins_props(global_ii1)%mgrain_min_pow) &
+                                                 - m_min_pow)
             end if
 #endif
         end if
@@ -286,8 +288,8 @@ module dust_rates
                 if ((m_min.ge.pahbins_props(pp_local)%mpah_max).or.(m_max<pahbins_props(pp_local)%mpah_min)) then
                     chi_frag_pah_out(pp_local) = 0d0
                 else
-                    chi_frag_pah_out(pp_local) = prefactor * (min(pahbins_props(pp_local)%mpah_max,m_max)**slope_frag_func - &
-                                                    max(pahbins_props(pp_local)%mpah_min,m_min)**slope_frag_func)
+                    chi_frag_pah_out(pp_local) = prefactor * (pow_min_mmax(pahbins_props(pp_local)%mpah_max,pahbins_props(pp_local)%mpah_max_pow) - &
+                                                    pow_max_mmin(pahbins_props(pp_local)%mpah_min,pahbins_props(pp_local)%mpah_min_pow))
                 end if
             end do
         end if
@@ -299,8 +301,8 @@ module dust_rates
                 if ((m_min.ge.dustbins_props(ll_global)%mgrain_max).or.(m_max<dustbins_props(ll_global)%mgrain_min)) then
                     chi_frag_out(ll_local) = 0d0
                 else
-                    chi_frag_out(ll_local) = prefactor * (min(dustbins_props(ll_global)%mgrain_max,m_max)**slope_frag_func - &
-                                                max(dustbins_props(ll_global)%mgrain_min,m_min)**slope_frag_func)
+                    chi_frag_out(ll_local) = prefactor * (pow_min_mmax(dustbins_props(ll_global)%mgrain_max,dustbins_props(ll_global)%mgrain_max_pow) - &
+                                                pow_max_mmin(dustbins_props(ll_global)%mgrain_min,dustbins_props(ll_global)%mgrain_min_pow))
                 end if
             end do
         end if
@@ -363,6 +365,29 @@ module dust_rates
             chi_frag_out(:) = chi_frag_out(:) / m_tot
             chi_frag_pah_out(:) = chi_frag_pah_out(:) / m_tot
         end if
+
+    contains
+
+        real(dp) function pow_min_mmax(a, a_pow)
+            ! min(a, m_max)**slope_frag_func, from a_pow = a**slope_frag_func (bin property) and m_max_pow
+            real(dp), intent(in) :: a, a_pow
+            if (a < m_max) then
+                pow_min_mmax = a_pow
+            else
+                pow_min_mmax = m_max_pow
+            end if
+        end function pow_min_mmax
+
+        real(dp) function pow_max_mmin(a, a_pow)
+            ! max(a, m_min)**slope_frag_func, from a_pow = a**slope_frag_func and m_min_pow
+            real(dp), intent(in) :: a, a_pow
+            if (a > m_min) then
+                pow_max_mmin = a_pow
+            else
+                pow_max_mmin = m_min_pow
+            end if
+        end function pow_max_mmin
+
     end subroutine compute_shattered_fragments_direct
 
     subroutine LeBourlot2012_accretion_rate(dust_info,y_gas,y_dust,dydt_gas,dydt_dust,kmax)
@@ -800,26 +825,26 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: ii, index, iel, nT_loc, iphi0, idx_T
-        real(dp) :: rate1, rate2, lT, rate_total, irate, mass_loss
+        integer :: ii, index, iel
+        real(dp) :: rate1, rate_total, mass_loss, lT
+        real(dp), dimension(1:n_elements) :: lr    ! log10 of the sputtering tables at this T
 
         lT = log10(dust_info%local_Tk)
 
-        idx_T = -1
         ! 1. Loop over the dust bins
         binloop: do ii = 1, dust_info%ndust
             rate_total = 0d0
             index = ii + dust_info%npah
 
-            ! 2. Loop over elements in the gas phase
-            do iel = 1, n_elements
-                if (y_gas(iel,1) < 1d-40) cycle
-                if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
-                nT_loc = dustbins_props(ii)%sputtering_tab(iel)%npts(1)
-                iphi0 = dustbins_props(ii)%sputtering_tab(iel)%ipos_zero(2)
-                call dustbins_props(ii)%sputtering_tab(iel)%interpolate(lT, irate, idx_T)
-                rate_total = rate_total + exp(irate * ln10) * y_gas(iel,1) * dust_info%inv_atomic_mass(iel) ! [micron / yr]
-            end do
+            ! 2. Loop over elements in the gas phase: the bin's tables at this T, all on one axis (sput_tabs)
+            if (dustbins_props(ii)%sput_tabs%n > 0) then
+                call dustbins_props(ii)%sput_tabs%eval(lT, lr)
+                do iel = 1, n_elements
+                    if (y_gas(iel,1) < 1d-40) cycle
+                    if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
+                    rate_total = rate_total + exp(lr(iel) * ln10) * y_gas(iel,1) * dust_info%inv_atomic_mass(iel) ! [micron / yr]
+                end do
+            end if
 
             ! 3. Convert to the real erosion rate in [s-1]
             rate1 = 3d0 * rate_total / dustbins_props(ii)%asize / yr2sec ! [s-1]
@@ -988,8 +1013,9 @@ module dust_rates
         real(dp) :: rate1, rate_dest
         real(dp) :: coll_factor
         real(dp) :: chi_frag_dest
-        real(dp), dimension(:), allocatable :: chi_frag
-        real(dp), dimension(:), allocatable :: chi_frag_pah
+        ! fixed-size (bins known at compile time): no allocation per call
+        real(dp), dimension(1:max(ndust,1)) :: chi_frag
+        real(dp), dimension(1:max(npah,1)) :: chi_frag_pah
         logical :: interact_pah_flag
 
         speciesloop: do ii = 1, ndchemtype
@@ -997,8 +1023,6 @@ module dust_rates
             ii1 = istart_chemtype(ii)
             ii2 = ii1 + dustbins_per_chemtype(ii) - 1
 
-            allocate(chi_frag(ii1:ii2))
-            allocate(chi_frag_pah(1:dust_info%npah))
 
             ! Cache PAH interaction flag outside grain loop for efficiency
             interact_pah_flag = dustbins_props(ii1)%interact_pah .and. dust_info%npah > 0
@@ -1054,8 +1078,6 @@ module dust_rates
                 end if
             end do
 
-            deallocate(chi_frag)
-            deallocate(chi_frag_pah)
         end do speciesloop
 
     end subroutine turbulent_shattering_rate
@@ -1082,8 +1104,9 @@ module dust_rates
         real(dp) :: rate_dest, mass_rate
         real(dp) :: coll_factor
         real(dp) :: chi_frag_dest
-        real(dp), dimension(:), allocatable :: chi_frag
-        real(dp), dimension(:), allocatable :: chi_frag_pah
+        ! fixed-size (bins known at compile time): no allocation per call
+        real(dp), dimension(1:max(ndust,1)) :: chi_frag
+        real(dp), dimension(1:max(npah,1)) :: chi_frag_pah
         logical :: interact_pah_flag
 
         speciesloop: do ichem = 1, ndchemtype
@@ -1091,8 +1114,6 @@ module dust_rates
             ii1 = istart_chemtype(ichem)
             ii2 = ii1 + dustbins_per_chemtype(ichem) - 1
 
-            allocate(chi_frag(ii1:ii2))
-            allocate(chi_frag_pah(1:dust_info%npah))
             
             ! Cache PAH interaction flag outside grain loop for efficiency
             interact_pah_flag = dustbins_props(ii1)%interact_pah .and. dust_info%npah > 0
@@ -1192,8 +1213,6 @@ module dust_rates
                 end do
             end do
 
-            deallocate(chi_frag)
-            deallocate(chi_frag_pah)
         end do speciesloop
 
     end subroutine turbulent_all_shattering_rate
@@ -1237,7 +1256,7 @@ module dust_rates
         global_ii2 = global_ii1 + dustbins_per_chemtype(dustbins_props(id1)%interact_group) - 1
 
         ! 1. Compute the relative velocity of two grains
-        v_rel_out = grain_relative_velocity(dust_velocity_model,dust_info%local_Tk,dust_info%local_rho,&
+        v_rel_out = grain_relative_velocity(dust_info%local_Tk,dust_info%local_rho,&
                                         dust_info%local_nH,dust_info%local_ne,local_sigma,dust_info%local_mu,local_L,&
                                         dustbins_props(id1)%asize_cm,dustbins_props(id2)%asize_cm,&
                                         dustbins_props(id1)%sgrain,dustbins_props(id2)%sgrain,&
@@ -1401,39 +1420,30 @@ module dust_rates
         real(dp), intent(inout), optional :: kmax
 
         ! ---- Local variables ----
-        integer :: pp, iel, nT_loc, idx_T
-        real(dp) :: lT, R_total, rate1, rate2, J_rate
-        real(dp), dimension(:), allocatable :: J_rate_all
+        integer :: pp, iel
+        real(dp) :: R_total, rate1, rate2, lT
+        real(dp), dimension(0:n_elements) :: lr    ! log10 of the sputtering tables at this T
 
         lT = log10(dust_info%local_Tk)
-        idx_T = -1
 
         ! 1. Loop over PAHs
         pahloop: do pp = 1, dust_info%npah
             R_total = 0d0
+            if (pahbins_props(pp)%sput_tabs%n == 0) cycle
 
-            if (allocated(J_rate_all)) deallocate(J_rate_all)
-            allocate(J_rate_all(0:n_elements))
-
-            ! 2. Interpolate sputtering rates from tables
-            J_rate_all(:) = -100d0
-            do iel = 0, n_elements
-                if (.not. pahbins_props(pp)%sputtering_tab(iel)%initialised) cycle
-                nT_loc = pahbins_props(pp)%sputtering_tab(iel)%npts(1)
-                call pahbins_props(pp)%sputtering_tab(iel)%interpolate(lT, J_rate_all(iel), idx_T)
-            end do
-            J_rate_all(:) = exp(J_rate_all(:) * ln10)
+            ! 2. The bin's tables at this T, all on one axis (sput_tabs)
+            call pahbins_props(pp)%sput_tabs%eval(lT, lr)
 
             ! 3. Electron contribution to sputtering rate
             if (pahbins_props(pp)%sputtering_tab(0)%initialised) then
-                R_total = R_total + dust_info%local_ne * J_rate_all(0)
+                R_total = R_total + dust_info%local_ne * exp(lr(0) * ln10)
             end if
 
             ! 4. Ion contributions to sputtering rate
             do iel = 1, n_elements
                 if (.not. pahbins_props(pp)%sputtering_tab(iel)%initialised) cycle
                 if (y_gas(iel, 1) < 1d-40) cycle
-                R_total = R_total + y_gas(iel, 1) / dust_info%el_atomic_mass_g(iel) * J_rate_all(iel)
+                R_total = R_total + y_gas(iel, 1) / dust_info%el_atomic_mass_g(iel) * exp(lr(iel) * ln10)
             end do
 
             ! 5. Convert rate to mass loss [atoms/s-1] and compute mass loss rate [g cm-3 s-1]
@@ -1448,8 +1458,6 @@ module dust_rates
                 ! 6. Return sputtered material (carbon) to the gas phase
                 dydt_gas(pahbins_props(pp)%C_index, 1) = dydt_gas(pahbins_props(pp)%C_index, 1) + rate2 ! [g cm-3 s-1]
             end if
-
-            if (allocated(J_rate_all)) deallocate(J_rate_all)
         end do pahloop
 
     end subroutine pah_sputtering_rate

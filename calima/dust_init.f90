@@ -852,6 +852,7 @@ module dust_init
         use anninos_mod, only: anninos_step
         use rk54_mod, only: rk54_step
         use ode_interface_mod, only: dust_solver_step
+        use dust_dynamics, only: select_velocity_model
         implicit none
         integer, intent(in) :: nGroups
         logical :: check_for_pahs
@@ -916,6 +917,7 @@ module dust_init
         end do
 
         call init_dust_processes
+        call select_velocity_model()
 
         ! 1. Loop over dust bins and set up their properties based on the namelist parameters
         idust_pah_interact = 0
@@ -1015,6 +1017,8 @@ module dust_init
             dustbins_props(ii)%amax = amax(ii)
             dustbins_props(ii)%mgrain_min = (4D0/3D0)*pi*(amin(ii)*1D-4)**3D0*sgrain(ii)
             dustbins_props(ii)%mgrain_max = (4D0/3D0)*pi*(amax(ii)*1D-4)**3D0*sgrain(ii)
+            dustbins_props(ii)%mgrain_min_pow = dustbins_props(ii)%mgrain_min**slope_frag_func
+            dustbins_props(ii)%mgrain_max_pow = dustbins_props(ii)%mgrain_max**slope_frag_func
             dustbins_props(ii)%Youngs_modulus = Youngs_modulus(ichemtype)
             dustbins_props(ii)%Poisson_ratio = Poisson_ratio(ichemtype)
             dustbins_props(ii)%shear_modulus = Youngs_modulus(ichemtype) / (2d0 * (1d0 + Poisson_ratio(ichemtype)))
@@ -1072,6 +1076,8 @@ module dust_init
                 pahbins_props(ii)%mpah = Nc_to_mass(pahbins_props(ii)%nc)
                 pahbins_props(ii)%mpah_min = Nc_to_mass(pahbins_props(ii)%nc_min)
                 pahbins_props(ii)%mpah_max = Nc_to_mass(pahbins_props(ii)%nc_max)
+                pahbins_props(ii)%mpah_min_pow = pahbins_props(ii)%mpah_min**slope_frag_func
+                pahbins_props(ii)%mpah_max_pow = pahbins_props(ii)%mpah_max**slope_frag_func
                 pahbins_props(ii)%is_cluster = pah_is_cluster(ii)
 
                 ! 2.3 Set the PAH injection and destruction parameters
@@ -1333,6 +1339,11 @@ module dust_init
         if (dust_acc_coulomb.or.pah_freezing) then
             Coulomb_precompute = .true.
         end if
+        ! the bins whose Coulomb factors are read: by the Coulomb accretion all, by the PAH freezing
+        ! those the PAHs stick to
+        do ii = 1, ndust
+            dustbins_props(ii)%need_coulomb = dust_acc_coulomb .or. (pah_freezing .and. dustbins_props(ii)%interact_pah)
+        end do
 
         ! 8. Read the dust thermal sputtering tables
         if (dust_sputtering .and. sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables
@@ -1606,6 +1617,9 @@ module dust_init
                 dustbins_props(ii)%collisional_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 call dustbins_props(ii)%collisional_tab(i)%init()
+                ! without the charge dependence only phi = 0 is used, on the T axis of all the bin's tables
+                if (.not. dust_coll_charge) &
+                    call dustbins_props(ii)%coll_tabs%add(dustbins_props(ii)%collisional_tab(i), i, 0, n_elements)
 
                 close(25)
 
@@ -1691,6 +1705,8 @@ module dust_init
             dustbins_props(ii)%collisional_tab(0)%tab1d(1:nT, 1) = T_grid(1:nT)
 
             call dustbins_props(ii)%collisional_tab(0)%init()
+            if (.not. dust_coll_charge) &
+                call dustbins_props(ii)%coll_tabs%add(dustbins_props(ii)%collisional_tab(0), 0, 0, n_elements)
             close(25)
             if (allocated(phi_grid)) deallocate(phi_grid)
             if (allocated(T_grid)) deallocate(T_grid)
@@ -1822,6 +1838,9 @@ module dust_init
                 dustbins_props(ii)%sputtering_tab(i)%tab1d(1:nT, 1) = T_grid(1:nT)
 
                 call dustbins_props(ii)%sputtering_tab(i)%init()
+                ! the neutral-grain sputtering (sputtering_rate) uses phi = 0, on the T axis of all the bin's tables
+                if (.not. dust_sputtering_charge) &
+                    call dustbins_props(ii)%sput_tabs%add(dustbins_props(ii)%sputtering_tab(i), i, 1, n_elements)
 
                 close(25)
                 deallocate(phi_grid, T_grid)
@@ -2099,6 +2118,12 @@ module dust_init
 
                 deallocate(T_grid, rate_grid)
                 
+            end do
+
+            ! the tables of this bin on their common T axis (pah_sputtering_rate)
+            do iel = 0, n_elements
+                if (pahbins_props(ipahbin)%sputtering_tab(iel)%initialised) &
+                    call pahbins_props(ipahbin)%sput_tabs%add(pahbins_props(ipahbin)%sputtering_tab(iel), iel, 0, n_elements)
             end do
         end do        
     end subroutine init_pah_sputtering_tables
