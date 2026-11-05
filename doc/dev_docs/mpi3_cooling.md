@@ -1,7 +1,8 @@
 # MPI-3 for the RTZ/CALIMA cooling step: a node-level work queue and node-shared tables
 
-Branch `feature/mpi3-cooling` (staging `ac03d014` + PR #73, `cost_measured`). This document is the design, and the
-record of what each phase measured. Status of each phase at the end.
+Branch `feature/mpi3-cooling`, PR #77: staging `0568f5d2` + PR #73 (`cost_measured`). It was rebased from `ac03d014`
+on 2026-11-04; the measurements below were made on `ac03d014`. This document is the design, and the record of what
+each phase measured.
 
 ## 1. The problem
 
@@ -198,7 +199,8 @@ about ±8%.
 - **Mode 0 against mode 2:** largest change 7e-10 (dust bins), from the warm-start reset.
 - **Decomposition dependence (from #73's balancing, not the queue):** B against C changes the dust by up to 3.8e-5.
   With `cost_measured = 1` the decomposition follows wall times, and `cmp_sigma_turb` reads stale ghost-cell momenta
-  inside the RT subcycles (see OPEN_ISSUES).
+  inside the RT subcycles. PR #75 fixed that: after the rebase, B and C are bit-identical with cells matched by
+  position (lv5 and lv6, 2026-11-05).
 - **Memory:** the summed PSS of the 32 ranks is 6.71-6.79 GB with `shared_tables` (D), against 8.19-8.28 GB without
   (B). That is -1.49 GB, or 47 MB per rank, matching the ~50 MB of converted tables.
 
@@ -299,6 +301,6 @@ branch. 12 steps:
   - tier 1 with sharing off: byte-identical to staging (`runs/mpi3_tab`);
   - `rtg`, sharing on against off: bit-identical (t1_pdr_calima, WDB06rt, np 4);
   - MIST: bit-identical (t1_sink_accretion, np 4).
-  - `SED_table`: on staging every SED initialisation crashes in `write_SEDtable` (a column past `nv`). PR #76 fixes
-    the column layout, and it applies cleanly on top of this branch. With it applied, sharing on and off are
-    bit-identical, with `sedprops_update = 0`, in the RTZ-only ladder (np 2) and in t1_pdr_calima (np 4).
+  - `SED_table`: before PR #76 (now in staging) every SED initialisation crashed in `write_SEDtable` (a column past
+    `nv`). With #76 applied, sharing on and off are bit-identical, with `sedprops_update = 0`, in the RTZ-only
+    ladder (np 2) and in t1_pdr_calima (np 4).
