@@ -430,7 +430,7 @@ contains
 #ifdef CALIMA
     r(o_dust:o_dust+ndust-1)=rho_dust(1,:)
     r(o_pah:o_pah+npah-1)=rho_pah(1,:)
-    if(npah>0)r(o_fion:o_fion+npah-1)=pah_fion_vec(1,:)
+    if(npah>0)r(o_fion:o_fion+npah-1)=pah_fion_vec(1,1:npah)
     call get_cell_zguess(r(o_zg:o_zg+ndust-1))
 #endif
     r(o_stat)=dble(err_idx)
@@ -1622,7 +1622,7 @@ subroutine coolfine1(ind_grid,ngrid,ilevel,iphase)
 #ifdef CALIMA
                  rho_dust(i,:)=cq_rec(o_dust:o_dust+ndust-1,n)
                  rho_pah(i,:)=cq_rec(o_pah:o_pah+npah-1,n)
-                 if(npah>0)pah_fion_vec(i,:)=cq_rec(o_fion:o_fion+npah-1,n)
+                 if(npah>0)pah_fion_vec(i,1:npah)=cq_rec(o_fion:o_fion+npah-1,n)
 #if NVARNOADVECT>0
                  if(cool_queue_zguess_ivar>0)unoadvect(ind_leaf(i),cool_queue_zguess_ivar:cool_queue_zguess_ivar+ndust-1)= &
                       & cq_rec(o_zg:o_zg+ndust-1,n)
