@@ -10,6 +10,8 @@
 
 # Do we want a debug build? 1=Yes, 0=No
 DEBUG = 0
+# Number of non-advected cell variables (unoadvect), e.g. 1 for the measured cooling cost (cost_measured)
+NVARNOADVECT = 0
 # Do we want to test coverage?
 GCOV = 0
 # Compiler flavor: GNU or INTEL
@@ -197,6 +199,9 @@ ifeq ($(USE_ONLY_MIST), 1)
 endif
 ifeq ($(DEBUG), 1)
    DEFINES += -DDEBUG
+endif
+ifneq ($(NVARNOADVECT), 0)
+   DEFINES += -DNVARNOADVECT=$(NVARNOADVECT)
 endif
 
 #############################################################################

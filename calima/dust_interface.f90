@@ -13,7 +13,7 @@ module dust_interface
     public :: compute_dust_rad_rates,compute_dust_precool,&
             compute_dust_coolrates,compute_local_anisotropy_factor,&
             compute_dust_update,rtgroups_reset_warm,store_pah_ion_fraction,&
-            rtgroups_derivative_calls
+            rtgroups_derivative_calls,reset_cell_warm_starts
 
     ! Cache to avoid automatic array allocations in compute_dust_update
     real(dp), allocatable, save, target :: y_gas_cache(:,:), y_gas_out_cache(:,:)
@@ -31,6 +31,9 @@ module dust_interface
     end type RTGLast
     type(RTGLast), allocatable, save :: rtg_last(:)
     real(dp), allocatable, save :: rtg_Zguess(:)
+    ! compute_dust_update: the last accepted substep's recommended next-step size, the first guess of the
+    ! next call (it skips the firstcall 1/kmax reduction at equilibrium for the explicit solvers)
+    real(dp), save :: last_h_ode = 0.0_dp
     real(dp), parameter :: RTG_DLNT = 1d-5, RTG_SERVE = 1.5d-5
     real(dp), parameter :: RTG_SERVE_HI = exp(RTG_SERVE), RTG_SERVE_LO = exp(-RTG_SERVE)   ! rtg_served, without a log
     ! the dust temperatures of the last update_T_dust and the inputs it had: the cooling solver's
@@ -91,6 +94,16 @@ contains
                                                                 pahbins_props(ii)%ncharge_states, ii))
         end do
     end subroutine store_pah_ion_fraction
+
+    subroutine reset_cell_warm_starts()
+        ! The guesses carried from one cell to the next (the ODE step of compute_dust_update, the grain-charge
+        ! root of WDB06rt) start cold for one cell: with the cooling queue (cool_queue >= 1) a cell's result then
+        ! does not depend on which cell was solved before it, i.e. on the rank that solves it or the order.
+        ! The cold root search costs ~20% of the cooling in the WDB06rt H II box (a full bracketing per bin)
+        implicit none
+        last_h_ode = 0.0_dp
+        if (allocated(rtg_Zguess)) rtg_Zguess = -huge(1d0)
+    end subroutine reset_cell_warm_starts
 
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
@@ -854,10 +867,6 @@ contains
         real(dp), pointer :: y_dust(:), y_dust_out(:)
         real(dp) :: mass_g(n_elements)   ! element atomic masses — populated once via #ifdef, used throughout
         real(dp) :: h_init_val           ! substep hint for integrate_dust_ode
-        ! Cache the last accepted substep's recommended next-step size across calls.
-        ! On re-entry with the same (or similar) conditions this skips the firstcall
-        ! 1/kmax reduction, cutting substep count at equilibrium for explicit solvers.
-        real(dp), save :: last_h_ode = 0.0_dp
         real(dp) :: m_el(n_elements), m_bin(ndust+npah)  ! reference masses of the trace floors [g cm-3]
 
         real(dp), intent(out) :: dUU

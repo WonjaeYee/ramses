@@ -28,6 +28,7 @@ end program ramses
 subroutine initialize_mpi
   use amr_commons, only:myid,ncpu
   use mpi_mod
+  use node_shared, only:node_shared_init
   implicit none
 #ifndef WITHOUTMPI
   integer::ierr
@@ -42,6 +43,7 @@ subroutine initialize_mpi
   call MPI_COMM_RANK(MPI_COMM_WORLD,myid,ierr)
   call MPI_COMM_SIZE(MPI_COMM_WORLD,ncpu,ierr)
   myid=myid+1 ! Careful with this...
+  call node_shared_init
 #endif
 
 end subroutine initialize_mpi

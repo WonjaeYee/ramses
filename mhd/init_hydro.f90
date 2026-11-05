@@ -11,6 +11,7 @@ subroutine init_hydro
   integer::irad
 #endif
   integer::nvar2,ilevel2,numbl2,ilun,ibound,istart
+  integer::nnoadv_file,nvar_adv
   integer::ncpu2,ndim2,nlevelmax2,nboundary2
   integer ,dimension(:),allocatable::ind_grid
   real(dp),dimension(:),allocatable::xx
@@ -37,6 +38,26 @@ subroutine init_hydro
      allocate(fluxes(1:ncell,1:twondim))
      fluxes(1:ncell,1:twondim)=0.0d0
   end if
+#if NVARNOADVECT>0
+  allocate(unoadvect(1:ncell,1:nvarnoadvect))
+  !TODO(code): we might want a different initial value per variable
+  unoadvect=noadvect_init
+  if(cost_measured>0d0.and.(cost_ivar<1.or.cost_ivar>nvarnoadvect))then
+     if(myid==1)write(*,*)'cost_measured: cost_ivar must be in 1..NVARNOADVECT, it is',cost_ivar
+     call clean_stop
+  end if
+  if(cost_measured>0d0.and.cost_cell_ratio_max<1d0)then
+     if(myid==1)write(*,*)'cost_measured: cost_cell_ratio_max must be >= 1, it is',cost_cell_ratio_max
+     call clean_stop
+  end if
+  if(cost_measured>0d0.and.noadvect_init>=0d0.and.myid==1) &
+       & write(*,*)'Warning: cost_measured reads cells with noadvect_init >= 0 as measured'
+#else
+  if(cost_measured>0d0)then
+     if(myid==1)write(*,*)'cost_measured needs a build with NVARNOADVECT >= 1'
+     call clean_stop
+  end if
+#endif
   if(momentum_feedback>0)then
      allocate(pstarold(1:ncell))
      allocate(pstarnew(1:ncell))
@@ -83,6 +104,17 @@ subroutine init_hydro
      open(unit=ilun,file=fileloc,form='unformatted')
      read(ilun)ncpu2
      read(ilun)nvar2
+     ! The non-advected scalars in the file: nvarnoadvect_og if set (>= 0); otherwise this build's
+     ! number if the file has exactly that many variables beyond the advected ones, else none
+     nvar_adv=nvar+3
+     if(nvarnoadvect_og>=0)then
+        nnoadv_file=nvarnoadvect_og
+     else if(nvarnoadvect>0.and.nvar2==nvar_adv+nvarnoadvect)then
+        nnoadv_file=nvarnoadvect
+     else
+        nnoadv_file=0
+     end if
+     nvar2 = nvar2 - nnoadv_file
      read(ilun)ndim2
      read(ilun)nlevelmax2
      read(ilun)nboundary2
@@ -185,6 +217,17 @@ subroutine init_hydro
                     end do
                  end do
 #endif
+                 ! Read the file's non-advected scalars; those beyond this build's are skipped
+                 do ivar=1,nnoadv_file
+                    read(ilun)xx
+#if NVARNOADVECT>0
+                    if(ivar<=nvarnoadvect)then
+                       do i=1,ncache
+                          unoadvect(ind_grid(i)+iskip,ivar)=xx(i)
+                       end do
+                    end if
+#endif
+                 end do
               end do
               deallocate(ind_grid,xx)
            end if
