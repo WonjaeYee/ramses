@@ -96,7 +96,6 @@ module amr_parameters
   logical::cool_stats=.false.              ! Print per coarse step the cooling time per call, max and mean over ranks
   integer::cool_queue=0                    ! RTZ cooling solve: 0 in coolfine1, 1 from per-cell records, 2 records shared on the node (MPI-3)
   real(dp)::cool_queue_chunk=2d-4           ! cool_queue = 2: predicted cost of a chunk of records [s] (at most 64 records)
-  integer::cool_queue_zguess_ivar=0        ! cool_queue >= 1: first of ndust non-advected scalars that keep each cell's grain-charge roots (0: cold)
   integer::cool_queue_debug=0              ! cool_queue tests: 1 solves the records in reverse order, 2 resets the warm starts in place
   ! Recursive bisection tree parameters
   integer::nbilevelmax=1                   ! Max steps of bisection partitioning

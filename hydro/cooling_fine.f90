@@ -30,7 +30,7 @@ module cool_queue_m
   integer::cq_nrec                                ! reals per record
   integer::cq_nion,cq_nel                         ! tracked ion slots (with H2) and elements
   integer,allocatable,dimension(:)::cq_ion_ii,cq_ion_jj,cq_el_ii
-  integer::o_T2,o_ion,o_el,o_CO,o_Np,o_Fp,o_pg,o_dNp,o_dFp,o_dx,o_sig,o_dust,o_pah,o_hwd,o_wd,o_fion,o_zg
+  integer::o_T2,o_ion,o_el,o_CO,o_Np,o_Fp,o_pg,o_dNp,o_dFp,o_dx,o_sig,o_dust,o_pah,o_hwd,o_wd,o_fion
   integer::o_stat,o_cost,o_rank
   integer::cq_nhome                               ! T2, nH, ekk, err, emag, T2min, Zsolar, the rt_vc boosts
   real(kind=8),pointer,contiguous,dimension(:,:)::cq_rec=>null()   ! (cq_nrec, cell): this rank's records
@@ -100,7 +100,6 @@ contains
     o_hwd=n+1;  n=n+1
     o_wd=n+1;   n=n+(cq_ndust+cq_npah)*ndim
     o_fion=n+1; n=n+cq_npah
-    o_zg=n+1;   n=n+cq_ndust
     o_stat=n+1; n=n+1
     o_cost=n+1; n=n+1
     o_rank=n+1; n=n+1
@@ -315,8 +314,7 @@ contains
   subroutine cq_check_mode
     ! At the first call: the record path covers the RTZ non-equilibrium solve only
     use amr_commons, only: myid
-    use amr_parameters, only: cool_queue, neq_chem, cool_queue_zguess_ivar, cost_ivar
-    use hydro_parameters, only: nvarnoadvect
+    use amr_parameters, only: cool_queue, neq_chem
     use node_shared, only: node_size
     use rt_parameters, only: rtz_cooling, rtz_equilibrium_test, rtz_single_cell_test
     logical,save::checked=.false.
@@ -325,12 +323,6 @@ contains
 #ifndef RTZ_ONE_CELL_TEST
     if(neq_chem.and.rtz_cooling.and.rtz_equilibrium_test<=0.and..not.rtz_single_cell_test)then
        if(.not.cq_lay_set)call cq_layout
-       if(cool_queue_zguess_ivar>0 .and. (cool_queue_zguess_ivar+cq_ndust-1>nvarnoadvect .or. &
-            & (cost_ivar>=cool_queue_zguess_ivar .and. cost_ivar<=cool_queue_zguess_ivar+cq_ndust-1)))then
-          if(myid==1)write(*,*)'cool_queue_zguess_ivar needs ndust non-advected scalars apart from cost_ivar: '// &
-               & 'starting the charge roots cold'
-          cool_queue_zguess_ivar=0
-       end if
 #ifndef WITHOUTMPI
        cq_node_queue=(cool_queue==2 .and. node_size>1)
 #endif
@@ -361,7 +353,7 @@ contains
     use rtz_cooling_module, only: rtz_solve_cooling
 #ifdef CALIMA
     use dust_commons, only: tva_wdrift_batch,ntva,pah_fion_vec
-    use dust_interface, only: reset_cell_warm_starts, get_cell_zguess
+    use dust_interface, only: reset_cell_warm_starts
 #endif
     real(kind=8),dimension(:),intent(inout)::r
     real(dp),dimension(1:nvector)::T2_new,nCO,dx_SS_H2
@@ -403,7 +395,7 @@ contains
        tva_wdrift_batch(1,:,:)=reshape(r(o_wd:o_wd+ntva*ndim-1),(/ntva,ndim/))
     end if
     if(npah>0)pah_fion_vec=-1d0
-    call reset_cell_warm_starts(r(o_zg:o_zg+ndust-1))   ! this cell's own charge roots, or a cold start
+    call reset_cell_warm_starts()   ! a cold start for this cell
 #endif
     err_idx=0
     t0=wallclock()
@@ -431,7 +423,6 @@ contains
     r(o_dust:o_dust+ndust-1)=rho_dust(1,:)
     r(o_pah:o_pah+npah-1)=rho_pah(1,:)
     if(npah>0)r(o_fion:o_fion+npah-1)=pah_fion_vec(1,1:npah)
-    call get_cell_zguess(r(o_zg:o_zg+ndust-1))
 #endif
     r(o_stat)=dble(err_idx)
     r(o_rank)=dble(myid)
@@ -1579,11 +1570,6 @@ subroutine coolfine1(ind_grid,ngrid,ilevel,iphase)
                  cq_rec(o_sig,n)=sigma(i)
                  cq_rec(o_dust:o_dust+ndust-1,n)=rho_dust(i,:)
                  cq_rec(o_pah:o_pah+npah-1,n)=rho_pah(i,:)
-                 cq_rec(o_zg:o_zg+ndust-1,n)=-huge(1d0)     ! no stored root: a cold search
-#if NVARNOADVECT>0
-                 if(cool_queue_zguess_ivar>0)cq_rec(o_zg:o_zg+ndust-1,n)= &
-                      & unoadvect(ind_leaf(i),cool_queue_zguess_ivar:cool_queue_zguess_ivar+ndust-1)
-#endif
                  cq_rec(o_hwd,n)=0d0
                  if(allocated(tva_wdrift))then
                     cq_rec(o_hwd,n)=1d0
@@ -1623,10 +1609,6 @@ subroutine coolfine1(ind_grid,ngrid,ilevel,iphase)
                  rho_dust(i,:)=cq_rec(o_dust:o_dust+ndust-1,n)
                  rho_pah(i,:)=cq_rec(o_pah:o_pah+npah-1,n)
                  if(npah>0)pah_fion_vec(i,1:npah)=cq_rec(o_fion:o_fion+npah-1,n)
-#if NVARNOADVECT>0
-                 if(cool_queue_zguess_ivar>0)unoadvect(ind_leaf(i),cool_queue_zguess_ivar:cool_queue_zguess_ivar+ndust-1)= &
-                      & cq_rec(o_zg:o_zg+ndust-1,n)
-#endif
 #endif
                  T2(i)=cq_home(1,n); nH(i)=cq_home(2,n); ekk(i)=cq_home(3,n); err(i)=cq_home(4,n)
                  emag(i)=cq_home(5,n); T2min(i)=cq_home(6,n); Zsolar(i)=cq_home(7,n)

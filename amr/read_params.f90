@@ -356,7 +356,6 @@ subroutine read_run_params(namelist_unit,nml_ok)
    & ,static_dm,static_gas,static_stars,convert_birth_times,use_proper_time,remap_pscalar &
    & ,unbind,make_mergertree,stellar &
    & ,ignore_no_prev,cost_measured,cost_ivar,cost_cell_ratio_max,cool_stats,cool_queue,cool_queue_chunk,cool_queue_debug &
-   & ,cool_queue_zguess_ivar &
    & ,shared_tables
 
   ! Default passive scalar map

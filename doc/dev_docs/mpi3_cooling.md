@@ -81,8 +81,7 @@ So call k is the same call on every rank. The queue relies on this, and `cool_st
 - A home buffer stays with the owner: ekk, err, emag, the pre-solve T2, T2min, nH, Zsolar and the `rt_vc` boosts.
 - `cq_solve_record` makes each record's result a pure function of the record and the call's globals:
   - it rebuilds the solver arrays with a fixed fill;
-  - it sets the warm-start state for this cell: the ODE step starts cold, and the charge roots start from the cell's
-    own stored values (`cool_queue_zguess_ivar`, section 5) or cold;
+  - it sets the warm-start state for this cell: the ODE step and the charge roots start cold;
   - it sets `pah_fion_vec` and `tva_wdrift_batch` from the record.
 - **Sigma** (`cmp_sigma_turb`, a neighbour stencil) is computed for all cells before any of them is cooled, so it does
   not depend on the order.
@@ -237,38 +236,10 @@ emptying (load 90 -> 1).
   - A cold root search brackets each bin over its whole charge range (up to 43,011 states), where the previous cell's
     root starts the search next to it.
 
-### Each cell keeps its own charge roots (`cool_queue_zguess_ivar`)
-- **How:** with a build of `NVARNOADVECT >= 1 + ndust` (5 in `bin_dust`), the cell's last WDB06rt roots live in the
-  non-advected scalars `cool_queue_zguess_ivar .. +ndust-1`.
-  - They go into the record, start the root search, and come back with the new roots.
-  - They move with the cell through refinement, the load balance and restarts; cells never solved start from
-    `noadvect_init` = -1.
-  - A cell's result depends only on its own history, so it stays independent of the rank and of the order.
-- **Recommended:** `NVARNOADVECT = 5`, `cost_ivar = 1`, `cool_queue_zguess_ivar = 2`.
-- **Determinism checks:**
-  - t1_pdr_calima, np 4: mode 1 in natural order, mode 1 in reverse order, and mode 2 twice are bit-identical in all
-    82 fields;
-  - mode 0 against them: 8.5e-10.
-- **128 ranks, 9.0 -> 9.3 Myr:**
-
-  | run | wall | cooling Σmax / Σmean | Σ solve per rank |
-  |---|---|---|---|
-  | (no balancing, 2026-10-21) | 1,333 s | 1,281 / 147 s | |
-  | #73 alone (A, A2) | 301-316 s | 267-280 / 147-149 s | |
-  | queue, cold roots (C) | 212 s | 188 / 187 s | 173 s |
-  | **queue + own roots (C_zg)** | **181 s** | **158 / 157 s** | **143 s** |
-  | queue + own roots, repeated (C_zg2) | 182 s | 158.5 / 157.2 s | 143 s |
-  | queue + own roots + #73 (B_zg) | 198 s | 162 / 159 s | |
-
-  - C_zg and C_zg2 are bit-identical in all 85 fields (262,144 cells).
-  - C against C_zg differ by up to 1.3e-6 in a few rare ions (He III, Ne VI, O VI): the root-solver tolerance,
-    accumulated over 63 steps.
-  - Overall: 7.4x over no balancing and 1.7x over #73. A rank's solve time (143 s) is now below #73's mean cooling
-    (147 s).
-
 ### Stress tests (megatron, 128 ranks, lv6 box from t = 0; `/data/currodri/turbhii/mpi3_stress`)
-"Queue" below means `cool_queue = 2` with `cool_queue_zguess_ivar = 2` (`NVARNOADVECT = 5`); runs were capped at
-30 min.
+"Queue" below means `cool_queue = 2`; runs were capped at 30 min. These runs also kept each cell's charge roots in
+non-advected scalars, an option since removed from the branch (it made the solve ~15% cheaper); the imbalance
+ratios (Σmax/Σmean) do not depend on it.
 
 **Corner source:** the box's source moved from the centre to (2, 2, 2) pc. The young H II front then lies on one or
 two ranks.

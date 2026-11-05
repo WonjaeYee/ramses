@@ -13,7 +13,7 @@ module dust_interface
     public :: compute_dust_rad_rates,compute_dust_precool,&
             compute_dust_coolrates,compute_local_anisotropy_factor,&
             compute_dust_update,rtgroups_reset_warm,store_pah_ion_fraction,&
-            rtgroups_derivative_calls,reset_cell_warm_starts,get_cell_zguess
+            rtgroups_derivative_calls,reset_cell_warm_starts
 
     ! Cache to avoid automatic array allocations in compute_dust_update
     real(dp), allocatable, save, target :: y_gas_cache(:,:), y_gas_out_cache(:,:)
@@ -95,29 +95,15 @@ contains
         end do
     end subroutine store_pah_ion_fraction
 
-    subroutine reset_cell_warm_starts(zguess)
+    subroutine reset_cell_warm_starts()
         ! The guesses carried from one cell to the next (the ODE step of compute_dust_update, the grain-charge
-        ! root of WDB06rt) are set for one cell: with the cooling queue (cool_queue >= 1) a cell's result then
+        ! root of WDB06rt) start cold for one cell: with the cooling queue (cool_queue >= 1) a cell's result then
         ! does not depend on which cell was solved before it, i.e. on the rank that solves it or the order.
-        ! zguess: this cell's own last charge roots (cool_queue_zguess_ivar); without it the root search
-        ! starts cold, which costs ~20% of the cooling in the WDB06rt H II box (a full bracketing per bin)
+        ! The cold root search costs ~20% of the cooling in the WDB06rt H II box (a full bracketing per bin)
         implicit none
-        real(dp), dimension(:), intent(in), optional :: zguess
         last_h_ode = 0.0_dp
-        if (present(zguess)) then
-            if (.not. allocated(rtg_Zguess)) allocate(rtg_Zguess(size(zguess)))
-            rtg_Zguess = zguess
-        else if (allocated(rtg_Zguess)) then
-            rtg_Zguess = -huge(1d0)
-        end if
+        if (allocated(rtg_Zguess)) rtg_Zguess = -huge(1d0)
     end subroutine reset_cell_warm_starts
-
-    subroutine get_cell_zguess(zguess)
-        ! The charge roots the last solve left (rtg_Zguess), to keep with the cell; unchanged if none
-        implicit none
-        real(dp), dimension(:), intent(inout) :: zguess
-        if (allocated(rtg_Zguess)) zguess = rtg_Zguess
-    end subroutine get_cell_zguess
 
     subroutine rtgroups_reset_warm(ncell)
         ! A new vector of ncell cells (rtz_solve_cooling): their warm states start cold. Only
@@ -744,11 +730,8 @@ contains
         end function rtg_served
         subroutine rtg_allocate()
             integer :: ib
-            allocate(rtg_warm(1:nvector + 1, 1:dinfo%ndust), rtg_last(1:dinfo%ndust))
-            if (.not. allocated(rtg_Zguess)) then      ! reset_cell_warm_starts may have set it already
-                allocate(rtg_Zguess(1:dinfo%ndust))
-                rtg_Zguess = -huge(1d0)
-            end if
+            allocate(rtg_warm(1:nvector + 1, 1:dinfo%ndust), rtg_last(1:dinfo%ndust), rtg_Zguess(1:dinfo%ndust))
+            rtg_Zguess = -huge(1d0)
             do ib = 1, dinfo%ndust
                 allocate(rtg_last(ib)%Np(dinfo%nGroups), rtg_last(ib)%egy(dinfo%nGroups))
             end do
