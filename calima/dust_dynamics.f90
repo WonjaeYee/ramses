@@ -73,6 +73,30 @@ module dust_dynamics
         end select
     end subroutine select_velocity_model
 
+    pure real(dp) function dust_slope(dlft, drgt)
+        ! The limited slope of rho_d in a cell from its left and right differences, by slope_type in
+        ! the hydro solver's numbering: 1 minmod, 2 monotonized central (MC), 4 superbee (Roe 1986),
+        ! 7 van Leer (1974); 6 the unlimited central slope. Any other value falls back to minmod.
+        ! All four limited slopes are at most 2 min(|dlft|, |drgt|), MC's bound, which is what the
+        ! positivity-limited drift Courant number of get_dust_courant_dt assumes for slope_type >= 2.
+        use hydro_parameters, only: slope_type
+        real(dp), intent(in) :: dlft, drgt
+        real(dp) :: dcen, theta
+        dcen = 0.5_dp * (dlft + drgt)
+        if (slope_type == 6) then
+            dust_slope = dcen
+        else if (dlft * drgt <= 0.0_dp) then
+            dust_slope = 0.0_dp
+        else if (slope_type == 4) then
+            dust_slope = sign(1.0_dp, dcen) * max(min(2.0_dp * abs(dlft), abs(drgt)), min(abs(dlft), 2.0_dp * abs(drgt)))
+        else if (slope_type == 7) then
+            dust_slope = 2.0_dp * dlft * drgt / (dlft + drgt)
+        else
+            theta = merge(2.0_dp, 1.0_dp, slope_type == 2)
+            dust_slope = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+        end if
+    end function dust_slope
+
     subroutine check_tva_rt_params()
         ! The trapped-IR radiation pressure on the dust needs a non-thermal energy variable, the IR
         ! group and the GLF flux (Rosdahl & Teyssier 2015, footnote 3: the trapped/streaming
@@ -1873,14 +1897,7 @@ module dust_dynamics
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
                             drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
                         end if
-                        dcen = half * (dlft + drgt)
-                        if (slope_type == 6) then
-                            slope_rhod(l,i,j,k,jbin) = dcen
-                        else
-                            if (dlft * drgt <= 0.0_dp) then; slope_rhod(l,i,j,k,jbin) = 0.0_dp
-                            else; slope_rhod(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
-                            end if
-                        end if
+                        slope_rhod(l,i,j,k,jbin) = dust_slope(dlft, drgt)
                     end do
                 end do; end do; end do; end do
             end if
@@ -2820,14 +2837,7 @@ module dust_dynamics
                             dlft = rhod_cell(l,i,j,k,jbin) - rhod_cell(l,i,j,k-1,jbin)
                             drgt = rhod_cell(l,i,j,k+1,jbin) - rhod_cell(l,i,j,k,jbin)
                         end if
-                        dcen = half * (dlft + drgt)
-                        if (slope_type == 6) then
-                            slope_rhod(l,i,j,k,jbin) = dcen
-                        else
-                            if (dlft * drgt <= 0.0_dp) then; slope_rhod(l,i,j,k,jbin) = 0.0_dp
-                            else; slope_rhod(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
-                            end if
-                        end if
+                        slope_rhod(l,i,j,k,jbin) = dust_slope(dlft, drgt)
                     end do
                 end do; end do; end do; end do
             end if
