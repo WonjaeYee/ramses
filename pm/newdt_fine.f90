@@ -10,7 +10,7 @@ subroutine newdt_fine(ilevel)
   use turb_commons
 #endif
 #ifdef CALIMA
-  use dust_commons,   only: dust_tva, tva_test_mode, TVA_TEST_GAUSS
+  use dust_commons,   only: dust_tva, tva_test_mode, TVA_TEST_GAUSS, tva_test_dt
   use dust_dynamics,  only: get_dust_courant_dt
 #endif
   use constants, ONLY: pi
@@ -200,6 +200,7 @@ subroutine newdt_fine(ilevel)
   if (tva_test_mode == TVA_TEST_GAUSS) then
      dtnew(ilevel) = 1.0d-8
   end if
+  if (tva_test_dt > 0.0d0) dtnew(ilevel) = min(dtnew(ilevel), tva_test_dt)
 #endif
 
 111 format('   Entering newdt_fine for level ',I2)

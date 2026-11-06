@@ -877,8 +877,9 @@ module dust_init
         ! Resolve the TVA test IC once, here, instead of string-comparing condinit_kind
         ! inside the per-cell/per-face/per-bin solver loops.
         select case (trim(condinit_kind))
-        case ('dustydiffuse'); tva_test_mode = TVA_TEST_DIFFUSE
+        case ('dustydiffuse', 'dustydiffuse_diag'); tva_test_mode = TVA_TEST_DIFFUSE
         case ('dustyshock');   tva_test_mode = TVA_TEST_SHOCK
+        case ('dustywave', 'dustywave_v'); tva_test_mode = TVA_TEST_SHOCK   ! the same t_s = eps rho / K
         case ('dustyblast1d'); tva_test_mode = TVA_TEST_BLAST1D
         case ('dustyspress');  tva_test_mode = TVA_TEST_SPRESS
         case ('dustygauss');   tva_test_mode = TVA_TEST_GAUSS
@@ -1445,7 +1446,7 @@ module dust_init
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
                 dust_tva, dust_radpressure, dust_drift_collisions, use_w_drift_test, w_drift_test,drag_coefficient,&
-                tva_wmax_cs,drag_model,&
+                tva_wmax_cs,drag_model,tva_test_dt,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,charging_table_label,ice_model,&
                 dust_ion_recombination,&

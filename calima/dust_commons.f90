@@ -97,6 +97,8 @@ module dust_commons
                                                  ! 'draine2011_pz' -- the same, with the Coulomb term
                                                  !   averaged over the charge distribution P(Z) of
                                                  !   charging_model instead of taken at |<Z>|.
+    real(dp) ::tva_test_dt=0d0                   ! Test problems: largest time step [code units], as L19
+                                                 ! impose in their tests. <=0 disables it.
     real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.
                                                  ! TVA assumes Stokes << 1, which fails once the drift
                                                  ! approaches c_s (typically in hot/diffuse cells, where
