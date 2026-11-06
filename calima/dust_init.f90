@@ -76,6 +76,7 @@ module dust_init
             write(*,*) 'use_w_drift_test     = ',use_w_drift_test
             if (use_w_drift_test) write(*,*) '   w_drift_test      = ',w_drift_test
             write(*,*) 'tva_wmax_cs          = ',tva_wmax_cs,' (cap on |w_drift| / c_s)'
+            write(*,*) 'tva_scheme           = ',trim(tva_scheme)
             write(*,*) 'epstein_coef         = ',epstein_coef,' = sqrt(pi*gamma/8)'
             write(*,*) 'drag_model           = ',trim(drag_model)
         end if
@@ -210,6 +211,17 @@ module dust_init
         ! from the per-cell radiation-pressure call; the pure-drag path has none.
         if (draine_on .and. .not.dust_radpressure) then
             if(myid==1)write(*,*)'Error: drag_model=',trim(drag_model),' requires dust_radpressure=.true.'
+            check_params_dust=.false.
+        end if
+        select case (trim(tva_scheme))
+        case ('calima'); tva_l19 = .false.
+        case ('l19');    tva_l19 = .true.
+        case default
+            if(myid==1)write(*,*)'Error: tva_scheme=',trim(tva_scheme),' is neither calima nor l19'
+            check_params_dust=.false.
+        end select
+        if (tva_l19 .and. dust_radpressure) then
+            if(myid==1)write(*,*)'Error: tva_scheme=l19 is implemented for the pure-drag fluxes only'
             check_params_dust=.false.
         end if
         if (dust_tva .and. myid==1) then
@@ -1446,7 +1458,7 @@ module dust_init
                 pah_AGBwinds,pah_sputtering,pah_pe_heating,pah_pe_heating_isrf,pah_pe_nolyman,H2onpah,&
                 ! Dust dynamics flags
                 dust_tva, dust_radpressure, dust_drift_collisions, use_w_drift_test, w_drift_test,drag_coefficient,&
-                tva_wmax_cs,drag_model,tva_test_dt,&
+                tva_wmax_cs,drag_model,tva_scheme,tva_test_dt,&
                 ! Dust modelling options
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,charging_table_label,ice_model,&
                 dust_ion_recombination,&

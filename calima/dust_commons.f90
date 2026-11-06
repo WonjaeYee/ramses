@@ -97,6 +97,17 @@ module dust_commons
                                                  ! 'draine2011_pz' -- the same, with the Coulomb term
                                                  !   averaged over the charge distribution P(Z) of
                                                  !   charging_model instead of taken at |<Z>|.
+    character(len=8) ::tva_scheme='calima'       ! Drift scheme of the pure-drag fluxes (no radiation):
+                                                 ! 'calima' -- cell drift averaged to the face, drift CFL
+                                                 !   at Courant <= 1/2, parabolic bound, positivity cap
+                                                 ! 'l19' -- Lebreuilly et al. (2019) sect. 3.2-3.3 as their
+                                                 !   code (RAMSES-ISM) runs it: cell drifts from a pre-pass,
+                                                 !   exchanged between processes; limited drift slopes
+                                                 !   (eq. 22); compression predictor (eq. 21); face drift
+                                                 !   the mean of the reconstructed states (eq. 23);
+                                                 !   advective CFL only (eq. 26); no positivity cap.
+                                                 !   Pure drag only. For the comparison tests.
+    logical  ::tva_l19=.false.                   ! tva_scheme == 'l19'
     real(dp) ::tva_test_dt=0d0                   ! Test problems: largest time step [code units], as L19
                                                  ! impose in their tests. <=0 disables it.
     real(dp) ::tva_wmax_cs=1d0                   ! Cap on |w_drift| in units of the local sound speed.

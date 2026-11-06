@@ -58,6 +58,17 @@ module dust_dynamics
     end interface
     procedure(relative_velocity_model), pointer, save :: grain_relative_velocity => null()
 
+    ! tva_l19: the cell-centred drifts (w_d per TVA species, w_g) of the cells of the level being
+    ! swept, from the pre-pass of dust_diffusion_fine over its active grids, sent through the
+    ! virtual boundaries -- what RAMSES-ISM's set_vdust does for its v_dust. The flux sweep takes
+    ! each stencil cell's drift from here, centred in every cell: L19's drift slopes reach the
+    ! stencil's edge cells, where the sweep itself has only a one-sided pressure gradient, and the
+    ! two grids sharing a face then build different fluxes for it. An entry is valid for the
+    ! pre-pass that wrote it (l19_stamp == l19_pass); the other cells (physical boundaries, cells
+    ! interpolated from the coarser level) keep the stencil's own drift.
+    real(dp), allocatable, save :: l19_wd(:,:,:), l19_wg(:,:), l19_stamp(:)
+    real(dp), save :: l19_pass = 0.0_dp
+
     contains
 
     subroutine select_velocity_model()
@@ -856,6 +867,7 @@ module dust_dynamics
         case default; c_drift = 1.0_dp - 1.0_dp / sqrt(2.0_dp)
         end select
         c_drift = min(courant_factor, c_drift)
+        if (tva_l19) c_drift = courant_factor   ! L19 eq. 26: the advective CFL alone
 
         ! ----------------------------------------------------------------
         ! PART A: Simple analytic CFL for the drift-test mode
@@ -1223,7 +1235,7 @@ module dust_dynamics
                                 D_diff = D_diff + max(eps_face_bin, 0.0_dp) * t_s_face_arr(jbin)
                             end do
                             D_diff = D_diff * c_s_face**2 * (1.0_dp - eps_tot_face)
-                            if (D_diff > 0.0_dp) then
+                            if (D_diff > 0.0_dp .and. .not. tva_l19) then
                                 dtcell = courant_factor * dx**2 / (2.0_dp * dble(ndim) * D_diff)
                                 dt_loc = min(dt_loc, dtcell)
                             end if
@@ -1296,12 +1308,16 @@ module dust_dynamics
 
     end subroutine get_dust_courant_dt
 
-    subroutine dust_upwind_correct1(ind_grid,ncache,ilevel)
+    subroutine dust_upwind_correct1(ind_grid,ncache,ilevel,drift_only)
         use amr_commons
         use hydro_commons
         implicit none
         integer::ilevel,ncache
         integer,dimension(1:nvector)::ind_grid
+        ! tva_l19 pre-pass: only store the drifts of the grids' own cells in l19_wd, l19_wg
+        logical, intent(in), optional :: drift_only
+        integer,dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2),save::icell_loc   ! stencil cell, 0 if interpolated
+        real(dp), allocatable, save :: wg_save(:,:,:,:,:)
 
         ! Cache blocks matching the sizes found in godfine1
         real(dp),dimension(1:nvector,iu1:iu2,ju1:ju2,ku1:ku2,1:nvar_all),save::uloc
@@ -1401,16 +1417,38 @@ module dust_dynamics
                 end do
                 do i=1,nexist;  ok(ind_exist(i),i3,j3,k3)=son(ind_cell(i))>0; end do
                 do i=1,nbuffer; ok(ind_nexist(i),i3,j3,k3)=.false.; end do
+                do i=1,nexist;  icell_loc(ind_exist(i),i3,j3,k3)=ind_cell(i); end do
+                do i=1,nbuffer; icell_loc(ind_nexist(i),i3,j3,k3)=0; end do
             end do; end do; end do
         end do; end do; end do
+
+        if (present(drift_only)) then
+            if (drift_only) then
+                ! The grids' own cells have the centred gradient in their own stencil
+                if (.not. allocated(wcell_save)) allocate(wcell_save(1:nvector,1:2,1:2,1:2,1:ntva,1:ndim))
+                if (.not. allocated(wg_save)) allocate(wg_save(1:nvector,1:2,1:2,1:2,1:ndim))
+                call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code, &
+                                                wcell=wcell_save,wgcell=wg_save)
+                do k2=0,k2max; do j2=0,j2max; do i2=0,i2max
+                    iskip=ncoarse+(i2+2*j2+4*k2)*ngridmax
+                    do i=1,ncache
+                        l19_wd(iskip+ind_grid(i),1:ntva,1:ndim) = wcell_save(i,1+i2,1+j2,1+k2,1:ntva,1:ndim)
+                        l19_wg(iskip+ind_grid(i),1:ndim) = wg_save(i,1+i2,1+j2,1+k2,1:ndim)
+                        l19_stamp(iskip+ind_grid(i)) = l19_pass
+                    end do
+                end do; end do; end do
+                return
+            end if
+        end if
 
         ! Call the actual mathematical worker to get our upwinded mass corrections
         keep_drift = tva_collision_drift()
         if (keep_drift) then
             if (.not. allocated(wcell_save)) allocate(wcell_save(1:nvector,1:2,1:2,1:2,1:ntva,1:ndim))
-            call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code,wcell=wcell_save)
+            call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code,wcell=wcell_save, &
+                                            icell=icell_loc)
         else
-            call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code)
+            call calculate_pure_drag_fluxes(uloc,dflux,eflux,dx,dt,ncache,agrain_code,sgrain_code,icell=icell_loc)
         end if
 
         ! Keep the cell-centred drift of every species for the grain-grain collisions of the
@@ -1660,7 +1698,7 @@ module dust_dynamics
         end do
     end subroutine tva_gas_counterflux
     subroutine calculate_pure_drag_fluxes(uloc, dflux, eflux, dx, dt, ngrid, &
-                                        & agrain_code, sgrain_code, wcell)
+                                        & agrain_code, sgrain_code, wcell, wgcell, icell)
         use amr_parameters
         use hydro_parameters
         use const
@@ -1680,6 +1718,10 @@ module dust_dynamics
         ! Cell-centred drift of every TVA species in the grid's own cells (1:2 per active
         ! direction), for the grain-grain collisions (dust_drift_collisions)
         real(dp), dimension(1:nvector, 1:2, 1:2, 1:2, 1:ntva, 1:ndim), intent(out), optional :: wcell
+        ! The gas drift of the same cells, and the cell index of every stencil cell (0 if it was
+        ! interpolated from the coarser level), for the tva_l19 pre-pass (l19_wd, l19_wg)
+        real(dp), dimension(1:nvector, 1:2, 1:2, 1:2, 1:ndim), intent(out), optional :: wgcell
+        integer, dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2), intent(in), optional :: icell
 
         ! ========================================================================
         ! 2. LOCAL WORKSPACE FIELDS
@@ -1698,6 +1740,8 @@ module dust_dynamics
         ! Arrays strictly matching Lebreuilly 2019 formulation
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: rhod_cell, w_d_cell
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: slope_rhod, rhod_pred
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2, 1:ntva) :: slope_wd   ! tva_l19 only
+        real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: slope_wg              ! tva_l19 only
         real(dp), dimension(1:nvector, iu1:iu2, ju1:ju2, ku1:ku2) :: w_g_cell, wg_pred
         
         real(dp) :: eken, rho_gas_cell, grad_P_cell, erad_cell
@@ -1713,6 +1757,7 @@ module dust_dynamics
         dflux = 0.0_dp
         eflux = 0.0_dp
         if (present(wcell)) wcell = 0.0_dp
+        if (present(wgcell)) wgcell = 0.0_dp
 
         ilo = MIN(1, iu1+1); ihi = MAX(1, iu2-1)
         jlo = MIN(1, ju1+1); jhi = MAX(1, ju2-1)
@@ -1864,10 +1909,28 @@ module dust_dynamics
                 end if
             end do; end do; end do; end do
 
+            ! tva_l19: every stencil cell's drift from the pre-pass, centred also at the stencil's
+            ! edge, where 2a is one-sided (see l19_wd). The grid's own cells get the same values.
+            if (tva_l19 .and. present(icell) .and. allocated(l19_wd)) then
+                do k = ku1, ku2; do j = ju1, ju2; do i = iu1, iu2; do l = 1, ngrid
+                    if (icell(l,i,j,k) > 0) then
+                        if (l19_stamp(icell(l,i,j,k)) == l19_pass) then
+                            w_d_cell(l,i,j,k,1:ntva) = l19_wd(icell(l,i,j,k),1:ntva,idim)
+                            w_g_cell(l,i,j,k) = l19_wg(icell(l,i,j,k),idim)
+                        end if
+                    end if
+                end do; end do; end do; end do
+            end if
+
             ! The drift of the grid's own cells, for the grain-grain collisions
             if (present(wcell)) then
                 do k = 1, min(2, ku2); do j = 1, min(2, ju2); do i = 1, 2; do l = 1, ngrid
                     wcell(l,i,j,k,1:ntva,idim) = w_d_cell(l,i,j,k,1:ntva)
+                end do; end do; end do; end do
+            end if
+            if (present(wgcell)) then
+                do k = 1, min(2, ku2); do j = 1, min(2, ju2); do i = 1, 2; do l = 1, ngrid
+                    wgcell(l,i,j,k,idim) = w_g_cell(l,i,j,k)
                 end do; end do; end do; end do
             end if
 
@@ -1902,6 +1965,33 @@ module dust_dynamics
                 end do; end do; end do; end do
             end if
 
+            ! L19 eq. 22: the drifts are reconstructed to the faces from their own slopes
+            slope_wd = 0.0_dp; slope_wg = 0.0_dp
+            if (tva_l19 .and. slope_type > 0 .and. slope_type /= 6) then
+                do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
+                    if (idim == 1) then
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i-1,j,k); drgt = w_g_cell(l,i+1,j,k) - w_g_cell(l,i,j,k)
+                    else if (idim == 2) then
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i,j-1,k); drgt = w_g_cell(l,i,j+1,k) - w_g_cell(l,i,j,k)
+                    else
+                        dlft = w_g_cell(l,i,j,k) - w_g_cell(l,i,j,k-1); drgt = w_g_cell(l,i,j,k+1) - w_g_cell(l,i,j,k)
+                    end if
+                    dcen = half * (dlft + drgt)
+                    if (dlft * drgt > 0.0_dp) slope_wg(l,i,j,k) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+                    do jbin = 1, ntva
+                        if (idim == 1) then
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i-1,j,k,jbin); drgt = w_d_cell(l,i+1,j,k,jbin) - w_d_cell(l,i,j,k,jbin)
+                        else if (idim == 2) then
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j-1,k,jbin); drgt = w_d_cell(l,i,j+1,k,jbin) - w_d_cell(l,i,j,k,jbin)
+                        else
+                            dlft = w_d_cell(l,i,j,k,jbin) - w_d_cell(l,i,j,k-1,jbin); drgt = w_d_cell(l,i,j,k+1,jbin) - w_d_cell(l,i,j,k,jbin)
+                        end if
+                        dcen = half * (dlft + drgt)
+                        if (dlft * drgt > 0.0_dp) slope_wd(l,i,j,k,jbin) = sign(1.0_dp, dcen) * min(theta * min(abs(dlft), abs(drgt)), abs(dcen))
+                    end do
+                end do; end do; end do; end do
+            end if
+
 
             ! ====================================================================
             ! STEP 4: POINT 1 - TEMPORAL PREDICTOR (INCLUDING COMPRESSIBILITY)
@@ -1909,13 +1999,14 @@ module dust_dynamics
             do k = klo, khi; do j = jlo, jhi; do i = ilo, ihi; do l = 1, ngrid
                 ! Predictor for Dust Density (w * grad_rho + rho * grad_w)
                 do jbin = 1, ntva
-                    ! Advective part only: the compression term rho_d dw/dx would need the drift
-                    ! slope, and at the cells next to the stencil edge that slope uses a drift
-                    ! whose pressure gradient is one-sided there but centred in the neighbouring
-                    ! grid's stencil. The two grids sharing a face would then build different
-                    ! fluxes for it, which does not conserve the dust mass (see STEP 5).
+                    ! Advective part only, except for tva_l19 (slope_wd is zero otherwise): the
+                    ! compression term rho_d dw/dx needs the drift slope, and at the cells next to
+                    ! the stencil edge that slope uses a drift whose pressure gradient is one-sided
+                    ! there but centred in the neighbouring grid's stencil. The two grids sharing a
+                    ! face would then build different fluxes for it, which does not conserve the
+                    ! dust mass (see STEP 5). tva_l19 takes those drifts from its pre-pass (l19_wd).
                     rhod_pred(l,i,j,k,jbin) = rhod_cell(l,i,j,k,jbin) - 0.5_dp * (dt / dx) * &
-                        w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin)
+                        (w_d_cell(l,i,j,k,jbin) * slope_rhod(l,i,j,k,jbin) + rhod_cell(l,i,j,k,jbin) * slope_wd(l,i,j,k,jbin))
                     rhod_pred(l,i,j,k,jbin) = MAX(rhod_pred(l,i,j,k,jbin), 0.0_dp)
                 end do
             end do; end do; end do; end do
@@ -1931,14 +2022,14 @@ module dust_dynamics
                     ! --- A. GAS ENTHALPY FLUX ---
                     ! Reconstruct L and R states for the gas drift at the face
                     if (idim == 1) then
-                        wg_state_L = w_g_cell(l,i-1,j,k)
-                        wg_state_R = w_g_cell(l,i,j,k)
+                        wg_state_L = w_g_cell(l,i-1,j,k) + half * slope_wg(l,i-1,j,k)
+                        wg_state_R = w_g_cell(l,i,j,k) - half * slope_wg(l,i,j,k)
                     else if (idim == 2) then
-                        wg_state_L = w_g_cell(l,i,j-1,k)
-                        wg_state_R = w_g_cell(l,i,j,k)
+                        wg_state_L = w_g_cell(l,i,j-1,k) + half * slope_wg(l,i,j-1,k)
+                        wg_state_R = w_g_cell(l,i,j,k) - half * slope_wg(l,i,j,k)
                     else
-                        wg_state_L = w_g_cell(l,i,j,k-1)
-                        wg_state_R = w_g_cell(l,i,j,k)
+                        wg_state_L = w_g_cell(l,i,j,k-1) + half * slope_wg(l,i,j,k-1)
+                        wg_state_R = w_g_cell(l,i,j,k) - half * slope_wg(l,i,j,k)
                     end if
                     
                     ! Point 3: Unique Averaged Face Velocity
@@ -1964,18 +2055,18 @@ module dust_dynamics
                         if (idim == 1) then
                             rhod_state_L = rhod_pred(l,i-1,j,k,jbin) + half * slope_rhod(l,i-1,j,k,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
-                            w_state_L    = w_d_cell(l,i-1,j,k,jbin)
-                            w_state_R    = w_d_cell(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i-1,j,k,jbin) + half * slope_wd(l,i-1,j,k,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin) - half * slope_wd(l,i,j,k,jbin)
                         else if (idim == 2) then
                             rhod_state_L = rhod_pred(l,i,j-1,k,jbin) + half * slope_rhod(l,i,j-1,k,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
-                            w_state_L    = w_d_cell(l,i,j-1,k,jbin)
-                            w_state_R    = w_d_cell(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i,j-1,k,jbin) + half * slope_wd(l,i,j-1,k,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin) - half * slope_wd(l,i,j,k,jbin)
                         else
                             rhod_state_L = rhod_pred(l,i,j,k-1,jbin) + half * slope_rhod(l,i,j,k-1,jbin)
                             rhod_state_R = rhod_pred(l,i,j,k,jbin)   - half * slope_rhod(l,i,j,k,jbin)
-                            w_state_L    = w_d_cell(l,i,j,k-1,jbin)
-                            w_state_R    = w_d_cell(l,i,j,k,jbin)
+                            w_state_L    = w_d_cell(l,i,j,k-1,jbin) + half * slope_wd(l,i,j,k-1,jbin)
+                            w_state_R    = w_d_cell(l,i,j,k,jbin) - half * slope_wd(l,i,j,k,jbin)
                         end if
 
                         ! Safety clamp
@@ -1987,7 +2078,8 @@ module dust_dynamics
                         ! from drift slopes: every quantity a face flux uses is then computed the same
                         ! way by the two grids that share the face (the drift of a cell needs the
                         ! pressure on both sides, one-sided at the stencil edge), so the fluxes match
-                        ! and the dust mass is conserved.
+                        ! and the dust mass is conserved. (tva_l19 reconstructs it from the drift
+                        ! slopes, L19 eq. 23, with the pre-pass drifts at the stencil edge, l19_wd.)
                         w_face = half * (w_state_L + w_state_R)
 
                         ! Point 4: Upwind Method for Flux Estimation
@@ -2012,6 +2104,7 @@ module dust_dynamics
             ! content: the drift CFL bounds |w| dt/dx, not the predicted face states, and a
             ! cell could be emptied below zero (inactive where the CFL keeps it positive)
             ! ====================================================================
+            if (tva_l19) cycle   ! L19 has neither cap
             io_l = 0; jo_l = 0; ko_l = 0
             if (idim == 1) io_l = 1
             if (idim == 2) jo_l = 1
@@ -2050,14 +2143,39 @@ module dust_dynamics
         implicit none
         integer::ilevel
 
-        integer::i,igrid,ncache,ngrid
+        integer::i,igrid,ncache,ngrid,idim,jbin
         integer,dimension(1:nvector),save::ind_grid
 
         if (numbtot(1,ilevel)==0) return
         if (verbose) write(*,222) ilevel
 
-        ! Loop over active grids by vector sweeps
         ncache = active(ilevel)%ngrid
+        ! tva_l19: the drifts of all the level's cells first, then to the virtual cells (l19_wd)
+        if (tva_l19) then
+            if (.not. allocated(l19_wd)) then
+                allocate(l19_wd(1:ncoarse+twotondim*ngridmax,1:ntva,1:ndim))
+                allocate(l19_wg(1:ncoarse+twotondim*ngridmax,1:ndim))
+                allocate(l19_stamp(1:ncoarse+twotondim*ngridmax))
+                l19_wd = 0.0_dp; l19_wg = 0.0_dp; l19_stamp = 0.0_dp
+            end if
+            l19_pass = l19_pass + 1.0_dp
+            do igrid=1,ncache,nvector
+                ngrid=min(nvector,ncache-igrid+1)
+                do i=1,ngrid
+                    ind_grid(i)=active(ilevel)%igrid(igrid+i-1)
+                end do
+                call dust_upwind_correct1(ind_grid,ngrid,ilevel,drift_only=.true.)
+            end do
+            do idim=1,ndim
+                do jbin=1,ntva
+                    call make_virtual_fine_dp(l19_wd(1,jbin,idim),ilevel)
+                end do
+                call make_virtual_fine_dp(l19_wg(1,idim),ilevel)
+            end do
+            call make_virtual_fine_dp(l19_stamp(1),ilevel)
+        end if
+
+        ! Loop over active grids by vector sweeps
         do igrid=1,ncache,nvector
             ngrid=min(nvector,ncache-igrid+1)
             do i=1,ngrid
