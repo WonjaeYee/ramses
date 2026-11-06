@@ -1,124 +1,118 @@
-import sys
+#!/usr/bin/env python3
+"""DustyDiffuse (Lebreuilly et al. 2019, sect. 4.2): pressure-driven dust diffusion, checked against the
+converged solution of the equation the code solves.
+
+The mixture is static and isothermal (c_s = 1) with tau_s = 0.1, so the drift w = -(1-eps) tau_s c_s^2 deps/dx
+turns the dust update into a nonlinear diffusion,
+    deps/dt = tau_s c_s^2 d/dx [ eps (1-eps) deps/dx ],
+from a parabola of peak 0.1 and half-width 0.2. The reference is that equation solved by a method of lines on
+4000 cells. The Barenblatt-Pattle solution (its eps << 1 limit) is drawn for comparison only: the factor 1-eps
+puts it 1-1.5% off the solution.
+
+Namelists:
+  dustydiffuse.nml      tva_scheme='calima': L19's AMR set-up (levels 4-10), MC, the scheme's own time step
+  dustydiffuse_l19.nml  tva_scheme='l19' (with its drift pre-pass): 2^8 cells, MinMod, a fixed dt = 1.5e-3, inside
+                        the scheme's stability limit (at the eq. 26 time step alone it is unstable from 2^8 cells)
+
+Checks: the relative L2 error against the reference at every output; the dust mass to round-off; eps >= 0.
+
+Usage: ./plot-dustydiffuse.py [namelist]      (runs ./ramses_dust_test1d, or $RAMSES_EXE)
+"""
+import glob
 import os
+import shutil
 import subprocess
+import sys
+
 import numpy as np
 import matplotlib as mpl
 mpl.use("Agg")
 import matplotlib.pyplot as plt
-mpl.rcParams.update({
-    'font.family': 'serif',
-    'axes.labelsize': 12,
-    'axes.titlesize': 13,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'xtick.direction': 'in',
-    'ytick.direction': 'in',
-    'xtick.minor.visible': True,
-    'ytick.minor.visible': True,
-    'axes.linewidth': 0.8,
-    'axes.facecolor': 'none',
-    'figure.facecolor': 'none',
-    'legend.frameon': False,
-    'lines.linewidth': 2.5,
-})
+from scipy.integrate import solve_ivp
+from scipy.sparse import diags
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../visu")))
 import visu_ramses
 
-def run_simulation():
-    """Run the simulation once using the parameter file."""
-    print("--- Running DustyDiffuse simulation ---")
-    subprocess.run(
-        ["./ramses_dust_test1d", "dustydiffuse.nml"],
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
+NML = sys.argv[1] if len(sys.argv) > 1 else "dustydiffuse.nml"
+NAME = os.path.splitext(NML)[0]
+EXE = os.environ.get("RAMSES_EXE", "./ramses_dust_test1d")
+TS, EPS0, XC = 0.1, 0.1, 0.2            # tau_s c_s^2, peak and half-width of the initial parabola
+TOL_L2 = {"dustydiffuse": 1.5e-2, "dustydiffuse_l19": 3.0e-3}.get(NAME, 1.5e-2)
+TOL_MASS = 1.0e-12
 
-# Run the simulation
-run_simulation()
 
-# Create plot
+def reference(times, n=4000):
+    """deps/dt = d/dx[TS eps(1-eps) deps/dx], periodic, by a method of lines (face diffusivity from the face mean)."""
+    dx = 1.0 / n
+    x = (np.arange(n) + 0.5) * dx
+    e0 = np.clip(EPS0 * (1.0 - ((x - 0.5) / XC) ** 2), 0.0, None)
+
+    def rhs(t, e):
+        ef = 0.5 * (e + np.roll(e, -1))
+        flux = -TS * ef * (1.0 - ef) * (np.roll(e, -1) - e) / dx
+        return -(flux - np.roll(flux, 1)) / dx
+
+    jac = diags([1.0] * 5, [-(n - 1), -1, 0, 1, n - 1], shape=(n, n))
+    sol = solve_ivp(rhs, (0.0, max(times)), e0, t_eval=sorted(times), method="BDF", rtol=1e-8, atol=1e-12,
+                    jac_sparsity=jac)
+    return x, {t: sol.y[:, k] for k, t in enumerate(sol.t)}
+
+
+def barenblatt(x, t):
+    c = (EPS0 * XC / np.sqrt(6.0)) ** (2.0 / 3.0)
+    tt = TS * (t + c ** 3 / (TS * EPS0 ** 3))
+    return np.clip(tt ** (-1.0 / 3.0) * (c - (x - 0.5) ** 2 / (6.0 * tt ** (2.0 / 3.0))), 0.0, None)
+
+
+print(f"--- Running DustyDiffuse ({NML}) ---")
+for old in glob.glob("output_*"):
+    shutil.rmtree(old)
+subprocess.run([EXE, NML], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+snaps = []
+n = 1
+while os.path.isdir(f"output_{n:05d}"):
+    d = visu_ramses.load_snapshot(n)["data"]
+    o = np.argsort(d["x"])
+    snaps.append({k: (d[k][o] if np.ndim(d[k]) else d[k]) for k in ("x", "dx", "density", "DustBin_01", "time")})
+    n += 1
+times = [s["time"] for s in snaps[1:]]
+xr, ref = reference(times)
+
+mass0 = np.sum(snaps[0]["density"] * snaps[0]["DustBin_01"] * snaps[0]["dx"])
+failures = []
 fig, ax = plt.subplots(figsize=(5.5, 4))
-
-# Define colors for the outputs (Snapshot 1: initial condition, Snapshots 2, 3, 4, 5: evolution)
-output_indices = [1, 2, 3, 4, 5]
-colors = {
-    1: "#424242",   # Near Black (initial condition)
-    2: "#4a148c",   # Dark Purple
-    3: "#006064",   # Dark Teal
-    4: "#1b5e20",   # Dark Green
-    5: "#b71c1c",   # Dark Red
-}
-
-# Physical parameters for the analytical Barenblatt-Pattle solution
-L = 1.0  # Box size
-x_center = 0.5 * L
-eps_0 = 0.1
-x_c = 0.5 * L
-gamma = 1.4
-c_s = 1.0  # Enforced isothermal sound speed
-
-xc = 0.2
-eps_0 = 0.1
-ts = 0.1
-cs = 1
-C = (eps_0*xc/np.sqrt(6))**(2./3.)
-t0 = C**3. / (ts*cs**2.*eps_0**3.)
-
-# Generate a fine grid for plotting a smooth analytic line
-x_fine = np.linspace(0.0, L, 2000)
-
-for idx in output_indices:
-    # Load snapshot data
-    snapshot = visu_ramses.load_snapshot(idx)
-    t = snapshot["data"]["time"]
-    
-    # Sort and extract numerical solution
-    order = snapshot["data"]["x"].argsort()
-    x_num = snapshot["data"]["x"][order]
-    rho_num = snapshot["data"]["density"][order]
-    f_dust_num = snapshot["data"]["DustBin_01"][order]
-    rho_dust_num = rho_num * f_dust_num
-    
-    if t != 0:
-        # Evaluate analytical solution at time t
-        t_eff = t + t0
-        eps_analytic = (ts*cs**2.*t_eff)**(-1./3.) * (C - 1./6.*(x_num-0.5)**2./(ts*cs**2*t_eff)**(2./3.))
-        eps_analytic = np.maximum(0.0, eps_analytic)
-        rho_dust_analytic = rho_num * eps_analytic
-        # Plot analytical solution (solid line)
-        label_analytic = f"t={t:.1f} (Analytic)"
-        ax.plot(
-            x_num, 
-            rho_dust_analytic, 
-            "-", 
-            color=colors[idx], 
-            linewidth=2.5,
-            alpha=0.4,
-            label=label_analytic
-        )
-    
-    # Plot numerical solution (dashed line)
-    label_numerical = "Numerical Initial" if idx == 1 else f"Numerical t={t:.1f}"
-    ax.plot(
-        x_num,
-        rho_dust_num,
-        "--",
-        color=colors[idx],
-        linewidth=2.5,
-        label=label_numerical
-    )
-
-# Formatting
-ax.set_xlabel("x", fontsize=12)
-ax.set_ylabel("Dust Density", fontsize=12)
-ax.grid(True, linestyle=":", alpha=0.3, color="#aaaaaa")
-ax.legend(fontsize=10, loc="upper right")
-ax.set_xlim(0.0, L)
-ax.set_ylim(0.0, 0.12)
-
+cols = plt.get_cmap("viridis")(np.linspace(0.0, 0.8, len(times)))
+print(f"{'t':>8} {'L2 vs reference':>16} {'L2 vs B-P':>10} {'dM/M':>10} {'min eps':>10}")
+for s, c in zip(snaps[1:], cols):
+    x, e, dx, t = s["x"], s["DustBin_01"], s["dx"], s["time"]
+    r = np.interp(x, xr, ref[t])
+    l2 = np.sqrt(np.sum(dx * (e - r) ** 2) / np.sum(dx * r ** 2))
+    l2bp = np.sqrt(np.sum(dx * (e - barenblatt(x, t)) ** 2) / np.sum(dx * barenblatt(x, t) ** 2))
+    dm = (np.sum(s["density"] * e * dx) - mass0) / mass0
+    print(f"{t:8.4f} {l2:16.3e} {l2bp:10.3e} {dm:10.1e} {e.min():10.2e}")
+    if l2 > TOL_L2:
+        failures.append(f"t = {t:.3f}: L2 against the reference {l2:.3e} > {TOL_L2:.1e}")
+    if abs(dm) > TOL_MASS:
+        failures.append(f"t = {t:.3f}: dust mass error {dm:.2e} > {TOL_MASS:.0e}")
+    if e.min() < 0.0:
+        failures.append(f"t = {t:.3f}: negative dust fraction {e.min():.2e}")
+    ax.plot(x, e, "o", color=c, ms=2.5, mfc="none", label=f"$t = {t:.1f}$")
+    ax.plot(xr, ref[t], "-", color=c, lw=1.2)
+    ax.plot(xr, barenblatt(xr, t), "--", color="0.4", lw=0.7)
+ax.plot([], [], "k-", lw=1.2, label="reference (converged PDE)")
+ax.plot([], [], "--", color="0.4", lw=0.7, label="Barenblatt-Pattle")
+ax.set_xlim(0.2, 0.8); ax.set_xlabel("x"); ax.set_ylabel("dust fraction")
+ax.legend(fontsize=8, loc="upper right")
 fig.tight_layout()
-fig.savefig("dustydiffuse.pdf", bbox_inches="tight", transparent=True)
-fig.savefig("dustydiffuse.png", dpi=300, bbox_inches="tight", transparent=True)
-print("Saved convergence plot to dustydiffuse.pdf / dustydiffuse.png")
+fig.savefig(f"{NAME}.pdf", bbox_inches="tight")
+fig.savefig(f"{NAME}.png", dpi=200, bbox_inches="tight")
+print(f"  wrote {NAME}.pdf / .png")
+
+if failures:
+    for f in failures:
+        print(f"FAILED: {f}")
+    print(f"{NAME:30s} failed")
+    sys.exit(1)
+print(f"{NAME:30s} passed")

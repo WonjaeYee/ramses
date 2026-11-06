@@ -126,10 +126,37 @@ The typical order is:
   `sqrt(gamma P/rho_gas)` with `rho_gas = rho_mix*(1-eps_tot)`, the pressure itself being unchanged,
   `(gamma-1)(E - E_kin - E_rad)`. A TVA run is therefore not bit-comparable to the same setup with
   TVA off.
-- **`condinit_kind`** values `dustydiffuse`, `dustyshock`, `dustyblast1d`, `dustyspress` and
-  `dustygauss` select **test** branches that hardcode the stopping time and/or the thermodynamics.
-  These are resolved once into `tva_test_mode` at startup and warned about. Production ICs must use
-  a different `condinit_kind` (the default `region`).
+- **The time step** (`get_dust_courant_dt`) has two drift conditions besides the hydro CFL, both evaluated at
+  the faces from the same quantities as the fluxes:
+  - the drift Courant condition, `dt <= min(courant_factor, C_pos) dx/(ndim |w|)`. `C_pos` = 1/2, 0.382 and
+    0.293 for `slope_type` 0, 1 (minmod) and 2 (MC, and the other limiters) keeps the positivity cap of the
+    flux routines (no face takes more than `rho_d/(2 ndim)` of its donor) idle. Above it, the cap clips the
+    trailing edge of a rising profile and slows the drift (at C = 0.8 a top hat moved at 0.805 of its speed);
+  - a parabolic bound, `dt <= courant_factor dx^2/(2 ndim D)`, `D = c_s^2 (1-eps) sum_k eps_k t_s,k`. A
+    pressure-driven drift is a diffusion, which the Courant condition does not bound (for a resolved profile
+    `|w|` does not grow as dx shrinks). Without it `dustydiffuse` goes unstable at 2^10 cells. In 1D the flux
+    is stable to 4x this bound.
+- **The dust is reconstructed with `slope_type`'s limiter** (`dust_slope`): 1 minmod, 2 MC, 4 superbee, 7 van
+  Leer, 6 the unlimited central slope; other values fall back to minmod. `slope_type` sets the gas limiter as
+  well.
+- **`tva_scheme='l19'`** replaces this flux by the scheme of Lebreuilly et al. (2019, sect. 3.2-3.3), as their
+  code (RAMSES-ISM) runs it, for comparisons. It is the pure-drag flux only, and refuses `dust_radpressure`.
+  - A pre-pass computes every cell's drift and exchanges it (`make_virtual_fine_dp`), as RAMSES-ISM's
+    `set_vdust` does. The drift slopes need the drift one cell beyond the 6-cell stencil.
+  - Then: limited drift slopes, the compression predictor, the face drift as the mean of the reconstructed
+    states, the Courant condition of their eq. 26 alone, and no positivity cap.
+  - In 1D, it and their code both follow a model of the scheme to round-off, and it conserves the dust to
+    round-off.
+  - It is stable only for `D dt/dx^2 <~ 1.6-2.5`, depending on the resolution and the profile. At its own time
+    step it goes unstable in `dustydiffuse` from 2^8 cells. `tva_test_dt` imposes a step, as their tests do.
+- **`tva_test_dt`** (> 0) caps the time step, for test problems that impose one.
+- **`condinit_kind`** values `dustydiffuse` (and `dustydiffuse_diag`, the same profile along the diagonal,
+  for 2D and 3D), `dustyshock`, `dustywave`, `dustywave_v`, `dustyblast1d`,
+  `dustyspress` and `dustygauss` select **test** branches that hardcode the stopping time and/or the
+  thermodynamics. These are resolved once into `tva_test_mode` at startup and warned about. `dustywave` takes
+  `t_s = eps rho/K` with `K = drag_coefficient`, as `dustyshock` does. `dustysettle` sets an isothermal mixture
+  in hydrostatic equilibrium in the potential of `gravity_type=2`. Production ICs must use a different
+  `condinit_kind` (the default `region`).
 - **CALIMA builds without RT**, for the TVA tests above and for runs without radiation. The single-bin
   tests use `bin_dust` with `RT=0 RTZ=0 CALIMA=1 NGROUPS=0 NDIM=1 NDUST=1 NPAH=0 NDCHEMTYPE=1`
   (`NDCHEMTYPE` must match the namelist's compositions). Radiation pressure

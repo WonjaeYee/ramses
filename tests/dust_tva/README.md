@@ -13,6 +13,40 @@ test is set up, its namelist variants and what it measures.
 | `tests/dust_tva/dustylev` | dust levitation (RT15 sec. 3.7 / Davis+2014): the ABSOLUTE normalisation of the IR radiation force against gravity, measured as an Eddington ratio. The only test that pins down the overall scale rather than a ratio or a gradient. |
 | `tests/dust_tva/levgas_rt15` | RT15 sec. 3.7 itself: the bound exponential atmosphere illuminated from below, plain RAMSES-RT with their KT13 opacity, every dimensional parameter matched. Reproduces their figs. 9-11 and 13 diagnostics and fig. 10 projections. |
 | `tests/dust_tva/levgas_rt15_dust` | the same run compiled with CALIMA and the dust as a drifting fluid (`dust_tva` + `dust_radpressure`, one bin, every other dust process off), with `eps` tuned so the dust reproduces RT15's opacity exactly. |
+| `tests/dust_tva/dustyadvect` | a top hat advected at a constant drift (L19 Fig. 1), levels 7-13, against the shifted profile; level 7 against `dustyadvect-ref.dat`. |
+| `tests/dust_tva/dustydiffuse` | pressure-driven diffusion (L19 sect. 4.2), against the converged solution of the equation the code solves; `dustydiffuse_l19.nml` runs the L19 scheme. |
+| `tests/dust_tva/dustywave` | a sound wave in a dusty mixture (L19 sect. 4.4, Figs. 5-6), against the linearised terminal-velocity solution; `dustywave_l19.nml` runs the L19 scheme. |
+| `tests/dust_tva/dustysettle` | dust settling in a disk (L19 sect. 4.5), against the exact solution by characteristics. |
+
+## The Lebreuilly et al. (2019) tests
+
+Fast 1D tests of the pure-drag drift, each checked against an exact solution, with PASS/FAIL tolerances.
+They use the single-bin build (`calima/README.md`, CALIMA without RT) as `./ramses_dust_test1d` in the test
+directory, or `$RAMSES_EXE`. Each script takes its namelist, runs it and checks the result. A failure exits
+with status 1.
+
+| run | wall time | checks (measured / tolerance) |
+| --- | --- | --- |
+| `./plot-dustydiffuse.py dustydiffuse.nml` | 15 s | L2 against the converged PDE at t = 0.5-5: 5.0e-3 / 1.5e-2; dust mass 4e-16 / 1e-12; eps >= 0 |
+| `./plot-dustydiffuse.py dustydiffuse_l19.nml` | 11 s | the same: 7.9e-4 / 3e-3; 3e-16 / 1e-12 |
+| `./plot-dustywave.py dustywave.nml` | 1 s | L2 of delta rho_d and of v over the amplitude: 8.0e-3 / 2e-2 and 1.4e-2 / 3e-2; delta rho_d amplitude +0.24% / 1%; dust mass 8e-16 / 1e-12 |
+| `./plot-dustywave.py dustywave_l19.nml` | 2 s | the same: 7.9e-3, 1.4e-2, +0.17%, 6e-16 |
+| `./plot-dustysettle.py` | 15 s | mid-plane eps after 1, 5, 10 orbits: +0.04, +0.17, +0.31% / 2%; dust mass within one scale height: +0.03, -0.46, +0.01% / 2%; total dust mass 8e-15 / 1e-12 |
+
+- **`dustydiffuse`.** The reference solves `deps/dt = tau_s c_s^2 d/dx[eps(1-eps) deps/dx]` by a method of
+  lines on 4000 cells. Barenblatt-Pattle (the `eps << 1` limit) is drawn too; the factor `1-eps` puts it
+  1-1.5% off. `dustydiffuse.nml` is L19's AMR set-up (levels 4-10) at the scheme's own time step.
+  `dustydiffuse_l19.nml` runs the L19 scheme on 2^8 cells with MinMod at a fixed `tva_test_dt = 1.5e-3`
+  (`D dt/dx^2 = 0.89`), inside its stability limit (~1.8 at this resolution). At the Courant step of their eq. 26
+  alone it is unstable from 2^8 cells.
+- **`dustywave`.** K = 50, 64 cells, dt = 1e-4, t = 4.5, MC slopes (with MinMod the gas solver alone takes 3-5%
+  off the amplitude). The linearised two-fluid solution differs from the TVA one by 0.3% in the dust amplitude
+  at this K. That is the error of the approximation, so it is not used for the checks.
+- **`dustysettle`.** 1 mm grains at r = 50 au, 256 cells, the drift uncapped (`tva_wmax_cs = 0`), as in L19.
+  The point-wise error near the settling front measures its sub-cell position, so the second check is the dust
+  mass within one scale height.
+- **`dustyadvect`.** `dustyadvect-ref.dat` was regenerated for the drift Courant condition. RAMSES does not
+  clamp the last step to `tout`, so the final time moved with the step (1.00426 -> 1.00266).
 
 
 ## `dustyslab`

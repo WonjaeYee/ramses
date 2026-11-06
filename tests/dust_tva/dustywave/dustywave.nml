@@ -1,0 +1,61 @@
+DustyWave, Lebreuilly et al. (2019) sect. 4.4 (their Figs. 5-6): one isothermal sound mode in a uniform
+mixture, rho0 = 2, eps0 = 0.5, c_s = 1, amplitude u_region(1) = 1e-4, constant drag K = 50; 64 cells, dt = 1e-4.
+
+&RUN_PARAMS
+hydro=.true.
+ncontrol=100000
+/
+
+&AMR_PARAMS
+levelmin=6
+levelmax=6
+ngridmax=4000
+nexpand=1
+boxlen=1.0
+/
+
+&BOUNDARY_PARAMS
+nboundary=0
+/
+
+&INIT_PARAMS
+condinit_kind='dustywave'
+nregion=1
+region_type(1)='square'
+x_center=0.5
+length_x=1.0
+d_region=2.0
+u_region=1d-4          ! the relative amplitude of the mode (L19: 1e-4)
+p_region=1.0           ! (1 - eps0) rho0 c_s^2
+var_region(1,1)=0.5d0
+/
+
+&OUTPUT_PARAMS
+tout=4.5
+/
+
+&HYDRO_PARAMS
+gamma=1.0000012
+courant_factor=0.8
+slope_type=2            ! MC: with Minmod the gas solver alone takes 3-5% off the amplitude at 64 cells
+riemann='hllc'
+/
+
+&REFINE_PARAMS
+interpol_var=0
+interpol_type=2
+/
+
+&CALIMA_PARAMS
+charging_table_label='DustBin_02'
+dust_tva=.true.
+tva_test_dt=1d-4       ! L19 sect. 4.4
+drag_coefficient=50
+dust_composition(1,6) = 1d0
+dustbins_per_chemtype=1
+asize=0.1d0
+sgrain=2.2d0
+amin = 3d-2
+amax = 1d0
+dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
+/

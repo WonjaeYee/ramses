@@ -1,0 +1,80 @@
+Dust settling, Lebreuilly et al. (2019) sect. 4.5 (Price & Laibe 2015): the disk's vertical
+at r = 50 au around 1 Msun, H/r = 0.05, 1 mm grains of 3 g/cm3, eps0 = 4.99e-3, gamma = 5/3,
+periodic over L = 20 au, 256 cells. 1D along the vertical: gravity_type=2 with softening r is
+exactly f = -GM y/(y^2+r^2)^(3/2). Code units: 1 au, 1/Omega(50 au), 1e-13 g/cm3, so
+Omega = 1, GM = r^3 = 1.25e5, c_s = H Omega = 2.5, one orbit = 2 pi.
+
+&RUN_PARAMS
+hydro=.true.
+poisson=.true.
+ncontrol=100000
+/
+
+&AMR_PARAMS
+levelmin=8
+levelmax=8
+ngridmax=4000
+nexpand=1
+boxlen=20.0
+/
+
+&BOUNDARY_PARAMS
+nboundary=0
+/
+
+&INIT_PARAMS
+condinit_kind='dustysettle'
+nregion=1
+region_type(1)='square'
+x_center=10.0
+length_x=20.0
+d_region=6.0                 ! mid-plane rho = 6e-13 g/cm3
+u_region=0.0
+p_region=37.3129             ! (1 - eps0) rho0 c_s^2 = 0.99501 * 6 * 2.5^2
+var_region(1,1)=4.99d-3
+/
+
+&POISSON_PARAMS
+gravity_type=2
+gravity_params=1.25d5,50.0,10.0   ! GM, softening = r, mid-plane position
+/
+
+&OUTPUT_PARAMS
+tout=6.283185307,31.41592654,62.83185307   ! 1, 5, 10 orbits
+/
+
+&HYDRO_PARAMS
+gamma=1.6666667
+courant_factor=0.8
+slope_type=1
+riemann='hllc'
+/
+
+&COOLING_PARAMS
+cooling=.false.
+metal=.false.
+/
+
+&UNITS_PARAMS
+units_length=1.495978707d13
+units_time=1.7757d9          ! 1/Omega at 50 au
+units_density=1d-13
+/
+
+&REFINE_PARAMS
+interpol_var=0
+interpol_type=2
+/
+
+&CALIMA_PARAMS
+charging_table_label='graphite_1mm'
+dust_tva=.true.
+tva_wmax_cs=0d0              ! no drift cap: L19 have none
+dust_composition(1,6) = 1d0
+dustbins_per_chemtype=1
+asize=1000.0d0
+sgrain=3.0d0
+amin = 3d-2
+amax = 2000.0d0
+dust_tables_dir='/Users/currodri/Documents/RAMSES_dev/rtzdata_for_public_ramses/calima_data/'
+/
