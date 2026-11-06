@@ -713,16 +713,20 @@ module dust_dynamics
         ! consistent with the numerical scheme being stabilised.
         !
         !   (1) Advection (hyperbolic) CFL:
-        !         dt <= courant_factor * dx / |w_drift_face|
+        !         dt <= min(courant_factor, C_pos) * dx / (ndim |w_drift_face|),
+        !       C_pos = 1/2, 0.382, 0.293 for slope_type 0, 1 (minmod), 2 (MC)
         !       where w_drift_face is the TVA drift velocity evaluated using
         !       the true face pressure gradient (P_R - P_L)/dx.
+        !   (2) Diffusion (parabolic) bound:
+        !         dt <= courant_factor * dx^2 / (2 ndim D),
+        !         D = c_s^2 (1 - eps_tot) sum_k eps_k t_s,k
         !
         ! MPI reduces to the global minimum and updates dtnew(ilevel).
         ! ====================================================================
         use amr_commons
         use const
         use hydro_commons
-        use hydro_parameters, only: courant_factor, smallr, smallc, gamma, neul, npah
+        use hydro_parameters, only: courant_factor, smallr, smallc, gamma, neul, npah, slope_type
 #ifdef RT
         use rt_hydro_commons, only: rtuold, nrtvar
         use dust_radpressure_module, only: compute_gas_dust_radpressure_acc
@@ -771,7 +775,7 @@ module dust_dynamics
         integer  :: i3min, i3max, j3min, j3max, k3min, k3max
         integer  :: ilo, ihi, jlo, jhi, klo, khi
 
-        real(dp) :: dx, scale, dt_loc, dt_all, dtcell
+        real(dp) :: dx, scale, dt_loc, dt_all, dtcell, c_drift, D_diff
         real(dp) :: scale_l, scale_t, scale_d, scale_v, scale_nH, scale_T2
         real(dp), dimension(1:ntva) :: agrain_code, sgrain_code, t_s_face_arr
 
@@ -816,6 +820,18 @@ module dust_dynamics
         scale  = boxlen / dble(icoarse_max - icoarse_min + 1)
         dx     = 0.5d0**ilevel * scale
         dt_loc = dtnew(ilevel)      ! upper bound: current level timestep
+        ! STEP 6 of the flux routines keeps rho_d >= 0 by capping each face's outflow at the
+        ! share rho_d/(2 ndim) of the donor. On a rising slope the MUSCL-Hancock face state is
+        ! up to rho_d (1 + theta (1-C)/2), theta the limiter's largest slope/rho_d (1 minmod,
+        ! 2 MC, superbee and van Leer), so the cap stays idle for C (1 + theta (1-C)/2) <= 1/2: C <= 1/2 at first
+        ! order, (3 - sqrt 5)/2 = 0.382 with minmod, 1 - 1/sqrt 2 = 0.293 with MC. Above that
+        ! it clips the trailing edge of every rising profile and slows the drift.
+        select case (slope_type)
+        case (0);    c_drift = 0.5_dp
+        case (1);    c_drift = 0.5_dp * (3.0_dp - sqrt(5.0_dp))
+        case default; c_drift = 1.0_dp - 1.0_dp / sqrt(2.0_dp)
+        end select
+        c_drift = min(courant_factor, c_drift)
 
         ! ----------------------------------------------------------------
         ! PART A: Simple analytic CFL for the drift-test mode
@@ -823,7 +839,7 @@ module dust_dynamics
         if (use_w_drift_test) then
             do i = 1, ndim
                 if (abs(w_drift_test(i)) > 0.0_dp) &
-                    dt_loc = min(dt_loc, courant_factor * dx / abs(w_drift_test(i)))
+                    dt_loc = min(dt_loc, c_drift * dx / (dble(ndim) * abs(w_drift_test(i))))
             end do
         end if
 
@@ -1163,6 +1179,31 @@ module dust_dynamics
                                 sum_eps_ts_D = sum_eps_ts_D + eps_face_bin * t_s_face_arr(jbin) * D_bin(jbin)
                             end do
 
+                            ! Pressure-driven drift makes the dust update a diffusion, and the
+                            ! drift CFL above does not bound it: for a resolved profile |w| does
+                            ! not grow as dx shrinks, while explicit diffusion needs dt ~ dx^2.
+                            ! The bins couple through grad P alone (a rank-1 matrix), so the
+                            ! diffusivity is D = c_s^2 (1 - eps_tot) sum_k eps_k t_s,k, i.e.
+                            ! eps (1-eps) t_s c_s^2 for one bin (Price & Laibe 2015). The bound is
+                            ! that of the compact 3-point operator; the cell-averaged drift of the
+                            ! flux routines is a 2 dx operator and stable to 4x this.
+                            D_diff = 0.0_dp
+                            do jbin = 1, ntva
+                                if (idim == 1) then
+                                    eps_face_bin = half * (eps_arr(l,i-1,j,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else if (idim == 2) then
+                                    eps_face_bin = half * (eps_arr(l,i,j-1,k,jbin) + eps_arr(l,i,j,k,jbin))
+                                else
+                                    eps_face_bin = half * (eps_arr(l,i,j,k-1,jbin) + eps_arr(l,i,j,k,jbin))
+                                end if
+                                D_diff = D_diff + max(eps_face_bin, 0.0_dp) * t_s_face_arr(jbin)
+                            end do
+                            D_diff = D_diff * c_s_face**2 * (1.0_dp - eps_tot_face)
+                            if (D_diff > 0.0_dp) then
+                                dtcell = courant_factor * dx**2 / (2.0_dp * dble(ndim) * D_diff)
+                                dt_loc = min(dt_loc, dtcell)
+                            end if
+
                             ! The dust update sums ndim independent directional flux
                             ! divergences (dust_upwind_correct1/2), so the per-direction
                             ! bound needs a 1/ndim -- cmpdt does the equivalent with
@@ -1179,7 +1220,7 @@ module dust_dynamics
                             end if
                             u_drift = abs(w_g)
                             if (u_drift > 0.0_dp) then
-                                dtcell = courant_factor * dx / (dble(ndim) * u_drift)
+                                dtcell = c_drift * dx / (dble(ndim) * u_drift)
                                 dt_loc = min(dt_loc, dtcell)
                             end if
 
@@ -1192,7 +1233,7 @@ module dust_dynamics
                                 end if
                                 u_drift = abs(w_d_val)
                                 if (u_drift > 0.0_dp) then
-                                    dtcell = courant_factor * dx / (dble(ndim) * u_drift)
+                                    dtcell = c_drift * dx / (dble(ndim) * u_drift)
                                     dt_loc = min(dt_loc, dtcell)
                                 end if
                             end do
