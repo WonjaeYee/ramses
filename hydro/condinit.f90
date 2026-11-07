@@ -37,8 +37,14 @@ subroutine condinit(x,u,dx,nn)
   case('ana_disk_potential')
      call ana_disk_potential_condinit(x, q, dx, nn)
 
-  case('dustydiffuse')
+  case('dustydiffuse','dustydiffuse_diag')
      call dustydiffuse_condinit(x, q, dx, nn)
+
+  case('dustywave','dustywave_v')
+     call dustywave_condinit(x, q, dx, nn)
+
+  case('dustysettle')
+     call dustysettle_condinit(x, q, dx, nn)
 
   case('dustyspress')
      call dustyspress_condinit(x, q, dx, nn)
@@ -183,17 +189,29 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
   real(dp),dimension(1:nvector,1:ndim)::x ! Cell center position.
   !================================================================
   ! This routine generates the initial conditions for the DustyDiffuse
-  ! test case.
+  ! test case. condinit_kind='dustydiffuse_diag' lays the same profile along the
+  ! diagonal, in u = x + y (+ z) modulo boxlen, for 2D and 3D: the diffusion then
+  ! runs along every direction at once, and in u it is the 1D problem with the
+  ! diffusivity multiplied by ndim.
   !================================================================
   integer::i,ivar
-  real(dp)::dist,eps_val
+  real(dp)::dist,eps_val,wsum
 
   ! Call built-in initial condition generator to set background gas properties
   call region_condinit(x,q,dx,nn)
 
   do i=1,nn
+#if NDUST>0
+     ! The bins share the profile in proportion to their var_region (one bin: all of it), so
+     ! a multigrain run of identical bins must reproduce the single-bin one (L19 sect. 4.6.1)
+     wsum = sum(q(i,idust:idust+ndust-1))
+#endif
      ! Distance from the center of the box (0.5 * boxlen)
-     dist = x(i,1) - 0.5d0*boxlen
+     if (trim(condinit_kind) == 'dustydiffuse_diag') then
+        dist = modulo(sum(x(i,1:ndim)), boxlen) - 0.5d0*boxlen
+     else
+        dist = x(i,1) - 0.5d0*boxlen
+     end if
      if (dist > 0.5d0*boxlen) dist = dist - boxlen
      if (dist < -0.5d0*boxlen) dist = dist + boxlen
 
@@ -204,8 +222,13 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
      ! Guarded: these dusty ICs are only meaningful with CALIMA, and idust/ndust
      ! do not exist otherwise, so a CALIMA=0 build could not compile this file.
 #if NDUST>0
+     ! (equal shares where the region gives the cell no dust at all)
      do ivar=1,ndust
-        q(i,idust+ivar-1) = eps_val
+        if (wsum > 0.0d0) then
+           q(i,idust+ivar-1) = eps_val * q(i,idust+ivar-1) / wsum
+        else
+           q(i,idust+ivar-1) = eps_val / dble(ndust)
+        end if
      end do
 #endif
 
@@ -215,6 +238,82 @@ subroutine dustydiffuse_condinit(x,q,dx,nn)
   end do
 
 end subroutine dustydiffuse_condinit
+!================================================================
+!================================================================
+subroutine dustywave_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use constants
+  implicit none
+  integer ::nn
+  real(dp)::dx
+  real(dp),dimension(1:nvector,1:nvar)::q
+  real(dp),dimension(1:nvector,1:ndim)::x
+  !================================================================
+  ! DustyWave (Lebreuilly et al. 2019 sect. 4.4; Laibe & Price 2011): one isothermal sound
+  ! mode k = 2 pi/boxlen on the uniform mixture of the region (d_region = rho0,
+  ! p_region = P0, var_region = eps of each bin):
+  !   rho = rho0 (1 + amp sin kx), v = amp sin kx, P = P0 (1 + amp sin kx), eps unchanged,
+  ! with amp = u_region(1) (L19: 1e-4) and P0 = (1 - eps0) rho0 c_s^2.  The values are exact
+  ! cell averages, momentum included, so the initial projection adds no error of its own.
+  ! condinit_kind='dustywave_v' perturbs the barycentric velocity alone (L19 sect. 4.6.2).
+  !================================================================
+  integer::i
+  real(dp)::k,amp,s1,s2,rho0,p0
+
+  call region_condinit(x,q,dx,nn)
+  k = 2.0d0*pi/boxlen
+  amp = u_region(1)
+  do i=1,nn
+     ! cell averages of sin(kx) and sin^2(kx)
+     s1 = sin(k*x(i,1)) * sin(0.5d0*k*dx)/(0.5d0*k*dx)
+     s2 = 0.5d0 - 0.5d0*cos(2.0d0*k*x(i,1)) * sin(k*dx)/(k*dx)
+     rho0 = q(i,1); p0 = q(i,ndim+2)
+     if (trim(condinit_kind) == 'dustywave_v') then
+        q(i,2) = amp*s1
+     else
+        q(i,1) = rho0*(1.0d0 + amp*s1)
+        q(i,2) = rho0*amp*(s1 + amp*s2) / q(i,1)    ! <rho v> / <rho>
+        q(i,ndim+2) = p0*(1.0d0 + amp*s1)
+     end if
+  end do
+end subroutine dustywave_condinit
+!================================================================
+!================================================================
+subroutine dustysettle_condinit(x,q,dx,nn)
+  use amr_parameters
+  use hydro_parameters
+  use poisson_parameters, only: gravity_params
+  use constants
+  implicit none
+  integer ::nn
+  real(dp)::dx
+  real(dp),dimension(1:nvector,1:nvar)::q
+  real(dp),dimension(1:nvector,1:ndim)::x
+  !================================================================
+  ! Dust settling (Lebreuilly et al. 2019 sect. 4.5; Price & Laibe 2015), along the disk's
+  ! vertical, in 1D: gravity_type=2 with softening gravity_params(2) = r gives exactly
+  ! f = -GM y/(y^2 + r^2)^(3/2), the point mass at y = gravity_params(3).  The region sets the
+  ! mid-plane rho0 (d_region), P0 = (1-eps) rho0 c_s^2 (p_region) and eps (var_region); the
+  ! isothermal mixture is put in exact hydrostatic equilibrium in that potential,
+  !   rho = rho0 exp(-(Phi - Phi_0)/((1-eps) c_s^2)),  Phi = -GM/sqrt(y^2 + r^2).
+  !================================================================
+  integer::i
+  real(dp)::gm,r,y,cs2_eff,eps_tot
+
+  call region_condinit(x,q,dx,nn)
+  gm = gravity_params(1); r = gravity_params(2)
+  do i=1,nn
+     y = x(i,1) - gravity_params(3)
+     eps_tot = 0.0d0
+#if NDUST>0
+     eps_tot = sum(q(i,idust:idust+ndust-1))
+#endif
+     cs2_eff = q(i,ndim+2)/q(i,1)                    ! P0/rho0 = (1-eps) c_s^2
+     q(i,1) = q(i,1)*exp(gm*(1.0d0/sqrt(y**2 + r**2) - 1.0d0/r)/cs2_eff)
+     q(i,ndim+2) = cs2_eff*q(i,1)
+  end do
+end subroutine dustysettle_condinit
 
 
 !================================================================
