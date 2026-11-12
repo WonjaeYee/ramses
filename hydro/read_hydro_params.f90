@@ -556,7 +556,11 @@ subroutine read_hydro_params(nml_ok)
   ! Set magnetic slope limiters
   !-----------------------------------
   if (slope_mag_type == -1) then
-    slope_mag_type = slope_type
+     if (slope_type /= 99) then
+        slope_mag_type = slope_type
+     else
+        slope_mag_type = 1
+     end if
   endif
   if (interpol_mag_type == -1) then
     interpol_mag_type = interpol_type
