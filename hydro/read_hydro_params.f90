@@ -10,7 +10,7 @@ subroutine read_hydro_params(nml_ok)
   !--------------------------------------------------
   ! Local variables
   !--------------------------------------------------
-  integer::i,idim,nboundary_true=0
+  integer::i,idim,ivar,nboundary_true=0
   integer ,dimension(1:MAXBOUND)::bound_type
   real(dp)::ek_bound
   logical :: dummy
@@ -455,6 +455,15 @@ subroutine read_hydro_params(nml_ok)
         ek_bound=ek_bound+0.5d0*boundary_var(i,idim+1)**2/boundary_var(i,1)
      end do
      boundary_var(i,neul)=ek_bound+P_bound(i)/(gamma-1.0d0)
+#endif
+#if NVAR>NHYDRO+NENER
+     ! Passive scalars of an imposed boundary: var_bound holds their fractions, as var_region
+     ! does, so the ghost holds fraction*rho (boundana; hydro_boundary then turns the ion
+     ! slots into ion mass densities with ps_frac_to_mass). Left unset, every passive scalar
+     ! of the ghost was zero: no elements, no ions, no dust.
+     do ivar=1,nvar-nhydro-nener
+        boundary_var(i,nhydro+nener+ivar)=MAX(d_bound(i),smallr)*var_bound(i,ivar)
+     end do
 #endif
   end do
 
