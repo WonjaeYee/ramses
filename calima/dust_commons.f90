@@ -308,6 +308,7 @@ module dust_commons
     type(DustProcess),dimension(:),allocatable::pah_processes_list ! List of the DustProcess types to use in the PAH chemistry solver
     integer::ndust_processes=0                     ! Number of dust processes activated (length of dust_processes_list)
     integer::npah_processes=0                      ! Number of PAH processes activated (length of pah_processes_list)
+    integer::coulomb_jmax=huge(1)         ! the highest impactor charge whose Coulomb factor a process reads (dust_init)
     logical::Coulomb_precompute=.false.   ! whether to precompute the Coulomb focusing factor at beginning of dust_fine
     logical::comp_sigma_turb=.false.            ! Activate the computation of turbulent velocity dispersion
     logical::carry_gas_ions=.false.       ! Whether to carry the individual ion densities for gas species

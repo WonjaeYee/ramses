@@ -1347,6 +1347,16 @@ module dust_init
         do ii = 1, ndust
             dustbins_props(ii)%need_coulomb = dust_acc_coulomb .or. (pah_freezing .and. dustbins_props(ii)%interact_pah)
         end do
+        ! and the highest impactor charge read: the ion charges by the Coulomb accretion, the PAH charge
+        ! states by the PAH freezing
+        coulomb_jmax = -1
+        if (pah_freezing) then
+            do ii = 1, npah
+                if (pahbins_props(ii)%ncharge_states > 0) coulomb_jmax = max(coulomb_jmax, &
+                    nint(maxval(pahbins_props(ii)%charge_states(1:pahbins_props(ii)%ncharge_states))))
+            end do
+        end if
+        if (dust_acc_coulomb) coulomb_jmax = huge(1)
 
         ! 8. Read the dust thermal sputtering tables
         if (dust_sputtering .and. sputtering_model.eq.'RM2026')  call init_thermal_sputtering_tables

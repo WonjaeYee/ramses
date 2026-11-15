@@ -155,6 +155,7 @@ module dust_charging
     integer, parameter :: RI_ATOMIC(RTG_NRI) = (/1, 2, 6, 7, 8, 10, 12, 14, 16, 26/)   ! atomic numbers of the RI_* ions
 
     type(RTGroupTable), allocatable, save :: rtg(:)
+    real(dp), save :: exp_m745 = -1d0                 ! exp(-745d0) (run time, first use), the clamp of the repulsive Coulomb terms (P8)
     real(dp), save :: ri_hlnm(RTG_NRI) = 0d0          ! 0.5 ln(RI_MASS), set at init
 
     ! The state of one bin in one cell (set_cell; set_cell_T for another temperature), passed to every
@@ -2181,7 +2182,7 @@ module dust_charging
 
     ! ---------------------------------------------------------------- solver
     subroutine rtgroups_solve_bin(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, &
-                                  st, dlnT, alpha_mode, r, sens)
+                                  st, dlnT, alpha_mode, r, sens, cratio)
         ! Equilibrium charge and rates [erg/s per grain] of bin ii for one cell
         ! (pyCALIMA GroupChargingTable.solve). Np: photon densities per group
         ! [cm^-3]; egy: group mean energies [eV]; c_red: RT speed of light [cm/s];
@@ -2203,6 +2204,9 @@ module dust_charging
         integer :: lo, hi, k, j, half, Zc, lt
         logical :: disc, got, want_d, have_chord, capped
         logical, intent(in), optional :: sens    ! also d/d ln S, d/d ln N and the anchor of rtgroups_predict
+        ! the exact-P(Z) Coulomb correction of rtgroups_coulomb_ratio, from this solve's window (1 for a wide P(Z))
+        real(dp), dimension(ISRF_ND), intent(out), optional :: cratio
+        logical :: want_s
         ! c, cS, cN: indexed by charge - lo + 1, from the lowest charge below the window in the recombination
         real(dp) :: cS(1 - MAX_DISCRETE_STATES:NBUF), cN(1 - MAX_DISCRETE_STATES:NBUF)
         real(dp) :: dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN, sw
@@ -2239,24 +2243,104 @@ module dust_charging
         ! 3. sens: d/d ln S and d/d ln N (pyCALIMA GroupChargingTable._sensitivities), and the anchor
         !    of rtgroups_predict
         st%anchored = .false.
-        if (.not. present(sens)) return
-        if (.not. sens) return
-        if (disc) then
-            call discrete_sens()
-        else
-            call wide_sens()
+        want_s = .false.
+        if (present(sens)) want_s = sens
+        if (want_s) then
+            if (disc) then
+                call discrete_sens()
+            else
+                call wide_sens()
+            end if
+            call anchor_kernels(cell, Zs, st)
+            st%anchored = .true.
+            st%aT = T
+            st%ane = ne
+            st%anion = (/n_Hp, n_Hep, n_Hepp/)
+            st%acred = c_red
+            st%aG0 = G0_bg
+            st%aNp = 0d0
+            st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
+            st%ar = r
         end if
-        call anchor_kernels(cell, Zs, st)
-        st%anchored = .true.
-        st%aT = T
-        st%ane = ne
-        st%anion = (/n_Hp, n_Hep, n_Hepp/)
-        st%acred = c_red
-        st%aG0 = G0_bg
-        st%aNp = 0d0
-        st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
-        st%ar = r
+
+        ! 4. the exact-P(Z) Coulomb correction of a narrow P(Z), from the window (last: it extends the buffers)
+        if (present(cratio)) then
+            cratio = 1d0
+            if (disc) call window_ratio(cratio)
+        end if
     contains
+        subroutine window_ratio(ratio)
+            ! rtgroups_coulomb_ratio (its range, cut and sums) from this solve: the rates of the window lo..hi
+            ! are in the buffers, and P is continued outward from it one charge at a time (rates only) until it
+            ! falls below LN_CUT of its running maximum (P(Z) is unimodal: g decreases with Z), instead of over
+            ! the whole range. Round-off differences only: ln P is accumulated from the window, not from the
+            ! range's lowest charge. (calima_cost_20261113, P4)
+            use constants, only: pi, e2instatC, kB
+            real(dp), intent(out) :: ratio(ISRF_ND)
+            real(dp), parameter :: LN_CUT = -690.7755278982137d0      ! ln 1e-300, as rtgroups_coulomb_ratio
+            real(dp) :: lp(1:NBUF), pm, C1, b0, gg, ss, Dg(-1:3), Dx(ISRF_ND)
+            integer :: rlo, rhi, k0, k1, kk, m, jj
+            ratio = 1d0
+            rlo = max(nint(rtg(ii)%Zmin), min(floor(r%Zstar - 8d0*max(r%Zsigma, 0.5d0) - 10d0), -3))
+            rhi = min(nint(rtg(ii)%Zmax), max(ceiling(r%Zstar + 8d0*max(r%Zsigma, 0.5d0) + 10d0), 3))
+            if (rhi - rlo + 3 > NBUF) return
+            k0 = max(lo, rlo)
+            k1 = min(hi, rhi)
+            if (k0 > k1 .or. rlo - b_base < 1 .or. rhi - b_base > NBUF) then
+                ! the range does not fit the window's buffers: evaluated on its own
+                call rtgroups_coulomb_ratio(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, r%Zstar, r%Zsigma, &
+                                            r%Zmean, ratio)
+                return
+            end if
+            lp(k0 - b_base) = 0d0
+            do kk = k0, k1 - 1
+                lp(kk + 1 - b_base) = lp(kk - b_base) + gwin(kk)
+            end do
+            pm = maxval(lp(k0 - b_base:k1 - b_base))
+            do while (k1 < rhi .and. lp(k1 - b_base) - pm > LN_CUT)
+                call eval_int(cell, dble(k1 + 1), .false., rates_only=.true.)
+                lp(k1 + 1 - b_base) = lp(k1 - b_base) + gwin(k1)
+                k1 = k1 + 1
+                pm = max(pm, lp(k1 - b_base))
+            end do
+            do while (k0 > rlo .and. lp(k0 - b_base) - pm > LN_CUT)
+                call eval_int(cell, dble(k0 - 1), .false., rates_only=.true.)
+                lp(k0 - 1 - b_base) = lp(k0 - b_base) - gwin(k0 - 1)
+                k0 = k0 - 1
+                pm = max(pm, lp(k0 - b_base))
+            end do
+            C1 = e2instatC / (kB * T * dustbins_props(ii)%asize_cm)
+            ss = 0d0
+            Dx = 0d0
+            do kk = k0, k1
+                gg = lp(kk - b_base) - pm
+                if (gg <= LN_CUT) cycle
+                gg = exp(gg)
+                ss = ss + gg
+                do m = 1, ISRF_ND
+                    jj = ISRF_DCHARGE(m)
+                    if (kk == 0) then
+                        b0 = 1d0 + dble(abs(jj)) * sqrt(pi * C1 / 2d0)
+                        Dx(m) = Dx(m) + gg * b0
+                    else if (kk * jj > 0) then
+                        if (-dble(kk * jj) * C1 <= -745d0) then
+                            ! at the clamp: exp(max(-k j C1, -745d0)) = exp(-745d0), the same run-time call once
+                            if (exp_m745 < 0d0) exp_m745 = exp(max(-dble(kk * jj) * C1, -745d0))
+                            Dx(m) = Dx(m) + gg * exp_m745
+                        else
+                            Dx(m) = Dx(m) + gg * exp(-dble(kk * jj) * C1)
+                        end if
+                    else
+                        Dx(m) = Dx(m) + gg * (1d0 - dble(kk * jj) * C1)
+                    end if
+                end do
+            end do
+            Dg = 1d0
+            call compute_Coulomb_focusing_ions(ii, T, r%Zmean, r%Zsigma, 3, Dg)
+            do m = 1, ISRF_ND
+                ratio(m) = (Dx(m) / ss) / Dg(ISRF_DCHARGE(m))
+            end do
+        end subroutine window_ratio
         subroutine distribution()
             ! step 1: Z*, sigma (pair, chord); for a discrete P(Z), the window lo..hi and its moments in r
             got = .false.
@@ -2624,7 +2708,7 @@ module dust_charging
         call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         b_base = lo - 2
         do k = lo, hi
-            call eval_int(cell, dble(k), .false.)
+            call eval_int(cell, dble(k), .false., rates_only=.true.)   ! P(Z) needs Up and Down only
         end do
         b_P(lo - b_base) = 0d0
         do k = lo - b_base, hi - b_base - 1
@@ -2645,7 +2729,13 @@ module dust_charging
                     b0 = 1d0 + dble(abs(j)) * sqrt(pi * C1 / 2d0)
                     Dx(m) = Dx(m) + g * b0
                 else if (k * j > 0) then
-                    Dx(m) = Dx(m) + g * exp(max(-dble(k * j) * C1, -745d0))
+                    if (-dble(k * j) * C1 <= -745d0) then
+                        ! at the clamp: exp(max(-k j C1, -745d0)) = exp(-745d0), the same run-time call once
+                        if (exp_m745 < 0d0) exp_m745 = exp(max(-dble(k * j) * C1, -745d0))
+                        Dx(m) = Dx(m) + g * exp_m745
+                    else
+                        Dx(m) = Dx(m) + g * exp(-dble(k * j) * C1)
+                    end if
                 else
                     Dx(m) = Dx(m) + g * (1d0 - dble(k * j) * C1)
                 end if

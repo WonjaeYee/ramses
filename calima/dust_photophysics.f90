@@ -1869,7 +1869,7 @@ module dust_radiation
         T0 = max(T0, Tmin)
     end subroutine get_Tdust_radiative_eq
 
-    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin,dHdT)
+    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin,dHdT,H0_in,dPdT_out,have_dPdT)
         ! This subroutine computes the local dust temperature by solving the full energy balance
         ! equation: P_rad + H_coll + recomb_heat = P_emit + pe_heat
         ! i_dust         --> integer of dust bin
@@ -1894,6 +1894,9 @@ module dust_radiation
         real(dp),intent(in) :: recomb_heat,pe_heat
         real(dp),intent(inout) :: T
         real(dp),intent(out),optional :: dHdT
+        real(dp),intent(in),optional :: H0_in          ! H_coll at T, if the caller has it
+        real(dp),intent(out),optional :: dPdT_out      ! with have_dPdT: d P_emit / dT at the returned T
+        logical,intent(out),optional :: have_dPdT
 
         integer :: iter
         integer :: max_iter=100
@@ -1906,6 +1909,7 @@ module dust_radiation
         T0 = T
         eps = 1d-2
         iter_used = 0
+        if (present(have_dPdT)) have_dPdT = .false.
 
         ! =========================================================
         ! 1. Compute Hcoll and derivative once (if collisional cooling is enabled)
@@ -1914,7 +1918,11 @@ module dust_radiation
             dT = max(T0*eps,1e-6)
             H2 = coll_heating_eval(pre,T0+dT)
             H1 = coll_heating_eval(pre,max(T0-dT,Tmin))
-            H0 = coll_heating_eval(pre,T0)
+            if (present(H0_in)) then
+                H0 = H0_in
+            else
+                H0 = coll_heating_eval(pre,T0)
+            end if
             true_dT_low = T0 - max(T0-dT, Tmin)
             dH_dT = (H2 - H1) / (dT + true_dT_low)
         else
@@ -1932,6 +1940,10 @@ module dust_radiation
             f = P_abs + H0 + dH_dT*(T - T0) + recomb_heat - P_rad - pe_heat
             fprime = dH_dT - dP_dT
             if (f .eq. 0d0) then
+                if (present(dPdT_out) .and. present(have_dPdT)) then
+                    dPdT_out = dP_dT
+                    have_dPdT = .true.
+                end if
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
@@ -1950,7 +1962,13 @@ module dust_radiation
 
             if (abs(T_new - T)/T < 1d-3) then
                 T = T_new
-                call dust_emission_power(i_dust, T, P_rad)
+                if (present(dPdT_out) .and. present(have_dPdT)) then
+                    ! the same P_rad as dust_emission_power, and its derivative for the caller
+                    call dust_emission_with_deriv(i_dust, T, P_rad, dPdT_out)
+                    have_dPdT = .true.
+                else
+                    call dust_emission_power(i_dust, T, P_rad)
+                end if
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
@@ -2140,6 +2158,8 @@ module dust_radiation
 
         integer :: i,j
         real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd, flux_bh80
+        real(dp) :: dPd_fin            ! d P_emit / d T_dust at the root, from solve_Tdust_fast
+        logical :: have_dP, h0_known
         logical :: rt_field
         type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
 
@@ -2151,6 +2171,8 @@ module dust_radiation
         if (dust_coll_cooling) flux_bh80 = bh80_unit_flux(nElement,xelem_ions)
 
         do j = 1, ndust
+            have_dP = .false.
+            h0_known = .false.
             ! --- Radiative absorbed power ---
             P_abs = dustbins_props(j)%Pabs_isrf * (G0_background / 1.13d0) ! [erg/s]
             
@@ -2167,7 +2189,9 @@ module dust_radiation
                 call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,flux_bh80,Tgas,dust_charge(j),pre,deriv=present(lin))
                 H_coll_at_Tgas = coll_heating_eval(pre,T0)
                 coll_heat(j) = H_coll_at_Tgas
+                h0_known = .true.                ! H_coll at T0, unless the start moves
                 if (H_coll_at_Tgas > P_abs) then
+                    h0_known = .false.
                     ! Collisional heating dominates the initial guess
                     call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
                 else if (abs(H_coll_at_Tgas) < 1d-4 * P_abs) then
@@ -2189,8 +2213,21 @@ module dust_radiation
             end if
 
             T0_lin = T0
-            call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
-                                recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT)
+            if (h0_known .and. present(lin)) then
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT, &
+                                    H0_in=H_coll_at_Tgas,dPdT_out=dPd_fin,have_dPdT=have_dP)
+            else if (h0_known) then
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT,H0_in=H_coll_at_Tgas)
+            else if (present(lin)) then
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT, &
+                                    dPdT_out=dPd_fin,have_dPdT=have_dP)
+            else
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT)
+            end if
             T_dust(j) = max(T0, Tmin)
             if (present(lin)) call lin_state(T0_lin, dHdT, T0 > Tmin)
         end do
@@ -2220,7 +2257,11 @@ module dust_radiation
             lin(j)%dP_dTd = 0d0
             lin(j)%dTd_df = 0d0
             if (free) then
-                call dust_emission_with_deriv(j, T_dust(j), Pd, lin(j)%dP_dTd)
+                if (have_dP) then
+                    lin(j)%dP_dTd = dPd_fin       ! solve_Tdust_fast's, at this T_dust
+                else
+                    call dust_emission_with_deriv(j, T_dust(j), Pd, lin(j)%dP_dTd)
+                end if
                 if (slope - lin(j)%dP_dTd /= 0d0) lin(j)%dTd_df = -1d0/(slope - lin(j)%dP_dTd)
             end if
         end subroutine lin_state

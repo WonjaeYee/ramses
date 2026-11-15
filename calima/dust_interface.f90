@@ -79,6 +79,14 @@ module dust_interface
     logical, save :: rtg_dT_calls = .false.
 
 contains
+    pure elemental logical function finite_dp(x)
+        ! ieee_is_finite without the IEEE module (whose USE costs an FPU-state save/restore per call of the
+        ! procedure): false for NaN (x /= x) and +-Inf
+        implicit none
+        real(dp), intent(in) :: x
+        finite_dp = (x == x) .and. (abs(x) <= huge(x))
+    end function finite_dp
+
     subroutine store_pah_ion_fraction(dinfo, icell)
         ! Keep the ion fraction of each PAH bin of cell icell of the cooling vector (pah_fion_vec), from the
         ! charge distribution compute_dust_rad_rates has just set in dinfo
@@ -277,7 +285,7 @@ contains
         logical, intent(in), optional :: rates_only   ! only the rates compute_dust_coolrates returns (not the Coulomb factors)
 
         ! ---- Local variables ----
-        integer :: ii,j
+        integer :: ii,j,jc
         integer :: i_neutral, i_charged   ! csa_pah row indices: neutral=2*ii-1, charged=2*ii
         real(dp) :: nHI
         logical :: skip_coulomb
@@ -347,15 +355,17 @@ contains
             if (.not. skip_coulomb) then
                 dinfo%Coulomb_factor = 1d0
                 if (Coulomb_precompute) then
+                    ! up to the highest impactor charge a process reads (coulomb_jmax, dust_init); above, 1
+                    jc = max(-1, min(dinfo%nion_charges, coulomb_jmax))
                     do ii = 1, dinfo%ndust
                         if (.not. dustbins_props(ii)%need_coulomb) cycle
-                        call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),dinfo%nion_charges,&
-                                                           dinfo%Coulomb_factor(ii,-1:dinfo%nion_charges))
+                        call compute_Coulomb_focusing_ions(ii,Tk,dinfo%Z_dust(ii),dinfo%Z_sigma(ii),jc,&
+                                                           dinfo%Coulomb_factor(ii,-1:jc))
                         ! the low impactor charges over the exact P(Z), where the Gaussian of <Z> and sigma_Z
                         ! misses the tail at the opposite sign (small grains in cold gas): the charging
                         ! routine's correction (Dmode 1) or factors (Dmode 2)
                         do j = 1, ISRF_ND
-                            if (ISRF_DCHARGE(j) > dinfo%nion_charges) cycle
+                            if (ISRF_DCHARGE(j) > jc) cycle
                             if (co%Dmode(ii) == 1) then
                                 dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) = &
                                     max(dinfo%Coulomb_factor(ii, ISRF_DCHARGE(j)) * co%D(j, ii), 1d-10)
@@ -517,6 +527,11 @@ contains
             if (.not. td_valid .or. (td_hasNp .neqv. present(Np))) return
             x = Tk/td_T
             if (x > RTG_SERVE_HI .or. x < RTG_SERVE_LO) return
+            ! the derivative calls have the precool's other inputs by construction (as in rtg_served)
+            if (rtg_dT_calls) then
+                td_served = .true.
+                return
+            end if
             if (ne /= td_ne .or. nH2 /= td_nH2 .or. nCO /= td_nCO) return
             if (present(Np)) then
                 if (dinfo%G0_background /= td_G0) return
@@ -596,7 +611,7 @@ contains
                 ! only the uniform background: start-up table in (T, ne), which has no alpha
                 path = 1
                 call rtgroups_uniform_lookup(ii, dinfo%G0_background, Tk, ne, rr%Zmean, rr%Zsigma, rr%Gamma, rr%Lambda)
-                if (Coulomb_precompute) then
+                if (Coulomb_precompute .and. dustbins_props(ii)%need_coulomb) then
                     call isrf_lookup(ii, dinfo%G0_background, Tk, ne, zz, ss, gg, ll, co%D(:, ii))
                     co%Dmode(ii) = 2
                 end if
@@ -622,16 +637,22 @@ contains
                 else
                     ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
                     path = 0
-                    call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
-                                            n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
-                                            st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), &
-                                            rr, sens=predict)
-                    if (Coulomb_precompute) then
+                    if (Coulomb_precompute .and. dustbins_props(ii)%need_coulomb) then
                         ! narrow P(Z): its exact Coulomb factors over the Gaussian ones (kept for the
-                        ! predictions from this solve); a wide one is close to its Gaussian
+                        ! predictions from this solve), from the solve's window; a wide one is close to its
+                        ! Gaussian (1). Only for the bins whose Coulomb factors a process reads (need_coulomb)
+                        call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
+                                                n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
+                                                st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), &
+                                                rr, sens=predict, cratio=st%Dratio)
+                    else
+                        call rtgroups_solve_bin(ii, Np, dinfo%group_eV, dinfo%local_c, Tk, ne, &
+                                                n_Hp, n_Hep, n_Hepp, dinfo%G0_background, rtg_Zguess(ii), &
+                                                st, RTG_DLNT, merge(RTG_ALPHA_GAUSS, RTG_ALPHA_NONE, dust_ion_recombination), &
+                                                rr, sens=predict)
                         st%Dratio = 1d0
-                        if (rr%discrete) call rtgroups_coulomb_ratio(ii, Np, dinfo%local_c, Tk, ne, n_Hp, n_Hep, &
-                            n_Hepp, dinfo%G0_background, rr%Zstar, rr%Zsigma, rr%Zmean, st%Dratio)
+                    end if
+                    if (Coulomb_precompute) then
                         co%D(:, ii) = st%Dratio
                         co%Dmode(ii) = 1
                     end if
@@ -846,7 +867,6 @@ contains
         use dust_rhs_mod, only: dust_rhs
         use dust_rates, only: compute_rate_caches
         use dust_radiative_torques, only: total_radiative_torque,IR_damping_factor
-        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
 #ifdef RTZ
         use rtz_module, only:elements
 #endif
@@ -960,7 +980,7 @@ contains
         ! (comparisons with NaN are false): the RTZ step then rejected each retry on the ions, halved
         ! ddt to zero and froze the cell. Reject it here, before it reaches nElement and the dust,
         ! and stop if the rates are already non-finite at the starting state (a bug in a rate).
-        if (.not. (all(ieee_is_finite(y_dust_out(1:ndust_total))) .and. all(ieee_is_finite(y_gas_out)))) then
+        if (.not. (all(finite_dp(y_dust_out(1:ndust_total))) .and. all(finite_dp(y_gas_out)))) then
             call check_dust_rates_finite(dinfo, dt, y_gas, y_dust(1:ndust_total))
             step_ok = .false.
             return
@@ -1033,7 +1053,6 @@ contains
         ! blew up: return, and the caller retries with a smaller dt. Non-finite rates there are a bug in
         ! a rate (a smaller dt cannot help): print the cell and stop. With dust_debug, also name the
         ! process(es) that produced it.
-        use, intrinsic :: ieee_arithmetic, only: ieee_is_finite
         use dust_rhs_mod, only: dust_rhs
         implicit none
         class(DustChemistryInfo), intent(in) :: dinfo
@@ -1043,7 +1062,7 @@ contains
 
         allocate(dydt_gas(size(y_gas,1), size(y_gas,2)), dydt_dust(size(y_dust), 2))
         call dust_rhs(dinfo, y_gas, y_dust, dydt_gas, dydt_dust, write_cache=.false.)
-        if (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust))) then
+        if (all(finite_dp(dydt_gas)) .and. all(finite_dp(dydt_dust))) then
             if (dust_debug) write(*,'(A,ES10.3,A)') ' CALIMA: dust update NaN/Inf over dt = ', dt, &
                                                    ' s with finite rates at its start; step rejected'
             return
@@ -1062,13 +1081,13 @@ contains
             do i = 1, ndust_processes
                 dydt_gas = 0d0; dydt_dust = 0d0
                 call dust_processes_list(i)%comp_rate(dinfo, y_gas, y_dust, dydt_gas, dydt_dust)
-                if (.not. (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust)))) &
+                if (.not. (all(finite_dp(dydt_gas)) .and. all(finite_dp(dydt_dust)))) &
                     write(*,'(A,A)') '   NaN/Inf from dust process: ', trim(dust_processes_list(i)%name)
             end do
             do i = 1, npah_processes
                 dydt_gas = 0d0; dydt_dust = 0d0
                 call pah_processes_list(i)%comp_rate(dinfo, y_gas, y_dust, dydt_gas, dydt_dust)
-                if (.not. (all(ieee_is_finite(dydt_gas)) .and. all(ieee_is_finite(dydt_dust)))) &
+                if (.not. (all(finite_dp(dydt_gas)) .and. all(finite_dp(dydt_dust)))) &
                     write(*,'(A,A)') '   NaN/Inf from PAH process: ', trim(pah_processes_list(i)%name)
             end do
         else
