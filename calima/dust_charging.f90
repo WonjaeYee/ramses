@@ -415,11 +415,23 @@ module dust_charging
                 p(k) = p(k+1) * r
                 r = r * rho
             end do
+            ! the taper and the zeros: only the ends of the window, where x = |Z - <Z>|/sw > KWIN - 1 (a prefix
+            ! and a suffix: x falls to <= 1 at the charge nearest <Z>, then rises)
             do k = 1, n
                 x = abs(dble(zlo + k - 1) - Zmean) / sw
+                if (x <= COUL_KWIN - 1d0) exit
                 if (x >= COUL_KWIN) then
                     p(k) = 0d0
-                else if (x > COUL_KWIN - 1d0) then
+                else
+                    p(k) = p(k) * cos(0.5d0 * PI_D * (x - COUL_KWIN + 1d0))**2
+                end if
+            end do
+            do k = n, 1, -1
+                x = abs(dble(zlo + k - 1) - Zmean) / sw
+                if (x <= COUL_KWIN - 1d0) exit
+                if (x >= COUL_KWIN) then
+                    p(k) = 0d0
+                else
                     p(k) = p(k) * cos(0.5d0 * PI_D * (x - COUL_KWIN + 1d0))**2
                 end if
             end do

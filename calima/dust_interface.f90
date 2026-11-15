@@ -191,7 +191,7 @@ contains
         ! pahAbs --> output array for PAH absorption rates [1/s]
         ! pahSc --> output array for PAH scattering rates [1/s]
         ! pahRp --> output array for PAH radiation pressure rates [1/s]
-        use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium
+        use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium, interpolate_pah_charge_all
         use dust_radiation, only: rad_dust_rate, rad_pah_rate
 
         implicit none
@@ -203,15 +203,26 @@ contains
         real(dp), dimension(:), intent(inout) :: dustAbs, dustSc, dustRp
         real(dp), dimension(:), intent(inout) :: pahAbs, pahSc, pahRp
         ! ---- Local variables ----
-        integer :: ii
+        integer :: ii, i, cs0, ns
+        real(dp) :: nd(1:max(ndust,1)), npd(1:max(npah,1)), fi(1:max(npah,1)), ra, rs, rr
 
-        ! 1. Compute and add the different dust radiative rates
+        ! 1. Compute and add the different dust radiative rates: rad_dust_rate of each group, with the
+        !    number densities rho / m_grain once (the same quotients) and the same sums
         dustAbs = 0d0; dustSc = 0d0; dustRp = 0d0
         if (dinfo%ndust > 0) then
+            do i = 1, ndust
+                nd(i) = dinfo%rho_dust(i) / dustbins_props(i)%mgrain
+            end do
             do ii = 1, dinfo%nGroups
-                dustAbs(ii) = rad_dust_rate(dinfo%csa_dust(:,ii),dinfo%rho_dust(:)) ! [1/s]
-                dustSc (ii) = rad_dust_rate(dinfo%css_dust(:,ii),dinfo%rho_dust(:)) ! [1/s]
-                dustRp (ii) = rad_dust_rate(dinfo%csr_dust(:,ii),dinfo%rho_dust(:)) ! [1/s]
+                ra = 0d0; rs = 0d0; rr = 0d0
+                do i = 1, ndust
+                    ra = ra + dinfo%csa_dust(i,ii) * nd(i)
+                    rs = rs + dinfo%css_dust(i,ii) * nd(i)
+                    rr = rr + dinfo%csr_dust(i,ii) * nd(i)
+                end do
+                dustAbs(ii) = ra ! [1/s]
+                dustSc (ii) = rs ! [1/s]
+                dustRp (ii) = rr ! [1/s]
             end do
             dinfo%dustAbs = dustAbs
         end if
@@ -226,14 +237,29 @@ contains
             ! TODO: currently we use the interpolation tables since
             ! it's sufficiently accurate and much faster, but we 
             ! could change to use the full calculation if we wanted
-            do ii = 1, dinfo%npah
-                call interpolate_pah_charge_equilibrium(ii,G0,ne,Tk,&
-                   &dinfo%fcharge_pah(:,ii))
+            ! every bin at once (log10 gamma once; bit-identical to the per-bin calls)
+            call interpolate_pah_charge_all(dinfo%npah,G0,ne,Tk,dinfo%fcharge_pah)
+            ! rad_pah_rate of each group, with each bin's ion fraction and number density once
+            do i = 1, npah
+                ns = pahbins_props(i)%ncharge_states
+                cs0 = pahbins_props(i)%cation_start_idx
+                if (cs0 <= ns) then
+                    fi(i) = sum(dinfo%fcharge_pah(cs0:ns,i))
+                else
+                    fi(i) = 0d0
+                end if
+                npd(i) = dinfo%rho_pah(i) / pahbins_props(i)%mpah
             end do
             do ii = 1, dinfo%nGroups
-                pahAbs(ii) = pahAbs(ii)+ rad_pah_rate(dinfo%csa_pah(:,ii),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
-                pahSc (ii) = pahSc(ii) + rad_pah_rate(dinfo%css_pah(:,ii),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
-                pahRp (ii) = pahRp(ii) + rad_pah_rate(dinfo%csr_pah(:,ii),dinfo%rho_pah(:),dinfo%fcharge_pah(:,:)) ! [1/s]
+                ra = 0d0; rs = 0d0; rr = 0d0
+                do i = 1, npah
+                    ra = ra + ((1d0-fi(i))*dinfo%csa_pah((i-1)*2+1,ii) + fi(i)*dinfo%csa_pah((i-1)*2+2,ii)) * npd(i)
+                    rs = rs + ((1d0-fi(i))*dinfo%css_pah((i-1)*2+1,ii) + fi(i)*dinfo%css_pah((i-1)*2+2,ii)) * npd(i)
+                    rr = rr + ((1d0-fi(i))*dinfo%csr_pah((i-1)*2+1,ii) + fi(i)*dinfo%csr_pah((i-1)*2+2,ii)) * npd(i)
+                end do
+                pahAbs(ii) = pahAbs(ii) + ra ! [1/s]
+                pahSc (ii) = pahSc(ii) + rs ! [1/s]
+                pahRp (ii) = pahRp(ii) + rr ! [1/s]
             end do
             dinfo%pahAbs = pahAbs
         end if
@@ -264,7 +290,8 @@ contains
         use pah_photoelectric_heating, only: interpolate_pah_charge_equilibrium,&
                                             compute_pah_peh_equilibrium,&
                                             interpolate_pah_peh_equilibrium,&
-                                            compute_pah_charge_equilibrium
+                                            compute_pah_charge_equilibrium,&
+                                            interpolate_pah_peh_all
         use dust_radiation, only: update_T_dust, serve_T_dust
         use dust_surface_chemistry, only: grain_h2_formation_rate
 #ifdef RT
@@ -442,13 +469,10 @@ contains
             ! 7. Compute the PAH PEH model
             if (pah_pe_heating .and. present(Np)) then
                 if (pah_pe_heating_isrf) then
-                    ! We have rt, but we want to just use the ISRF-averaged model
-                        do ii = 1, dinfo%npah
-                            call interpolate_pah_peh_equilibrium(ii,G0_total,&
-                                                                ne,Tk,dinfo%fcharge_pah(:,ii),&
-                                                                dinfo%Pabs_pah(ii,1),dinfo%Pinj_pah(ii),&
-                                                                dinfo%Prad_pah(ii),dinfo%Prec_pah(ii))
-                        end do
+                    ! We have rt, but we want to just use the ISRF-averaged model: every bin at once
+                    ! (log10 gamma and the attachment rate once; bit-identical to the per-bin calls)
+                    call interpolate_pah_peh_all(dinfo%npah,G0_total,ne,Tk,dinfo%fcharge_pah,&
+                                                 dinfo%Pabs_pah(:,1),dinfo%Pinj_pah,dinfo%Prad_pah,dinfo%Prec_pah)
                 else
                     ! We want the PAH PEH also have rt, so we use the full model
                     do ii = 1, dinfo%npah

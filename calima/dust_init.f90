@@ -2387,6 +2387,22 @@ module dust_init
             do istate = 1, pahbins_props(i)%ncharge_states
                 call pahbins_props(i)%fcharge_tab(istate)%init()
             end do
+            ! interpolate_pah_peh_equilibrium / interpolate_pah_charge_equilibrium take the bin's tables in one
+            ! cell of their common gamma axis
+            if (any(pahbins_props(i)%peh_pabs_tab%tab1d(:,1) /= pahbins_props(i)%peh_eff_tab%tab1d(:,1)) .or. &
+                pahbins_props(i)%peh_pabs_tab%inv_dx(1) /= pahbins_props(i)%peh_eff_tab%inv_dx(1) .or. &
+                (pahbins_props(i)%peh_pabs_tab%eqw .neqv. pahbins_props(i)%peh_eff_tab%eqw)) then
+                write(*,*) 'ERROR: PAH PEH tables not on one gamma axis, bin ', i
+                call clean_stop
+            end if
+            do istate = 1, pahbins_props(i)%ncharge_states
+                if (any(pahbins_props(i)%fcharge_tab(istate)%tab1d(:,1) /= pahbins_props(i)%peh_eff_tab%tab1d(:,1)) .or. &
+                    pahbins_props(i)%fcharge_tab(istate)%inv_dx(1) /= pahbins_props(i)%peh_eff_tab%inv_dx(1) .or. &
+                    (pahbins_props(i)%fcharge_tab(istate)%eqw .neqv. pahbins_props(i)%peh_eff_tab%eqw)) then
+                    write(*,*) 'ERROR: PAH charge tables not on the PEH gamma axis, bin ', i
+                    call clean_stop
+                end if
+            end do
             close(111)
         end do
     end subroutine init_pah_peh_tables
