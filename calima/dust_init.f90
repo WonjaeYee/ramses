@@ -856,6 +856,7 @@ module dust_init
         use anninos_coupled_mod, only: anninos_coupled_step
         use ode_interface_mod, only: dust_solver_step
         use dust_dynamics, only: select_velocity_model
+        use dust_rates, only: init_rate_constants
         implicit none
         integer, intent(in) :: nGroups
         logical :: check_for_pahs
@@ -1021,6 +1022,7 @@ module dust_init
             dustbins_props(ii)%mgrain_min = (4D0/3D0)*pi*(amin(ii)*1D-4)**3D0*sgrain(ii)
             dustbins_props(ii)%mgrain_max = (4D0/3D0)*pi*(amax(ii)*1D-4)**3D0*sgrain(ii)
             dustbins_props(ii)%mgrain_min_pow = dustbins_props(ii)%mgrain_min**slope_frag_func
+            frag_min_pow_fac = 1d-6**slope_frag_func
             dustbins_props(ii)%mgrain_max_pow = dustbins_props(ii)%mgrain_max**slope_frag_func
             dustbins_props(ii)%Youngs_modulus = Youngs_modulus(ichemtype)
             dustbins_props(ii)%Poisson_ratio = Poisson_ratio(ichemtype)
@@ -1379,6 +1381,25 @@ module dust_init
         if (dust_coll_cooling) call init_dust_coll_heating_BH80_cache
 
 
+        ! The bin and pair constants of the dust rates
+        call init_rate_constants()
+
+        ! The smallest lower mass edge of the destinations of each target's shattering fragments
+        ! (compute_shattered_fragments_direct): its chemtype's bins and, for a carbonaceous chemtype with PAHs,
+        ! the PAH bins (their lowest edge is also the destruction threshold), else its first bin
+        do ii = 1, ndust
+            kk = istart_chemtype(dustbins_props(ii)%interact_group)
+            frag_edge(ii) = dustbins_props(kk)%mgrain_min
+            do jj = kk, kk + dustbins_per_chemtype(dustbins_props(ii)%interact_group) - 1
+                frag_edge(ii) = min(frag_edge(ii), dustbins_props(jj)%mgrain_min)
+            end do
+            if (dustbins_props(kk)%interact_pah .and. npah > 0) then
+                do jj = 1, npah
+                    frag_edge(ii) = min(frag_edge(ii), pahbins_props(jj)%mpah_min)
+                end do
+            end if
+        end do
+
         ! Select the ODE solver procedure pointer
         if (dust_solver_type == 1) then
             dust_solver_step => rk4_step
@@ -1460,6 +1481,8 @@ module dust_init
                 sputtering_model,accretion_model,shattering_model,coagulation_model,dust_velocity_model,charging_model,charging_table_label,ice_model,&
                 dust_ion_recombination,&
                 rtg_predict_tol,rtg_predict_tol_shape,&
+                dust_sput_T_min,pah_photo_G0_min,&
+                dust_shat_phi_min,&
                 ! PAH modelling options
                 photolysis_model,peh_attach_model,coalescence_model,pah_h2_model,pah_growth_model,pah_sputtering_model,&
                 cluster_evaporation_model,&
@@ -1909,6 +1932,12 @@ module dust_init
                     if (dustbins_props(ii)%sputtering_tab(i)%initialised) &
                         call dustbins_props(ii)%sput_tabs%add(dustbins_props(ii)%sputtering_tab(i), i, 1, n_elements)
                 end do
+                ! the rates below the T axis (sputtering_rate), as there: exp(lr * ln10) of the first node
+                if (dustbins_props(ii)%sput_tabs%n > 0) then
+                    do i = 1, n_elements
+                        dustbins_props(ii)%sput_lo(i) = exp(dustbins_props(ii)%sput_tabs%y(i,1) * ln10)
+                    end do
+                end if
             end do
         end if
 
@@ -2190,6 +2219,12 @@ module dust_init
                 if (pahbins_props(ipahbin)%sputtering_tab(iel)%initialised) &
                     call pahbins_props(ipahbin)%sput_tabs%add(pahbins_props(ipahbin)%sputtering_tab(iel), iel, 0, n_elements)
             end do
+            ! the rates below the T axis (pah_sputtering_rate), as there: exp(lr * ln10) of the first node
+            if (pahbins_props(ipahbin)%sput_tabs%n > 0) then
+                do iel = 0, n_elements
+                    pahbins_props(ipahbin)%sput_lo(iel) = exp(pahbins_props(ipahbin)%sput_tabs%y(iel,1) * ln10)
+                end do
+            end if
         end do        
     end subroutine init_pah_sputtering_tables
 

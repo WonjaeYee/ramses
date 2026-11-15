@@ -1645,6 +1645,71 @@ module ode_driver_mod
         debug_enabled = dust_log
         if (present(debug_flag)) debug_enabled = debug_flag
 
+        if (.not. solver_substepped .and. dt > 0.0_dp) then
+            ! One step of h = dt (the loop below takes exactly that one step), from the caller's arrays
+            ! into the final ones: no work copies
+            call ensure_kmax_storage
+            if (present(h_last)) h_last = 0.0_dp
+            step_ok = .true.
+            mass_init = sum(y_gas(:,1)) + sum(y_dust(:))
+            h = dt
+            if (present(debug_flag)) then
+                call step_fn(dust_info,y_gas,y_dust,h,rhs,y_gas_final,y_dust_final,h_new,.true.,accepted,break,debug_flag=debug_flag,step_ok_present=.true.)
+            else
+                call step_fn(dust_info,y_gas,y_dust,h,rhs,y_gas_final,y_dust_final,h_new,.true.,accepted,break,step_ok_present=.true.)
+            end if
+            if (break) then
+                y_gas_final(:,:) = y_gas(:,:)
+                y_dust_final(:) = y_dust(:)
+                return
+            end if
+            if (.not. accepted) then
+                if (dust_log) then
+                    ode_nrejected = ode_nrejected + 1_8
+                    ode_nreduced = ode_nreduced + 1_8
+                    call register_timestep_reduction_cause
+                end if
+                step_ok = .false.
+                return
+            end if
+            if (dust_log) ode_naccepted = ode_naccepted + 1_8
+            if (dust_debug) then
+                if (ndust_processes > 0 .and. allocated(dM_ode_dust) .and. &
+                    allocated(last_dydt_dust_per_proc)) then
+                    dM_ode_dust(:, 1:ndust_processes) = dM_ode_dust(:, 1:ndust_processes) + &
+                        (last_dydt_dust_per_proc(:, 1:ndust_processes, 1)-last_dydt_dust_per_proc(:, 1:ndust_processes, 2)) * h * dust_info%local_vol
+                end if
+                if (npah_processes > 0 .and. allocated(dM_ode_pah) .and. &
+                    allocated(last_dydt_pah_per_proc)) then
+                    dM_ode_pah(:, 1:npah_processes) = dM_ode_pah(:, 1:npah_processes) + &
+                        (last_dydt_pah_per_proc(:, 1:npah_processes, 1)-last_dydt_pah_per_proc(:, 1:npah_processes, 2)) * h * dust_info%local_vol
+                end if
+            end if
+            mass_final = sum(y_gas_final(:,1)) + sum(y_dust_final(:))
+            if (mass_init > 0d0) then
+                if (abs(mass_final - mass_init) / mass_init > mass_conservation_tol) then
+                    print *, 'FATAL ERROR: integrate_dust_ode: mass not conserved!'
+                    print *, '  Initial mass = ', mass_init
+                    print *, '  Final mass   = ', mass_final
+                    print *, '  Rel. diff    = ', abs(mass_final - mass_init)/mass_init
+                    call clean_stop
+                end if
+            end if
+            if (dust_log) then
+                ndust_cells       = ndust_cells + 1_8
+                ode_substeps_sum  = ode_substeps_sum + 1_8
+                ode_substeps_min  = min(ode_substeps_min, 1_8)
+                ode_substeps_max  = max(ode_substeps_max, 1_8)
+            end if
+            if (any(y_gas_final < 0.0_dp) .or. any(y_dust_final < 0.0_dp)) then
+                print *, 'FATAL ERROR: integrate_dust_ode: negative density in final state (bug in rate routines).'
+                print *, '  y_gas_final min:  ', minval(y_gas_final)
+                print *, '  y_dust_final min: ', minval(y_dust_final)
+                call clean_stop
+            end if
+            return
+        end if
+
         ! Allocate/resize all work arrays once before the substep loop.
         call ensure_driver_cache(size(y_gas,1), size(y_gas,2), size(y_dust))
         y_gas_temp => drv_y_gas_temp_cache

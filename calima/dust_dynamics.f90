@@ -440,7 +440,12 @@ module dust_dynamics
         if (xi < 1d-4) then
             ! no drift (Eq. 18): f is a Maxwellian; the drift correction is O(xi^2)
             v_mean = sqrt_8_3pi * dV
-            v_stick = v_mean * (1d0 - (1d0 + chi**2) * exp(-chi**2))
+            if (chi**2 >= 50d0) then
+                ! (1 + chi^2) exp(-chi^2) < 1e-20 < 2^-54: the bracket below is 1 exactly
+                v_stick = v_mean
+            else
+                v_stick = v_mean * (1d0 - (1d0 + chi**2) * exp(-chi**2))
+            end if
             return
         end if
         e_xi = exp(-xi**2)

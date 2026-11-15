@@ -188,6 +188,11 @@ module dust_commons
     logical,dimension(1:ndchemtype) ::separate_refractive_index=.false. ! Whether the dust bin has separate refractive index tables for parallel and perpendicular waves
     real(dp)::slope_frag_func=1.3D0/3D0                  ! Fragment distribution (shattering and RATD) power-law slope
     real(dp)::errmax=0.1d0            ! Criterion for convergence in dust chemistry solver
+    real(dp)::dust_sput_T_min=0d0     ! PHYSICS OPTION: no thermal sputtering (dust, PAH) below this T [K] (0: always)
+    real(dp)::pah_photo_G0_min=0d0    ! PHYSICS OPTION: no PAH photolysis / cluster evaporation below this G0 (0: always)
+    real(dp)::dust_shat_phi_min=0d0   ! PHYSICS OPTION: no shattering for pairs with phi = E_imp/(m Q*) below this (0: all)
+    real(dp), dimension(1:max(ndust,1)) :: frag_edge = 0d0  ! smallest lower mass edge of the bins a target's fragments reach
+    real(dp)::frag_min_pow_fac=1d0    ! (1e-6)**slope_frag_func: m_min**s = m_max**s * this in the shattering fragments
     real(dp)::countmax=10000          ! Maximum number of iterations in dust chemistry solver
     real(dp)::GDinit=162d0            ! Initial gas-to-dust ratio (Def: 162 as given by Zubko et al. 2004)
     real(dp)::DTMinit=-1d0            ! Initial dust-to-metal ratio (Def: 1d-3)

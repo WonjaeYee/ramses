@@ -220,7 +220,12 @@ module dust_surface_chemistry
         ! assumming that the bare grain coefficient
         ! is already coming from the original model
         ! and the ice coefficient is set to S=0.1
-        S = 0.1d0 + (1.d0 - 0.1d0) * exp(-N_mono)
+        if (N_mono >= 50d0) then
+            ! 0.9 exp(-N_mono) < 2e-22, below half an ulp of 0.1: S is 0.1 exactly
+            S = 0.1d0
+        else
+            S = 0.1d0 + (1.d0 - 0.1d0) * exp(-N_mono)
+        end if
     end subroutine Hollenbach2009_icemodel
 
     function ice_sticking_coefficient(G0,nO,Tgas,Td)
