@@ -562,14 +562,14 @@ contains
     subroutine charge_rtgroups(dinfo, G0_total, Tk, ne, nElement, xelem_ions, Np, co)
         ! charging_model = 'WDB06rt' with the cell's RT photons
         use dust_charging, only: rtgroups_solve_bin, rtgroups_refine_alpha, rtgroups_uniform_lookup, &
-                                 rtgroups_predict, rtgroups_coulomb_ratio, isrf_lookup
+                                 rtgroups_predict, rtgroups_coulomb_ratio, isrf_lookup, isrf_have
         implicit none
         class(DustChemistryInfo), intent(inout) :: dinfo
         real(dp), intent(in) :: G0_total, Tk, ne
         real(dp), intent(in) :: nElement(:), xelem_ions(:,:)
         real(dp), intent(in) :: Np(:)
         type(ChargeOut), intent(inout) :: co
-        real(dp) :: zz, ss, gg, ll
+        real(dp) :: zz, ss, gg, ll, Dj_guess(ISRF_ND)
         real(dp) :: n_Hp, n_Hep, n_Hepp, h
         type(RTGState), pointer :: st
         type(RTGResult) :: rr
@@ -637,6 +637,12 @@ contains
                 else
                     ! full solve; the recombination of a wide P(Z) is the Gaussian estimate here
                     path = 0
+                    ! CH1: a solve without a guess (a new cell in the queue paths, the first of a run) starts from
+                    ! the uniform-ISRF table's <Z> at the cell's G0, T, n_e (deterministic in the cell's inputs)
+                    if (rtg_Zguess(ii) == -huge(1d0) .and. .not. st%valid .and. isrf_have()) then
+                        call isrf_lookup(ii, G0_total, Tk, ne, zz, ss, gg, ll, Dj_guess)
+                        rtg_Zguess(ii) = zz
+                    end if
                     if (Coulomb_precompute .and. dustbins_props(ii)%need_coulomb) then
                         ! narrow P(Z): its exact Coulomb factors over the Gaussian ones (kept for the
                         ! predictions from this solve), from the solve's window; a wide one is close to its
