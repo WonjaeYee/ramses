@@ -871,6 +871,13 @@ module dust_optics
             call dustbins_props(i)%Planck_power_tab%init()
             call dustbins_props(i)%Planckderiv_tab%init()
             call dustbins_props(i)%Tdust_tab%init()
+            ! dust_emission_with_deriv takes both Planck tables in one cell of their common axis
+            if (any(dustbins_props(i)%Planckderiv_tab%tab1d(:,1) /= dustbins_props(i)%Planck_power_tab%tab1d(:,1)) .or. &
+                (dustbins_props(i)%Planckderiv_tab%inv_dx(1) /= dustbins_props(i)%Planck_power_tab%inv_dx(1)) .or. &
+                (dustbins_props(i)%Planckderiv_tab%eqw .neqv. dustbins_props(i)%Planck_power_tab%eqw)) then
+                write(*,*) 'ERROR: the Planck power and derivative tables are not on one axis, bin ', i
+                call clean_stop
+            end if
         end do
 
         ! 2.f Same mean cross sections for the PAH bins, per charge state.
@@ -888,6 +895,9 @@ module dust_optics
                                      pahbins_props(i)%Planck_tab_i,            &
                                      trim(pahlabel)//'_i', nbins, log_Tmin, log_step)
         end do
+
+        ! get_IR_mean_cross_sections takes all the mean cross-section tables in one cell of their common axis
+        call check_mean_tab_axes()
 
         ! 3. Write the tables to files for verification
         if (myid==1) then
@@ -942,7 +952,84 @@ module dust_optics
                 close(130+i)
             end do
         end if
+    contains
+
+        subroutine check_mean_tab_axes()
+            integer :: k
+            if (ndust == 0 .and. npah == 0) return
+            do k = 1, ndust
+                call check_one(dustbins_props(k)%Rosseland_tab)
+                call check_one(dustbins_props(k)%Planck_tab)
+            end do
+            do k = 1, npah
+                call check_one(pahbins_props(k)%Rosseland_tab_n)
+                call check_one(pahbins_props(k)%Rosseland_tab_i)
+                call check_one(pahbins_props(k)%Planck_tab_n)
+                call check_one(pahbins_props(k)%Planck_tab_i)
+            end do
+        end subroutine check_mean_tab_axes
+
+        subroutine check_one(tab)
+            ! tab on the axis of the reference table of get_IR_mean_cross_sections (dust bin 1's Planck mean,
+            ! else PAH bin 1's neutral Planck mean)
+            type(DustTable), intent(in) :: tab
+            if (ndust > 0) then
+                call check_pair(tab, dustbins_props(1)%Planck_tab)
+            else
+                call check_pair(tab, pahbins_props(1)%Planck_tab_n)
+            end if
+        end subroutine check_one
+
+        subroutine check_pair(tab, ref)
+            type(DustTable), intent(in) :: tab, ref
+            if (tab%npts(1) /= ref%npts(1) .or. tab%ndim /= 1 .or. (tab%eqw .neqv. ref%eqw)) then
+                write(*,*) 'ERROR: mean cross-section table not on the common axis: ', trim(tab%name)
+                call clean_stop
+            end if
+            if (any(tab%tab1d(:,1) /= ref%tab1d(:,1)) .or. tab%inv_dx(1) /= ref%inv_dx(1)) then
+                write(*,*) 'ERROR: mean cross-section table not on the common axis: ', trim(tab%name)
+                call clean_stop
+            end if
+        end subroutine check_pair
     end subroutine init_dust_mean_cross_sections
+
+    pure subroutine ir_eqw_cell(tab, x, i, t, side)
+        ! The cell of x in the equally spaced 1D table tab as interpolate1D_eqw finds it (locate_eqw):
+        ! side -1, x at or below the first node; +1, at or above the last; 0, in cell i at weight t
+        type(DustTable), intent(in) :: tab
+        real(dp), intent(in) :: x
+        integer, intent(out) :: i, side
+        real(dp), intent(out) :: t
+        integer :: n
+        n = tab%npts(1)
+        i = 1
+        t = 0d0
+        side = 0
+        if (x <= tab%tab1d(1,1)) then
+            side = -1
+        else if (x >= tab%tab1d(n,1)) then
+            side = 1
+        else
+            i = int((x - tab%tab1d(1,1)) * tab%inv_dx(1)) + 1
+            if (i < 1) i = 1
+            if (i >= n) i = n - 1
+            t = (x - tab%tab1d(i,1)) * tab%inv_dx(1)
+        end if
+    end subroutine ir_eqw_cell
+
+    pure real(dp) function ir_eqw_val(tab, i, t, side)
+        ! The value of the 1D table tab in the cell of ir_eqw_cell (that of interpolate1D_eqw)
+        type(DustTable), intent(in) :: tab
+        integer, intent(in) :: i, side
+        real(dp), intent(in) :: t
+        if (side < 0) then
+            ir_eqw_val = tab%tab1d(1,2)
+        else if (side > 0) then
+            ir_eqw_val = tab%tab1d(tab%npts(1),2)
+        else
+            ir_eqw_val = (1.0d0 - t) * tab%tab1d(i,2) + t * tab%tab1d(i+1,2)
+        end if
+    end function ir_eqw_val
 
     subroutine get_IR_mean_cross_sections(E_IR_code_cgs, f_c,                &
                                          sig_R_dust, sig_P_dust,             &
@@ -972,14 +1059,40 @@ module dust_optics
         real(dp), dimension(:), intent(out) :: sig_R_pah,  sig_P_pah  ! (1:2*npah)
         real(dp), intent(out) :: T_rad
 
-        real(dp) :: logT
-        integer  :: k, idx_n, idx_i
+        real(dp) :: logT, w
+        integer  :: k, idx_n, idx_i, ic, side
+        logical  :: one_cell
 
         ! Clamp to the tabulated range [1 K, Td_max]; the tables are built on
         ! log_Tmin = 0 (i.e. 1 K) up to log10(Td_max).
         T_rad = (max(E_IR_code_cgs, 0.0_dp) * f_c / a_r)**0.25_dp
         T_rad = min(max(T_rad, 1.0_dp), Td_max)
         logT  = log10(T_rad)
+
+        ! one cell of the tables' common axis (checked at init), as each interpolation finds it
+        one_cell = .false.
+        if (ndust > 0) then
+            one_cell = dustbins_props(1)%Planck_tab%eqw
+            if (one_cell) call ir_eqw_cell(dustbins_props(1)%Planck_tab, logT, ic, w, side)
+        else if (npah > 0) then
+            one_cell = pahbins_props(1)%Planck_tab_n%eqw
+            if (one_cell) call ir_eqw_cell(pahbins_props(1)%Planck_tab_n, logT, ic, w, side)
+        end if
+        if (one_cell) then
+            do k = 1, ndust
+                sig_R_dust(k) = ir_eqw_val(dustbins_props(k)%Rosseland_tab, ic, w, side)
+                sig_P_dust(k) = ir_eqw_val(dustbins_props(k)%Planck_tab, ic, w, side)
+            end do
+            do k = 1, npah
+                idx_n = 2*(k-1) + 1
+                idx_i = 2*(k-1) + 2
+                sig_R_pah(idx_n) = ir_eqw_val(pahbins_props(k)%Rosseland_tab_n, ic, w, side)
+                sig_R_pah(idx_i) = ir_eqw_val(pahbins_props(k)%Rosseland_tab_i, ic, w, side)
+                sig_P_pah(idx_n) = ir_eqw_val(pahbins_props(k)%Planck_tab_n, ic, w, side)
+                sig_P_pah(idx_i) = ir_eqw_val(pahbins_props(k)%Planck_tab_i, ic, w, side)
+            end do
+            return
+        end if
 
         do k = 1, ndust
             call dustbins_props(k)%Rosseland_tab%interpolate(logT, sig_R_dust(k))
@@ -1837,6 +1950,44 @@ module dust_radiation
         end do
     end function rad_pah_rate
 
+    pure subroutine eqw_cell(tab, x, i, t, side)
+        ! The cell of x in the equally spaced 1D table tab as interpolate1D_eqw finds it (locate_eqw):
+        ! side -1, x at or below the first node; +1, at or above the last; 0, in cell i at weight t
+        type(DustTable), intent(in) :: tab
+        real(dp), intent(in) :: x
+        integer, intent(out) :: i, side
+        real(dp), intent(out) :: t
+        integer :: n
+        n = tab%npts(1)
+        i = 1
+        t = 0d0
+        side = 0
+        if (x <= tab%tab1d(1,1)) then
+            side = -1
+        else if (x >= tab%tab1d(n,1)) then
+            side = 1
+        else
+            i = int((x - tab%tab1d(1,1)) * tab%inv_dx(1)) + 1
+            if (i < 1) i = 1
+            if (i >= n) i = n - 1
+            t = (x - tab%tab1d(i,1)) * tab%inv_dx(1)
+        end if
+    end subroutine eqw_cell
+
+    pure real(dp) function eqw_val(tab, i, t, side)
+        ! The value of the 1D table tab in the cell of eqw_cell (that of interpolate1D_eqw)
+        type(DustTable), intent(in) :: tab
+        integer, intent(in) :: i, side
+        real(dp), intent(in) :: t
+        if (side < 0) then
+            eqw_val = tab%tab1d(1,2)
+        else if (side > 0) then
+            eqw_val = tab%tab1d(tab%npts(1),2)
+        else
+            eqw_val = (1.0d0 - t) * tab%tab1d(i,2) + t * tab%tab1d(i+1,2)
+        end if
+    end function eqw_val
+
     subroutine get_Tdust_radiative_eq(j, P_rad, Tmin, T0)
         ! This subroutine computes the local dust temperature by solving the radiative
         ! equilibrium equation: P_abs = P_emit, where P_abs is the absorbed power by
@@ -1854,7 +2005,8 @@ module dust_radiation
         real(dp),intent(in) :: P_rad, Tmin
         real(dp),intent(out) :: T0
 
-        real(dp) :: logP, logT
+        real(dp) :: logP, logT, w
+        integer :: ic, side
 
         if (P_rad <= tiny(1d0)) then
             T0 = Tmin
@@ -1863,13 +2015,19 @@ module dust_radiation
 
         logP = log10(P_rad)
 
-        call dustbins_props(j)%Tdust_tab%interpolate(logP, logT)
+        if (dustbins_props(j)%Tdust_tab%eqw .and. dustbins_props(j)%Tdust_tab%ndim == 1) then
+            call eqw_cell(dustbins_props(j)%Tdust_tab, logP, ic, w, side)
+            logT = eqw_val(dustbins_props(j)%Tdust_tab, ic, w, side)
+        else
+            call dustbins_props(j)%Tdust_tab%interpolate(logP, logT)
+        end if
 
         T0 = exp(logT * ln10)
         T0 = max(T0, Tmin)
     end subroutine get_Tdust_radiative_eq
 
-    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin,dHdT)
+    subroutine solve_Tdust_fast(i_dust,P_abs,pre,coll_heat,recomb_heat,pe_heat,P_rad,T,Tmin,dHdT,H0_in,dPdT_out,have_dPdT,&
+                                logT_in)
         ! This subroutine computes the local dust temperature by solving the full energy balance
         ! equation: P_rad + H_coll + recomb_heat = P_emit + pe_heat
         ! i_dust         --> integer of dust bin
@@ -1894,6 +2052,11 @@ module dust_radiation
         real(dp),intent(in) :: recomb_heat,pe_heat
         real(dp),intent(inout) :: T
         real(dp),intent(out),optional :: dHdT
+        real(dp),intent(in),optional :: H0_in          ! H_coll at T, if the caller has it
+        real(dp),intent(out),optional :: dPdT_out      ! with have_dPdT: d P_emit / dT at the returned T
+        logical,intent(out),optional :: have_dPdT
+        real(dp),intent(in),optional :: logT_in        ! log10 T of the start, if the caller has it
+        real(dp) :: u, u_new                           ! log10 T, of the iterate and of the Newton point
 
         integer :: iter
         integer :: max_iter=100
@@ -1906,6 +2069,7 @@ module dust_radiation
         T0 = T
         eps = 1d-2
         iter_used = 0
+        if (present(have_dPdT)) have_dPdT = .false.
 
         ! =========================================================
         ! 1. Compute Hcoll and derivative once (if collisional cooling is enabled)
@@ -1914,7 +2078,11 @@ module dust_radiation
             dT = max(T0*eps,1e-6)
             H2 = coll_heating_eval(pre,T0+dT)
             H1 = coll_heating_eval(pre,max(T0-dT,Tmin))
-            H0 = coll_heating_eval(pre,T0)
+            if (present(H0_in)) then
+                H0 = H0_in
+            else
+                H0 = coll_heating_eval(pre,T0)
+            end if
             true_dT_low = T0 - max(T0-dT, Tmin)
             dH_dT = (H2 - H1) / (dT + true_dT_low)
         else
@@ -1926,19 +2094,33 @@ module dust_radiation
         ! =========================================================
         ! 2. Newton iterations (with linearised approximation)
         ! =========================================================
+        ! in u = log10 T (the tables' axis): no log10 per step
+        if (present(logT_in)) then
+            u = logT_in
+        else
+            u = log10(T)
+        end if
         do iter = 1, max_iter
             iter_used = iter
-            call dust_emission_with_deriv(i_dust,T,P_rad,dP_dT)
+            ! P_emit at T = 10**u, and for the step dP/dT from the slope of the interpolated log P
+            call dust_emission_log(i_dust,u,T,P_rad,dP_dT,.true.)
             f = P_abs + H0 + dH_dT*(T - T0) + recomb_heat - P_rad - pe_heat
             fprime = dH_dT - dP_dT
             if (f .eq. 0d0) then
+                if (present(dPdT_out) .and. present(have_dPdT)) then
+                    ! the tabulated derivative at the root (lin_state)
+                    call dust_emission_log(i_dust,u,T,P_rad,dPdT_out)
+                    have_dPdT = .true.
+                end if
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
             end if
             ! if (abs(fprime) < 1d-20) exit
 
-            T_new = T - f/fprime
+            ! the Newton step in u: df/du = f' T ln10
+            u_new = u - f/(fprime*T*ln10)
+            T_new = exp(u_new*ln10)
 
             if (T_new < Tmin) then
                 T = Tmin
@@ -1950,12 +2132,19 @@ module dust_radiation
 
             if (abs(T_new - T)/T < 1d-3) then
                 T = T_new
-                call dust_emission_power(i_dust, T, P_rad)
+                if (present(dPdT_out) .and. present(have_dPdT)) then
+                    ! P_rad at the root, and the tabulated derivative for the caller, at its log u_new
+                    call dust_emission_log(i_dust, u_new, T, P_rad, dPdT_out)
+                    have_dPdT = .true.
+                else
+                    call dust_emission_log(i_dust, u_new, T, P_rad)
+                end if
                 if (dust_coll_cooling) coll_heat = H0 + dH_dT*(T - T0)
                 call dust_log_tdust_solver_update(i_dust, T, iter_used, .false.)
                 return
             end if
             T = T_new
+            u = u_new
         end do
 
         ! fallback (rare)
@@ -1987,15 +2176,24 @@ module dust_radiation
         real(dp),intent(in) :: T
         real(dp),intent(out) :: P,dP_dT
 
-        real(dp) :: logT, logP, logdP_dT
+        real(dp) :: logT, logP, logdP_dT, w
+        integer :: ic, side
 
         logT = log10(T)
 
-        ! logP
-        call dustbins_props(j)%Planck_power_tab%interpolate(logT, logP)
+        if (dustbins_props(j)%Planck_power_tab%eqw .and. dustbins_props(j)%Planck_power_tab%ndim == 1 .and. &
+            dustbins_props(j)%Planckderiv_tab%ndim == 1) then
+            ! logP and log dP/dT in the one cell of their common axis (checked at init)
+            call eqw_cell(dustbins_props(j)%Planck_power_tab, logT, ic, w, side)
+            logP = eqw_val(dustbins_props(j)%Planck_power_tab, ic, w, side)
+            logdP_dT = eqw_val(dustbins_props(j)%Planckderiv_tab, ic, w, side)
+        else
+            ! logP
+            call dustbins_props(j)%Planck_power_tab%interpolate(logT, logP)
 
-        ! dP/dT
-        call dustbins_props(j)%Planckderiv_tab%interpolate(logT, logdP_dT)
+            ! dP/dT
+            call dustbins_props(j)%Planckderiv_tab%interpolate(logT, logdP_dT)
+        end if
 
         P = exp(logP * ln10)
         dP_dT = exp(logdP_dT * ln10)
@@ -2013,14 +2211,94 @@ module dust_radiation
         real(dp), intent(in) :: T
         real(dp), intent(out) :: P
 
-        real(dp) :: logT, logP
+        real(dp) :: logT, logP, w
+        integer :: ic, side
 
         logT = log10(max(T, tiny(1d0)))
 
-        call dustbins_props(j)%Planck_power_tab%interpolate(logT, logP)
+        if (dustbins_props(j)%Planck_power_tab%eqw .and. dustbins_props(j)%Planck_power_tab%ndim == 1) then
+            call eqw_cell(dustbins_props(j)%Planck_power_tab, logT, ic, w, side)
+            logP = eqw_val(dustbins_props(j)%Planck_power_tab, ic, w, side)
+        else
+            call dustbins_props(j)%Planck_power_tab%interpolate(logT, logP)
+        end if
 
         P = exp(logP * ln10)
     end subroutine dust_emission_power
+
+    subroutine tdust_radeq_u(j, P_rad, Tmin, T0, u0)
+        ! get_Tdust_radiative_eq (the same T0, bit for bit), and u0 = log10 T0 as the table gives it (log10(Tmin)
+        ! where T0 is clamped to Tmin)
+        implicit none
+        integer,intent(in) :: j
+        real(dp),intent(in) :: P_rad, Tmin
+        real(dp),intent(out) :: T0, u0
+        real(dp) :: logP, logT
+
+        if (P_rad <= tiny(1d0)) then
+            T0 = Tmin
+            u0 = log10(Tmin)
+            return
+        end if
+        logP = log10(P_rad)
+        call dustbins_props(j)%Tdust_tab%interpolate(logP, logT)
+        T0 = exp(logT * ln10)
+        if (T0 < Tmin) then
+            T0 = Tmin
+            u0 = log10(Tmin)
+        else
+            u0 = logT
+        end if
+    end subroutine tdust_radeq_u
+
+    subroutine dust_emission_log(j,u,T,P,dP_dT,slope)
+        ! P_emit at T = 10**u from Planck_power_tab at u (no log10 of T) and, if asked, dP_emit/dT: slope true,
+        ! P b / T with b the slope d log10 P / d log10 T of the interpolated table in the cell of u; false, the
+        ! tabulated derivative (Planckderiv_tab, on the same axis: init_dust_mean_cross_sections copies it).
+        ! At or beyond the end nodes (the tables clamped): the tabulated values. A table not equally spaced:
+        ! dust_emission_with_deriv at T.
+        implicit none
+        integer, intent(in) :: j
+        real(dp), intent(in) :: u, T
+        real(dp), intent(out) :: P
+        real(dp), intent(out), optional :: dP_dT
+        logical, intent(in), optional :: slope
+        real(dp) :: logP, logd, w, d
+        integer :: n, i
+        logical :: sl
+
+        sl = .false.
+        if (present(slope)) sl = slope
+        associate(tp => dustbins_props(j)%Planck_power_tab, td => dustbins_props(j)%Planckderiv_tab)
+        if (.not. (tp%eqw .and. tp%ndim == 1 .and. td%ndim == 1)) then
+            call dust_emission_with_deriv(j, T, P, d)
+            if (present(dP_dT)) dP_dT = d
+            return
+        end if
+        n = tp%npts(1)
+        if (u <= tp%tab1d(1,1) .or. u >= tp%tab1d(n,1)) then
+            i = 1
+            if (u >= tp%tab1d(n,1)) i = n
+            P = exp(tp%tab1d(i,2) * ln10)
+            if (present(dP_dT)) dP_dT = exp(td%tab1d(i,2) * ln10)
+            return
+        end if
+        i = int((u - tp%tab1d(1,1)) * tp%inv_dx(1)) + 1
+        if (i < 1) i = 1
+        if (i >= n) i = n - 1
+        w = (u - tp%tab1d(i,1)) * tp%inv_dx(1)
+        logP = (1.0d0 - w) * tp%tab1d(i,2) + w * tp%tab1d(i+1,2)
+        P = exp(logP * ln10)
+        if (present(dP_dT)) then
+            if (sl) then
+                dP_dT = P * ((tp%tab1d(i+1,2) - tp%tab1d(i,2)) * tp%inv_dx(1)) / T
+            else
+                logd = (1.0d0 - w) * td%tab1d(i,2) + w * td%tab1d(i+1,2)
+                dP_dT = exp(logd * ln10)
+            end if
+        end if
+        end associate
+    end subroutine dust_emission_log
 
     subroutine solve_Tdust_brent_fast(j,P_abs,H0,dH_dT,T0,recomb_heat,pe_heat,P_rad,Tmin,Tmax,T)
         ! This subroutine computes the local dust temperature by solving the full energy balance
@@ -2125,7 +2403,7 @@ module dust_radiation
         !-------------------------------------------------------------------------
         use amr_commons, only: myid
         use dust_cooling, only: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ, &
-                                bh80_unit_flux
+                                bh80_unit_flux, BH80At, coll_heating_eval_at, coll_heating_dTg_at
         implicit none
         real(dp),intent(in) :: G0_background
         real(dp),dimension(1:ndust),intent(inout) :: coll_heat,P_rad
@@ -2140,8 +2418,12 @@ module dust_radiation
 
         integer :: i,j
         real(dp) :: P_abs, Tmin, T0, H_coll_at_Tgas, T0_lin, dHdT, Pd, flux_bh80
+        real(dp) :: dPd_fin            ! d P_emit / d T_dust at the root, from solve_Tdust_fast
+        real(dp) :: u0                 ! log10 T0 of the start (tdust_radeq_u)
+        logical :: have_dP, h0_known
         logical :: rt_field
         type(CollHeatPre) :: pre      ! the collisional heating of bin j at Tgas, at any T_dust
+        type(BH80At) :: at0           ! its BH80 T_d factors at the start T0 (lin_state's d/dT_gas there)
 
         ! Limit dust temp minimum to CMB temp
         Tmin = 2.725d0 * (1.d0/aexp)
@@ -2151,6 +2433,8 @@ module dust_radiation
         if (dust_coll_cooling) flux_bh80 = bh80_unit_flux(nElement,xelem_ions)
 
         do j = 1, ndust
+            have_dP = .false.
+            h0_known = .false.
             ! --- Radiative absorbed power ---
             P_abs = dustbins_props(j)%Pabs_isrf * (G0_background / 1.13d0) ! [erg/s]
             
@@ -2160,23 +2444,28 @@ module dust_radiation
                 end do
             endif
             ! --- Initial guess: radiative equilibrium ---
-            call get_Tdust_radiative_eq(j, P_abs, Tmin, T0)
+            call tdust_radeq_u(j, P_abs, Tmin, T0, u0)
             ! --- Check collisional heating at Tgas ---
             ! If collisional heating dominates radiation, start closer to Tgas
             if (dust_coll_cooling) then
                 call coll_heating_prepare(j,ne,nElement,xelem_ions,nH2,nCO,flux_bh80,Tgas,dust_charge(j),pre,deriv=present(lin))
-                H_coll_at_Tgas = coll_heating_eval(pre,T0)
+                H_coll_at_Tgas = coll_heating_eval_at(pre,T0,at0)
                 coll_heat(j) = H_coll_at_Tgas
+                h0_known = .true.                ! H_coll at T0, unless the start moves
                 if (H_coll_at_Tgas > P_abs) then
+                    h0_known = .false.
                     ! Collisional heating dominates the initial guess
-                    call get_Tdust_radiative_eq(j, H_coll_at_Tgas, Tmin, T0)
+                    call tdust_radeq_u(j, H_coll_at_Tgas, Tmin, T0, u0)
+                    ! H_coll at the new start (solve_Tdust_fast's H0), and its T_d factors for lin_state
+                    H_coll_at_Tgas = coll_heating_eval_at(pre,T0,at0)
+                    h0_known = .true.
                 else if (abs(H_coll_at_Tgas) < 1d-4 * P_abs) then
                     ! Radiative heating is much larger than collisional.
                     ! At pure radiative equilibrium P_emit = P_abs; evaluate the
                     ! emission at the equilibrium temperature from the tabulated
                     ! Planck power so P_rad is consistent with T_dust.
                     T_dust(j) = max(T0, Tmin)
-                    call dust_emission_power(j, T_dust(j), P_rad(j))
+                    call dust_emission_log(j, u0, T_dust(j), P_rad(j))
                     if (present(lin)) then
                         ! T_dust does not respond; H_coll at this T0 moves with Tgas (and the charge)
                         call lin_state(T0, 0d0, .false.)
@@ -2189,8 +2478,21 @@ module dust_radiation
             end if
 
             T0_lin = T0
-            call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
-                                recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT)
+            if (h0_known .and. present(lin)) then
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT, &
+                                    H0_in=H_coll_at_Tgas,dPdT_out=dPd_fin,have_dPdT=have_dP,logT_in=u0)
+            else if (h0_known) then
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT,H0_in=H_coll_at_Tgas,logT_in=u0)
+            else if (present(lin)) then
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT, &
+                                    dPdT_out=dPd_fin,have_dPdT=have_dP,logT_in=u0)
+            else
+                call solve_Tdust_fast(j,P_abs,pre,coll_heat(j),&
+                                    recomb_heat(j),pe_heat(j),P_rad(j),T0,Tmin,dHdT,logT_in=u0)
+            end if
             T_dust(j) = max(T0, Tmin)
             if (present(lin)) call lin_state(T0_lin, dHdT, T0 > Tmin)
         end do
@@ -2213,14 +2515,18 @@ module dust_radiation
             lin(j)%dH_dZ = 0d0
             if (dust_coll_cooling) then
                 ! analytic, from the slopes of the tables (pre prepared with deriv)
-                lin(j)%dH_dTg = coll_heating_dTg(pre,Tx)
+                lin(j)%dH_dTg = coll_heating_dTg_at(pre,Tx,at0)
                 if (dust_coll_charge) lin(j)%dH_dZ = coll_heating_dZ(pre,Tx)
             end if
             lin(j)%dH_dTd = slope
             lin(j)%dP_dTd = 0d0
             lin(j)%dTd_df = 0d0
             if (free) then
-                call dust_emission_with_deriv(j, T_dust(j), Pd, lin(j)%dP_dTd)
+                if (have_dP) then
+                    lin(j)%dP_dTd = dPd_fin       ! solve_Tdust_fast's, at this T_dust
+                else
+                    call dust_emission_with_deriv(j, T_dust(j), Pd, lin(j)%dP_dTd)
+                end if
                 if (slope - lin(j)%dP_dTd /= 0d0) lin(j)%dTd_df = -1d0/(slope - lin(j)%dP_dTd)
             end if
         end subroutine lin_state
@@ -2446,6 +2752,7 @@ module pah_photoelectric_heating
     private   ! default
     public :: compute_pah_peh_equilibrium,interpolate_pah_peh_equilibrium
     public ::compute_pah_charge_equilibrium,interpolate_pah_charge_equilibrium
+    public :: interpolate_pah_peh_all, interpolate_pah_charge_all
 
     ! ====== CONSTANTS ======
     ! Fitting parameters for the neutral PAH electron attachment
@@ -2967,20 +3274,106 @@ module pah_photoelectric_heating
 
     end subroutine compute_pah_peh_equilibrium
 
-    subroutine interpolate_pah_charge_equilibrium(i_pah,G0,ne,Tgas,fcharge_pahs)
+    pure subroutine pah_eqw_cell(tab, x, i, t, side)
+        ! The cell of x in the equally spaced 1D table tab as interpolate1D_eqw finds it (locate_eqw):
+        ! side -1, x at or below the first node; +1, at or above the last; 0, in cell i at weight t
+        type(DustTable), intent(in) :: tab
+        real(dp), intent(in) :: x
+        integer, intent(out) :: i, side
+        real(dp), intent(out) :: t
+        integer :: n
+        n = tab%npts(1)
+        i = 1
+        t = 0d0
+        side = 0
+        if (x <= tab%tab1d(1,1)) then
+            side = -1
+        else if (x >= tab%tab1d(n,1)) then
+            side = 1
+        else
+            i = int((x - tab%tab1d(1,1)) * tab%inv_dx(1)) + 1
+            if (i < 1) i = 1
+            if (i >= n) i = n - 1
+            t = (x - tab%tab1d(i,1)) * tab%inv_dx(1)
+        end if
+    end subroutine pah_eqw_cell
+
+    pure real(dp) function pah_eqw_val(tab, i, t, side)
+        ! The value of the 1D table tab in the cell of pah_eqw_cell (that of interpolate1D_eqw)
+        type(DustTable), intent(in) :: tab
+        integer, intent(in) :: i, side
+        real(dp), intent(in) :: t
+        if (side < 0) then
+            pah_eqw_val = tab%tab1d(1,2)
+        else if (side > 0) then
+            pah_eqw_val = tab%tab1d(tab%npts(1),2)
+        else
+            pah_eqw_val = (1.0d0 - t) * tab%tab1d(i,2) + t * tab%tab1d(i+1,2)
+        end if
+    end function pah_eqw_val
+
+    subroutine interpolate_pah_charge_all(npah_in,G0,ne,Tgas,fcharge_pahs)
+        ! interpolate_pah_charge_equilibrium of the PAH bins 1..npah_in at one (G0, ne, Tgas): log10 gamma once
+        implicit none
+        integer, intent(in) :: npah_in
+        real(dp), intent(in) :: G0, ne, Tgas
+        real(dp), dimension(:,:), intent(out) :: fcharge_pahs
+        real(dp) :: gamma, lg
+        integer :: ii
+        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20)
+        lg = log10(gamma)
+        do ii = 1, npah_in
+            call interpolate_pah_charge_equilibrium(ii,G0,ne,Tgas,fcharge_pahs(:,ii),lgam_in=lg)
+        end do
+    end subroutine interpolate_pah_charge_all
+
+    subroutine interpolate_pah_peh_all(npah_in,G0,ne,Tgas,fcharge_pahs,Pabs_pah,Pinj_pah,Prad_pah,Prec_pah)
+        ! interpolate_pah_peh_equilibrium of the PAH bins 1..npah_in at one (G0, ne, Tgas): log10 gamma and
+        ! (peh_attach_model Berne) the electron attachment rate once
+        implicit none
+        integer, intent(in) :: npah_in
+        real(dp), intent(in) :: G0, ne, Tgas
+        real(dp), dimension(:,:), intent(out) :: fcharge_pahs
+        real(dp), dimension(:), intent(out) :: Pabs_pah, Pinj_pah, Prad_pah, Prec_pah
+        real(dp) :: gamma, lg, katt
+        integer :: ii
+        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20)
+        lg = log10(gamma)
+        if (trim(peh_attach_model).eq.'Berne') then
+            katt = attachment_rate_Carelli13(Tgas)
+            do ii = 1, npah_in
+                call interpolate_pah_peh_equilibrium(ii,G0,ne,Tgas,fcharge_pahs(:,ii),Pabs_pah(ii),Pinj_pah(ii), &
+                                                     Prad_pah(ii),Prec_pah(ii),lgam_in=lg,katt_in=katt)
+            end do
+        else
+            do ii = 1, npah_in
+                call interpolate_pah_peh_equilibrium(ii,G0,ne,Tgas,fcharge_pahs(:,ii),Pabs_pah(ii),Pinj_pah(ii), &
+                                                     Prad_pah(ii),Prec_pah(ii),lgam_in=lg)
+            end do
+        end if
+    end subroutine interpolate_pah_peh_all
+
+    subroutine interpolate_pah_charge_equilibrium(i_pah,G0,ne,Tgas,fcharge_pahs,lgam_in)
 
         ! This subroutine interpolates only the equilibrium PAH charge
         ! distribution for a given PAH molecule based on local G0, ne and Tgas.
+        ! lgam_in (optional): log10 gamma of these G0, ne, Tgas, computed as here (interpolate_pah_charge_all)
         use amr_commons, only: myid
         implicit none
         integer, intent(in) :: i_pah
         real(dp), intent(in) :: G0, ne, Tgas
         real(dp), dimension(:), intent(out) :: fcharge_pahs
+        real(dp), intent(in), optional :: lgam_in
 
-        integer :: nstates, nstates_interp, istate, idx_gamma
-        real(dp) :: gamma, f_total
+        integer :: nstates, nstates_interp, istate, idx_gamma, ic, side
+        real(dp) :: gamma, f_total, lg, w
 
-        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
+        if (present(lgam_in)) then
+            lg = lgam_in
+        else
+            gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
+            lg = log10(gamma)
+        end if
         nstates = pahbins_props(i_pah)%ncharge_states
         nstates_interp = min(nstates, 4)
         fcharge_pahs(:) = 0d0
@@ -2994,15 +3387,25 @@ module pah_photoelectric_heating
                 if (myid == 1) write(*,*) 'Error: PAH fcharge table not initialised for PAH bin ', i_pah, ', state ', istate
                 call clean_stop
             end if
-            call pahbins_props(i_pah)%fcharge_tab(istate)%interpolate(log10(gamma), fcharge_pahs(istate), idx_gamma)
         end do
+        if (pahbins_props(i_pah)%fcharge_tab(1)%eqw .and. pahbins_props(i_pah)%fcharge_tab(1)%ndim == 1) then
+            ! the tables share one axis (init_pah_peh_tables): one cell, as the hinted calls find it
+            call pah_eqw_cell(pahbins_props(i_pah)%fcharge_tab(1), lg, ic, w, side)
+            do istate = 1, nstates_interp
+                fcharge_pahs(istate) = pah_eqw_val(pahbins_props(i_pah)%fcharge_tab(istate), ic, w, side)
+            end do
+        else
+            do istate = 1, nstates_interp
+                call pahbins_props(i_pah)%fcharge_tab(istate)%interpolate(lg, fcharge_pahs(istate), idx_gamma)
+            end do
+        end if
         f_total = sum(fcharge_pahs(:))
         if (f_total > 0d0) fcharge_pahs(:) = fcharge_pahs(:) / f_total
     end subroutine interpolate_pah_charge_equilibrium
 
     subroutine interpolate_pah_peh_equilibrium(i_pah,G0,ne,Tgas,&
                                                 fcharge_pahs,Pabs_pah,&
-                                                Pinj_pah,Prad_pah,Prec_pah)
+                                                Pinj_pah,Prad_pah,Prec_pah,lgam_in,katt_in)
 
         ! This subroutine interpolates the PAH photoelectric heating equilibrium
         ! conditions for a given PAH molecule based on the local G0, ne and Tgas.
@@ -3016,6 +3419,8 @@ module pah_photoelectric_heating
         ! Pinj_pah       <-- injected power into the gas [erg/s]
         ! Prad_pah       <-- radiative cooling power of the PAH [erg/s]
         ! Prec_pah       <-- recombination cooling power of the PAH [erg/s]
+        ! lgam_in, katt_in (optional): log10 gamma and the attachment rate of these G0, ne, Tgas, computed as
+        !                     here (interpolate_pah_peh_all)
         use amr_commons, only: myid
         use constants, only: kB
         implicit none
@@ -3023,26 +3428,47 @@ module pah_photoelectric_heating
         real(dp), intent(in) :: G0, ne, Tgas
         real(dp), dimension(:), intent(out) :: fcharge_pahs
         real(dp), intent(out),optional :: Pabs_pah, Pinj_pah, Prad_pah, Prec_pah
+        real(dp), intent(in), optional :: lgam_in, katt_in
 
-        integer :: Nc, nstates, nstates_interp, istate, idx_gamma, idx_gamma_fcharge
-        real(dp) :: eff,gamma,f_total
+        integer :: Nc, nstates, nstates_interp, istate, idx_gamma, idx_gamma_fcharge, ic, side
+        real(dp) :: eff,gamma,f_total,lg,w
         real(dp) :: k_att, k_rec_1, k_rec_2
         real(dp) :: f_cat, f_dicat
+        logical :: one_cell, berne
 
         ! 1. Get the interpolated value for the PAH PE efficiency
-        gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
+        if (present(lgam_in)) then
+            lg = lgam_in
+        else
+            gamma = max(G0,1d-6) * sqrt(Tgas) / max(ne,1d-20) ! Avoid division by zero or very small numbers
+            lg = log10(gamma)
+        end if
         if ((.not. pahbins_props(i_pah)%peh_eff_tab%initialised) .or. &
             (.not. pahbins_props(i_pah)%peh_pabs_tab%initialised)) then
             if (myid == 1) write(*,*) 'Error: PAH PEH tables not initialised for PAH bin ', i_pah
             call clean_stop
         end if
+        ! the bin's tables share one axis (init_pah_peh_tables): one cell, as the hinted calls find it
+        one_cell = pahbins_props(i_pah)%peh_eff_tab%eqw .and. pahbins_props(i_pah)%peh_eff_tab%ndim == 1
+        ic = 1
+        w = 0d0
+        side = 0
+        if (one_cell) call pah_eqw_cell(pahbins_props(i_pah)%peh_eff_tab, lg, ic, w, side)
 
         idx_gamma = -1
-        call pahbins_props(i_pah)%peh_eff_tab%interpolate(log10(gamma), eff, idx_gamma)
+        if (one_cell) then
+            eff = pah_eqw_val(pahbins_props(i_pah)%peh_eff_tab, ic, w, side)
+        else
+            call pahbins_props(i_pah)%peh_eff_tab%interpolate(lg, eff, idx_gamma)
+        end if
         eff = exp(eff * ln10) ! Convert back to linear scale
 
         ! 2. Get the interpolated value for the PAH absorption power (almost independent of gamma)
-        call pahbins_props(i_pah)%peh_pabs_tab%interpolate(log10(gamma), Pabs_pah, idx_gamma)
+        if (one_cell) then
+            Pabs_pah = pah_eqw_val(pahbins_props(i_pah)%peh_pabs_tab, ic, w, side)
+        else
+            call pahbins_props(i_pah)%peh_pabs_tab%interpolate(lg, Pabs_pah, idx_gamma)
+        end if
         ! Scale by the value of G0 and the number density of PAHs
         ! NOTE: Convert G0 to the Mathis ISRF by dividing by 1.13 (see Mathis et al. 1983)
         if (present(Pabs_pah)) then
@@ -3073,7 +3499,11 @@ module pah_photoelectric_heating
                 if (myid == 1) write(*,*) 'Error: PAH fcharge table not initialised for PAH bin ', i_pah, ', state ', istate
                 call clean_stop
             end if
-            call pahbins_props(i_pah)%fcharge_tab(istate)%interpolate(log10(gamma), fcharge_pahs(istate), idx_gamma_fcharge)
+            if (one_cell) then
+                fcharge_pahs(istate) = pah_eqw_val(pahbins_props(i_pah)%fcharge_tab(istate), ic, w, side)
+            else
+                call pahbins_props(i_pah)%fcharge_tab(istate)%interpolate(lg, fcharge_pahs(istate), idx_gamma_fcharge)
+            end if
         end do
         f_total = sum(fcharge_pahs(:))
         if (f_total > 0d0) fcharge_pahs(:) = fcharge_pahs(:) / f_total
@@ -3085,31 +3515,24 @@ module pah_photoelectric_heating
         ! 7. Compute the recombination cooling power of the PAH molecules
         if (present(Prec_pah)) then
             Nc = pahbins_props(i_pah)%nc
-            if (trim(peh_attach_model).eq.'Berne') then
-                k_att = attachment_rate_Carelli13(Tgas)
-            else if (trim(peh_attach_model).eq.'Tielens') then
-                k_att = attachment_rate_Tielens05(Nc)
-            else
+            ! the model, compared once
+            berne = trim(peh_attach_model).eq.'Berne'
+            if (.not. berne .and. trim(peh_attach_model).ne.'Tielens') then
                 write(*,*) 'Error: Unknown electron attachment model for PAHs!'
                 stop
             end if
-
-            if (trim(peh_attach_model).eq.'Berne') then
+            if (berne) then
+                if (present(katt_in)) then
+                    k_att = katt_in
+                else
+                    k_att = attachment_rate_Carelli13(Tgas)
+                end if
                 k_rec_1 = recombination_rate_Spitzer(Nc,0,Tgas)
-            else if (trim(peh_attach_model).eq.'Tielens') then
-                k_rec_1 = recombination_rate_Tielens21(Nc,Tgas)
-            else
-                write(*,*) 'Error: Unknown recombination model for PAHs!'
-                stop
-            end if
-
-            if (trim(peh_attach_model).eq.'Berne') then
                 k_rec_2 = recombination_rate_Spitzer(Nc,1,Tgas)
-            else if (trim(peh_attach_model).eq.'Tielens') then
-                k_rec_2 = recombination_rate_Tielens21(Nc,Tgas)
             else
-                write(*,*) 'Error: Unknown recombination model for PAHs!'
-                stop
+                k_att = attachment_rate_Tielens05(Nc)
+                k_rec_1 = recombination_rate_Tielens21(Nc,Tgas)
+                k_rec_2 = recombination_rate_Tielens21(Nc,Tgas)
             end if
             Prec_pah = k_att * fcharge_pahs(2) + &
                     k_rec_1 * f_cat + &

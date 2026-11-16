@@ -19,6 +19,10 @@ module dust_surface_chemistry
     real(dp),dimension(2),parameter :: nuHc = (/2d13,1d13/) ! in 1/s
 
     real(dp),parameter :: Ns = 2D15 ! Fixed number of sites per cm2 on the surface of the grain
+    ! (1 + sqrt((EHc - Es)/(EHp - Es)))**2 of each grain type (high_temp_correction, beta_hp_over_alphapc)
+    real(dp),dimension(2),parameter :: HC_A3 = (1D0 + sqrt( (EHc - Es) / (EHp - Es) ))**2D0
+    ! exp(x) is +0 below this argument (the double underflow: below ln(2^-1075) = -745.13)
+    real(dp),parameter :: EXP_ZERO_ARG = -746D0
 
     public :: grain_h2_formation_rate,ice_sticking_coefficient
     contains
@@ -55,8 +59,13 @@ module dust_surface_chemistry
         real(dp) :: a1,a2,a3
 
         a1 = nuHc(dust_index) / (2D0 * F)
-        a2 = exp(-1.5D0 * EHc(dust_index) / (Td))
-        a3 = (1D0 + sqrt( (EHc(dust_index) - Es(dust_index)) / (EHp(dust_index) - Es(dust_index)) ))**2D0
+        a2 = -1.5D0 * EHc(dust_index) / (Td)
+        if (a2 < EXP_ZERO_ARG) then
+            a2 = 0D0                  ! what exp returns there (T_d < 60 K), without its underflow path
+        else
+            a2 = exp(a2)
+        end if
+        a3 = HC_A3(dust_index)
 
         high_temp_correction = 1D0 / (1D0 + (a1 * a2 * a3))
     end function high_temp_correction
@@ -70,7 +79,7 @@ module dust_surface_chemistry
 
         real(dp) :: a1,a2
 
-        a1 = (1D0 + sqrt( (EHc(dust_index) - Es(dust_index)) / (EHp(dust_index) - Es(dust_index)) ))**2D0
+        a1 = HC_A3(dust_index)
         a2 = exp(-1D0 * Es(dust_index) / (Td))
         beta_hp_over_alphapc =  2.5D-1 * a1 * a2
     end function beta_hp_over_alphapc
@@ -211,7 +220,12 @@ module dust_surface_chemistry
         ! assumming that the bare grain coefficient
         ! is already coming from the original model
         ! and the ice coefficient is set to S=0.1
-        S = 0.1d0 + (1.d0 - 0.1d0) * exp(-N_mono)
+        if (N_mono >= 50d0) then
+            ! 0.9 exp(-N_mono) < 2e-22, below half an ulp of 0.1: S is 0.1 exactly
+            S = 0.1d0
+        else
+            S = 0.1d0 + (1.d0 - 0.1d0) * exp(-N_mono)
+        end if
     end subroutine Hollenbach2009_icemodel
 
     function ice_sticking_coefficient(G0,nO,Tgas,Td)

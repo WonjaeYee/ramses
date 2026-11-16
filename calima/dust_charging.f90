@@ -76,6 +76,8 @@ module dust_charging
     real(dp), parameter :: RTG_MU = 1.66053906660d-24
     real(dp), parameter :: GRAPHITE_WF = 4.4d0, SILICATE_WF = 8.0d0, SILICATE_GAP = 5.0d0
     real(dp), parameter :: U_SCALE = 0.5d0, SIGMA_DISCRETE = 3d0, DISCRETE_TAIL = 1d-5
+    ! CH1 (calima_cost_phase2): a cold solve walks at most LAT_NWALK charges on the lattice from its guess
+    integer, parameter :: LAT_NWALK = 4
     integer, parameter :: SIGMA_CHORD_ITER = 3       ! at most this many chords for the width of a wide P(Z)
     integer, parameter :: MAX_DISCRETE_STATES = 121, NBUF = 3*MAX_DISCRETE_STATES + 4
     real(dp), parameter :: M_HION = 1.67262192d-24, M_HEION = 6.6446573d-24
@@ -116,6 +118,10 @@ module dust_charging
         real(dp), allocatable :: edge0(:), edge1(:)                          ! (nG) charges where IP(a,Z) crosses L0, L1
         real(dp) :: edgebg(4) = NONE                                         ! ... and the Mathis breaks
         integer, allocatable :: iuz(:)                                       ! (nZ) U index of each integer charge
+        ! CH3: the kernels at each integer charge (nG, nZ), the background's (nZ), and theta(nu) of DS87 for
+        ! nu = |Z| and |Z|/2 (0:nZ)
+        real(dp), allocatable :: KZ(:,:), HZ(:,:), KbZ(:), HbZ(:), thZ(:), thZ2(:)
+        integer :: iZmin = 0                                                 ! CH4: nint(Zmin)
         real(dp), allocatable :: wuz(:)
         integer :: jpos = 1                                                  ! first U node > 0
     end type RTGroupTable
@@ -155,6 +161,7 @@ module dust_charging
     integer, parameter :: RI_ATOMIC(RTG_NRI) = (/1, 2, 6, 7, 8, 10, 12, 14, 16, 26/)   ! atomic numbers of the RI_* ions
 
     type(RTGroupTable), allocatable, save :: rtg(:)
+    real(dp), save :: exp_m745 = -1d0                 ! exp(-745d0) (run time, first use), the clamp of the repulsive Coulomb terms (P8)
     real(dp), save :: ri_hlnm(RTG_NRI) = 0d0          ! 0.5 ln(RI_MASS), set at init
 
     ! The state of one bin in one cell (set_cell; set_cell_T for another temperature), passed to every
@@ -186,6 +193,9 @@ module dust_charging
     ! discrete window: per-integer quantities, indexed by charge - b_base
     integer :: b_base
     real(dp), dimension(NBUF) :: b_up, b_dn, b_gam, b_lam, b_lamd, b_dup, b_ddn, b_dlam, b_A, b_P, b_ph, b_dA
+    ! CH4: ln max(Up, tiny), ln max(Down, tiny) of each buffered charge, once computed (gwin)
+    real(dp), dimension(NBUF) :: b_lu, b_ld
+    logical, dimension(NBUF) :: b_oku = .false., b_okd = .false.
     ! recombination fit work
     real(dp), allocatable, save :: f_Zn(:), f_lnP(:), f_lnA(:), f_v(:), f_ps(:), f_row(:)
     integer :: np_
@@ -205,7 +215,7 @@ module dust_charging
 
     private
     public :: compute_Coulomb_focusing_ions, &
-              init_dust_charging_isrf, isrf_lookup, ISRF_ND, ISRF_DCHARGE
+              init_dust_charging_isrf, isrf_lookup, ISRF_ND, ISRF_DCHARGE, isrf_have
     public :: init_dust_charging_rtgroups, rtgroups_set_group_energies, rtgroups_solve_bin, &
               rtgroups_refine_alpha, rtgroups_uniform_lookup, rtgroups_predict, &
               rtgroups_coulomb_ratio
@@ -302,6 +312,11 @@ module dust_charging
         if (myid == 1) write(*,'(A,I4,A,I4,A)') ' CALIMA: uniform-ISRF charging tables read (', isrf_nT, ' x ', &
             isrf_nX, ' nodes per bin)'
     end subroutine init_dust_charging_isrf
+
+    logical function isrf_have()
+        ! CH1: the uniform-ISRF tables are loaded
+        isrf_have = associated(isrf_q)
+    end function isrf_have
 
     subroutine isrf_lookup(ii, G0, T, ne, Zmean, Zsigma, Gamma, Lambda, D, alpha)
         ! <Z>, sigma_Z, PE heating Gamma and net recombination cooling Lambda [erg/s per grain],
@@ -400,11 +415,23 @@ module dust_charging
                 p(k) = p(k+1) * r
                 r = r * rho
             end do
+            ! the taper and the zeros: only the ends of the window, where x = |Z - <Z>|/sw > KWIN - 1 (a prefix
+            ! and a suffix: x falls to <= 1 at the charge nearest <Z>, then rises)
             do k = 1, n
                 x = abs(dble(zlo + k - 1) - Zmean) / sw
+                if (x <= COUL_KWIN - 1d0) exit
                 if (x >= COUL_KWIN) then
                     p(k) = 0d0
-                else if (x > COUL_KWIN - 1d0) then
+                else
+                    p(k) = p(k) * cos(0.5d0 * PI_D * (x - COUL_KWIN + 1d0))**2
+                end if
+            end do
+            do k = n, 1, -1
+                x = abs(dble(zlo + k - 1) - Zmean) / sw
+                if (x <= COUL_KWIN - 1d0) exit
+                if (x >= COUL_KWIN) then
+                    p(k) = 0d0
+                else
                     p(k) = p(k) * cos(0.5d0 * PI_D * (x - COUL_KWIN + 1d0))**2
                 end if
             end do
@@ -834,7 +861,38 @@ module dust_charging
         end do
         rtg(ii)%egy_used = egy(1:rtg(ii)%nG)
         deallocate(col, m)
+        call integer_kernels(ii)
     end subroutine rtgroups_set_group_energies
+
+    subroutine integer_kernels(ii)
+        ! CH3: the PCHIP kernels of every group and the background at each integer charge of bin ii (their U index
+        ! and weight iuz, wuz), the same expression as kernels; and DS87 theta(nu) at nu = n and n/2
+        implicit none
+        integer, intent(in) :: ii
+        integer :: k, g, i
+        real(dp) :: h(4), nup
+        if (.not. allocated(rtg(ii)%iuz)) return
+        rtg(ii)%iZmin = nint(rtg(ii)%Zmin)
+        if (.not. allocated(rtg(ii)%KZ)) allocate(rtg(ii)%KZ(rtg(ii)%nG, rtg(ii)%nZ), rtg(ii)%HZ(rtg(ii)%nG, rtg(ii)%nZ), &
+                                                  rtg(ii)%KbZ(rtg(ii)%nZ), rtg(ii)%HbZ(rtg(ii)%nZ), &
+                                                  rtg(ii)%thZ(0:rtg(ii)%nZ), rtg(ii)%thZ2(0:rtg(ii)%nZ))
+        do k = 1, rtg(ii)%nZ
+            i = rtg(ii)%iuz(k)
+            call hermite4(rtg(ii)%wuz(k), h)
+            do g = 1, rtg(ii)%nG
+                rtg(ii)%KZ(g, k) = pchip(h, rtg(ii)%KgT(g,i), rtg(ii)%mKT(g,i), rtg(ii)%KgT(g,i+1), rtg(ii)%mKT(g,i+1))
+                rtg(ii)%HZ(g, k) = pchip(h, rtg(ii)%HgT(g,i), rtg(ii)%mHT(g,i), rtg(ii)%HgT(g,i+1), rtg(ii)%mHT(g,i+1))
+            end do
+            rtg(ii)%KbZ(k) = pchip(h, rtg(ii)%Kbg(i), rtg(ii)%mKb(i), rtg(ii)%Kbg(i+1), rtg(ii)%mKb(i+1))
+            rtg(ii)%HbZ(k) = pchip(h, rtg(ii)%Hbg(i), rtg(ii)%mHb(i), rtg(ii)%Hbg(i+1), rtg(ii)%mHb(i+1))
+        end do
+        do k = 0, rtg(ii)%nZ
+            nup = max(dble(k), RTG_TINY)
+            rtg(ii)%thZ(k) = nup / (1d0 + 1d0/sqrt(nup))
+            nup = max(dble(k) / 2d0, RTG_TINY)
+            rtg(ii)%thZ2(k) = nup / (1d0 + 1d0/sqrt(nup))
+        end do
+    end subroutine integer_kernels
 
     ! ------------------------------------------------------------ interpolation
     subroutine u_index(cell, U, i, w)
@@ -1097,6 +1155,103 @@ module dust_charging
         heat = max(s + cell%G0*pchip(h, rtg(cell%bin)%Hbg(i), rtg(cell%bin)%mHb(i), rtg(cell%bin)%Hbg(i+1), rtg(cell%bin)%mHb(i+1)), 0d0)
     end subroutine kernels
 
+    subroutine kernels_int(cell, kz, photo, heat, want_heat)
+        ! CH3: kernels at the integer charge of index kz (Zmin + kz - 1) from the tables of integer_kernels: the
+        ! same sums as kernels
+        implicit none
+        type(CellState), intent(in) :: cell
+        integer, intent(in) :: kz
+        real(dp), intent(out) :: photo, heat
+        logical, intent(in) :: want_heat
+        real(dp) :: s
+        integer :: g
+        s = 0d0
+        do g = 1, rtg(cell%bin)%nG
+            s = s + cell%cN(g)*rtg(cell%bin)%KZ(g, kz)
+        end do
+        photo = max(s + cell%G0*rtg(cell%bin)%KbZ(kz), 0d0)
+        heat = 0d0
+        if (.not. want_heat) return
+        s = 0d0
+        do g = 1, rtg(cell%bin)%nG
+            s = s + cell%cN(g)*rtg(cell%bin)%HZ(g, kz)
+        end do
+        heat = max(s + cell%G0*rtg(cell%bin)%HbZ(kz), 0d0)
+    end subroutine kernels_int
+
+    real(dp) function ds87_J_int(cell, Z, n, q, tau, dlnJ)
+        ! CH3: ds87_J at an integer charge Z (q = -1, 1, 2), theta from the bin's table: the same operations
+        implicit none
+        type(CellState), intent(in) :: cell
+        real(dp), intent(in) :: Z, q, tau
+        integer, intent(in) :: n                  ! CH4: |Z|
+        real(dp), intent(out), optional :: dlnJ
+        real(dp) :: nu, r, A, d, s, th, nup
+        nu = Z / q
+        if (nu == 0d0) then
+            r = sqrt(RTG_PI/(2d0*tau))
+            ds87_J_int = 1d0 + r
+            if (present(dlnJ)) dlnJ = -0.5d0*r/(1d0 + r)
+        else if (nu < 0d0) then
+            A = 1d0 - nu/tau
+            d = max(tau - 2d0*nu, RTG_TINY)
+            s = sqrt(2d0/d)
+            ds87_J_int = A*(1d0 + s)
+            if (present(dlnJ)) dlnJ = (nu/tau)/A - 0.5d0*s*tau/d/(1d0 + s)
+        else
+            nup = max(nu, RTG_TINY)
+            if (q == 2d0) then
+                th = rtg(cell%bin)%thZ2(n)
+            else
+                th = rtg(cell%bin)%thZ(n)
+            end if
+            s = 1d0/sqrt(4d0*tau + 3d0*nup)
+            ds87_J_int = (1d0 + s)**2 * exp(-th/tau)
+            if (present(dlnJ)) dlnJ = -4d0*tau*s**3/(1d0 + s) + th/tau
+        end if
+    end function ds87_J_int
+
+    subroutine ds87_JL_e_int(cell, Z, n, tau, je, lt, dje, dld)
+        ! CH3: ds87_J(Z, -1, tau) and ds87_L(Z, tau) of the electrons at an integer charge Z, sharing theta (the
+        ! bin's table) and exp(-theta/tau) on a negative grain: the same operations as the two functions
+        implicit none
+        type(CellState), intent(in) :: cell
+        real(dp), intent(in) :: Z, tau
+        integer, intent(in) :: n                  ! CH4: |Z|
+        real(dp), intent(out) :: je, lt
+        real(dp), intent(out), optional :: dje, dld
+        real(dp) :: nu, r, A, d, s, th, nup, e
+        nu = -Z
+        if (nu == 0d0) then
+            r = sqrt(RTG_PI/(2d0*tau))
+            je = 1d0 + r
+            if (present(dje)) dje = -0.5d0*r/(1d0 + r)
+            lt = 2d0 + 1.5d0*r
+            if (present(dld)) dld = -0.75d0*r/lt
+        else if (nu < 0d0) then
+            A = 1d0 - nu/tau
+            d = max(tau - 2d0*nu, RTG_TINY)
+            s = sqrt(2d0/d)
+            je = A*(1d0 + s)
+            if (present(dje)) dje = (nu/tau)/A - 0.5d0*s*tau/d/(1d0 + s)
+            A = 2d0 - nu/tau
+            s = 1d0/sqrt(max(tau - nu, RTG_TINY))
+            lt = A*(1d0 + s)
+            if (present(dld)) dld = (nu/tau)/A - 0.5d0*tau*s**3/(1d0 + s)
+        else
+            nup = max(nu, RTG_TINY)
+            th = rtg(cell%bin)%thZ(n)
+            e = exp(-th/tau)
+            s = 1d0/sqrt(4d0*tau + 3d0*nup)
+            je = (1d0 + s)**2 * e
+            if (present(dje)) dje = -4d0*tau*s**3/(1d0 + s) + th/tau
+            A = 2d0 + nup/tau
+            s = 1d0/sqrt(1.5d0/tau + 3d0*nup)
+            lt = A*(1d0 + s)*e
+            if (present(dld)) dld = (-nup/tau)/A + 0.75d0*s**3/tau/(1d0 + s) + th/tau
+        end if
+    end subroutine ds87_JL_e_int
+
     ! -------------------------------------------------------------- physics
     real(dp) function ds87_tau(cell, q)
         implicit none
@@ -1286,8 +1441,17 @@ module dust_charging
         real(dp), intent(in) :: Z
         real(dp), intent(out) :: gam, lam
         real(dp) :: w, photo, heat
-        integer :: i
-        call u_of(cell, Z, i, w)
+        integer :: i, mc
+        ! CH4: the U index of a charge gfun has just evaluated, from its cache
+        do mc = 1, gm_used
+            if (gm_Z(mc) == Z) exit
+        end do
+        if (mc <= gm_used) then
+            i = gm_i(mc)
+            w = gm_w(mc)
+        else
+            call u_of(cell, Z, i, w)
+        end if
         call kernels(cell, i, w, photo, heat, .true.)
         gam = RTG_EV2ERG*heat
         lam = rate_lam(cell, sticking(cell, Z), ds87_L(Z, cell%tau_e), hot(cell, rtg(cell%bin)%fcool, i, w), ds87_J(Z, -1d0, cell%tau_e), &
@@ -1529,6 +1693,16 @@ module dust_charging
 
     ! --------------------------------------------------------- discrete P(Z)
     subroutine eval_int(cell, Z, want_d, rates_only)
+        ! CH4: eval_int_k at the integer Z
+        implicit none
+        type(CellState), intent(in) :: cell
+        real(dp), intent(in) :: Z
+        logical, intent(in) :: want_d
+        logical, intent(in), optional :: rates_only
+        call eval_int_k(cell, nint(Z), want_d, rates_only)
+    end subroutine eval_int
+
+    subroutine eval_int_k(cell, kq, want_d, rates_only)
         ! rates, heating, cooling (and their d/d ln T) of integer charge Z into the window buffers.
         ! Each J~ / Lambda~ and hot-gas row is evaluated once, with its d/d ln T when want_d: the
         ! electrons, z = 1 (H+, He+ and b_A share it) and He++ (only if present); the sums keep the
@@ -1537,25 +1711,34 @@ module dust_charging
         ! window in the recombination
         implicit none
         type(CellState), intent(in) :: cell
-        real(dp), intent(in) :: Z
+        integer, intent(in) :: kq                 ! CH4: the integer charge
         logical, intent(in) :: want_d
         logical, intent(in), optional :: rates_only
         real(dp) :: w, photo, heat, je, dlt, ptr, fc, eb, st, lt, kT, dje, dld, j1, dj1, j3, dj3, ion, dion
-        real(dp) :: dde, dpt, dfc, deb
-        integer :: i, k
+        real(dp) :: dde, dpt, dfc, deb, Z
+        integer :: i, k, kz, na
         logical :: full
         full = .true.
         if (present(rates_only)) full = .not. rates_only
-        k = nint(Z) - b_base
-        call u_of(cell, Z, i, w)
-        call kernels(cell, i, w, photo, heat, full)
+        Z = dble(kq)
+        na = abs(kq)
+        k = kq - b_base
+        b_oku(k) = .false.
+        b_okd(k) = .false.
+        kz = kq - rtg(cell%bin)%iZmin + 1
+        i = rtg(cell%bin)%iuz(kz)
+        w = rtg(cell%bin)%wuz(kz)
+        call kernels_int(cell, kz, photo, heat, full)
         j3 = 0d0
         dj3 = 0d0
         if (want_d) then
-            je = ds87_J(Z, -1d0, cell%tau_e, dje)
-            if (full) lt = ds87_L(Z, cell%tau_e, dld)
-            j1 = ds87_J(Z, 1d0, cell%tau_ion(1), dj1)
-            if (cell%arr_ion(3) /= 0d0 .or. cell%nion(3) > 0d0) j3 = ds87_J(Z, cell%zion(3), cell%tau_ion(3), dj3)
+            if (full) then
+                call ds87_JL_e_int(cell, Z, na, cell%tau_e, je, lt, dje, dld)
+            else
+                je = ds87_J_int(cell, Z, na, -1d0, cell%tau_e, dje)
+            end if
+            j1 = ds87_J_int(cell, Z, na, 1d0, cell%tau_ion(1), dj1)
+            if (cell%arr_ion(3) /= 0d0 .or. cell%nion(3) > 0d0) j3 = ds87_J_int(cell, Z, na, cell%zion(3), cell%tau_ion(3), dj3)
             dlt = hot(cell, rtg(cell%bin)%delta, i, w, dde)
             ptr = hot(cell, rtg(cell%bin)%Ptr, i, w, dpt)
             if (full) then
@@ -1563,10 +1746,13 @@ module dust_charging
                 eb = hot(cell, rtg(cell%bin)%Ebar, i, w, deb)
             end if
         else
-            je = ds87_J(Z, -1d0, cell%tau_e)
-            if (full) lt = ds87_L(Z, cell%tau_e)
-            j1 = ds87_J(Z, 1d0, cell%tau_ion(1))
-            if (cell%nion(3) > 0d0) j3 = ds87_J(Z, cell%zion(3), cell%tau_ion(3))
+            if (full) then
+                call ds87_JL_e_int(cell, Z, na, cell%tau_e, je, lt)
+            else
+                je = ds87_J_int(cell, Z, na, -1d0, cell%tau_e)
+            end if
+            j1 = ds87_J_int(cell, Z, na, 1d0, cell%tau_ion(1))
+            if (cell%nion(3) > 0d0) j3 = ds87_J_int(cell, Z, na, cell%zion(3), cell%tau_ion(3))
             dlt = hot(cell, rtg(cell%bin)%delta, i, w)
             ptr = hot(cell, rtg(cell%bin)%Ptr, i, w)
             if (full) then
@@ -1599,7 +1785,7 @@ module dust_charging
                         - je*RTG_EV2ERG*(dlt*eb*(0.5d0 + dje) + dde*eb + dlt*deb))
         end if
         b_dA(k) = 0.5d0 + dj1                       ! d ln b_A / d ln T (rtgroups_solve_bin sens)
-    end subroutine eval_int
+    end subroutine eval_int_k
 
     subroutine window_P(lo, hi, pmax)
         ! P on lo..hi by running products of Up(Z)/Down(Z+1), relative to its maximum pmax
@@ -1615,18 +1801,20 @@ module dust_charging
         pmax = maxval(b_P(lo - b_base:hi - b_base))
     end subroutine window_P
 
-    subroutine window(cell, z0, z1, want_d, lo, hi, capped)
+    subroutine window(cell, z0, z1, want_d, lo, hi, capped, elo, ehi)
         ! pyCALIMA _window: exact P(Z) on z0..z1, grown or trimmed at each end to one charge
         ! past where P < DISCRETE_TAIL of its maximum; P normalised in b_P(lo..hi).
         ! capped: the growth stopped at MAX_DISCRETE_STATES with P still above the tail at an end
         ! that could grow, so lo..hi need not hold the peak (a warm window far from the new root)
+        ! elo, ehi (CH1): the charges elo..ehi are in the buffers already (same want_d), b_base is kept
         implicit none
         type(CellState), intent(in) :: cell
         real(dp), intent(in) :: z0, z1
         logical, intent(in) :: want_d
         integer, intent(out) :: lo, hi
         logical, intent(out), optional :: capped
-        integer :: k, k0, k1, zl, zh
+        integer, intent(in), optional :: elo, ehi
+        integer :: k, k0, k1, zl, zh, el, eh
         real(dp) :: pmax
         logical :: room, glo, ghi
         if (present(capped)) capped = .false.
@@ -1634,9 +1822,16 @@ module dust_charging
         hi = nint(z1)
         zl = nint(rtg(cell%bin)%Zmin)
         zh = nint(rtg(cell%bin)%Zmax)
-        b_base = lo - MAX_DISCRETE_STATES - 2
+        if (present(elo)) then
+            el = elo
+            eh = ehi
+        else
+            b_base = lo - MAX_DISCRETE_STATES - 2
+            el = 1
+            eh = 0
+        end if
         do k = lo, hi
-            call eval_int(cell, dble(k), want_d)
+            if (k < el .or. k > eh) call eval_int_k(cell, k, want_d)
         end do
         do
             call window_P(lo, hi, pmax)
@@ -1651,11 +1846,11 @@ module dust_charging
             end if
             if (glo) then
                 lo = lo - 1
-                call eval_int(cell, dble(lo), want_d)
+                if (lo < el .or. lo > eh) call eval_int_k(cell, lo, want_d)
             end if
             if (ghi) then
                 hi = hi + 1
-                call eval_int(cell, dble(hi), want_d)
+                if (hi < el .or. hi > eh) call eval_int_k(cell, hi, want_d)
             end if
         end do
         k0 = hi
@@ -2181,7 +2376,7 @@ module dust_charging
 
     ! ---------------------------------------------------------------- solver
     subroutine rtgroups_solve_bin(ii, Np, egy, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, Z_guess, &
-                                  st, dlnT, alpha_mode, r, sens)
+                                  st, dlnT, alpha_mode, r, sens, cratio)
         ! Equilibrium charge and rates [erg/s per grain] of bin ii for one cell
         ! (pyCALIMA GroupChargingTable.solve). Np: photon densities per group
         ! [cm^-3]; egy: group mean energies [eV]; c_red: RT speed of light [cm/s];
@@ -2203,9 +2398,16 @@ module dust_charging
         integer :: lo, hi, k, j, half, Zc, lt
         logical :: disc, got, want_d, have_chord, capped
         logical, intent(in), optional :: sens    ! also d/d ln S, d/d ln N and the anchor of rtgroups_predict
+        ! the exact-P(Z) Coulomb correction of rtgroups_coulomb_ratio, from this solve's window (1 for a wide P(Z))
+        real(dp), dimension(ISRF_ND), intent(out), optional :: cratio
+        logical :: want_s
         ! c, cS, cN: indexed by charge - lo + 1, from the lowest charge below the window in the recombination
         real(dp) :: cS(1 - MAX_DISCRETE_STATES:NBUF), cN(1 - MAX_DISCRETE_STATES:NBUF)
         real(dp) :: dvS, dvN, sg(2), sgm(2), sgp(2), gl, ll, gh, lh, dZS, dZN, sw
+        ! window_ratio (P4) and CH2: ln P, its maximum and C1 of the walk; the terms of each charge (gk: P relative to
+        ! its maximum, fk: the Coulomb factors), the partial sums for the stop (ps, px), the bound's tolerances
+        real(dp), parameter :: R_EPS = 1d-6, R_CLAMP = 0.5d-10      ! CH5: 1e-6 (CH2: 1e-17)
+        real(dp) :: lp(1:NBUF), pm, C1, gk(1:NBUF), fk(ISRF_ND, 1:NBUF), ps, px(ISRF_ND), sq
 
         if (any(rtg(ii)%egy_used /= egy(1:rtg(ii)%nG))) call rtgroups_set_group_energies(ii, egy)
         call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
@@ -2239,51 +2441,265 @@ module dust_charging
         ! 3. sens: d/d ln S and d/d ln N (pyCALIMA GroupChargingTable._sensitivities), and the anchor
         !    of rtgroups_predict
         st%anchored = .false.
-        if (.not. present(sens)) return
-        if (.not. sens) return
-        if (disc) then
-            call discrete_sens()
-        else
-            call wide_sens()
+        want_s = .false.
+        if (present(sens)) want_s = sens
+        if (want_s) then
+            if (disc) then
+                call discrete_sens()
+            else
+                call wide_sens()
+            end if
+            call anchor_kernels(cell, Zs, st)
+            st%anchored = .true.
+            st%aT = T
+            st%ane = ne
+            st%anion = (/n_Hp, n_Hep, n_Hepp/)
+            st%acred = c_red
+            st%aG0 = G0_bg
+            st%aNp = 0d0
+            st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
+            st%ar = r
         end if
-        call anchor_kernels(cell, Zs, st)
-        st%anchored = .true.
-        st%aT = T
-        st%ane = ne
-        st%anion = (/n_Hp, n_Hep, n_Hepp/)
-        st%acred = c_red
-        st%aG0 = G0_bg
-        st%aNp = 0d0
-        st%aNp(1:rtg(ii)%nG) = Np(1:rtg(ii)%nG)
-        st%ar = r
+
+        ! 4. the exact-P(Z) Coulomb correction of a narrow P(Z), from the window (last: it extends the buffers)
+        if (present(cratio)) then
+            cratio = 1d0
+            if (disc) call window_ratio(cratio)
+        end if
     contains
+        subroutine window_ratio(ratio)
+            ! rtgroups_coulomb_ratio (its range, cut and sums) from this solve: the rates of the window lo..hi
+            ! are in the buffers, and P is continued outward from it one charge at a time (rates only) until it
+            ! falls below LN_CUT of its running maximum (P(Z) is unimodal: g decreases with Z), instead of over
+            ! the whole range. Round-off differences only: ln P is accumulated from the window, not from the
+            ! range's lowest charge. (calima_cost_20261113, P4)
+            use constants, only: pi, e2instatC, kB
+            real(dp), intent(out) :: ratio(ISRF_ND)
+            real(dp), parameter :: LN_CUT = -690.7755278982137d0      ! ln 1e-300, as rtgroups_coulomb_ratio
+            real(dp) :: b0, gg, ss, Dg(-1:3), Dx(ISRF_ND)       ! (lp, pm, C1: in rtgroups_solve_bin, CH2)
+            integer :: rlo, rhi, k0, k1, kk, m, jj
+            logical :: mono
+            ratio = 1d0
+            rlo = max(nint(rtg(ii)%Zmin), min(floor(r%Zstar - 8d0*max(r%Zsigma, 0.5d0) - 10d0), -3))
+            rhi = min(nint(rtg(ii)%Zmax), max(ceiling(r%Zstar + 8d0*max(r%Zsigma, 0.5d0) + 10d0), 3))
+            if (rhi - rlo + 3 > NBUF) return
+            k0 = max(lo, rlo)
+            k1 = min(hi, rhi)
+            if (k0 > k1 .or. rlo - b_base < 1 .or. rhi - b_base > NBUF) then
+                ! the range does not fit the window's buffers: evaluated on its own
+                call rtgroups_coulomb_ratio(ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg, r%Zstar, r%Zsigma, &
+                                            r%Zmean, ratio)
+                return
+            end if
+            lp(k0 - b_base) = 0d0
+            do kk = k0, k1 - 1
+                lp(kk + 1 - b_base) = lp(kk - b_base) + gwin(kk)
+            end do
+            pm = maxval(lp(k0 - b_base:k1 - b_base))
+            C1 = e2instatC / (kB * T * dustbins_props(ii)%asize_cm)
+            sq = sqrt(pi * C1 / 2d0)
+            ps = 0d0
+            px = 0d0
+            mono = .true.
+            do kk = k0, k1
+                call ratio_term(kk)
+            end do
+            do while (k1 < rhi .and. lp(k1 - b_base) - pm > LN_CUT)
+                if (mono .and. k1 > k0) then
+                    if (ratio_tail_done(k1, gwin(k1 - 1), .false.)) exit
+                end if
+                call eval_int_k(cell, k1 + 1, .false., rates_only=.true.)
+                lp(k1 + 1 - b_base) = lp(k1 - b_base) + gwin(k1)
+                k1 = k1 + 1
+                if (lp(k1 - b_base) > pm) mono = .false.
+                pm = max(pm, lp(k1 - b_base))
+                if (mono) call ratio_term(k1)
+            end do
+            do while (k0 > rlo .and. lp(k0 - b_base) - pm > LN_CUT)
+                if (mono) then
+                    if (ratio_tail_done(k0, -gwin(k0), .true.)) exit
+                end if
+                call eval_int_k(cell, k0 - 1, .false., rates_only=.true.)
+                lp(k0 - 1 - b_base) = lp(k0 - b_base) - gwin(k0 - 1)
+                k0 = k0 - 1
+                if (lp(k0 - b_base) > pm) mono = .false.
+                pm = max(pm, lp(k0 - b_base))
+                if (mono) call ratio_term(k0)
+            end do
+            ss = 0d0
+            Dx = 0d0
+            if (mono) then
+                ! the same sums over k0..k1 as below, from the terms kept
+                do kk = k0, k1
+                    if (lp(kk - b_base) - pm <= LN_CUT) cycle
+                    ss = ss + gk(kk - b_base)
+                    do m = 1, ISRF_ND
+                        Dx(m) = Dx(m) + gk(kk - b_base) * fk(m, kk - b_base)
+                    end do
+                end do
+            end if
+            do kk = k0, k1
+                if (mono) exit
+                gg = lp(kk - b_base) - pm
+                if (gg <= LN_CUT) cycle
+                gg = exp(gg)
+                ss = ss + gg
+                do m = 1, ISRF_ND
+                    jj = ISRF_DCHARGE(m)
+                    if (kk == 0) then
+                        b0 = 1d0 + dble(abs(jj)) * sqrt(pi * C1 / 2d0)
+                        Dx(m) = Dx(m) + gg * b0
+                    else if (kk * jj > 0) then
+                        if (-dble(kk * jj) * C1 <= -745d0) then
+                            ! at the clamp: exp(max(-k j C1, -745d0)) = exp(-745d0), the same run-time call once
+                            if (exp_m745 < 0d0) exp_m745 = exp(max(-dble(kk * jj) * C1, -745d0))
+                            Dx(m) = Dx(m) + gg * exp_m745
+                        else
+                            Dx(m) = Dx(m) + gg * exp(-dble(kk * jj) * C1)
+                        end if
+                    else
+                        Dx(m) = Dx(m) + gg * (1d0 - dble(kk * jj) * C1)
+                    end if
+                end do
+            end do
+            Dg = 1d0
+            call compute_Coulomb_focusing_ions(ii, T, r%Zmean, r%Zsigma, 3, Dg)
+            do m = 1, ISRF_ND
+                ratio(m) = (Dx(m) / ss) / Dg(ISRF_DCHARGE(m))
+            end do
+        end subroutine window_ratio
+            subroutine ratio_term(kq)
+                ! CH2: the terms of charge kq (as the sums of window_ratio make them) into gk, fk and the partial sums
+                integer, intent(in) :: kq
+                real(dp) :: g1, f
+                integer :: mq, jq
+                gk(kq - b_base) = 0d0
+                fk(:, kq - b_base) = 0d0
+                g1 = lp(kq - b_base) - pm
+                if (g1 <= -690.7755278982137d0) return      ! LN_CUT of window_ratio
+                g1 = exp(g1)
+                gk(kq - b_base) = g1
+                ps = ps + g1
+                do mq = 1, ISRF_ND
+                    jq = ISRF_DCHARGE(mq)
+                    if (kq == 0) then
+                        f = 1d0 + dble(abs(jq)) * sqrt(pi * C1 / 2d0)
+                    else if (kq * jq > 0) then
+                        if (-dble(kq * jq) * C1 <= -745d0) then
+                            if (exp_m745 < 0d0) exp_m745 = exp(max(-dble(kq * jq) * C1, -745d0))
+                            f = exp_m745
+                        else
+                            f = exp(-dble(kq * jq) * C1)
+                        end if
+                    else
+                        f = 1d0 - dble(kq * jq) * C1
+                    end if
+                    fk(mq, kq - b_base) = f
+                    px(mq) = px(mq) + g1 * f
+                end do
+            end subroutine ratio_term
+            logical function ratio_tail_done(kq, lnr, down)
+                ! CH2: everything beyond the last charge kq of a direction is negligible: P(kq +- n) <= P(kq) r^n
+                ! (r = exp(lnr) < 1, log-concave P) and f(k, j) <= a + b n; down: also a sum certainly below the clamp
+                integer, intent(in) :: kq
+                real(dp), intent(in) :: lnr
+                logical, intent(in) :: down
+                real(dp) :: r, g1, g2, a, b, tm
+                integer :: mq, jq
+                ratio_tail_done = .false.
+                if (.not. (lnr < 0d0)) return
+                r = exp(lnr)
+                g1 = r / (1d0 - r)
+                g2 = g1 / (1d0 - r)
+                if (gk(kq - b_base) * g1 > R_EPS * ps) return
+                do mq = 1, ISRF_ND
+                    jq = ISRF_DCHARGE(mq)
+                    if (jq > coulomb_jmax) cycle
+                    a = 1d0 + dble(abs(jq)) * sq + dble(abs(kq) * abs(jq)) * C1
+                    b = dble(abs(jq)) * C1
+                    tm = gk(kq - b_base) * (a * g1 + b * g2)
+                    if (tm <= R_EPS * px(mq)) cycle
+                    if (down .and. (px(mq) + tm) * (1d0 + 4d0 * R_EPS) < R_CLAMP * ps) cycle
+                    return
+                end do
+                ratio_tail_done = .true.
+            end function ratio_tail_done
         subroutine distribution()
-            ! step 1: Z*, sigma (pair, chord); for a discrete P(Z), the window lo..hi and its moments in r
+            ! step 1: Z*, sigma (pair, chord); for a discrete P(Z), the window lo..hi and its moments in r.
+            ! CH1 (calima_cost_phase2): one rule on the warm and the cold path. Discrete iff the root's width on the
+            ! lattice is narrow (the integer slope of g at the root, g(k*+1) - g(k*), or else the integer chord
+            ! from it, gives sigma < SIGMA_DISCRETE) and the converged window (not capped) has sigma <
+            ! SIGMA_DISCRETE; Z* is then the root of g interpolated between the integers. A cold start walks the
+            ! lattice from the guess with the window's own rates; only a wide P(Z) needs non-integer charges.
+            integer :: ks, kg, elo, ehi
+            real(dp) :: sig_l, sig_n, zg
+            logical :: okl
             got = .false.
+            okl = .false.
             if (st%valid .and. st%discrete) then
                 call window(cell, st%wlo, st%whi, want_d, lo, hi, capped)
                 call window_moments(lo, hi, r%Zmean, r%Zsigma)
                 ! a capped window is a cut tail, narrow whatever the true width: solve from the root
                 if (r%Zsigma < SIGMA_DISCRETE .and. .not. capped) then
-                    got = .true.
                     ! Z*: root of g interpolated between the integers of the window
-                    Zs = dble(hi)
-                    if (hi == lo) then
-                        Zs = dble(lo)
-                    else if (gwin(lo) <= 0d0) then
-                        Zs = dble(lo)
+                    call root_on_window(sig_l, ks)
+                    got = lattice_narrow(sig_l, sig_n)
+                    if (got .and. ks >= lo) then
+                        ! the window a cold solve grows (from k* and its width), from the rates in the buffers: the
+                        ! same P(Z) to the bit whatever the start
+                        elo = lo
+                        ehi = hi
+                        half = ceiling(3d0*max(sig_n, 0.5d0))
+                        call window(cell, max(rtg(ii)%Zmin, dble(ks - half + 1)), min(rtg(ii)%Zmax, dble(ks + half)), &
+                                    want_d, lo, hi, capped, elo, ehi)
+                        call window_moments(lo, hi, r%Zmean, r%Zsigma)
+                        call root_on_window(sig_l, ks)
+                        got = r%Zsigma < SIGMA_DISCRETE .and. .not. capped
                     end if
-                    do k = lo, hi - 2
-                        if (gwin(k) > 0d0 .and. gwin(k + 1) <= 0d0) then
-                            Zs = dble(k) + gwin(k)/(gwin(k) - gwin(k + 1))
-                            exit
+                end if
+            end if
+            if (.not. got) then
+                ! the lattice from the guess: the last root of this bin in this cell, else Z_guess, else (or if
+                ! the root is more than LAT_NWALK charges away) the continuous search from the guess
+                zg = Z_guess
+                if (st%valid) zg = st%Zstar
+                if (zg > rtg(ii)%Zmin .and. zg < rtg(ii)%Zmax - 1d0) then
+                    kg = floor(zg)
+                    call lattice(kg, ks, elo, ehi, okl)
+                end if
+                if (.not. okl) then
+                    call find_root(cell, Z_guess, st, Zs, sigma, pair)
+                    kg = floor(Zs)
+                    if (dble(kg) > rtg(ii)%Zmin .and. dble(kg) < rtg(ii)%Zmax - 1d0) call lattice(kg, ks, elo, ehi, okl)
+                end if
+                if (okl) then
+                    sig_l = huge(1d0)
+                    if (gwin(ks + 1) < gwin(ks)) sig_l = sqrt(-1d0/(gwin(ks + 1) - gwin(ks)))
+                    Zs = dble(ks) + gwin(ks)/(gwin(ks) - gwin(ks + 1))
+                    if (lattice_narrow(sig_l, sig_n)) then
+                        half = ceiling(3d0*max(sig_n, 0.5d0))
+                        call window(cell, max(rtg(ii)%Zmin, dble(ks - half + 1)), min(rtg(ii)%Zmax, dble(ks + half)), &
+                                    want_d, lo, hi, capped, elo, ehi)
+                        call window_moments(lo, hi, r%Zmean, r%Zsigma)
+                        if (r%Zsigma < SIGMA_DISCRETE .and. .not. capped) then
+                            call root_on_window(sig_l, ks)
+                            got = .true.
                         end if
-                    end do
+                    end if
                 end if
             end if
             if (got) then
                 disc = .true.
+            else if (okl) then
+                ! wide by the rule: the continuous root within the lattice bracket, its pair and chord as before
+                ! (the chord from the pair's width, not the last width); not re-classified
+                Zs = illinois(cell, dble(ks), dble(ks + 1), gwin(ks), gwin(ks + 1))
+                call slope_at(cell, Zs, sigma, pair)
+                have_chord = .false.
+                if (sigma >= SIGMA_DISCRETE) call chord_sigma(cell, Zs, sigma, chord, have_chord)
+                disc = .false.
             else
+                ! the root at an end of the charge range (Zmin, Zmax - 1): as before
                 call find_root(cell, Z_guess, st, Zs, sigma, pair)
                 have_chord = .false.
                 if (sigma >= SIGMA_DISCRETE) then
@@ -2300,6 +2716,88 @@ module dust_charging
                 end if
             end if
         end subroutine distribution
+        logical function lattice_narrow(sig_l, sig_n)
+            ! CH1: the root's width on the lattice is narrow: sig_l (its integer slope) < SIGMA_DISCRETE, or else the
+            ! integer chord of chord_sigma from Zs and sig_l (sig_n: the width used, for the window's start)
+            real(dp), intent(in) :: sig_l
+            real(dp), intent(out) :: sig_n
+            real(dp) :: ch(4)
+            logical :: hv
+            sig_n = sig_l
+            if (sig_l < SIGMA_DISCRETE) then
+                lattice_narrow = .true.
+                return
+            end if
+            if (sig_l < huge(1d0)) call chord_sigma(cell, Zs, sig_n, ch, hv)
+            lattice_narrow = sig_n < SIGMA_DISCRETE
+        end function lattice_narrow
+        subroutine root_on_window(sig_l, kb)
+            ! Z*: the root of g interpolated between the integers of the window lo..hi; sig_l: the width of its
+            ! integer slope g(k*+1) - g(k*), kb = k* (sig_l = 0, kb = lo - 1 at an end of the window: no bracket)
+            real(dp), intent(out) :: sig_l
+            integer, intent(out) :: kb
+            Zs = dble(hi)
+            sig_l = 0d0
+            kb = lo - 1
+            if (hi == lo) then
+                Zs = dble(lo)
+            else if (gwin(lo) <= 0d0) then
+                Zs = dble(lo)
+            end if
+            do k = lo, hi - 2
+                if (gwin(k) > 0d0 .and. gwin(k + 1) <= 0d0) then
+                    Zs = dble(k) + gwin(k)/(gwin(k) - gwin(k + 1))
+                    sig_l = sqrt(-1d0/(gwin(k + 1) - gwin(k)))
+                    kb = k
+                    exit
+                end if
+            end do
+        end subroutine root_on_window
+        subroutine lattice(kg, ks, elo, ehi, ok)
+            ! CH1: the integer bracket ks of the root of g, g(ks) > 0 >= g(ks + 1), walking from kg one charge
+            ! at a time (at most LAT_NWALK steps), with the window's rates (eval_int, want_d) of the charges
+            ! elo..ehi; b_base is set for a window around kg. ok = .false.: not found (too far, or an end of
+            ! the charge range)
+            integer, intent(in) :: kg
+            integer, intent(out) :: ks, elo, ehi
+            logical, intent(out) :: ok
+            integer :: zl, zh, n
+            ok = .false.
+            zl = nint(rtg(ii)%Zmin)
+            zh = nint(rtg(ii)%Zmax)
+            ks = kg
+            elo = kg
+            ehi = kg + 1
+            if (kg < zl + 1 .or. kg + 2 > zh) return
+            b_base = kg - MAX_DISCRETE_STATES - LAT_NWALK - 4
+            call eval_int_k(cell, kg, want_d)
+            call eval_int_k(cell, kg + 1, want_d)
+            if (gwin(kg) > 0d0) then
+                do n = 1, LAT_NWALK
+                    if (ks + 2 > zh) return
+                    if (ehi < ks + 2) then
+                        ehi = ks + 2
+                        call eval_int_k(cell, ehi, want_d)
+                    end if
+                    if (gwin(ks + 1) <= 0d0) then
+                        ok = .true.
+                        return
+                    end if
+                    ks = ks + 1
+                end do
+            else
+                do n = 1, LAT_NWALK
+                    if (ks - 1 < zl) return
+                    elo = ks - 1
+                    call eval_int_k(cell, elo, want_d)
+                    ks = ks - 1
+                    if (gwin(ks) > 0d0) then
+                        ok = .true.
+                        return
+                    end if
+                end do
+            end if
+        end subroutine lattice
         subroutine discrete_rates()
             ! Gamma, Lambda and the autoionisation of the discrete window
             do k = lo, hi
@@ -2330,7 +2828,7 @@ module dust_charging
                 lnP = log(b_P(lo - b_base))
                 lnAlo = log(cell%geoA*ds87_J(rtg(ii)%Zmin, 1d0, cell%tau_ion(1)))
                 do k = lo - 1, max(lo - MAX_DISCRETE_STATES, nint(rtg(ii)%Zmin), b_base + 1), -1
-                    call eval_int(cell, dble(k), want_d, rates_only=.true.)
+                    call eval_int_k(cell, k, want_d, rates_only=.true.)
                     lnP = lnP - gwin(k)
                     b_P(k - b_base) = exp(lnP)
                     do j = 1, RTG_NRI
@@ -2518,17 +3016,37 @@ module dust_charging
             real(dp), intent(in) :: z
             real(dp), intent(out) :: d(2)
             real(dp) :: ww, ph, ht, upz
-            integer :: iz
-            call u_of(cell, z, iz, ww)
-            call kernels(cell, iz, ww, ph, ht, .false.)
+            integer :: iz, mc
+            ! CH4: the U index and photoemission of a charge gfun has just evaluated, from its cache
+            do mc = 1, gm_used
+                if (gm_Z(mc) == z) exit
+            end do
+            if (mc <= gm_used) then
+                iz = gm_i(mc)
+                ww = gm_w(mc)
+                ph = gm_photo(mc)
+            else
+                call u_of(cell, z, iz, ww)
+                call kernels(cell, iz, ww, ph, ht, .false.)
+            end if
             upz = max(rate_up(cell, ph, ion_capture(cell, z), ds87_J(z, -1d0, cell%tau_e), hot(cell, rtg(cell%bin)%delta, iz, ww)), RTG_TINY)
             d(1) = ph/upz
             d(2) = (upz - ph)/upz - 1d0
         end subroutine dg_dtheta
         real(dp) function gwin(k)
-            ! g increment of the window from charge k to k + 1
+            ! g increment of the window from charge k to k + 1 (CH4: the logs of each charge kept once computed)
             integer, intent(in) :: k
-            gwin = log(max(b_up(k - b_base), RTG_TINY)) - log(max(b_dn(k + 1 - b_base), RTG_TINY))
+            integer :: kb
+            kb = k - b_base
+            if (.not. b_oku(kb)) then
+                b_lu(kb) = log(max(b_up(kb), RTG_TINY))
+                b_oku(kb) = .true.
+            end if
+            if (.not. b_okd(kb + 1)) then
+                b_ld(kb + 1) = log(max(b_dn(kb + 1), RTG_TINY))
+                b_okd(kb + 1) = .true.
+            end if
+            gwin = b_lu(kb) - b_ld(kb + 1)
         end function gwin
     end subroutine rtgroups_solve_bin
 
@@ -2624,7 +3142,7 @@ module dust_charging
         call set_cell(cell, ii, Np, c_red, T, ne, n_Hp, n_Hep, n_Hepp, G0_bg)
         b_base = lo - 2
         do k = lo, hi
-            call eval_int(cell, dble(k), .false.)
+            call eval_int_k(cell, k, .false., rates_only=.true.)   ! P(Z) needs Up and Down only
         end do
         b_P(lo - b_base) = 0d0
         do k = lo - b_base, hi - b_base - 1
@@ -2645,7 +3163,13 @@ module dust_charging
                     b0 = 1d0 + dble(abs(j)) * sqrt(pi * C1 / 2d0)
                     Dx(m) = Dx(m) + g * b0
                 else if (k * j > 0) then
-                    Dx(m) = Dx(m) + g * exp(max(-dble(k * j) * C1, -745d0))
+                    if (-dble(k * j) * C1 <= -745d0) then
+                        ! at the clamp: exp(max(-k j C1, -745d0)) = exp(-745d0), the same run-time call once
+                        if (exp_m745 < 0d0) exp_m745 = exp(max(-dble(k * j) * C1, -745d0))
+                        Dx(m) = Dx(m) + g * exp_m745
+                    else
+                        Dx(m) = Dx(m) + g * exp(-dble(k * j) * C1)
+                    end if
                 else
                     Dx(m) = Dx(m) + g * (1d0 - dble(k * j) * C1)
                 end if

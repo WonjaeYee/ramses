@@ -23,8 +23,74 @@ module dust_rates
     real(dp), allocatable, save :: cached_chi_frag_dust(:,:,:)
     real(dp), allocatable, save :: cached_chi_frag_pah(:,:,:)
     real(dp), allocatable, save :: cached_chi_frag_dest(:,:)
+    ! dust_shat_phi_min (physics option): whether the pair (target, impactor) shatters (phi >= dust_shat_phi_min)
+    logical, allocatable, save :: cached_shat_on(:,:)
+    ! log10 of the gas temperature and of the FUV field of the dust update (compute_rate_caches), for the rates
+    real(dp), save :: rc_lT = 0d0, rc_lG0 = 0d0
+    ! Constants of the bins and pairs, set once at init (init_rate_constants), each the expression the rates
+    ! evaluated in every call: the accretion limiter denominators el_mfractions(k) sqrt(el_atomic_masses_g(k)),
+    ! the coagulation mass fractions m_i/(m_i+m_k), m_k/(m_i+m_k), the geometric cross sections pi (a_1+a_2)^2 of
+    ! the dust-dust and PAH-dust pairs, 0.5 m_1 m_2/(m_1+m_2) and m Q* (shattering), nint of the PAH charge states
+    real(dp), allocatable, save :: rc_acc_den(:,:), rc_coag_fi(:,:), rc_coag_fk(:,:)
+    real(dp), allocatable, save :: rc_xs_dd(:,:), rc_xs_pd(:,:), rc_mred_half(:,:), rc_mq(:)
+    integer, allocatable, save :: rc_pah_iz(:,:)
 
     contains
+
+    subroutine init_rate_constants()
+        ! The constants above, from the bin properties (dust_init, after they are set)
+        integer :: ii, kk, pp, jj, ii1, ii2, kk_loc, nmax
+        real(dp) :: mi, mk, msum
+        nmax = 1
+        do ii = 1, ndust
+            nmax = max(nmax, dustbins_props(ii)%nelements)
+        end do
+        if (allocated(rc_acc_den)) deallocate(rc_acc_den, rc_coag_fi, rc_coag_fk, rc_xs_dd, rc_xs_pd, &
+                                               rc_mred_half, rc_mq, rc_pah_iz)
+        allocate(rc_acc_den(nmax, max(ndust,1)), rc_coag_fi(max(ndust,1), max(ndust,1)), &
+                 rc_coag_fk(max(ndust,1), max(ndust,1)), rc_xs_dd(max(ndust,1), max(ndust,1)), &
+                 rc_xs_pd(max(npah,1), max(ndust,1)), rc_mred_half(max(ndust,1), max(ndust,1)), rc_mq(max(ndust,1)))
+        rc_acc_den = 1d0; rc_coag_fi = 0d0; rc_coag_fk = 0d0; rc_xs_dd = 0d0; rc_xs_pd = 0d0
+        rc_mred_half = 0d0; rc_mq = 1d0
+        do ii = 1, ndust
+            do kk = 1, dustbins_props(ii)%nelements
+                rc_acc_den(kk, ii) = dustbins_props(ii)%el_mfractions(kk) * sqrt(dustbins_props(ii)%el_atomic_masses_g(kk))
+            end do
+            rc_mq(ii) = dustbins_props(ii)%mgrain*dustbins_props(ii)%catastrophic_spec_energy
+            do kk = 1, ndust
+                rc_xs_dd(ii, kk) = pi * (dustbins_props(ii)%asize_cm + dustbins_props(kk)%asize_cm)**2d0
+                rc_mred_half(ii, kk) = 5d-1 * (dustbins_props(ii)%mgrain*dustbins_props(kk)%mgrain) / &
+                                       (dustbins_props(ii)%mgrain+dustbins_props(kk)%mgrain)
+            end do
+        end do
+        do jj = 1, ndchemtype
+            ii1 = istart_chemtype(jj)
+            ii2 = ii1 + dustbins_per_chemtype(jj) - 1
+            do ii = ii1, ii2 - 1
+                do kk = ii, ii2
+                    mi = dustbins_props(ii)%mgrain
+                    mk = dustbins_props(kk)%mgrain
+                    msum = mi + mk
+                    rc_coag_fi(ii, kk) = mi / msum
+                    rc_coag_fk(ii, kk) = mk / msum
+                end do
+            end do
+        end do
+        nmax = 1
+        do pp = 1, npah
+            nmax = max(nmax, pahbins_props(pp)%ncharge_states)
+        end do
+        allocate(rc_pah_iz(nmax, max(npah,1)))
+        rc_pah_iz = 0
+        do pp = 1, npah
+            do kk = 1, ndust
+                rc_xs_pd(pp, kk) = pi * (pahbins_props(pp)%apah_cm + dustbins_props(kk)%asize_cm)**2d0
+            end do
+            do ii = 1, pahbins_props(pp)%ncharge_states
+                rc_pah_iz(ii, pp) = nint(pahbins_props(pp)%charge_states(ii))
+            end do
+        end do
+    end subroutine init_rate_constants
 
     pure real(dp) function pair_drift(dust_info, is1, is2)
         ! |w_1 - w_2|: the systematic relative velocity of TVA species is1 and is2 (PAH bins, then
@@ -61,6 +127,11 @@ module dust_rates
             allocate(cached_chi_frag_dest(ndust, ndust))
         end if
         
+        if (allocated(cached_shat_on)) then
+            if (size(cached_shat_on,1) /= ndust) deallocate(cached_shat_on)
+        end if
+        if (.not. allocated(cached_shat_on)) allocate(cached_shat_on(ndust, ndust))
+
         if (.not. allocated(cached_v_stick_pah_dust)) then
             allocate(cached_v_stick_pah_dust(npah, ndust))
         else if (size(cached_v_stick_pah_dust,1) /= npah .or. size(cached_v_stick_pah_dust,2) /= ndust) then
@@ -83,9 +154,11 @@ module dust_rates
         real(dp) :: reduced_mass, v_stick_thresh
         logical :: interact_pah_flag
         
-        real(dp) :: nO, vth, N_mono, f_ice_ii, enhan_factor_pair
+        real(dp) :: nO, vth, N_mono, f_ice_ii, enhan_factor_pair, f_ice_cold
         real(dp), dimension(1:max(1, ndust)) :: enhan_factor   ! fixed size: no allocation per call
         
+        rc_lT = log10(dust_info%local_Tk)    ! the rates' log10 T and log10 G0 (once per dust update)
+        rc_lG0 = log10(dust_info%local_G0)
         call ensure_rate_caches(dust_info)
         
         if (dust_eq_test) then
@@ -104,11 +177,17 @@ module dust_rates
             end if
             vth = 3624.65d0 * sqrt(dust_info%local_Tk)
             N_mono = 2d0 * nO * vth / (max(dust_info%local_G0, 1d-5) * 3d5)
+            ! the same for every bin below 100 K, and 1 exactly for N_mono >= 50 (exp(-50) < 2^-54)
+            if (N_mono >= 50d0) then
+                f_ice_cold = 1d0
+            else
+                f_ice_cold = 1d0 - exp(-N_mono)
+            end if
             do ii = 1, dust_info%ndust
                 if (dust_info%T_dust(ii) >= 100d0) then
                     f_ice_ii = 0d0
                 else
-                    f_ice_ii = 1d0 - exp(-N_mono)
+                    f_ice_ii = f_ice_cold
                 end if
                 enhan_factor(ii) = 1d0 + 3d0 * f_ice_ii
             end do
@@ -226,6 +305,7 @@ module dust_rates
         logical :: remnant_assigned
         real(dp) :: m_max_pow, m_min_pow
         real(dp) :: v_rel_out
+        logical :: all_dest
 
         ii1 = lbound(chi_frag_out, 1)
         ii2 = ubound(chi_frag_out, 1)
@@ -235,18 +315,33 @@ module dust_rates
 
         v_rel_out = cached_v_rel_dust_dust(id1, id2)
 
-        E_imp = 5d-1 * (dustbins_props(id1)%mgrain*dustbins_props(id2)%mgrain) / &
-                (dustbins_props(id1)%mgrain+dustbins_props(id2)%mgrain) * v_rel_out**2d0
-        phi = E_imp / (dustbins_props(id1)%mgrain*dustbins_props(id1)%catastrophic_spec_energy)
+        E_imp = rc_mred_half(id1, id2) * v_rel_out**2d0
+        phi = E_imp / rc_mq(id1)
         m_ej = phi / (1d0 + phi) * dustbins_props(id1)%mgrain
 
         m_remnant = dustbins_props(id1)%mgrain - m_ej
         m_max = 2d-2*m_ej
         m_min = 1d-6*m_max
 
+        ! dust_shat_phi_min (physics option, default 0): a pair below it does not shatter
+        cached_shat_on(id1, id2) = .not. (phi < dust_shat_phi_min)
+        if (.not. cached_shat_on(id1, id2)) then
+            chi_frag_dest_out = 0d0
+            chi_frag_out(:) = 0d0
+            chi_frag_pah_out(:) = 0d0
+            return
+        end if
+
+        ! every fragment below every destination bin (frag_edge): the destroyed fraction is m_ej, no pow
+        all_dest = m_max < frag_edge(id1)
+        if (all_dest) then
+            m_max_pow = 0d0
+            m_min_pow = 0d0
+            prefactor = 0d0
+        else
         if (m_ej > tiny(m_ej)) then
             m_max_pow = m_max**slope_frag_func
-            m_min_pow = m_min**slope_frag_func
+            m_min_pow = m_max_pow * frag_min_pow_fac     ! (1e-6 m_max)**s
             denom = m_max_pow - m_min_pow
             if (abs(denom) > tiny(denom)) then
                 prefactor = m_ej / denom
@@ -258,10 +353,12 @@ module dust_rates
             m_min_pow = 0d0
             prefactor = 0d0
         end if
+        end if
 
         chi_frag_dest_out = 0d0
         chi_frag_out(:) = 0d0
         chi_frag_pah_out(:) = 0d0
+        if (all_dest .and. m_ej > tiny(m_ej)) chi_frag_dest_out = m_ej
         if (prefactor > 0d0) then
 #if NPAH > 0
             if (interact_pah) then
@@ -410,7 +507,7 @@ module dust_rates
         integer :: jj, ii, ii1, ii2, kk, e_index
         integer :: n_el
         real(dp) :: pseudo_rate, rate, prefactor, Tk_loc, limit_rate
-        real(dp) :: total_rate_type, sticking_ice,nO
+        real(dp) :: total_rate_type, sticking_ice,nO, sticking_cold
 
         Tk_loc = dust_info%local_Tk
         prefactor = sqrt(Tk_loc) / (1d0 + 1d-4*Tk_loc**1.5d0)
@@ -419,6 +516,8 @@ module dust_rates
 #else
         nO = y_gas(8,1) / el_atomic_masses_g(8)
 #endif
+        ! the ice sticking coefficient depends on the bin only through T_dust >= 100 K (then 1): the cold value once
+        sticking_cold = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,0d0)
 
         speciesloop: do jj = 1, ndchemtype
             ! 1. Loop over the dust chemical species.
@@ -431,14 +530,14 @@ module dust_rates
                 if (n_el == 1) then
                     ! 2. A single-element chemistry type has a limiter.
                     e_index = bin%el_index(1)
-                    limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
+                    limit_rate = y_gas(e_index,1) / rc_acc_den(1, ii1)
                 else
                     ! 3. Find the limiting element in a single pass, without a temporary array.
                     e_index = bin%el_index(1)
-                    limit_rate = y_gas(e_index,1) / (bin%el_mfractions(1) * sqrt(bin%el_atomic_masses_g(1)))
+                    limit_rate = y_gas(e_index,1) / rc_acc_den(1, ii1)
                     do kk = 2, n_el
                         e_index = bin%el_index(kk)
-                        pseudo_rate = y_gas(e_index,1) / (bin%el_mfractions(kk) * sqrt(bin%el_atomic_masses_g(kk)))
+                        pseudo_rate = y_gas(e_index,1) / rc_acc_den(kk, ii1)
                         if (pseudo_rate < limit_rate) then
                             limit_rate = pseudo_rate
                         end if
@@ -448,7 +547,11 @@ module dust_rates
                 ! 4. Apply the same limiting rate to every dust bin in the chemical type.
                 total_rate_type = 0d0
                 do ii = ii1, ii2
-                    sticking_ice = ice_sticking_coefficient(dust_info%local_G0,nO,dust_info%local_Tk,dust_info%T_dust(ii))
+                    if (dust_info%T_dust(ii) >= 100d0) then
+                        sticking_ice = 1d0
+                    else
+                        sticking_ice = sticking_cold
+                    end if
                     rate = limit_rate * dustbins_props(ii)%k0_acc * prefactor * sticking_ice ! [s-1]
                     rate = min(rate, max_accretion_rate)
                     ! 5. Get the maximum rate computed here, if requested.
@@ -790,12 +893,9 @@ module dust_rates
                         rate2 = 0.5d0 * rate2
                     end if
 
-                    mi = dustbins_props(ii)%mgrain
-                    mk = dustbins_props(kk)%mgrain
-                    msum = mi + mk
                     idest = dustbins_props(ii)%idend_coag(kk_loc)
-                    loss_ii = rate2 * (mi / msum)
-                    loss_kk = rate2 * (mk / msum)
+                    loss_ii = rate2 * rc_coag_fi(ii, kk)
+                    loss_kk = rate2 * rc_coag_fk(ii, kk)
 
                     ! Three-term update for each pair: two sinks (ii, kk) and one gain (idest).
                     dydt_dust(index, 2) = dydt_dust(index, 2) + loss_ii
@@ -829,7 +929,8 @@ module dust_rates
         real(dp) :: rate1, rate_total, mass_loss, lT
         real(dp), dimension(1:n_elements) :: lr    ! log10 of the sputtering tables at this T
 
-        lT = log10(dust_info%local_Tk)
+        if (dust_info%local_Tk < dust_sput_T_min) return   ! physics option (default 0: never)
+        lT = rc_lT    ! log10(local_Tk), compute_rate_caches
 
         ! 1. Loop over the dust bins
         binloop: do ii = 1, dust_info%ndust
@@ -838,12 +939,21 @@ module dust_rates
 
             ! 2. Loop over elements in the gas phase: the bin's tables at this T, all on one axis (sput_tabs)
             if (dustbins_props(ii)%sput_tabs%n > 0) then
-                call dustbins_props(ii)%sput_tabs%eval(lT, lr)
-                do iel = 1, n_elements
-                    if (y_gas(iel,1) < 1d-40) cycle
-                    if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
-                    rate_total = rate_total + exp(lr(iel) * ln10) * y_gas(iel,1) * dust_info%inv_atomic_mass(iel) ! [micron / yr]
-                end do
+                if (lT <= dustbins_props(ii)%sput_tabs%x(1)) then
+                    ! below the T axis: the first-node rates, exp(lr * ln10) computed at init (sput_lo)
+                    do iel = 1, n_elements
+                        if (y_gas(iel,1) < 1d-40) cycle
+                        if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
+                        rate_total = rate_total + dustbins_props(ii)%sput_lo(iel) * y_gas(iel,1) * dust_info%inv_atomic_mass(iel) ! [micron / yr]
+                    end do
+                else
+                    call dustbins_props(ii)%sput_tabs%eval(lT, lr)
+                    do iel = 1, n_elements
+                        if (y_gas(iel,1) < 1d-40) cycle
+                        if (.not. dustbins_props(ii)%sputtering_tab(iel)%initialised) cycle
+                        rate_total = rate_total + exp(lr(iel) * ln10) * y_gas(iel,1) * dust_info%inv_atomic_mass(iel) ! [micron / yr]
+                    end do
+                end if
             end if
 
             ! 3. Convert to the real erosion rate in [s-1]
@@ -942,7 +1052,7 @@ module dust_rates
         real(dp) :: rate1, rate2, lT, rate_total, irate, rate_element, phi_charge, mass_loss
         real(dp) :: min_abundance_density
 
-        lT = log10(dust_info%local_Tk)
+        lT = rc_lT    ! log10(local_Tk), compute_rate_caches
         idx_T = -1
         min_abundance_density = 1d-10 * dust_info%local_rho
 
@@ -1126,6 +1236,8 @@ module dust_rates
                 do jj = ii, ii2
                     index_j = jj + dust_info%npah
                     if (y_dust(index_j) < 1d-40) cycle
+                    ! dust_shat_phi_min (physics option): neither grain of the pair shatters
+                    if (.not. (cached_shat_on(ii, jj) .or. cached_shat_on(jj, ii))) cycle
 
                     ! 2. Compute shattered fragments for target ii impacted by jj.
                     chi_frag_dest = cached_chi_frag_dest(ii, jj)
@@ -1136,8 +1248,7 @@ module dust_rates
 
                     ! 3. Compute the collision rate factor for pair (ii,jj), with the mean relative speed
                     ! over the Gaussian relative velocity (Guillet et al. 2020, Marchand et al. 2021)
-                    coll_factor = pi * (dustbins_props(ii)%asize_cm + dustbins_props(jj)%asize_cm)**2d0 &
-                                * cached_v_mean_dust_dust(ii, jj)
+                    coll_factor = rc_xs_dd(ii, jj) * cached_v_mean_dust_dust(ii, jj)
 
                     ! 4. Collision event rate (events cm^-3 s^-1) × target mass:
                     !    mass_rate_ii = R * m_ii  = coll_factor * n_jj * rho_ii
@@ -1155,6 +1266,7 @@ module dust_rates
                     end if
 
                     ! 5a. Apply destruction and fragmentation for target ii.
+                    if (cached_shat_on(ii, jj)) then
                     dydt_dust(index_i, 2) = dydt_dust(index_i, 2) + mass_rate ! [g cm-3 s-1]
 
                     do ll = ii1, ii2
@@ -1175,7 +1287,10 @@ module dust_rates
                         end do
                     end if
 
+                    end if
+
                     ! 5b. Apply destruction and fragmentation for target jj (same collision event).
+                    if (cached_shat_on(jj, ii)) then
                     !    mass_rate_jj = R * m_jj = coll_factor * (rho_ii/m_ii) * rho_jj
                     !    For ii/=jj: chi_frag is recomputed for target jj hit by ii.
                     !    For ii==jj: chi_frag is identical by symmetry; reuse directly.
@@ -1209,6 +1324,7 @@ module dust_rates
                             dydt_gas(dustbins_props(jj)%el_index(iel),1) = dydt_gas(dustbins_props(jj)%el_index(iel),1) + &
                                 rate_dest * dustbins_props(jj)%el_mfractions(iel) ! [g cm-3 s-1]
                         end do
+                    end if
                     end if
                 end do
             end do
@@ -1424,13 +1540,25 @@ module dust_rates
         real(dp) :: R_total, rate1, rate2, lT
         real(dp), dimension(0:n_elements) :: lr    ! log10 of the sputtering tables at this T
 
-        lT = log10(dust_info%local_Tk)
+        if (dust_info%local_Tk < dust_sput_T_min) return   ! physics option (default 0: never)
+        lT = rc_lT    ! log10(local_Tk), compute_rate_caches
 
         ! 1. Loop over PAHs
         pahloop: do pp = 1, dust_info%npah
             R_total = 0d0
             if (pahbins_props(pp)%sput_tabs%n == 0) cycle
 
+            if (lT <= pahbins_props(pp)%sput_tabs%x(1)) then
+                ! below the T axis: the first-node rates, exp(lr * ln10) computed at init (sput_lo)
+                if (pahbins_props(pp)%sputtering_tab(0)%initialised) then
+                    R_total = R_total + dust_info%local_ne * pahbins_props(pp)%sput_lo(0)
+                end if
+                do iel = 1, n_elements
+                    if (.not. pahbins_props(pp)%sputtering_tab(iel)%initialised) cycle
+                    if (y_gas(iel, 1) < 1d-40) cycle
+                    R_total = R_total + y_gas(iel, 1) / dust_info%el_atomic_mass_g(iel) * pahbins_props(pp)%sput_lo(iel)
+                end do
+            else
             ! 2. The bin's tables at this T, all on one axis (sput_tabs)
             call pahbins_props(pp)%sput_tabs%eval(lT, lr)
 
@@ -1445,6 +1573,7 @@ module dust_rates
                 if (y_gas(iel, 1) < 1d-40) cycle
                 R_total = R_total + y_gas(iel, 1) / dust_info%el_atomic_mass_g(iel) * exp(lr(iel) * ln10)
             end do
+            end if
 
             ! 5. Convert rate to mass loss [atoms/s-1] and compute mass loss rate [g cm-3 s-1]
             if (R_total > 0d0) then
@@ -1484,8 +1613,9 @@ module dust_rates
         real(dp):: log_nH, log_G0
         real(dp):: rate1, rate2
 
+        if (dust_info%local_G0 < pah_photo_G0_min) return   ! physics option (default 0: never)
         log_nH = log10(dust_info%local_nH)
-        log_G0 = log10(dust_info%local_G0)
+        log_G0 = rc_lG0    ! log10(local_G0), compute_rate_caches
 
         idx_G0 = -1
         idx_nH = -1
@@ -1536,6 +1666,7 @@ module dust_rates
         real(dp):: rate1, rate2
         real(dp):: k_single, k_multi
 
+        if (dust_info%local_G0 < pah_photo_G0_min) return   ! physics option (default 0: never)
         log_T = log10(dust_info%local_Tk)
         log_nH = log10(dust_info%local_nH)
 
@@ -1543,7 +1674,7 @@ module dust_rates
         pahloop: do pp = 2, dust_info%npah
             if (.not. pahbins_props(pp)%is_cluster) cycle ! Cluster evaporation is only for PAH clusters
             k_single = dust_info%local_G0 / 0.19306d0
-            k_multi = 1d0 / exp((-3.1692061d0 * log10(dust_info%local_G0) + 13.5642486d0) * ln10)
+            k_multi = 1d0 / exp((-3.1692061d0 * rc_lG0 + 13.5642486d0) * ln10)
             rate1 = min(k_single, k_multi) / yr2sec ! [s-1]
 
             if (rate1 > 0d0) then
@@ -1588,7 +1719,7 @@ module dust_rates
             if (pahbins_props(pp)%is_cluster) cycle
 
             reduced_mass = 5d-1 * pahbins_props(pp)%mpah
-            C_eff = 1d0 / (1d0 + 9.92807181d-7 * (log10(dust_info%local_Tk))**1.37933821d1)
+            C_eff = 1d0 / (1d0 + 9.92807181d-7 * (rc_lT)**1.37933821d1)
             dV_thermal = sqrt(8d0 * kB * dust_info%local_Tk / (pi * reduced_mass))
             coll_section = 4d0 * pi * (pahbins_props(pp)%apah_cm)**2d0
             rate1 = coll_section * dV_thermal * C_eff * y_dust(pp) / pahbins_props(pp)%mpah
@@ -1703,8 +1834,7 @@ module dust_rates
                 !    using precomputed dust_info%Coulomb_factor for this grain.
                 D_av = 0d0
                 do ii = 1, pahbins_props(pp)%ncharge_states
-                    Z_single = pahbins_props(pp)%charge_states(ii)
-                    izion = nint(Z_single)
+                    izion = rc_pah_iz(ii, pp)
                     izion = max(lbound(dust_info%Coulomb_factor,2), min(ubound(dust_info%Coulomb_factor,2), izion))
 
                     weight = 0d0
@@ -1720,7 +1850,7 @@ module dust_rates
                 D_av = max(D_av,1d-10)
 
                 ! 3. Pair collision factor.
-                coll_factor = pi * (pahbins_props(pp)%apah_cm + dustbins_props(kk)%asize_cm)**2d0 * v_stick * D_av
+                coll_factor = rc_xs_pd(pp, kk) * v_stick * D_av
 
                 ! 4. Collision rate from PAH-dust encounters, analogous to all-bin coagulation.
                 rate1 = coll_factor * y_dust(index_dust) / dustbins_props(kk)%mgrain

@@ -15,6 +15,7 @@ module dust_cooling
     public :: init_dust_coll_heating_BH80_cache
     public :: CollHeatPre, coll_heating_prepare, coll_heating_eval, coll_heating_dTg, coll_heating_dZ
     public :: bh80_unit_flux
+    public :: BH80At, coll_heating_eval_at, coll_heating_dTg_at
 
     ! The collisional heating split at the dust temperature: everything but the T_d dependence,
     ! for one bin and one gas state (coll_heating_prepare), then H_coll at any T_d (coll_heating_eval)
@@ -26,6 +27,12 @@ module dust_cooling
         ! with deriv: d sum_rate / d T_gas, d sum_rate / d Z (dust_coll_charge), d supp_inv / d T_gas
         real(dp) :: dsum_dT = 0d0, dsum_dZ = 0d0, dsupp_inv = 0d0
     end type CollHeatPre
+
+    ! The T_d-dependent factors of one BH80 evaluation at T_d (coll_heating_eval_at): sx = sqrt((Td + Tg)/250),
+    ! e = exp(-sx), for the derivative at the same T_d (coll_heating_dTg_at); Td < 0: none
+    type BH80At
+        real(dp) :: Td = -1d0, sx = 0d0, e = 0d0
+    end type BH80At
 
     ! BH80 constants (init_dust_coll_heating_BH80_cache). A species s hits a grain of radius a at
     ! n_s pi a^2 sqrt(8 kB T / (pi m_s)): the mean thermal speed over sqrt(T), sqrt(8 kB / (pi m_s))
@@ -349,6 +356,108 @@ module dust_cooling
         end if
         bh80_dTg = dP * S + P * dS
     end function bh80_dTg
+
+    real(dp) function bh80_eval_at(pre,Td,at)
+        ! bh80_eval(pre,pre%Tgas,Td), keeping its T_d factors in at
+        implicit none
+        type(CollHeatPre), intent(in) :: pre
+        real(dp), intent(in) :: Td
+        type(BH80At), intent(out) :: at
+        real(dp) :: accomm_factor,prefactor,Hcoll,Tgas
+
+        Tgas = pre%Tgas
+        prefactor = 2d0 * kB * (Tgas - Td) * pre%sqrtTg
+        at%Td = Td
+        at%sx = sqrt((Td+Tgas)/250d0)
+        at%e = exp(-at%sx)
+        accomm_factor = (1d0 - pre%a0_h2) * at%e + pre%a0_h2
+        Hcoll = pre%s_const + pre%nh2_pf * accomm_factor
+        if (pre%hneutral) then
+            accomm_factor = (1d0 - pre%a0_h) * at%e + pre%a0_h
+            Hcoll = Hcoll + pre%nhi_pf * accomm_factor
+        end if
+        bh80_eval_at = prefactor * Hcoll
+    end function bh80_eval_at
+
+    real(dp) function bh80_eval_from(pre,Td,at)
+        ! bh80_eval(pre,pre%Tgas,Td) from the T_d factors at = bh80_eval_at at this Td
+        implicit none
+        type(CollHeatPre), intent(in) :: pre
+        real(dp), intent(in) :: Td
+        type(BH80At), intent(in) :: at
+        real(dp) :: accomm_factor,prefactor,Hcoll
+
+        prefactor = 2d0 * kB * (pre%Tgas - Td) * pre%sqrtTg
+        accomm_factor = (1d0 - pre%a0_h2) * at%e + pre%a0_h2
+        Hcoll = pre%s_const + pre%nh2_pf * accomm_factor
+        if (pre%hneutral) then
+            accomm_factor = (1d0 - pre%a0_h) * at%e + pre%a0_h
+            Hcoll = Hcoll + pre%nhi_pf * accomm_factor
+        end if
+        bh80_eval_from = prefactor * Hcoll
+    end function bh80_eval_from
+
+    real(dp) function bh80_dTg_from(pre,Td,at)
+        ! bh80_dTg(pre,Td) from the T_d factors at = bh80_eval_at at this Td
+        implicit none
+        type(CollHeatPre), intent(in) :: pre
+        real(dp), intent(in) :: Td
+        type(BH80At), intent(in) :: at
+        real(dp) :: Tg, e, de, P, dP, S, dS
+
+        Tg = pre%Tgas
+        P = 2d0 * kB * (Tg - Td) * pre%sqrtTg
+        dP = 2d0 * kB * (pre%sqrtTg + (Tg - Td) / (2d0 * pre%sqrtTg))
+        e = at%e
+        de = -e / (500d0 * at%sx)
+        S = pre%s_const + pre%nh2_pf * ((1d0 - pre%a0_h2) * e + pre%a0_h2)
+        dS = pre%nh2_pf * (1d0 - pre%a0_h2) * de
+        if (pre%hneutral) then
+            S = S + pre%nhi_pf * ((1d0 - pre%a0_h) * e + pre%a0_h)
+            dS = dS + pre%nhi_pf * (1d0 - pre%a0_h) * de
+        end if
+        bh80_dTg_from = dP * S + P * dS
+    end function bh80_dTg_from
+
+    real(dp) function coll_heating_eval_at(pre,Td,at)
+        ! coll_heating_eval(pre,Td), keeping the T_d factors of its BH80 part in at (at%Td < 0: none)
+        implicit none
+        type(CollHeatPre), intent(in) :: pre
+        real(dp), intent(in) :: Td
+        type(BH80At), intent(out) :: at
+        real(dp) :: Hcoll
+
+        at%Td = -1d0
+        if (pre%hot) then
+            Hcoll = pre%sum_rate * (pre%Tgas - Td)
+            if (pre%blend) Hcoll = pre%supp_inv * Hcoll + pre%supp * bh80_eval_at(pre,Td,at)
+        else
+            Hcoll = bh80_eval_at(pre,Td,at)
+        end if
+        coll_heating_eval_at = Hcoll
+    end function coll_heating_eval_at
+
+    real(dp) function coll_heating_dTg_at(pre,Td,at)
+        ! coll_heating_dTg(pre,Td), from the T_d factors at where they are those of this Td
+        implicit none
+        type(CollHeatPre), intent(in) :: pre
+        real(dp), intent(in) :: Td
+        type(BH80At), intent(in) :: at
+        real(dp) :: dH
+
+        if (at%Td /= Td .or. at%Td < 0d0) then
+            coll_heating_dTg_at = coll_heating_dTg(pre,Td)
+            return
+        end if
+        if (pre%hot) then
+            dH = pre%sum_rate + (pre%Tgas - Td) * pre%dsum_dT
+            if (pre%blend) dH = pre%supp_inv * dH + pre%dsupp_inv * pre%sum_rate * (pre%Tgas - Td) &
+                                + pre%supp * bh80_dTg_from(pre,Td,at) - pre%dsupp_inv * bh80_eval_from(pre,Td,at)
+        else
+            dH = bh80_dTg_from(pre,Td,at)
+        end if
+        coll_heating_dTg_at = dH
+    end function coll_heating_dTg_at
 
     real(dp) function coll_heating_eval(pre,Td)
         ! H_coll [erg/s] at dust temperature Td from coll_heating_prepare

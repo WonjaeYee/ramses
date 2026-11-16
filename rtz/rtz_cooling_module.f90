@@ -949,6 +949,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       real(dp):: alpha_H2_loc, beta_H2_loc, cr_H2, de_H2, xH2_loc, xH2_loc_eq, f_shd, f_shd_CO, sh2_loc
       real(dp):: tau_dust_FUV, tau_dust_LW, tau_dust_CO, sco_loc
       real(dp) :: trans_dust
+      logical :: band_later   ! the CALIMA block sets trans_dust and f_shd_CO's dust factor (P3)
       real(dp) :: bg_dust, bg_CO   ! mode 3: the background's shielding for the grains and metals, and for CO
 #ifdef CALIMA
       integer :: n_lw, n_fuv
@@ -1136,8 +1137,15 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          eqm_tau_dust_LW_new = tau_dust_LW ; eqm_tau_dust_CO_new = tau_dust_CO
       end if
 #endif
-      ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0 (times bg_dust in mode 3)
-      trans_dust = lw_transmission(tau_dust_FUV, 0d0)
+      ! the grains' FUV field: advected_G0 * trans_dust + UV_background_G0 (times bg_dust in mode 3). With CALIMA
+      ! and RT the block before the cooling sets trans_dust and the dust factor of f_shd_CO from the groups
+      ! (its condition: band_later), and nothing reads them before: not computed here then
+      band_later = .false.
+#if defined(CALIMA) && defined(RT)
+      band_later = rt_advect .and. rtz_equilibrium_test .le. 0 .and. rt_c_cgs(ilevel) > 0d0
+#endif
+      trans_dust = 1d0
+      if (.not. band_later) trans_dust = lw_transmission(tau_dust_FUV, 0d0)
       ! local H2 line self-shielding
       sh2_loc = 1d0
       if (isH2_rtz) &
@@ -1150,7 +1158,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
          if (rtz_shielding_config .ge. 2) then
             sco_loc = comp_SCO(nCO(icell), 0.5d0*nElement_dep(1)*dXion(1,3), dx_SS_H2(icell))
             f_shd_CO = sco_loc
-            if (rtz_shielding_config .ge. 3) f_shd_CO = sco_loc * lw_transmission(tau_dust_CO, 0d0)
+            if (rtz_shielding_config .ge. 3 .and. .not. band_later) f_shd_CO = sco_loc * lw_transmission(tau_dust_CO, 0d0)
          end if
       end if
       ! Mode 3: the background is the field of the test and is shielded as the rest is: through the dust
@@ -1597,11 +1605,6 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       ! this substep. Needs rt_advect (dustRp from compute_dust_rad_rates); the equilibrium tests
       ! keep the isotropic values above.
       if (rt_advect .and. rtz_equilibrium_test.le.0 .and. dust_helper%local_c > 0d0) then
-         call dust_shield_tau(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, 0, &
-                              tau_dust_FUV, tau_dust_LW, tau_dust_CO)
-         trans_fuv = lw_transmission(tau_dust_FUV, 0d0)
-         trans_lw  = lw_transmission(tau_dust_LW, 0d0)
-         trans_co  = lw_transmission(tau_dust_CO, 0d0)
          n_lw = 0 ; n_fuv = 0
          sum_lw = 0d0 ; wsum_lw = 0d0 ; mean_lw = 0d0
          sum_fuv = 0d0 ; wsum_fuv = 0d0 ; mean_fuv = 0d0
@@ -1620,6 +1623,14 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                sum_fuv = sum_fuv + dNp(igroup) * group_egy(igroup) * trans_g
             end if
          end do
+         ! a band without groups: the isotropic transmission of the local grains
+         if (n_lw == 0 .or. n_fuv == 0) then
+            call dust_shield_tau(nElement_dep(1), dx_SS_H2(icell), dust_to_gas_mass_ratio_over_mw, 0, &
+                                 tau_dust_FUV, tau_dust_LW, tau_dust_CO)
+            trans_fuv = lw_transmission(tau_dust_FUV, 0d0)
+            trans_lw  = lw_transmission(tau_dust_LW, 0d0)
+            trans_co  = lw_transmission(tau_dust_CO, 0d0)
+         end if
          ! no photons in the band: the plain mean over its groups
          if (n_lw > 0) then
             trans_lw = mean_lw / n_lw

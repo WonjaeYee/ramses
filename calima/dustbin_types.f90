@@ -216,6 +216,7 @@ module dustbin_types
         type(DustTable),dimension(0:n_elements) :: collisional_tab ! Collisional tables (0 is for electrons)
         type(TableFamily) :: coll_tabs     ! collisional_tab(0:n_elements) at phi = 0, on their common log10 T axis
         type(TableFamily) :: sput_tabs     ! sputtering_tab(1:n_elements) at phi = 0, on their common log10 T axis
+        real(dp), dimension(1:n_elements) :: sput_lo = 0d0   ! exp(ln10 sput_tabs%y(:,1)): the rates below its T axis
         type(DustTable) :: cs_abs_tab, cs_scat_tab, cs_ext_tab ! Absorption, scattering and extinction cross-section tables
         type(DustTable) :: Rosseland_tab, Planck_tab ! Rosseland and Planck mean opacity tables
         type(DustTable),dimension(:),allocatable :: Im_n ! Imaginary part of the refractive index tables for each element
@@ -260,6 +261,7 @@ module dustbin_types
         ! Tables for PAH processes
         type(DustTable),dimension(0:n_elements) :: sputtering_tab ! PAH tables for each element
         type(TableFamily) :: sput_tabs     ! sputtering_tab(0:n_elements), on their common log10 T axis
+        real(dp), dimension(0:n_elements) :: sput_lo = 0d0   ! exp(ln10 sput_tabs%y(:,1)): the rates below its T axis
         type(DustTable) :: peh_eff_tab, peh_pabs_tab ! Photoelectric efficiency and absorption cross-section tables for PAHs
         type(DustTable),dimension(:),allocatable :: fcharge_tab ! Charging states distribution tables for PAHs
         type(DustTable) :: cs_abs_tab_n, cs_scat_tab_n, cs_ext_tab_n ! Absorption, scattering and extinction cross-section tables for neutral PAHs
