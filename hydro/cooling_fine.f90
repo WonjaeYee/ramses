@@ -368,7 +368,7 @@ contains
     real(dp),dimension(1:nvector,1:npah)::rho_pah
 #endif
     real(kind=8)::wallclock,t0
-    integer::k,err_idx
+    integer::k,err_idx,ig,id
     xion=0d0; nElement=0d0; dNpdt=0d0; dFpdt=0d0
     T2_new(1)=r(o_T2)
     do k=1,cq_nion
@@ -379,11 +379,19 @@ contains
     end do
     nCO(1)=r(o_CO)
     Np(:,1)=r(o_Np:o_Np+nGroups-1)
-    Fp(:,:,1)=reshape(r(o_Fp:o_Fp+ndim*nGroups-1),(/ndim,nGroups/))
+    do ig=1,nGroups           ! the record holds Fp(1:ndim,1:nGroups) in column order
+       do id=1,ndim
+          Fp(id,ig,1)=r(o_Fp+(ig-1)*ndim+id-1)
+       end do
+    end do
     p_gas(:,1)=r(o_pg:o_pg+ndim-1)
     if(rt_smooth)then
        dNpdt(:,1)=r(o_dNp:o_dNp+nGroups-1)
-       dFpdt(:,:,1)=reshape(r(o_dFp:o_dFp+ndim*nGroups-1),(/ndim,nGroups/))
+       do ig=1,nGroups
+          do id=1,ndim
+             dFpdt(id,ig,1)=r(o_dFp+(ig-1)*ndim+id-1)
+          end do
+       end do
     end if
     dx_SS_H2(1)=r(o_dx)
 #ifdef CALIMA
@@ -417,7 +425,11 @@ contains
     end do
     r(o_CO)=nCO(1)
     r(o_Np:o_Np+nGroups-1)=Np(:,1)
-    r(o_Fp:o_Fp+ndim*nGroups-1)=reshape(Fp(:,:,1),(/ndim*nGroups/))
+    do ig=1,nGroups
+       do id=1,ndim
+          r(o_Fp+(ig-1)*ndim+id-1)=Fp(id,ig,1)
+       end do
+    end do
     r(o_pg:o_pg+ndim-1)=p_gas(:,1)
 #ifdef CALIMA
     r(o_dust:o_dust+ndust-1)=rho_dust(1,:)
@@ -1194,7 +1206,8 @@ subroutine coolfine1(ind_grid,ngrid,ilevel,iphase)
 #ifdef RTZ
         ! Consistency of the passive scalars after the hydro step (counted, reported at
         ! each output; renormalised only with passive_renorm)
-        if(ps_ntop>0) call ps_check_cells(ind_leaf,nleaf)
+        ! once per level step (the first RT sub-cycle): the scalars change only in the hydro step
+        if(ps_ntop>0 .and. (ps_rt_substep<=1 .or. passive_renorm)) call ps_check_cells(ind_leaf,nleaf)
         counter = 0
         e_counter = 0
         nElement = 0d0

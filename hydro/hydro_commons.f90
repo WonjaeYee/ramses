@@ -23,6 +23,8 @@ module hydro_commons
   real(dp),allocatable,dimension(:,:,:,:,:)::ps_rch
   ! consistency diagnostics accumulated in cooling_fine since the last report
   integer(kind=8)::ps_nbad_top=0,ps_nbad_child=0,ps_ncheck=0,ps_nrenorm=0
+  ! the RT sub-cycle cooling_fine is called from (rt_step), 0 outside it: the check runs at the first only
+  integer::ps_rt_substep=0
   real(dp)::ps_maxdev_top=0,ps_maxdev_child=0
   ! The uold slots of the gas-phase metals, set once in read_hydro_params: with RTZ the tracked elements beyond H and
   ! He, without RTZ the metallicity scalars. Used by the metallicity and DTM movie maps and CALIMA's box masses.
