@@ -13,8 +13,8 @@ subroutine init_time
   use movie_lines_module, only: init_movie_lines
   use cosmic_ray_ionization_module, only: initialize_cr_rates
   use photoionization_UVB_module, only: load_UVB_data, update_UVB
-  use charge_exchange_module, only: load_ct_rates
-  use recombination_module, only: load_recombination_data
+  use charge_exchange_module, only: load_ct_rates, ct_tables_prebuild
+  use recombination_module, only: load_recombination_data, rec_tables_prebuild
   use rtz_coolrates_module, only: initialize_high_temperature_metal_cooling, initialize_fine_structure_tables
   use metal_yields_module, only: initialize_SN_yields
   use molecules_module, only: initialize_SCO_table
@@ -345,6 +345,8 @@ subroutine init_time
 
   ! Initialize the Cloudy radiative recombination rates
   call load_recombination_data()
+  call ct_tables_prebuild()      ! the rate tables of the run's elements (rtz_rate_tables)
+  call rec_tables_prebuild()
 
   ! Initialize high temperature cooling tables
   call initialize_high_temperature_metal_cooling()

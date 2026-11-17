@@ -6,6 +6,7 @@ module recombination_module
 
   private  ! everything is private by default
   public :: recombination, load_recombination_data, old_recombination_HII, old_recombination_HeII, old_recombination_HeIII
+  public :: rec_tables_prebuild
   public :: init_recrad_table, recrad_fractions, heI_recrad_cell, otsa_he_photons, otsa_h_dust_alpha
 
   !---------------------------------------------------------------------------
@@ -584,6 +585,21 @@ module recombination_module
     0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00, 0.0000d+00 ], &
     shape=[8,27])
 
+  ! ---- the metals' recombination rates (ion, element): cubic Hermite tables in log10 T (rtz_rate_tables)
+  integer, parameter :: rrt_npd = 400                       ! nodes per dex
+  real(dp), parameter :: rrt_x0 = 0d0, rrt_x1 = 9d0        ! log10 T [K] of the first and last node
+  integer, parameter :: rrt_nk = 3600                       ! cells: (x1 - x0) * npd
+  integer, parameter :: rrt_maxp = 128                         ! columns
+  real(dp), allocatable, save :: rrt_tab(:,:,:)             ! (2, column, 0:nk): value, slope x cell width (dex)
+  integer, save :: rrt_id(30,30) = 0                    ! pair -> column; 0 not built, -1 not tabulated
+  integer, save :: rrt_np = 0
+  real(dp), save :: rrt_tlo(128) = 0d0, rrt_thi(128) = huge(1d0)   ! the column's range in T
+  real(dp), save :: rrt_vlo(128) = 0d0, rrt_vhi(128) = 0d0         ! its value below / above it
+  real(dp), save :: rrt_T = -1d0, rrt_w(4) = 0d0           ! the Hermite weights at the last T
+  integer, save :: rrt_k = 0
+  real(dp), save :: rrt_errmax = 0d0                        ! the largest midpoint error found (rate > 1e-30)
+  integer, save :: rrt_ci = 0, rrt_ce = 0       ! the pair being checked
+
 CONTAINS
 
 subroutine load_recombination_data()
@@ -853,6 +869,26 @@ FUNCTION alpha_DR(T, DR_rates_e, DR_rates_c) result(rate)
 END FUNCTION alpha_DR
 
 FUNCTION recombination(T, ion, element_idx) result(rate)
+  ! the metals' rates from their table (rtz_rate_tables), else recombination_exact
+  use rt_parameters, only: rtz_rate_tables
+  implicit none
+  real(dp), intent(in) :: T
+  integer, intent(in) :: ion, element_idx
+  real(dp) :: rate
+  integer :: c
+  if (rtz_rate_tables .and. element_idx >= 3 .and. element_idx <= 30 .and. ion >= 1 .and. ion <= 30 &
+      .and. T >= 1d0 .and. T < 1d9) then
+     c = rrt_id(ion, element_idx)
+     if (c == 0) c = rrt_column(ion, element_idx)
+     if (c > 0) then
+        rate = max(rrt_interp(c, T), 1d-100)
+        return
+     end if
+  end if
+  rate = recombination_exact(T, ion, element_idx)
+END FUNCTION recombination
+
+FUNCTION recombination_exact(T, ion, element_idx) result(rate)
   use rt_parameters, only: rt_otsa
   implicit none
   real(dp), intent(in) :: T
@@ -911,7 +947,108 @@ FUNCTION recombination(T, ion, element_idx) result(rate)
 
   rate = MAX(rate,1.d-100)
 
-END FUNCTION recombination
+END FUNCTION recombination_exact
+
+FUNCTION rrt_interp(c, T) result(v)
+  ! column c at T (inside the table's T range): the cubic Hermite interpolant, weights shared at one T
+  implicit none
+  integer, intent(in) :: c
+  real(dp), intent(in) :: T
+  real(dp) :: v, x, s, s2, s3
+  integer :: k
+  if (T /= rrt_T) then
+     x = (log10(T) - rrt_x0) * rrt_npd
+     k = min(max(int(x), 0), rrt_nk - 1)
+     s = x - k
+     s2 = s * s
+     s3 = s2 * s
+     rrt_w(1) = 2d0 * s3 - 3d0 * s2 + 1d0
+     rrt_w(2) = s3 - 2d0 * s2 + s
+     rrt_w(3) = 3d0 * s2 - 2d0 * s3
+     rrt_w(4) = s3 - s2
+     rrt_k = k
+     rrt_T = T
+  end if
+  k = rrt_k
+  v = rrt_w(1) * rrt_tab(1,c,k) + rrt_w(2) * rrt_tab(2,c,k) + rrt_w(3) * rrt_tab(1,c,k+1) &
+      + rrt_w(4) * rrt_tab(2,c,k+1)
+END FUNCTION rrt_interp
+
+SUBROUTINE rrt_check(c, f)
+  ! the column's error at the cells' midpoints against the exact f, where f > 1e-30 (kept in rrt_errmax)
+  implicit none
+  integer, intent(in) :: c
+  real(dp), external :: f
+  integer :: k
+  real(dp) :: Tm, ex, ap
+  do k = 0, rrt_nk - 1
+     Tm = 10d0**(rrt_x0 + (k + 0.5d0) / rrt_npd)
+     if (Tm <= rrt_tlo(c) .or. Tm >= rrt_thi(c)) cycle
+     ex = f(Tm)
+     if (ex <= 1d-30) cycle
+     ap = 0.5d0 * (rrt_tab(1,c,k) + rrt_tab(1,c,k+1)) + 0.125d0 * (rrt_tab(2,c,k) - rrt_tab(2,c,k+1))
+     rrt_errmax = max(rrt_errmax, abs(ap / ex - 1d0))
+  end do
+END SUBROUTINE rrt_check
+
+FUNCTION rec_exact_at(Tx) result(v)
+  ! the exact rate of the pair being checked, at Tx
+  implicit none
+  real(dp), intent(in) :: Tx
+  real(dp) :: v
+  v = recombination_exact(Tx, rrt_ci, rrt_ce)
+END FUNCTION rec_exact_at
+
+FUNCTION rrt_column(ion, el) result(c)
+  ! the column of (ion, element), built at its first use (-1 when the table is full)
+  implicit none
+  integer, intent(in) :: ion, el
+  integer :: c, k
+  real(dp) :: x, dx, f(-2:2)
+  integer :: j
+  c = rrt_id(ion, el)
+  if (c /= 0) return
+  if (rrt_np >= rrt_maxp) then
+     rrt_id(ion, el) = -1
+     c = -1
+     return
+  end if
+  if (.not. allocated(rrt_tab)) allocate(rrt_tab(2, rrt_maxp, 0:rrt_nk))
+  rrt_np = rrt_np + 1
+  c = rrt_np
+  dx = 1d-3                              ! dex, the 4th-order difference of the slope
+  do k = 0, rrt_nk
+     x = rrt_x0 + dble(k) / rrt_npd
+     do j = -2, 2
+        f(j) = recombination_exact(10d0**(x + j * dx), ion, el)
+     end do
+     rrt_tab(1, c, k) = f(0)
+     rrt_tab(2, c, k) = (f(-2) - 8d0 * f(-1) + 8d0 * f(1) - f(2)) / (12d0 * dx) / rrt_npd
+  end do
+  rrt_id(ion, el) = c
+  rrt_ci = ion
+  rrt_ce = el
+  call rrt_check(c, rec_exact_at)
+END FUNCTION rrt_column
+
+SUBROUTINE rec_tables_prebuild()
+  ! the columns of the run's metals at init, and the check of their accuracy
+  use amr_commons, only: myid
+  use rt_parameters, only: rtz_rate_tables
+  use rtz_module, only: elements, n_elements
+  implicit none
+  integer :: iE, z, i, c
+  if (.not. rtz_rate_tables) return
+  do iE = 1, n_elements
+     z = elements(iE)%atomic_number
+     if (z < 3 .or. z > 30) cycle
+     do i = 2, elements(iE)%n_ions
+        c = rrt_column(i, z)
+     end do
+  end do
+  if (myid == 1) write(*,'(A,I0,A,ES9.2)') ' Recombination rate tables (rtz_rate_tables, metals): ', rrt_np, &
+       ' columns, 400 nodes/dex over 1 K-1e9 K; largest midpoint error (rate > 1e-30) ', rrt_errmax
+END SUBROUTINE rec_tables_prebuild
 
 !************************************************************************
 INTEGER FUNCTION group_of(E, L0, L1, n)

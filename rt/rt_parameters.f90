@@ -254,6 +254,9 @@ module rt_parameters
   ! dC/dT of the semi-implicit temperature update: .false. a forward difference, C(T) and C(T(1 + 1e-5));
   ! .true. a central one, C(T(1 +- 1e-5)), one cooling call more per substep
   logical::rtz_dCdT_central=.false.
+  ! rtz_rate_tables: the charge-exchange fits and the metals' recombination rates from cubic Hermite tables in
+  ! log10 T (relative error ~1e-8); .false. evaluates the fits at every call, as before
+  logical::rtz_rate_tables=.true.
   logical::rtz_single_cell_test=.false.
   character(len=256)::rtz_single_cell_test_file=''
   real(dp),dimension(nGroups,1:27,1:27)::signc,sigec,PHrate
