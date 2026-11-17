@@ -30,7 +30,7 @@ module rtz_cooling_module
 
    private   ! default
    public rtz_solve_cooling, rtz_set_model, PHrate, T2_min_fix, signc_dust, &
-          rtz_run_single_cell_test
+          rtz_run_single_cell_test, rtg_consts_level
 
    ! real(dp),parameter::T2_min_fix=1d-2 ! Min temperature [K]
    real(dp),parameter::T2_min_fix=1d0 ! Min temperature [K]
@@ -40,6 +40,9 @@ module rtz_cooling_module
    ! The substep tolerances T_frac, x_frac, Np_frac, Fp_frac are namelist parameters now
    ! (rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac in &RT_PARAMS, rt_parameters.f90)
    real(dp),dimension(nGroups, 3)::signc_dust
+   ! the level whose group constants (rtz_updateRTGroups_CoolConstants) are current: set by cooling_fine for the
+   ! duration of its call (the group properties do not change within it), -1 otherwise
+   integer, save :: rtg_consts_level = -1
    real(dp), save :: t_rad = 0.0_dp
    real(dp), save :: t_cool = 0.0_dp
    real(dp), save :: t_dust = 0.0_dp
@@ -270,7 +273,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
    loopCodes10(:,0:nslot) = 0
 
 #ifdef RT
-   call rtz_updateRTGroups_CoolConstants(ilevel)
+   if (rtg_consts_level /= ilevel) call rtz_updateRTGroups_CoolConstants(ilevel)
 #endif
    ! Store some temporary variables reduce computations
    one_over_T_FRAC = 1d0 / rtz_T_frac

@@ -536,6 +536,9 @@ subroutine cooling_fine(ilevel)
   use dust_commons, only: comp_sigma_turb
   use dust_utils, only: cmp_sigma_turb
 #endif
+#if defined(RT) && defined(RTZ)
+  use rtz_cooling_module, only: rtg_consts_level
+#endif
   implicit none
   integer::ilevel
   !-------------------------------------------------------------------
@@ -556,6 +559,11 @@ subroutine cooling_fine(ilevel)
 
   if(numbtot(1,ilevel)==0)return
   if(verbose)write(*,111)ilevel
+#if defined(RT) && defined(RTZ)
+  ! the group constants of this level, once for the whole call (rtz_solve_cooling skips them while marked)
+  call rtz_updateRTGroups_CoolConstants(ilevel)
+  rtg_consts_level = ilevel
+#endif
 
   ncache=active(ilevel)%ngrid
 #ifdef CALIMA
@@ -645,6 +653,9 @@ subroutine cooling_fine(ilevel)
 #ifdef CALIMA
      deallocate(sigma_turb)
 #endif
+#if defined(RT) && defined(RTZ)
+     rtg_consts_level = -1
+#endif
      return
   end if
 #else
@@ -712,6 +723,10 @@ subroutine cooling_fine(ilevel)
      call set_table(dble(aexp))
 #endif
   endif
+#endif
+
+#if defined(RT) && defined(RTZ)
+  rtg_consts_level = -1
 #endif
 
 111 format('   Entering cooling_fine for level',i2)
