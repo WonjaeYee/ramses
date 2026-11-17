@@ -931,6 +931,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       integer:: el_h, st_h, oel_h, ost_h, it_hhe, ns_h, isub_hhe
       logical:: hhe_converged, he_on
       logical:: ne_sync                       ! the next ion update sums ne over all ions again
+      real(dp):: inv_nH_ion                   ! 1/n_H in the element loop
       real(dp):: dust_effective_number_density, dust_to_gas_mass_ratio_over_mw
       real(dp):: HI_number_density, HII_number_density
       real(dp):: paired_ion_number_density
@@ -2392,6 +2393,7 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
       end if
 
       ! Loop over all elements
+      inv_nH_ion = 1.d0 / nElement_dep(1)                    ! for x_e after each ion update
       do iElement = 1,n_elements
          if (elements(iElement)%atomic_number > 0) then
             if (rtz_hhe_implicit .and. iElement <= 2) cycle   ! solved above
@@ -2793,8 +2795,8 @@ SUBROUTINE rtz_solve_cooling(T2, aexp, xion, nElement, nCO, &
                else
                   ne = ne + nElement_dep(iElement) * (dXion(iElement,iIon) - x_old) * real(iIon - 1, dp)
                end if
-               xe = ne / nElement_dep(1)
-               phi_s = secondary_cr_rates(xe)
+               xe = ne * inv_nH_ion                     ! inv_nH_ion = 1/n_H, set before the element loop
+               phi_s = (1.d0 - xe * (1.d0 / 1.2d0)) * (0.670d0 / (1.d0 + 20.d0 * xe))   ! secondary_cr_rates
                total_cosmic_ray_ionization_rate = primary_cosmic_ray_ionization_rate * (1.d0 + phi_s)
 
                ! Update mu and T --> only H and He (others don't matter)
