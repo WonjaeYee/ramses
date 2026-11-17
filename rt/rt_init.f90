@@ -202,7 +202,7 @@ SUBROUTINE read_rt_params(nml_ok)
        & ,rtz_eqm_min_its, rtz_source_temperature, rtz_include_dust      &
        & ,rtz_T_frac, rtz_x_frac, rtz_Np_frac, rtz_Fp_frac                &
        & ,rtz_hhe_implicit, rtz_hhe_nsub                                  &
-       & ,rtz_dCdT_central                                                &
+       & ,rtz_dCdT_central, rtz_rate_tables                               &
        & ,rtz_single_cell_test, rtz_single_cell_test_file               &
 #endif
        ! RT regions (for initialization)                                 &

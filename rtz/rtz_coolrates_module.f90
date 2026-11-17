@@ -50,6 +50,13 @@ module rtz_coolrates_module
   ! computed at (they depend on nothing else); per MPI rank, as the CT rate cache
   real(dp), save:: cmb3_z(27) = -1d0, cmb3_Bnu(3,27) = 0d0
   real(dp), save:: cmb2_z(27) = -1d0, cmb2_Bnu(27) = 0d0
+  ! the level solvers' per-species constants (their fixed wavelengths, A and g), kept from the first call of each
+  ! species (keyed by its first table line idx_0); the log10 of the last T; the collision-rate table with the
+  ! colliders contiguous, fs_tab_t(k, line, itemp) = fs_cool_tab(line, itemp, k), its 161st temperature = the 160th
+  real(dp), save:: fs3_c(12,27) = 0d0, fs2_c(4,27) = 0d0
+  logical, save:: fs3_ok(27) = .false., fs2_ok(27) = .false.
+  real(dp), save:: fs_lT_T = -1d0, fs_lT = 0d0
+  real(dp), save:: fs_tab_t(8,27,161) = 0d0
 
   real(dp):: G0_heating_rates(26) = (/ &
     0.d0, & ! 1 - Hydrogen
@@ -985,6 +992,12 @@ SUBROUTINE initialize_fine_structure_tables()
         close(unit_num)
 
     end do
+    do i=1,N_LINES
+        do j=1,160
+            fs_tab_t(:,i,j) = fs_cool_tab(i,j,:)
+        end do
+    end do
+    fs_tab_t(:,:,161) = fs_tab_t(:,:,160)
 
     call build_optical_metal_tables()
     
@@ -1090,7 +1103,11 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     T_cmb = 2.725d0 * (1.d0 + z) ! CMB temperature
 
     ! Get log T and enforce bounds
-    logT = log10(T)
+    if (T /= fs_lT_T) then          ! shared by all the species at this T
+       fs_lT_T = T
+       fs_lT = log10(T)
+    end if
+    logT = fs_lT
 
     !// Enforce bounds on temperature
     tmin = 1.d0
@@ -1099,24 +1116,41 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
     logT = max(logT,1.d0)
     logT = min(logT,tmax)
 
-    nu_10 = C_CGS / (lam_10 * 1d-4) ! Hz
-    nu_20 = C_CGS / (lam_20 * 1d-4) ! Hz
-    nu_21 = C_CGS / (lam_21 * 1d-4) ! Hz
+    if (.not. fs3_ok(idx_0)) then          ! the species' constants, at its first call
+       nu_10 = C_CGS / (lam_10 * 1d-4) ! Hz
+       nu_20 = C_CGS / (lam_20 * 1d-4) ! Hz
+       nu_21 = C_CGS / (lam_21 * 1d-4) ! Hz
 
-    E_10 = (H_PLANCK * C_CGS / (lam_10 * 1d-4)) / KB ! E/K (K)
-    E_20 = (H_PLANCK * C_CGS / (lam_20 * 1d-4)) / KB ! E/K (K)
-    E_21 = (H_PLANCK * C_CGS / (lam_21 * 1d-4)) / KB ! E/K (K)
+       E_10 = (H_PLANCK * C_CGS / (lam_10 * 1d-4)) / KB ! E/K (K)
+       E_20 = (H_PLANCK * C_CGS / (lam_20 * 1d-4)) / KB ! E/K (K)
+       E_21 = (H_PLANCK * C_CGS / (lam_21 * 1d-4)) / KB ! E/K (K)
 
-    lam_10_scaled = lam_10 * 1.d-4
-    lam_20_scaled = lam_20 * 1.d-4
-    lam_21_scaled = lam_21 * 1.d-4
-    B_01 = A_10 * (lam_10_scaled * lam_10_scaled * lam_10_scaled) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
-    B_02 = A_20 * (lam_20_scaled * lam_20_scaled * lam_20_scaled) * (g_2 / g_0) / (2.d0 * H_PLANCK * C_CGS)
-    B_12 = A_21 * (lam_21_scaled * lam_21_scaled * lam_21_scaled) * (g_2 / g_1) / (2.d0 * H_PLANCK * C_CGS)
+       lam_10_scaled = lam_10 * 1.d-4
+       lam_20_scaled = lam_20 * 1.d-4
+       lam_21_scaled = lam_21 * 1.d-4
+       B_01 = A_10 * (lam_10_scaled * lam_10_scaled * lam_10_scaled) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
+       B_02 = A_20 * (lam_20_scaled * lam_20_scaled * lam_20_scaled) * (g_2 / g_0) / (2.d0 * H_PLANCK * C_CGS)
+       B_12 = A_21 * (lam_21_scaled * lam_21_scaled * lam_21_scaled) * (g_2 / g_1) / (2.d0 * H_PLANCK * C_CGS)
 
-    B_10 = (g_0 / g_1) * B_01
-    B_20 = (g_0 / g_2) * B_02
-    B_21 = (g_1 / g_2) * B_12
+       B_10 = (g_0 / g_1) * B_01
+       B_20 = (g_0 / g_2) * B_02
+       B_21 = (g_1 / g_2) * B_12
+       fs3_c(1:12,idx_0) = (/nu_10, nu_20, nu_21, E_10, E_20, E_21, B_01, B_02, B_12, B_10, B_20, B_21/)
+       fs3_ok(idx_0) = .true.
+    else
+       nu_10 = fs3_c(1,idx_0)
+       nu_20 = fs3_c(2,idx_0)
+       nu_21 = fs3_c(3,idx_0)
+       E_10 = fs3_c(4,idx_0)
+       E_20 = fs3_c(5,idx_0)
+       E_21 = fs3_c(6,idx_0)
+       B_01 = fs3_c(7,idx_0)
+       B_02 = fs3_c(8,idx_0)
+       B_12 = fs3_c(9,idx_0)
+       B_10 = fs3_c(10,idx_0)
+       B_20 = fs3_c(11,idx_0)
+       B_21 = fs3_c(12,idx_0)
+    end if
 
     ! CMB black body spectrum
     if (z /= cmb3_z(idx_0)) then
@@ -1137,44 +1171,44 @@ FUNCTION three_level(g_0, g_1, g_2, lam_10, lam_20, lam_21, &
 
     ! All collison strengths are in cm^3 s^-1
     ! For collisions with o-H2
-    q10_oH2 = (fs_cool_tab(idx_0,itemp_low,7) * frac_low) + (fs_cool_tab(idx_0,itemp_high,7) * frac_high)
-    q20_oH2 = (fs_cool_tab(idx_1,itemp_low,7) * frac_low) + (fs_cool_tab(idx_1,itemp_high,7) * frac_high)
-    q21_oH2 = (fs_cool_tab(idx_2,itemp_low,7) * frac_low) + (fs_cool_tab(idx_2,itemp_high,7) * frac_high)
+    q10_oH2 = (fs_tab_t(7,idx_0,itemp_low) * frac_low) + (fs_tab_t(7,idx_0,itemp_high) * frac_high)
+    q20_oH2 = (fs_tab_t(7,idx_1,itemp_low) * frac_low) + (fs_tab_t(7,idx_1,itemp_high) * frac_high)
+    q21_oH2 = (fs_tab_t(7,idx_2,itemp_low) * frac_low) + (fs_tab_t(7,idx_2,itemp_high) * frac_high)
 
     ! For collisions with p-H2
-    q10_pH2 = (fs_cool_tab(idx_0,itemp_low,8) * frac_low) + (fs_cool_tab(idx_0,itemp_high,8) * frac_high)
-    q20_pH2 = (fs_cool_tab(idx_1,itemp_low,8) * frac_low) + (fs_cool_tab(idx_1,itemp_high,8) * frac_high)
-    q21_pH2 = (fs_cool_tab(idx_2,itemp_low,8) * frac_low) + (fs_cool_tab(idx_2,itemp_high,8) * frac_high)
+    q10_pH2 = (fs_tab_t(8,idx_0,itemp_low) * frac_low) + (fs_tab_t(8,idx_0,itemp_high) * frac_high)
+    q20_pH2 = (fs_tab_t(8,idx_1,itemp_low) * frac_low) + (fs_tab_t(8,idx_1,itemp_high) * frac_high)
+    q21_pH2 = (fs_tab_t(8,idx_2,itemp_low) * frac_low) + (fs_tab_t(8,idx_2,itemp_high) * frac_high)
 
     ! For collisions with H
-    q10_H = (fs_cool_tab(idx_0,itemp_low,5) * frac_low) + (fs_cool_tab(idx_0,itemp_high,5) * frac_high)
-    q20_H = (fs_cool_tab(idx_1,itemp_low,5) * frac_low) + (fs_cool_tab(idx_1,itemp_high,5) * frac_high)
-    q21_H = (fs_cool_tab(idx_2,itemp_low,5) * frac_low) + (fs_cool_tab(idx_2,itemp_high,5) * frac_high)
+    q10_H = (fs_tab_t(5,idx_0,itemp_low) * frac_low) + (fs_tab_t(5,idx_0,itemp_high) * frac_high)
+    q20_H = (fs_tab_t(5,idx_1,itemp_low) * frac_low) + (fs_tab_t(5,idx_1,itemp_high) * frac_high)
+    q21_H = (fs_tab_t(5,idx_2,itemp_low) * frac_low) + (fs_tab_t(5,idx_2,itemp_high) * frac_high)
 
     ! For collisions with H+
-    q10_Hp = (fs_cool_tab(idx_0,itemp_low,2) * frac_low) + (fs_cool_tab(idx_0,itemp_high,2) * frac_high)
-    q20_Hp = (fs_cool_tab(idx_1,itemp_low,2) * frac_low) + (fs_cool_tab(idx_1,itemp_high,2) * frac_high)
-    q21_Hp = (fs_cool_tab(idx_2,itemp_low,2) * frac_low) + (fs_cool_tab(idx_2,itemp_high,2) * frac_high)
+    q10_Hp = (fs_tab_t(2,idx_0,itemp_low) * frac_low) + (fs_tab_t(2,idx_0,itemp_high) * frac_high)
+    q20_Hp = (fs_tab_t(2,idx_1,itemp_low) * frac_low) + (fs_tab_t(2,idx_1,itemp_high) * frac_high)
+    q21_Hp = (fs_tab_t(2,idx_2,itemp_low) * frac_low) + (fs_tab_t(2,idx_2,itemp_high) * frac_high)
 
     ! For collisions with e
-    q10_e = (fs_cool_tab(idx_0,itemp_low,1) * frac_low) + (fs_cool_tab(idx_0,itemp_high,1) * frac_high)
-    q20_e = (fs_cool_tab(idx_1,itemp_low,1) * frac_low) + (fs_cool_tab(idx_1,itemp_high,1) * frac_high)
-    q21_e = (fs_cool_tab(idx_2,itemp_low,1) * frac_low) + (fs_cool_tab(idx_2,itemp_high,1) * frac_high)
+    q10_e = (fs_tab_t(1,idx_0,itemp_low) * frac_low) + (fs_tab_t(1,idx_0,itemp_high) * frac_high)
+    q20_e = (fs_tab_t(1,idx_1,itemp_low) * frac_low) + (fs_tab_t(1,idx_1,itemp_high) * frac_high)
+    q21_e = (fs_tab_t(1,idx_2,itemp_low) * frac_low) + (fs_tab_t(1,idx_2,itemp_high) * frac_high)
 
     ! For collisions with He
-    q10_He = (fs_cool_tab(idx_0,itemp_low,6) * frac_low) + (fs_cool_tab(idx_0,itemp_high,6) * frac_high)
-    q20_He = (fs_cool_tab(idx_1,itemp_low,6) * frac_low) + (fs_cool_tab(idx_1,itemp_high,6) * frac_high)
-    q21_He = (fs_cool_tab(idx_2,itemp_low,6) * frac_low) + (fs_cool_tab(idx_2,itemp_high,6) * frac_high)
+    q10_He = (fs_tab_t(6,idx_0,itemp_low) * frac_low) + (fs_tab_t(6,idx_0,itemp_high) * frac_high)
+    q20_He = (fs_tab_t(6,idx_1,itemp_low) * frac_low) + (fs_tab_t(6,idx_1,itemp_high) * frac_high)
+    q21_He = (fs_tab_t(6,idx_2,itemp_low) * frac_low) + (fs_tab_t(6,idx_2,itemp_high) * frac_high)
 
     ! For collisions with He+
-    q10_Hep = (fs_cool_tab(idx_0,itemp_low,3) * frac_low) + (fs_cool_tab(idx_0,itemp_high,3) * frac_high)
-    q20_Hep = (fs_cool_tab(idx_1,itemp_low,3) * frac_low) + (fs_cool_tab(idx_1,itemp_high,3) * frac_high)
-    q21_Hep = (fs_cool_tab(idx_2,itemp_low,3) * frac_low) + (fs_cool_tab(idx_2,itemp_high,3) * frac_high)
+    q10_Hep = (fs_tab_t(3,idx_0,itemp_low) * frac_low) + (fs_tab_t(3,idx_0,itemp_high) * frac_high)
+    q20_Hep = (fs_tab_t(3,idx_1,itemp_low) * frac_low) + (fs_tab_t(3,idx_1,itemp_high) * frac_high)
+    q21_Hep = (fs_tab_t(3,idx_2,itemp_low) * frac_low) + (fs_tab_t(3,idx_2,itemp_high) * frac_high)
 
     ! For collisions with He++
-    q10_Hepp = (fs_cool_tab(idx_0,itemp_low,4) * frac_low) + (fs_cool_tab(idx_0,itemp_high,4) * frac_high)
-    q20_Hepp = (fs_cool_tab(idx_1,itemp_low,4) * frac_low) + (fs_cool_tab(idx_1,itemp_high,4) * frac_high)
-    q21_Hepp = (fs_cool_tab(idx_2,itemp_low,4) * frac_low) + (fs_cool_tab(idx_2,itemp_high,4) * frac_high)
+    q10_Hepp = (fs_tab_t(4,idx_0,itemp_low) * frac_low) + (fs_tab_t(4,idx_0,itemp_high) * frac_high)
+    q20_Hepp = (fs_tab_t(4,idx_1,itemp_low) * frac_low) + (fs_tab_t(4,idx_1,itemp_high) * frac_high)
+    q21_Hepp = (fs_tab_t(4,idx_2,itemp_low) * frac_low) + (fs_tab_t(4,idx_2,itemp_high) * frac_high)
 
     ! Net collision strengths note the 75-25 ortho-para H2
     C_10 = (q10_e * ne) + (q10_H * nH) + (q10_Hp * nHp) + (q10_oH2 * 0.75d0 * nH2) + (q10_pH2 * 0.25d0 * nH2) + (q10_He * nHe) + (q10_Hep * nHep) + (q10_Hepp * nHepp)
@@ -1264,7 +1298,11 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     T_cmb = 2.725d0 * (1.d0 + z) ! CMB temperature
 
     ! Get log T and enforce bounds
-    logT = log10(T)
+    if (T /= fs_lT_T) then          ! shared by all the species at this T
+       fs_lT_T = T
+       fs_lT = log10(T)
+    end if
+    logT = fs_lT
 
     !// Enforce bounds on temperature
     tmin = 1.d0
@@ -1273,14 +1311,23 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
     logT = max(logT,1.d0)
     logT = min(logT,tmax)
 
-    nu_10 = C_CGS / (lam_10 * 1d-4) ! Hz
+    if (.not. fs2_ok(idx_0)) then          ! the species' constants, at its first call
+       nu_10 = C_CGS / (lam_10 * 1d-4) ! Hz
 
-    E_10 = (H_PLANCK * C_CGS / (lam_10 * 1d-4)) / KB ! E/K (K)
+       E_10 = (H_PLANCK * C_CGS / (lam_10 * 1d-4)) / KB ! E/K (K)
 
-    lam_10_scaled = lam_10 * 1.d-4
-    B_01 = A_10 * (lam_10_scaled * lam_10_scaled * lam_10_scaled) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
+       lam_10_scaled = lam_10 * 1.d-4
+       B_01 = A_10 * (lam_10_scaled * lam_10_scaled * lam_10_scaled) * (g_1 / g_0) / (2.d0 * H_PLANCK * C_CGS)
 
-    B_10 = (g_0 / g_1) * B_01
+       B_10 = (g_0 / g_1) * B_01
+       fs2_c(1:4,idx_0) = (/nu_10, E_10, B_01, B_10/)
+       fs2_ok(idx_0) = .true.
+    else
+       nu_10 = fs2_c(1,idx_0)
+       E_10 = fs2_c(2,idx_0)
+       B_01 = fs2_c(3,idx_0)
+       B_10 = fs2_c(4,idx_0)
+    end if
 
     ! CMB black body spectrum
     if (z /= cmb2_z(idx_0)) then
@@ -1297,28 +1344,28 @@ FUNCTION two_level(g_0, g_1, lam_10, A_10, z, T, &
 
     ! All collison strengths are in cm^3 s^-1
     ! For collisions with o-H2
-    q10_oH2 = (fs_cool_tab(idx_0,itemp_low,7) * frac_low) + (fs_cool_tab(idx_0,itemp_high,7) * frac_high)
+    q10_oH2 = (fs_tab_t(7,idx_0,itemp_low) * frac_low) + (fs_tab_t(7,idx_0,itemp_high) * frac_high)
 
     ! For collisions with p-H2
-    q10_pH2 = (fs_cool_tab(idx_0,itemp_low,8) * frac_low) + (fs_cool_tab(idx_0,itemp_high,8) * frac_high)
+    q10_pH2 = (fs_tab_t(8,idx_0,itemp_low) * frac_low) + (fs_tab_t(8,idx_0,itemp_high) * frac_high)
 
     ! For collisions with H
-    q10_H = (fs_cool_tab(idx_0,itemp_low,5) * frac_low) + (fs_cool_tab(idx_0,itemp_high,5) * frac_high)
+    q10_H = (fs_tab_t(5,idx_0,itemp_low) * frac_low) + (fs_tab_t(5,idx_0,itemp_high) * frac_high)
 
     ! For collisions with H+
-    q10_Hp = (fs_cool_tab(idx_0,itemp_low,2) * frac_low) + (fs_cool_tab(idx_0,itemp_high,2) * frac_high)
+    q10_Hp = (fs_tab_t(2,idx_0,itemp_low) * frac_low) + (fs_tab_t(2,idx_0,itemp_high) * frac_high)
 
     ! For collisions with e
-    q10_e = (fs_cool_tab(idx_0,itemp_low,1) * frac_low) + (fs_cool_tab(idx_0,itemp_high,1) * frac_high)
+    q10_e = (fs_tab_t(1,idx_0,itemp_low) * frac_low) + (fs_tab_t(1,idx_0,itemp_high) * frac_high)
 
     ! For collisions with He
-    q10_He = (fs_cool_tab(idx_0,itemp_low,6) * frac_low) + (fs_cool_tab(idx_0,itemp_high,6) * frac_high)
+    q10_He = (fs_tab_t(6,idx_0,itemp_low) * frac_low) + (fs_tab_t(6,idx_0,itemp_high) * frac_high)
 
     ! For collisions with He+
-    q10_Hep = (fs_cool_tab(idx_0,itemp_low,3) * frac_low) + (fs_cool_tab(idx_0,itemp_high,3) * frac_high)
+    q10_Hep = (fs_tab_t(3,idx_0,itemp_low) * frac_low) + (fs_tab_t(3,idx_0,itemp_high) * frac_high)
 
     ! For collisions with He++
-    q10_Hepp = (fs_cool_tab(idx_0,itemp_low,4) * frac_low) + (fs_cool_tab(idx_0,itemp_high,4) * frac_high)
+    q10_Hepp = (fs_tab_t(4,idx_0,itemp_low) * frac_low) + (fs_tab_t(4,idx_0,itemp_high) * frac_high)
 
     ! Net collision strengths note the 75-25 ortho-para H2
     C_10 = (q10_e * ne) + (q10_H * nH) + (q10_Hp * nHp) + (q10_oH2 * 0.75d0 * nH2) + (q10_pH2 * 0.25d0 * nH2) + (q10_He * nHe) + (q10_Hep * nHep) + (q10_Hepp * nHepp)

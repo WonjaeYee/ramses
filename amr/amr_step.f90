@@ -660,6 +660,7 @@ subroutine rt_step(ilevel)
 #endif
   use SED_module,     only: star_RT_feedback
   use mpi_mod
+  use hydro_commons, only: ps_rt_substep
   implicit none
   integer, intent(in) :: ilevel
 
@@ -687,6 +688,7 @@ subroutine rt_step(ilevel)
   i_substep = 0
   do while (t_left > 0)                      !                RT sub-cycle
      i_substep = i_substep + 1
+     ps_rt_substep = i_substep               ! cooling_fine checks the passive scalars at the first only
      call get_rt_courant_dt(dt_rt,ilevel)
      ! Temporarily change timestep length to rt step:
      dtnew(ilevel) = MIN(t_left, dt_rt)
@@ -737,6 +739,7 @@ subroutine rt_step(ilevel)
   ! Restriction operator to update coarser level split cells
   call rt_upload_fine(ilevel)
 
+  ps_rt_substep = 0
   if (myid==1 .and. rt_nsubcycle .gt. 1) write(*,901) ilevel, i_substep
 
   !900 format (' dt_hydro=', 1pe12.3, ' dt_rt=', 1pe12.3, ' i_sub=', I5, ' level=', I5)
